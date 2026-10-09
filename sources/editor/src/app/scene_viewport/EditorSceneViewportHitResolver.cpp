@@ -32,12 +32,14 @@ constexpr float kMinRayPlaneDistance = 0.05F;
     };
 }
 
-[[nodiscard]] std::optional<kb::scene::Vec3> IntersectGroundPlane(const EditorSceneViewportRay& ray) noexcept {
+// The world's ground plane (y = kGroundPlaneY) met by a viewport-space ray whose space starts at `origin`.
+[[nodiscard]] std::optional<kb::scene::Vec3> IntersectGroundPlane(const EditorSceneViewportRay& ray, const kb::math::DVec3& origin) noexcept {
     if (std::abs(ray.direction.y) <= 0.00001F) {
         return std::nullopt;
     }
 
-    const float distance = (kGroundPlaneY - ray.origin.y) / ray.direction.y;
+    const float groundY = static_cast<float>(static_cast<double>(kGroundPlaneY) - origin.y);
+    const float distance = (groundY - ray.origin.y) / ray.direction.y;
     if (distance <= kMinRayPlaneDistance) {
         return std::nullopt;
     }
@@ -70,13 +72,15 @@ std::optional<EditorSceneViewportHit> EditorSceneViewportHitResolver::ResolveRay
         return std::nullopt;
     }
 
-    const EditorSceneViewportRay ray = BuildRay(sceneContext.ViewportCamera(panelHit.sceneContent->panelId), sceneRects.renderArea, x, y);
+    const EditorViewportCameraState& camera = sceneContext.ViewportCamera(panelHit.sceneContent->panelId);
+    const EditorSceneViewportRay ray = BuildRay(camera, sceneRects.renderArea, x, y);
     return EditorSceneViewportHit{
         .panelId = panelHit.sceneContent->panelId,
         .renderArea = sceneRects.renderArea,
         .ray = ray,
         .localX = static_cast<float>(x - sceneRects.renderArea.left),
         .localY = static_cast<float>(y - sceneRects.renderArea.top),
+        .origin = camera.ViewportOrigin(),
     };
 }
 
@@ -94,7 +98,7 @@ std::optional<EditorSceneViewportHit> EditorSceneViewportHitResolver::ResolveGro
         return std::nullopt;
     }
 
-    const std::optional<kb::scene::Vec3> groundPosition = IntersectGroundPlane(hit->ray);
+    const std::optional<kb::scene::Vec3> groundPosition = IntersectGroundPlane(hit->ray, hit->origin);
     if (!groundPosition.has_value()) {
         return std::nullopt;
     }

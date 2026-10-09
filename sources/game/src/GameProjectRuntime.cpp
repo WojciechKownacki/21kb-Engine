@@ -9,6 +9,9 @@
 #include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
+#include "engine/save/SaveGameService.hpp"
+#include "engine/security/ReleaseKeys.hpp"
+#include "engine/security/ReleaseManifest.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -36,12 +39,15 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <limits>
 #include <memory>
 #include <ostream>
+#include <span>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace kb::game {
 
@@ -124,19 +130,193 @@ namespace {
         err << "runtime host has no valid package target identity\n";
         return false;
     }
-    auto pack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
-    const kb::assets::bake::RuntimeAssetPackStatus status =
-        pack->Mount(packPath, targetProfile);
-    if (status != kb::assets::bake::RuntimeAssetPackStatus::Success) {
-        err << "runtime package could not be mounted: "
-            << kb::assets::bake::ToString(status) << '\n';
+    kb::assets::bake::AssetPackTrust trust{};
+    const kb::security::TrustAnchorLookup anchor = kb::security::LoadExecutableTrustAnchor();
+    if (!ResolvePackagedAssetPackTrust(anchor, trust, err)) {
         return false;
+    }
+    std::shared_ptr<const kb::security::InstalledRelease> release;
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
+    // A player that carries an anchor -- in its PE resource, or in its ELF slot -- runs only the
+    // release its signed manifest describes, from the directory it lies in.
+    if (anchor.state == kb::security::TrustAnchorLookup::State::Present) {
+        std::filesystem::path executable;
+#if defined(_WIN32)
+        {
+            std::wstring buffer(32768U, L'\0');
+            const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+            buffer.resize(length);
+            executable = std::filesystem::path{ buffer };
+        }
+#else
+        {
+            std::error_code linkError;
+            executable = std::filesystem::read_symlink("/proc/self/exe", linkError);
+            if (linkError || executable.empty()) {
+                err << "this player could not locate its own executable to verify its release\n";
+                return false;
+            }
+        }
+#endif
+        release = VerifyPackagedRelease(anchor.anchor, executable.parent_path(), executable,
+            kb::security::DefaultUserSecurityRoot(anchor.anchor.productId), err);
+        if (release == nullptr) {
+            return false;
+        }
+    }
+#endif
+    auto pack = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
+    // A game whose content is more than one pack ships a pack set index beside its base pack;
+    // the index names the base, the chunks and the patches in mount order.
+    const std::filesystem::path setIndex =
+        packPath.parent_path() / std::filesystem::path{ kb::assets::bake::kAssetPackSetFileName };
+    std::error_code setError;
+    const bool packSet = std::filesystem::is_regular_file(setIndex, setError) && !setError;
+    const kb::assets::bake::RuntimeAssetPackStatus status = packSet
+        ? pack->MountSetIndex(setIndex, targetProfile, kb::assets::bake::AssetPackAccess::Ranged, trust)
+        : pack->Mount(packPath, targetProfile, kb::assets::bake::AssetPackAccess::Ranged, trust);
+    if (status != kb::assets::bake::RuntimeAssetPackStatus::Success) {
+        ReportRuntimePackageRefusal(*pack, status, err);
+        return false;
+    }
+    if (packSet && pack->ContainerPath(0U).lexically_normal() != packPath.lexically_normal()) {
+        err << "the pack set index does not name this game's base pack\n";
+        return false;
+    }
+    if (!trust.requiredSigner.has_value() && pack->Seal() == nullptr) {
+        err << "runtime package is not signed; this development player loads it unverified\n";
+    }
+    if (release != nullptr && !PackBelongsToRelease(*release, packPath, *pack, err)) {
+        return false;
+    }
+    if (anchor.state == kb::security::TrustAnchorLookup::State::Present) {
+        ConfigurePackagedSaveIntegrity(anchor.anchor, err);
     }
     return ReadMountedGameProjectRuntime(
         std::move(pack), packPath.parent_path(), sceneOverride, runtime, err);
 }
 
 } // namespace
+
+bool ResolvePackagedAssetPackTrust(
+    const kb::security::TrustAnchorLookup& anchor,
+    kb::assets::bake::AssetPackTrust& trust,
+    std::ostream& err) {
+    trust = {};
+    switch (anchor.state) {
+    case kb::security::TrustAnchorLookup::State::Absent:
+        return true;
+    case kb::security::TrustAnchorLookup::State::Invalid:
+        err << "this player's embedded trust anchor is damaged: " << anchor.error << '\n';
+        return false;
+    case kb::security::TrustAnchorLookup::State::Present:
+        break;
+    }
+    trust.requiredSigner = anchor.anchor.releaseKey;
+    trust.contentKey = anchor.anchor.packContentKey;
+    return true;
+}
+
+std::shared_ptr<const kb::security::InstalledRelease> VerifyPackagedRelease(
+    const kb::security::TrustAnchor& anchor,
+    const std::filesystem::path& root,
+    const std::filesystem::path& executable,
+    const std::filesystem::path& securityRoot,
+    std::ostream& err) {
+    // The pack set index decides which packs mount and in what order, so it is hashed now like the
+    // executable; the packs themselves are bound through their seals when they mount.
+    std::vector<std::filesystem::path> hashNow{ executable };
+    const std::filesystem::path setIndex = root / std::filesystem::path{ kb::assets::bake::kAssetPackSetFileName };
+    std::error_code setError;
+    if (std::filesystem::is_regular_file(setIndex, setError) && !setError) {
+        hashNow.push_back(setIndex);
+    }
+    kb::security::ReleaseVerification verification =
+        kb::security::VerifyInstalledRelease(root, anchor.releaseKey, anchor.productId, hashNow);
+    if (verification.status != kb::security::ReleaseManifestStatus::Success) {
+        err << "this game's files do not match its signed release manifest: "
+            << kb::security::ToString(verification.status);
+        if (!verification.detail.empty()) {
+            err << " (" << verification.detail << ')';
+        }
+        err << "; reinstall the game\n";
+        return nullptr;
+    }
+    if (verification.manifest.antiRollback) {
+        const kb::security::ReleaseManifestStatus rollback =
+            kb::security::EnforceReleaseAntiRollback(securityRoot, verification.manifest);
+        if (rollback == kb::security::ReleaseManifestStatus::RolledBack) {
+            err << "release " << verification.manifest.releaseNumber
+                << " is older than a release this computer has already run; install the current release\n";
+            return nullptr;
+        }
+        if (rollback != kb::security::ReleaseManifestStatus::Success) {
+            err << "the release history could not be recorded; downgrade protection is inactive\n";
+        }
+    }
+    auto release = std::make_shared<kb::security::InstalledRelease>();
+    release->root = root;
+    release->manifest = std::move(verification.manifest);
+    kb::security::InstallVerifiedRelease(release);
+    return release;
+}
+
+bool PackBelongsToRelease(
+    const kb::security::InstalledRelease& release,
+    const std::filesystem::path& packPath,
+    const kb::assets::bake::RuntimeAssetPack& pack,
+    std::ostream& err) {
+    // Every pack of the set -- the base at `packPath`, its chunks and its patches -- must be the
+    // one the signed manifest lists at its path, compared by the digest its seal signs. A patch
+    // swapped for an older, equally well-signed one fails here.
+    const std::uint32_t containers = std::max<std::uint32_t>(pack.ContainerCount(), 1U);
+    for (std::uint32_t container = 0U; container < containers; ++container) {
+        const std::filesystem::path& path = container == 0U ? packPath : pack.ContainerPath(container);
+        const std::u8string relative =
+            path.lexically_normal().lexically_relative(release.root.lexically_normal()).generic_u8string();
+        const kb::security::ReleaseManifestPackSeal* listed = release.manifest.FindPack(
+            std::string_view{ reinterpret_cast<const char*>(relative.data()), relative.size() });
+        if (listed == nullptr ||
+            !kb::security::ConstantTimeEqual(listed->sealDigest, pack.ContainerSealDigest(container))) {
+            err << "runtime package is not the one this release shipped; reinstall the game\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+void ConfigurePackagedSaveIntegrity(const kb::security::TrustAnchor& anchor, std::ostream& err) {
+    if (!anchor.saveSecret.has_value()) {
+        err << "this player's trust anchor carries no save secret; saves use the development key\n";
+        return;
+    }
+    kb::save::SaveGameService::ConfigureIntegrity(kb::save::DeriveSaveGameIntegrity(anchor.saveSecret->Span(), {}));
+}
+
+void ReportRuntimePackageRefusal(
+    const kb::assets::bake::RuntimeAssetPack& pack,
+    kb::assets::bake::RuntimeAssetPackStatus status,
+    std::ostream& err) {
+    err << "runtime package could not be mounted: " << kb::assets::bake::ToString(status);
+    if (pack.RefusedContainer() != 0U) {
+        err << " (pack " << pack.RefusedContainer() << " of the pack set)";
+    }
+    if (status == kb::assets::bake::RuntimeAssetPackStatus::ContainerRejected) {
+        using kb::assets::bake::AssetPackReadStatus;
+        const AssetPackReadStatus container = pack.ContainerStatus();
+        err << " (" << kb::assets::bake::ToString(container) << ')';
+        if (container == AssetPackReadStatus::Unsigned || container == AssetPackReadStatus::UntrustedSigner ||
+            container == AssetPackReadStatus::SignatureInvalid || container == AssetPackReadStatus::SealCorrupt) {
+            err << ": this game only loads content signed with its release key, and this package is "
+                << (container == AssetPackReadStatus::Unsigned ? "not signed" :
+                    container == AssetPackReadStatus::UntrustedSigner ? "signed by a different key" : "modified");
+        } else if (container == AssetPackReadStatus::ContentKeyMissing ||
+            container == AssetPackReadStatus::ContentKeyMismatch) {
+            err << ": the package is encrypted for a different build of this game";
+        }
+    }
+    err << '\n';
+}
 
 bool ReadMountedGameProjectRuntime(
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack,
@@ -284,7 +464,20 @@ std::filesystem::path ExecutableDirectory() {
         buffer.resize(buffer.size() * 2U);
     }
 }
+
 #endif
+
+bool IsShippedGamePlayer() {
+    if (kb::security::LoadExecutableTrustAnchor().state != kb::security::TrustAnchorLookup::State::Absent) {
+        return true;
+    }
+#if defined(_WIN32)
+    std::error_code error;
+    return std::filesystem::is_regular_file(ExecutableDirectory() / kPackagedGameFileName, error) && !error;
+#else
+    return false;
+#endif
+}
 
 bool ReadGameProjectRuntime(
     const std::filesystem::path& projectPath,
@@ -301,13 +494,20 @@ bool ReadGameProjectRuntime(
 
     std::filesystem::path packageCandidate = absoluteInput;
     if (std::filesystem::is_directory(absoluteInput, pathError) && !pathError) {
-        packageCandidate /= "Game.kbpack";
+        packageCandidate /= kPackagedGameFileName;
     }
     if (!pathError && std::filesystem::is_regular_file(packageCandidate, pathError) && !pathError &&
         LowerExtension(packageCandidate) == kb::assets::bake::kAssetPackFileExtension) {
         return ReadPackagedGameProjectRuntime(packageCandidate, sceneOverride, runtime, err);
     }
     pathError.clear();
+
+    // A packaged player runs only the package it shipped with; loose project content would bypass
+    // every check the package path makes.
+    if (IsShippedGamePlayer()) {
+        err << "this packaged game only runs its own package; loose project content is refused\n";
+        return false;
+    }
 
     std::filesystem::path projectFile = absoluteInput;
     if (std::filesystem::is_directory(absoluteInput, pathError) && !pathError) {
@@ -440,6 +640,9 @@ bool LoadGameProjectScene(
     std::filesystem::path& loadedScenePath,
     std::size_t& discoveredAssets,
     std::ostream& err) {
+    for (const std::string& warning : scene.ModuleWarnings()) {
+        err << "module warning: " << warning << '\n';
+    }
     if (!scene.ModuleDiagnostics().empty()) {
         for (const std::string& diagnostic : scene.ModuleDiagnostics()) {
             err << "module diagnostic: " << diagnostic << '\n';

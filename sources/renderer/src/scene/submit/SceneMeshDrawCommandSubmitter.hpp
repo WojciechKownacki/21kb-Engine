@@ -33,6 +33,8 @@ struct SceneMeshDrawCommandSubmitDesc {
     bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE;
     std::array<float, 16> motionVectorPreviousViewProjection{};
     const RenderSkinningPaletteAllocator* skinningPaletteAllocator = nullptr;
+    // What material graphs add to render-space positions to read world positions (SceneMeshSubmitter).
+    std::array<float, 4> renderOriginOffset{};
     const SceneMeshPassResources& passResources;
     SceneMeshInstanceBufferPool* instanceBufferPool = nullptr;
     SceneRenderDiagnostics* diagnostics = nullptr;

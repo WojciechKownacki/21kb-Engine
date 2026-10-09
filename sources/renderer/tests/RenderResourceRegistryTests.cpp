@@ -7,6 +7,7 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/save/SaveGameService.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
 #include "kb/render/resources/RenderAssetRefs.hpp"
@@ -1007,7 +1008,21 @@ void AppendFbxFixtureNode(std::vector<std::byte>& output, const FbxFixtureNode& 
     output[nodeOffset + 12U] = static_cast<std::byte>(node.name.size());
 }
 
-[[nodiscard]] std::vector<std::byte> MakeMultiMaterialFbxFixture() {
+[[nodiscard]] std::vector<std::byte> MakeFbxFixture(const FbxFixtureNode& root) {
+    std::vector<std::byte> output;
+    constexpr std::array<std::byte, 23U> magic{
+        std::byte{ 'K' }, std::byte{ 'a' }, std::byte{ 'y' }, std::byte{ 'd' }, std::byte{ 'a' }, std::byte{ 'r' }, std::byte{ 'a' }, std::byte{ ' ' },
+        std::byte{ 'F' }, std::byte{ 'B' }, std::byte{ 'X' }, std::byte{ ' ' }, std::byte{ 'B' }, std::byte{ 'i' }, std::byte{ 'n' }, std::byte{ 'a' },
+        std::byte{ 'r' }, std::byte{ 'y' }, std::byte{ ' ' }, std::byte{ ' ' }, std::byte{}, std::byte{ 0x1A }, std::byte{},
+    };
+    output.insert(output.end(), magic.begin(), magic.end());
+    AppendFbxU32(output, 7400U);
+    AppendFbxFixtureNode(output, root);
+    output.insert(output.end(), 13U, std::byte{});
+    return output;
+}
+
+[[nodiscard]] std::vector<std::byte> MakeMultiMaterialFbxFixture(std::array<std::int32_t, 2U> materialIndices = { 0, 1 }) {
     std::vector<std::byte> geometryProperties;
     AppendFbxInt64Property(geometryProperties, 1U);
     AppendFbxStringProperty(geometryProperties, "Geometry::TwoMaterialQuad");
@@ -1024,7 +1039,6 @@ void AppendFbxFixtureNode(std::vector<std::byte>& output, const FbxFixtureNode& 
     const std::array<std::int32_t, 6U> polygonIndices{ 0, 1, -3, 0, 2, -4 };
     std::vector<std::byte> polygonProperties;
     AppendFbxArrayProperty(polygonProperties, 'i', std::span<const std::int32_t>{ polygonIndices });
-    const std::array<std::int32_t, 2U> materialIndices{ 0, 1 };
     std::vector<std::byte> materialIndexProperties;
     AppendFbxArrayProperty(materialIndexProperties, 'i', std::span<const std::int32_t>{ materialIndices });
     std::vector<std::byte> byPolygonProperties;
@@ -1063,17 +1077,101 @@ void AppendFbxFixtureNode(std::vector<std::byte>& output, const FbxFixtureNode& 
         },
     };
 
-    std::vector<std::byte> output;
-    constexpr std::array<std::byte, 23U> magic{
-        std::byte{ 'K' }, std::byte{ 'a' }, std::byte{ 'y' }, std::byte{ 'd' }, std::byte{ 'a' }, std::byte{ 'r' }, std::byte{ 'a' }, std::byte{ ' ' },
-        std::byte{ 'F' }, std::byte{ 'B' }, std::byte{ 'X' }, std::byte{ ' ' }, std::byte{ 'B' }, std::byte{ 'i' }, std::byte{ 'n' }, std::byte{ 'a' },
-        std::byte{ 'r' }, std::byte{ 'y' }, std::byte{ ' ' }, std::byte{ ' ' }, std::byte{}, std::byte{ 0x1A }, std::byte{},
-    };
-    output.insert(output.end(), magic.begin(), magic.end());
-    AppendFbxU32(output, 7400U);
-    AppendFbxFixtureNode(output, objects);
-    output.insert(output.end(), 13U, std::byte{});
-    return output;
+    return MakeFbxFixture(objects);
+}
+
+// A compressed FBX array states the length it inflates to, and that length is a
+// claim its compressed bytes may not be able to back. This array (found by fuzzing,
+// fuzz/corpus/mesh_fbx) declares 268 million coordinates in 20 bytes of deflate
+// data; the importer must refuse it without first making room for 2 GB.
+void RunFbxImporterRefusesArrayLongerThanItsCompressedBytesTest() {
+    std::vector<std::byte> verticesProperties{ std::byte{ 'd' } };
+    AppendFbxU32(verticesProperties, 0x1000000CU);
+    AppendFbxU32(verticesProperties, 1U);
+    AppendFbxU32(verticesProperties, 20U);
+    verticesProperties.insert(verticesProperties.end(), 20U, std::byte{});
+    const std::vector<std::byte> fixture = MakeFbxFixture(
+        FbxFixtureNode{ .name = "Vertices", .properties = std::move(verticesProperties), .propertyCount = 1U });
+
+    const std::size_t peakBefore = PeakCommittedBytes();
+    const std::optional<RenderMeshAssetData> asset = RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte>{ fixture });
+    Require(!asset.has_value(), "FBX importer accepted an array its compressed bytes cannot produce");
+    Require(PeakCommittedBytes() - peakBefore < 256U * 1024U * 1024U,
+        "FBX importer allocated a compressed array's declared length before inflating it");
+}
+
+// Every material slot up to the highest index a polygon names is built. A file whose
+// second polygon names slot 65536 (found by fuzzing, fuzz/corpus/mesh_fbx) made the
+// importer build 65537 slots and their names for a two-triangle mesh.
+void RunFbxImporterRefusesUnboundedMaterialSlotsTest() {
+    Require(!RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte>{ MakeMultiMaterialFbxFixture({ 0, 65536 }) }).has_value(),
+        "FBX importer built material slots up to an index the file only names");
+    const std::optional<RenderMeshAssetData> bounded =
+        RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte>{ MakeMultiMaterialFbxFixture({ 0, 1023 }) });
+    Require(bounded.has_value() && bounded->materialSlots.size() == 1024U && bounded->sections.size() == 2U,
+        "FBX importer refused a material index within the slot limit");
+}
+
+[[nodiscard]] std::optional<RenderTextureAssetData> DecodeTextureSource(
+    std::string_view resolvedName, const std::vector<std::uint8_t>& bytes) {
+    kb::assets::AssetMetadata metadata{};
+    metadata.type = "Texture";
+    RenderTextureAssetLoader loader{ bgfx::RendererType::Noop };
+    const kb::assets::AssetLoadResult result = loader.Load(kb::assets::AssetLoadRequest{
+        .metadata = metadata,
+        .resolvedPath = std::filesystem::path{ resolvedName },
+        .sourceBytes = std::span<const std::uint8_t>{ bytes },
+    });
+    if (!result.Succeeded()) {
+        return std::nullopt;
+    }
+    return *std::static_pointer_cast<RenderTextureAssetData>(result.asset);
+}
+
+// An image states its own size and the decoders allocate for it before reading a
+// pixel. This GIF header (found by fuzzing, fuzz/corpus/image) claims 36293 x 11040
+// pixels in thirteen bytes; it must be refused before gigabytes are set aside.
+void RunTextureLoaderRefusesOversizedImageHeaderTest() {
+    const std::vector<std::uint8_t> gif{ 'G', 'I', 'F', '8', '9', 'a', 0xC5U, 0x8DU, 0x20U, 0x2BU, 0x00U, 0x00U, 0x00U };
+    const std::size_t peakBefore = PeakCommittedBytes();
+    Require(!DecodeTextureSource("Hostile.gif", gif).has_value(), "A GIF larger than any texture was decoded");
+    Require(PeakCommittedBytes() - peakBefore < 256U * 1024U * 1024U,
+        "A GIF's stated size was allocated before the image was refused");
+    std::vector<std::uint8_t> png{ 0x89U, 'P', 'N', 'G', 0x0DU, 0x0AU, 0x1AU, 0x0AU, 0x00U, 0x00U, 0x00U, 0x0DU,
+        'I', 'H', 'D', 'R', 0x00U, 0x00U, 0x4EU, 0x20U, 0x00U, 0x00U, 0x4EU, 0x20U, 0x08U, 0x06U, 0x00U, 0x00U, 0x00U };
+    Require(!DecodeTextureSource("Hostile.png", png).has_value(), "A PNG larger than any texture was decoded");
+    // Shorter than any image signature (found by fuzzing): the decoders compared their
+    // signatures without checking the length first.
+    Require(!DecodeTextureSource("Short.png", { 0xFFU, 0xD8U, 0xFFU }).has_value() &&
+            !DecodeTextureSource("Short.exr", { 0x76U }).has_value(),
+        "A buffer shorter than an image signature was decoded");
+}
+
+// TGA has no signature and its pixel data has no length: the decoder read past the end
+// of the file as zeros for every pixel the header declared. A 46-byte file (found by
+// fuzzing, fuzz/corpus/image) spent seconds filling a 3855 x 3855 image that way.
+void RunTextureLoaderRefusesTruncatedTgaTest() {
+    for (const std::uint8_t imageType : { std::uint8_t{ 2U }, std::uint8_t{ 10U } }) {
+        // Uncompressed and run-length truecolour, 4096 x 4096 x 24 bits, and no pixels.
+        const std::vector<std::uint8_t> tga{ 0x00U, 0x00U, imageType, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
+            0x00U, 0x00U, 0x00U, 0x10U, 0x00U, 0x10U, 0x18U, 0x00U };
+        Require(!DecodeTextureSource("Truncated.tga", tga).has_value(), "A TGA without its pixel data was decoded");
+    }
+}
+
+// A data URI's byteLength is only a claim about the text that follows it. This
+// buffer (found by fuzzing, fuzz/corpus/mesh_gltf) declares a gigabyte in four
+// base64 characters; the importer must refuse it without allocating the gigabyte.
+void RunGltfImporterRefusesBufferLongerThanItsDataTest() {
+    const std::string gltf =
+        R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":1073741824,"uri":"data:application/octet-stream;base64,AAAA"}]})";
+    const std::size_t peakBefore = PeakCommittedBytes();
+    Require(!RenderMeshAssetBuilder::LoadGltf(
+                std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(gltf.data()), gltf.size() }, {})
+                 .has_value(),
+        "glTF importer accepted a buffer longer than its data");
+    Require(PeakCommittedBytes() - peakBefore < 256U * 1024U * 1024U,
+        "glTF importer allocated a buffer's declared length before decoding its data");
 }
 
 void RunFbxImporterBuildsSectionsForMaterialSlotsTest() {
@@ -3507,6 +3605,9 @@ void RunRenderTextureAsyncDecodeStreamsInTest() {
 
     Require(RenderTextureAssetLoader::TryAcquireDecodedTexture(texturePath) == nullptr,
         "Async decode: an unseen texture is NOT available synchronously (the render thread does not block-decode it)");
+    const std::shared_ptr<kb::assets::streaming::BackgroundLoadService> background =
+        kb::assets::streaming::BackgroundLoadService::Shared();
+    const std::uint64_t jobsBefore = background->Stats().jobsRun;
     RenderTextureAssetLoader::RequestAsyncTextureDecode(texturePath);
     std::shared_ptr<const RenderTextureAssetData> streamed;
     for (int attempt = 0; attempt < 500 && streamed == nullptr; ++attempt) {
@@ -3517,6 +3618,12 @@ void RunRenderTextureAsyncDecodeStreamsInTest() {
     }
     Require(streamed != nullptr && streamed->width > 0U && !streamed->rgba8.empty(),
         "Async decode: the background worker streams the texture into the cache so a later frame can bind it");
+    const auto jobDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 30 };
+    while (background->Stats().jobsRun == jobsBefore && std::chrono::steady_clock::now() < jobDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(background->Stats().jobsRun > jobsBefore,
+        "Async decode: the texture was decoded as a job of the engine's background load service");
     std::filesystem::remove_all(root, error);
 }
 
@@ -3623,6 +3730,11 @@ void RunRenderResourceRegistryTests() {
     RunMeshBoundsBoxIsTighterThanSphereTest();
     RunFbxImporterBuildsSectionsForMaterialSlotsTest();
     RunFbxImporterStopsAtFooterAfterNullTerminatorTest();
+    RunFbxImporterRefusesArrayLongerThanItsCompressedBytesTest();
+    RunFbxImporterRefusesUnboundedMaterialSlotsTest();
+    RunTextureLoaderRefusesOversizedImageHeaderTest();
+    RunTextureLoaderRefusesTruncatedTgaTest();
+    RunGltfImporterRefusesBufferLongerThanItsDataTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();
     RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest();

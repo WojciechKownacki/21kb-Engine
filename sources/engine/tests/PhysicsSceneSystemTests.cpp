@@ -20,6 +20,9 @@
 #include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/SceneSystem.hpp"
+#include "engine/scene/SceneSystemContext.hpp"
+#include "engine/modules/IEngineModule.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -40,9 +43,11 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -58,6 +63,7 @@
 #if !defined(KB_PHYSICS_JOLT_PLUGIN_PATH)
 #define KB_PHYSICS_JOLT_PLUGIN_PATH ""
 #endif
+
 
 namespace {
 
@@ -84,6 +90,8 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     });
 
     kb::scene::Scene scene{ std::move(descriptor) };
+
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false); // these tests read results in the update that stepped them
     kb::scene::PhysicsBackend::SetCollisionEventConsumer(scene, true);
 
     kb::scene::SceneObject floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
@@ -1957,6 +1965,7 @@ void RunPhysicsPersistentSleeperTransitionTest() {
         .enabled = true,
     });
     kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false); // these tests read results in the update that stepped them
     const auto support = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
         .name = "Transition support",
         .transform = kb::scene::TransformComponent{.localPosition = {1500.0F, -0.5F, 0.0F}},
@@ -2011,6 +2020,7 @@ void RunPhysicsIdenticalReplayTest() {
             .enabled = true,
         });
         kb::scene::Scene scene{std::move(descriptor)};
+        kb::scene::PhysicsBackend::SetStepPipelining(scene, false); // these tests read results in the update that stepped them
         const auto floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
             .name = "Replay floor",
             .transform = kb::scene::TransformComponent{.localPosition = {0.0F, -0.5F, 0.0F}},
@@ -2315,6 +2325,7 @@ void RunStaticColliderBatchInvalidationTest() {
     descriptor.disableEnginePluginsByDefault = true;
     descriptor.plugins.push_back({.name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true});
     kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false); // these tests read results in the update that stepped them
     kb::tests::Require(scene.IsModuleActive("Physics.Jolt"), "Static cache test did not load the real physics backend");
     std::vector<kb::scene::SceneObject> objects;
     for (unsigned index = 0U; index < 2048U; ++index) {
@@ -2406,6 +2417,369 @@ void RunPhysicsEventBatchReuseTest() {
         "Contact drain left an already consumed event queued");
 }
 
+// A pile of one-metre boxes in layers on a floor: the scenario of the step-time benchmark and of the
+// pipelining equivalence check below.
+struct PhysicsPile {
+    explicit PhysicsPile(int bodyCount, bool pipelined) {
+        kb::project::ProjectDescriptor descriptor;
+        descriptor.disableEnginePluginsByDefault = true;
+        descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+            .name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true });
+        scene = std::make_unique<kb::scene::Scene>(std::move(descriptor));
+        kb::scene::PhysicsBackend::SetStepPipelining(*scene, pipelined);
+        kb::scene::SceneObject floor = scene->Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Floor",
+            .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, -0.5F, 0.0F } },
+        });
+        scene->Components().Rigidbodies().Set(floor.Entity(), kb::scene::RigidbodyComponent{
+            .bodyType = kb::scene::RigidbodyBodyType::Static });
+        scene->Components().Colliders().Set(floor.Entity(), kb::scene::ColliderComponent{
+            .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 60.0F, 1.0F, 60.0F }, .restitution = 0.3F });
+        // A square grid of ceil(sqrt(count / 10)) columns, 1.5 m apart, in layers, each box turned a little differently.
+        const int footprint = std::max(1, static_cast<int>(std::ceil(std::sqrt(static_cast<double>(bodyCount) / 10.0))));
+        for (int index = 0; index < bodyCount; ++index) {
+            const int layer = index / (footprint * footprint);
+            const int cell = index % (footprint * footprint);
+            const float half = static_cast<float>(footprint - 1) * 0.5F;
+            const float angleY = static_cast<float>(index) * 0.37F;
+            const float angleX = static_cast<float>(index) * 0.21F;
+            const kb::scene::Quat turnY{ 0.0F, std::sin(angleY * 0.5F), 0.0F, std::cos(angleY * 0.5F) };
+            const kb::scene::Quat turnX{ std::sin(angleX * 0.5F), 0.0F, 0.0F, std::cos(angleX * 0.5F) };
+            kb::scene::SceneObject body = scene->Entities().CreateObject(kb::scene::SceneObjectDesc{
+                .name = "Box",
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = kb::scene::Vec3{ (static_cast<float>(cell % footprint) - half) * 1.5F,
+                        3.0F + static_cast<float>(layer) * 1.5F, (static_cast<float>(cell / footprint) - half) * 1.5F },
+                    .localRotation = turnY * turnX },
+            });
+            scene->Components().Rigidbodies().Set(body.Entity(), kb::scene::RigidbodyComponent{
+                .bodyType = kb::scene::RigidbodyBodyType::Dynamic, .mass = 1.0F });
+            scene->Components().Colliders().Set(body.Entity(), kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F }, .restitution = 0.3F });
+            bodies.push_back(body);
+        }
+    }
+
+    std::unique_ptr<kb::scene::Scene> scene;
+    std::vector<kb::scene::SceneObject> bodies;
+};
+
+struct StepTimes {
+    double mean = 0.0;
+    double p50 = 0.0;
+    double p99 = 0.0;
+    double max = 0.0;
+};
+
+// The first steps create 4000 bodies and meet the first contacts; the tail a frame budget has to survive is
+// the one of the steady state after that.
+constexpr int kStartupSteps = 60;
+
+// Times one fixed step per update. `frameWorkMilliseconds` stands in for the rest of a frame (scripts, render
+// submission) that a pipelined physics step can overlap with.
+// A script Tick that talks to physics every frame: reads a body's velocity and pushes it (a zero impulse), the
+// way gameplay code queries and steers bodies.
+class PhysicsTouchingScript final : public kb::scene::SceneSystem {
+public:
+    explicit PhysicsTouchingScript(kb::scene::SceneEntity body) noexcept : body_(body) {}
+    [[nodiscard]] kb::scene::SceneUpdatePhase UpdatePhase() const noexcept override {
+        return kb::scene::SceneUpdatePhase::PostFixed;
+    }
+    void OnUpdate(kb::scene::SceneSystemContext& context) override {
+        static_cast<void>(kb::scene::PhysicsBackend::GetVelocity(context.GetScene(), body_));
+        static_cast<void>(kb::scene::PhysicsBackend::AddImpulse(context.GetScene(), body_, kb::scene::Vec3{}));
+    }
+
+private:
+    kb::scene::SceneEntity body_{};
+};
+
+[[nodiscard]] StepTimes SummarizeStepTimes(std::vector<double> milliseconds) {
+    std::ranges::sort(milliseconds);
+    StepTimes times;
+    for (const double value : milliseconds) times.mean += value;
+    times.mean /= static_cast<double>(milliseconds.size());
+    times.p50 = milliseconds[milliseconds.size() / 2U];
+    times.p99 = milliseconds[std::min(milliseconds.size() - 1U, milliseconds.size() * 99U / 100U)];
+    times.max = milliseconds.back();
+    return times;
+}
+
+// One pile of the step-time benchmark: synchronous or pipelined, with or without a script touching physics.
+struct MeasuredPile {
+    MeasuredPile(int bodyCount, bool pipelined, bool scriptsTouchPhysics) : pile(bodyCount, pipelined) {
+        if (scriptsTouchPhysics) {
+            static_cast<void>(pile.scene->Runtime().AddSceneSystem(std::make_unique<PhysicsTouchingScript>(pile.bodies.front().Entity())));
+        }
+    }
+
+    PhysicsPile pile;
+    int steps = 0;
+    std::vector<double> milliseconds;
+};
+
+// Steps every pile `steps` times, in turns of `blockSteps` updates, so that the piles being compared share whatever
+// else the machine is doing at the time (a pile measured a minute after another can meet a different load). After
+// each update a busy loop stands in for the rest of a frame (scripts, render submission), which a pipelined
+// physics step can overlap with. It lasts half again the median step of the reference (first) pile's latest turn,
+// within one to five times `frameWorkMilliseconds`: a step that the machine's load slows down then still gets the
+// time to finish behind the frame, so what is compared is whether the step is overlapped, not how busy the
+// machine is. The first update of a turn is not counted: it can still meet the end of the previous pile's
+// background step, or find its own long finished.
+void MeasureInterleavedPhysicsSteps(std::span<MeasuredPile* const> piles, int steps, int blockSteps, double frameWorkMilliseconds) {
+    double frameWork = frameWorkMilliseconds;
+    std::vector<double> referenceTurn;
+    for (int first = 0; first < steps; first += blockSteps) {
+        for (MeasuredPile* const measured : piles) {
+            const bool reference = measured == piles.front();
+            if (reference) referenceTurn.clear();
+            for (int step = first; step < std::min(steps, first + blockSteps); ++step) {
+                const auto start = std::chrono::steady_clock::now();
+                [[maybe_unused]] const bool progressed = measured->pile.scene->Runtime().Update(1.0F / 60.0F);
+                const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+                if (measured->steps >= kStartupSteps && step != first) measured->milliseconds.push_back(elapsed);
+                if (reference && step != first) referenceTurn.push_back(elapsed);
+                ++measured->steps;
+                const auto frameEnd = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(frameWork);
+                while (std::chrono::steady_clock::now() < frameEnd) {
+                }
+            }
+            if (reference && !referenceTurn.empty()) {
+                std::ranges::nth_element(referenceTurn, referenceTurn.begin() + static_cast<std::ptrdiff_t>(referenceTurn.size() / 2U));
+                frameWork = std::clamp(1.5 * referenceTurn[referenceTurn.size() / 2U], frameWorkMilliseconds, 5.0 * frameWorkMilliseconds);
+            }
+        }
+    }
+}
+
+// The engine's share of a crowd frame (the "agents" benchmark scenario): 30000 agents that are plain entities with a
+// transform, 64 static box colliders, every frame a Transforms().Set per agent, a raycast for one agent in eight and
+// Runtime().Update. The steering of the agents is the application's own code and is not measured here.
+void RunAgentsFrameBenchmarkWith(const kb::ecs::WorldConfig& worldConfig, const char* label, bool batched = false, int agentCount = 30000, bool withHierarchy = false) {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
+        return;
+    }
+    const int kAgents = agentCount;
+    constexpr int kFrames = 150;
+    constexpr int kWarmup = 30;
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true });
+    kb::scene::Scene scene{ std::move(descriptor), {}, worldConfig };
+    for (int row = 0; row < 8; ++row) {
+        for (int column = 0; column < 8; ++column) {
+            const kb::scene::SceneObject obstacle = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+                .name = "Obstacle",
+                .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ (static_cast<float>(row) - 3.5F) * 25.0F, 1.0F, (static_cast<float>(column) - 3.5F) * 25.0F },
+                    .localScale = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F } } });
+            scene.Components().Colliders().Set(obstacle.Entity(), kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F } });
+        }
+    }
+    std::vector<kb::scene::SceneObjectDesc> descs(kAgents);
+    std::vector<kb::scene::Vec3> positions(kAgents);
+    for (int index = 0; index < kAgents; ++index) {
+        positions[index] = kb::scene::Vec3{ static_cast<float>(index % 200) - 100.0F, 0.5F, static_cast<float>(index / 200) - 75.0F };
+        descs[index].transform = kb::scene::TransformComponent{ .localPosition = positions[index] };
+    }
+    std::vector<kb::scene::SceneEntity> agents;
+    for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) agents.push_back(object.Entity());
+    if (withHierarchy) {
+        // a screen-UI-like overlay: one canvas with a few parented children. A single parent link makes the whole scene
+        // "hierarchical" for the transform sync, so every parentless agent used to take the slow generic lane.
+        const kb::scene::SceneObject canvas = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Canvas" });
+        for (int child = 0; child < 6; ++child) {
+            const kb::scene::SceneObject node = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Node" });
+            static_cast<void>(scene.Hierarchy().SetParent(node.Entity(), canvas.Entity()));
+        }
+    }
+    kb::tests::Require(agents.size() == static_cast<std::size_t>(kAgents), "agent benchmark could not create its agents");
+    using Clock = std::chrono::steady_clock;
+    std::vector<kb::scene::TransformComponent> batch(batched ? static_cast<std::size_t>(kAgents) : 0U);
+    std::vector<double> setMs, rayMs, updateMs, syncMs;
+    kb::scene::SceneRuntimeHotPathReport lastSyncReport{};
+    std::array<kb::scene::PhysicsCastResult, 1> hitStorage{};
+    for (int frame = 0; frame < kFrames + kWarmup; ++frame) {
+        const auto t0 = Clock::now();
+        const auto step = [&](std::size_t begin, std::size_t end) {
+            for (std::size_t index = begin; index < end; ++index) {
+                positions[index].x += 0.03F;
+                if (positions[index].x > 100.0F) positions[index].x -= 200.0F;
+                const kb::scene::TransformComponent value{ .localPosition = positions[index],
+                    .localRotation = kb::scene::Quat{ 0.0F, std::sin(0.005F * static_cast<float>(index % 628)), 0.0F, std::cos(0.005F * static_cast<float>(index % 628)) } };
+                if (batched) {
+                    batch[index] = value;
+                } else {
+                    scene.Transforms().Set(agents[index], value);
+                }
+            }
+        };
+        if (batched) {
+            // the application's own per-agent work runs on the scene's worker threads, the write is one batch
+            scene.Runtime().ParallelFor(static_cast<std::size_t>(kAgents), 2048U, step);
+            scene.Transforms().SetMany(agents, batch);
+        } else {
+            step(0U, static_cast<std::size_t>(kAgents));
+        }
+        const auto t1 = Clock::now();
+        scene.Runtime().SynchronizeTransforms();
+        const auto tSync = Clock::now();
+        if (frame == kFrames + kWarmup - 1) lastSyncReport = scene.Runtime().HotPathReport();
+        syncMs.push_back(std::chrono::duration<double, std::milli>(tSync - t1).count());
+        for (int index = frame % 8; index < kAgents; index += 8) {
+            kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> hits{ std::span<kb::scene::PhysicsCastResult>(hitStorage) };
+            kb::scene::RaycastAllNonAlloc(scene, kb::scene::Vec3{ positions[index].x, 1.0F, positions[index].z }, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }, 5.0F, 0xFFFFFFFFU, hits);
+        }
+        const auto t2 = Clock::now();
+        static_cast<void>(scene.Runtime().Update(0.037F)); // a frame of the real benchmark: two fixed steps
+        const auto t3 = Clock::now();
+        if (frame >= kWarmup) {
+            setMs.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+            rayMs.push_back(std::chrono::duration<double, std::milli>(t2 - t1).count());
+            updateMs.push_back(std::chrono::duration<double, std::milli>(t3 - t2).count());
+        }
+    }
+    const auto median = [](std::vector<double> values) { std::ranges::sort(values); return values[values.size() / 2U]; };
+    const kb::scene::SceneRuntimeHotPathReport report = lastSyncReport;
+    const double setMedian = median(setMs);
+    const double syncMedian = median(syncMs);
+    const kb::scene::TransformComponent checked = scene.Transforms().Get(agents[kAgents - 1]);
+    kb::tests::Require(std::abs(checked.worldPosition.x - positions[kAgents - 1].x) < 1e-3F, "agent benchmark: a written transform did not reach the world pose");
+    std::cout << "agents_frame " << label << " agents=" << kAgents << " set_ms=" << median(setMs) << " raycast_ms=" << median(rayMs)
+              << " sync_ms=" << median(syncMs) << " update_ms=" << median(updateMs) << " transform_sync_ms=" << static_cast<double>(report.runtimeTransformSyncNanoseconds) * 1e-6
+              << " cache_ms=" << static_cast<double>(report.transformHierarchyCacheBuildNanoseconds) * 1e-6 << " entry_ms=" << static_cast<double>(report.transformHierarchyEntryBuildNanoseconds) * 1e-6 << " kernel_ms=" << static_cast<double>(report.transformHierarchyKernelApplyNanoseconds) * 1e-6 << " frontier_ms=" << static_cast<double>(report.transformHierarchyFrontierAppendNanoseconds) * 1e-6 << " propagate_ms=" << static_cast<double>(report.transformHierarchyPropagateNanoseconds) * 1e-6 << " flush_ms=" << static_cast<double>(report.transformHierarchyFlushNanoseconds) * 1e-6 << " parallel_flush=" << report.transformHierarchyParallelFlushCount << " workers=" << report.transformHierarchyParallelFlushWorkerCount << " updated=" << report.transformHierarchyUpdatedCount << " inspected=" << report.transformHierarchyInspectedCount << " rootFast=" << report.transformHierarchyRootFastPathCount
+              << " hierarchy_update_ms=" << static_cast<double>(report.transformHierarchyUpdateNanoseconds) * 1e-6
+              << " hierarchy_flush_write_ms=" << static_cast<double>(report.transformHierarchyFlushWriteNanoseconds) * 1e-6
+              << " backend_mark_ms=" << static_cast<double>(report.transformHierarchyBackendMarkNanoseconds) * 1e-6
+              << " fixed_capture_start_ms=" << static_cast<double>(report.runtimeFixedCaptureStartNanoseconds) * 1e-6 << " fixed_capture_end_ms=" << static_cast<double>(report.runtimeFixedCaptureEndNanoseconds) * 1e-6
+              << " runtime_update_ms=" << static_cast<double>(report.runtimeUpdateNanoseconds) * 1e-6 << '\n';
+    // Publishing the poses of 30000 moved agents is a pass over them like the loop that moved them: it was 1.75 times
+    // that loop (pose records of the fixed-step interpolation found by binary search) and is now about 1.1 times.
+    if (!withHierarchy && agentCount == 30000) kb::tests::Require(syncMedian < setMedian * 1.4, "Synchronizing 30000 moved transforms must not cost much more than setting them");
+}
+
+void RunAgentsFrameBenchmark() {
+    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "mirror=on(default)");
+    kb::ecs::WorldConfig native{};
+    native.mirrorNativeComponentChangesToBackend = false;
+    RunAgentsFrameBenchmarkWith(native, "mirror=off");
+    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "mirror=on(default),ParallelFor+SetMany", true);
+    // the same crowd next to a small parented overlay, at a size where the sync pass dominates
+    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "flat 300k", true, 300000, false);
+    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "with overlay hierarchy 1M", true, 1000000, true);
+    RunAgentsFrameBenchmarkWith(kb::ecs::WorldConfig{}, "with overlay hierarchy 300k", true, 300000, true);
+}
+
+// The step of a large pile, as a frame sees it. The mean hides the occasional long step a frame budget cannot
+// absorb, so the tail (p99, max) is reported too. The same 4000-box pile runs synchronously and pipelined; the
+// pipelined step overlaps the Jolt update with the rest of the frame (modelled by a busy loop), so only the
+// part that is not hidden remains in the update time. The piles compared are stepped in alternating turns of a
+// few updates, so load from other processes falls on both alike instead of on whichever ran at the time, and the
+// frame lasts long enough for a step that load slows down to finish behind it; the verdict is the median of three
+// trials: the pipelined p99 must be below 60 % of the synchronous one (about 45 % on the machine this was written
+// on).
+void RunPhysicsStepSpikeBenchmark() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
+        return;
+    }
+    constexpr int kBodies = 4000;
+    constexpr int kSteps = 300;
+    constexpr int kBlockSteps = 10;
+    constexpr int kTrials = 3;
+    constexpr double kFrameWorkMilliseconds = 8.0;
+    std::array<double, kTrials> ratios{};
+    std::array<double, kTrials> touchingRatios{};
+    for (int trial = 0; trial < kTrials; ++trial) {
+        // Scripts that read and steer physics every frame must not give the overlap back.
+        MeasuredPile synchronousPile(kBodies, false, false);
+        MeasuredPile pipelinedPile(kBodies, true, false);
+        MeasuredPile synchronousTouchingPile(kBodies, false, true);
+        MeasuredPile pipelinedTouchingPile(kBodies, true, true);
+        const std::array<MeasuredPile*, 4> piles{ &synchronousPile, &pipelinedPile, &synchronousTouchingPile, &pipelinedTouchingPile };
+        MeasureInterleavedPhysicsSteps(piles, kSteps, kBlockSteps, kFrameWorkMilliseconds);
+        const StepTimes synchronous = SummarizeStepTimes(std::move(synchronousPile.milliseconds));
+        const StepTimes pipelined = SummarizeStepTimes(std::move(pipelinedPile.milliseconds));
+        ratios[trial] = pipelined.p99 / synchronous.p99;
+        const StepTimes syncTouching = SummarizeStepTimes(std::move(synchronousTouchingPile.milliseconds));
+        const StepTimes pipelinedTouching = SummarizeStepTimes(std::move(pipelinedTouchingPile.milliseconds));
+        touchingRatios[trial] = pipelinedTouching.p99 / syncTouching.p99;
+        std::cout << "physics_step_spikes bodies=" << kBodies << " steps=" << kSteps
+                  << " sync_mean_ms=" << synchronous.mean << " sync_p99_ms=" << synchronous.p99 << " sync_max_ms=" << synchronous.max
+                  << " pipelined_mean_ms=" << pipelined.mean << " pipelined_p99_ms=" << pipelined.p99
+                  << " pipelined_max_ms=" << pipelined.max << " p99_ratio=" << ratios[trial] << " p99_ratio_with_script_calls=" << touchingRatios[trial] << '\n';
+    }
+    std::ranges::sort(ratios);
+    kb::tests::Require(ratios[kTrials / 2] < 0.6,
+        "Pipelining the physics step must cut the p99 update time of a 4000-body pile well below the synchronous one");
+    std::ranges::sort(touchingRatios);
+    kb::tests::Require(touchingRatios[kTrials / 2] < 0.6,
+        "Script calls into physics every frame must not take the pipelining gain away");
+}
+
+// Pipelining only moves the arrival of results: the poses of the scene after update k are exactly the poses a
+// synchronous scene had after update k - 1 (the physics world sees the same operations in the same order).
+// Stands in for a script FixedTick: runs in the PreSimulation phase and records the pose it sees.
+class FixedTickPoseRecorder final : public kb::scene::SceneSystem {
+public:
+    explicit FixedTickPoseRecorder(kb::scene::SceneEntity body) noexcept : body_(body) {}
+    [[nodiscard]] kb::scene::SceneFixedUpdatePhase FixedUpdatePhase() const noexcept override {
+        return kb::scene::SceneFixedUpdatePhase::PreSimulation;
+    }
+    [[nodiscard]] bool RequiresFixedStep() const override { return true; }
+    void OnFixedUpdate(kb::scene::SceneSystemContext& context) override {
+        seenY.push_back(std::bit_cast<std::uint32_t>(context.GetScene().Transforms().Get(body_).localPosition.y));
+    }
+    std::vector<std::uint32_t> seenY;
+
+private:
+    kb::scene::SceneEntity body_{};
+};
+
+void RunPhysicsPipelinedStepEquivalenceTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
+        return;
+    }
+    constexpr int kBodies = 400;
+    constexpr int kSteps = 150;
+    PhysicsPile synchronous(kBodies, false);
+    PhysicsPile pipelined(kBodies, true);
+    auto synchronousRecorder = std::make_unique<FixedTickPoseRecorder>(synchronous.bodies[199].Entity());
+    auto pipelinedRecorder = std::make_unique<FixedTickPoseRecorder>(pipelined.bodies[199].Entity());
+    const FixedTickPoseRecorder& synchronousSeen = *synchronousRecorder;
+    const FixedTickPoseRecorder& pipelinedSeen = *pipelinedRecorder;
+    static_cast<void>(synchronous.scene->Runtime().AddSceneSystem(std::move(synchronousRecorder)));
+    static_cast<void>(pipelined.scene->Runtime().AddSceneSystem(std::move(pipelinedRecorder)));
+    const std::array<std::size_t, 4U> tracked{ 0U, 17U, 199U, 399U };
+    const auto snapshot = [&tracked](PhysicsPile& pile) {
+        std::array<std::uint32_t, 4U * 7U> bits{};
+        for (std::size_t index = 0U; index < tracked.size(); ++index) {
+            const kb::scene::TransformComponent& transform = pile.scene->Transforms().Get(pile.bodies[tracked[index]]);
+            const std::array<float, 7U> values{ transform.localPosition.x, transform.localPosition.y, transform.localPosition.z,
+                transform.localRotation.x, transform.localRotation.y, transform.localRotation.z, transform.localRotation.w };
+            for (std::size_t component = 0U; component < values.size(); ++component) {
+                bits[index * 7U + component] = std::bit_cast<std::uint32_t>(values[component]);
+            }
+        }
+        return bits;
+    };
+    const auto initial = snapshot(pipelined);
+    std::array<std::uint32_t, 28U> previousSynchronous = initial;
+    bool moved = false;
+    for (int step = 0; step < kSteps; ++step) {
+        kb::tests::Require(synchronous.scene->Runtime().Update(1.0F / 60.0F) && pipelined.scene->Runtime().Update(1.0F / 60.0F),
+            "Pipelining equivalence test could not update its scenes");
+        const auto pipelinedPoses = snapshot(pipelined);
+        kb::tests::Require(pipelinedPoses == previousSynchronous,
+            "A pipelined physics scene must show exactly the poses its synchronous twin had one update earlier");
+        previousSynchronous = snapshot(synchronous);
+        moved = moved || previousSynchronous != initial;
+    }
+    kb::tests::Require(moved, "Pipelining equivalence test never moved a body, so it proved nothing");
+    kb::tests::Require(!synchronousSeen.seenY.empty() && pipelinedSeen.seenY == synchronousSeen.seenY,
+        "A FixedTick must see the same poses whether or not the physics step is pipelined");
+}
+
 void RunPhysicsSceneSystemTests() {
     RunStaticColliderBatchInvalidationTest();
     RunPhysicsEventBatchReuseTest();
@@ -2414,6 +2788,7 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsIdenticalReplayTest();
     RunPhysicsSceneSystemFallingBodyTest();
     RunPhysicsPersistentSleeperTransitionTest();
+    RunPhysicsPipelinedStepEquivalenceTest();
 }
 
 void RunPhysicsReplayOnlyTest() {

@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
@@ -17,10 +18,12 @@ const MeshRendererComponent* SceneComponentQueryService::TryGetMeshRenderer(cons
 }
 
 MeshRendererComponent* SceneComponentMutationService::TryGetMeshRenderer(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.MeshRenderers().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetMeshRenderer(Scene& scene, SceneEntity entity, const MeshRendererComponent& renderer) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.MeshRenderers().Set(entity, renderer);
@@ -31,6 +34,7 @@ void SceneComponentMutationService::SetMeshRenderer(Scene& scene, SceneEntity en
 }
 
 void SceneComponentMutationService::RemoveMeshRenderer(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.MeshRenderers().Remove(entity);

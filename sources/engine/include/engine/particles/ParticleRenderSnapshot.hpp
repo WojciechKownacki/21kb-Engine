@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
 
@@ -102,10 +103,25 @@ struct ParticleRenderRecord {
     std::uint32_t ribbonGroup = 0U;
     std::uint16_t frame = 0U;
     std::uint16_t normalizedAgeUnorm = 0U;
+    // Angles about X and Y (a mesh particle's Euler angles besides rotationRadians), wrapped to [-pi, pi] and
+    // stored as snorm16; they fit in the padding of the 80-byte record.
+    std::int16_t rotationXSnorm = 0;
+    std::int16_t rotationYSnorm = 0;
 };
 
 static_assert(sizeof(ParticleRenderRecord) >= 48U && sizeof(ParticleRenderRecord) <= 80U);
 static_assert(sizeof(ParticleRenderRecord) == 80U);
+
+// Angle (radians) <-> snorm16 as stored in rotationXSnorm / rotationYSnorm.
+[[nodiscard]] inline std::int16_t PackParticleAngle(float radians) noexcept {
+    constexpr float kPi = 3.14159265F;
+    const float turns = radians / (2.0F * kPi);
+    const float wrapped = (turns - static_cast<float>(static_cast<std::int64_t>(turns + (turns >= 0.0F ? 0.5F : -0.5F)))) * 2.0F;
+    return static_cast<std::int16_t>(wrapped * 32767.0F);
+}
+[[nodiscard]] inline float UnpackParticleAngle(std::int16_t snorm) noexcept {
+    return static_cast<float>(snorm) / 32767.0F * 3.14159265F;
+}
 static_assert(std::is_trivially_copyable_v<ParticleRenderRecord>);
 
 struct ParticleRenderEmitterRecord {
@@ -185,6 +201,8 @@ struct ParticleRenderSnapshotHeader {
     std::uint64_t fixedStepIndex = 0U;
     bool tombstone = false;
     std::uint8_t reserved[7]{};
+    // The simulation origin the positions of the snapshot are relative to (ParticlePlayback::SimulationOrigin).
+    kb::math::DVec3 origin{};
 };
 
 static_assert(std::is_trivially_copyable_v<ParticleRenderSnapshotHeader>);
@@ -221,6 +239,7 @@ struct ParticleRenderSnapshotPublishDesc {
     std::uint64_t revision = 0U;
     std::uint64_t fixedStepIndex = 0U;
     bool tombstone = false;
+    kb::math::DVec3 origin{};
     std::span<const ParticleRenderEmitterRecord> emitters;
     std::span<const ParticleRenderRecord> particles;
 };
@@ -241,6 +260,8 @@ public:
     [[nodiscard]] std::uint64_t BackendEpoch() const noexcept;
     [[nodiscard]] std::uint64_t FixedStepIndex() const noexcept;
     [[nodiscard]] bool IsTombstone() const noexcept;
+    // World position the record positions are relative to.
+    [[nodiscard]] const kb::math::DVec3& Origin() const noexcept;
     [[nodiscard]] std::span<const ParticleRenderEmitterRecord> Emitters() const noexcept;
     [[nodiscard]] std::span<const ParticleRenderRecord> Particles() const noexcept;
 

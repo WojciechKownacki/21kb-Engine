@@ -22,6 +22,17 @@ if(APPLE)
     add_compile_definitions(_LIBCPP_DISABLE_AVAILABILITY)
 endif()
 
+# Release objects carry debug information, so a shipped binary can be linked
+# with a PDB (see the shipped targets at the end of this file): a crash report
+# from a player is only readable with the PDB of that exact build. Embedded keeps
+# parallel compiles from sharing one compiler PDB. Sanitizer builds choose their
+# own format.
+if(MSVC AND NOT KB_ENABLE_SANITIZERS AND NOT DEFINED CMAKE_MSVC_DEBUG_INFORMATION_FORMAT)
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>$<$<CONFIG:Release>:Embedded>")
+    # Jolt would otherwise add its own /Zi on top of the format chosen here.
+    set(GENERATE_DEBUG_SYMBOLS OFF CACHE BOOL "Jolt debug information follows CMAKE_MSVC_DEBUG_INFORMATION_FORMAT" FORCE)
+endif()
+
 include(CTest)
 include(FetchContent)
 
@@ -34,12 +45,55 @@ set_property(CACHE KB_ANDROID_TEXTURE_PROFILE PROPERTY STRINGS ASTC ETC2)
 set(KB_WEB_RENDERER "WEBGL" CACHE STRING "Browser package renderer: WEBGL or WEBGPU")
 set_property(CACHE KB_WEB_RENDERER PROPERTY STRINGS WEBGL WEBGPU)
 option(KB_ENABLE_SANITIZERS "Build project targets with AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
+option(KB_BUILD_FUZZERS "Build the libFuzzer harnesses in fuzz/ (requires KB_ENABLE_SANITIZERS; build the kb_fuzzers target)" OFF)
+if(KB_BUILD_FUZZERS AND NOT KB_ENABLE_SANITIZERS)
+    message(FATAL_ERROR "KB_BUILD_FUZZERS requires KB_ENABLE_SANITIZERS=ON")
+endif()
 option(KB_ENGINE_ENABLE_NATIVE_AVX2 "Opt in to AVX2 code generation for engine targets and consumers; produced binaries require AVX2-capable CPUs" OFF)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    option(KB_ENGINE_TRANSFORM_LTO "Opt in to transform-only MSVC Release LTO; requires matching-toolset consumers" OFF)
+endif()
 option(KB_GENERATE_RENDERER_SHADERS "Generate renderer shaders with bgfx shaderc instead of staging prebuilt shaders" OFF)
 option(KB_BUILD_GRAPH_SHADERC "Build bgfx shaderc for the Material Editor graph cooker" ${KB_BUILD_EDITOR})
 option(KB_STRICT_OWN_WARNINGS "Treat warnings from first-party targets as build errors" ON)
 set(KB_DXCOMPILER_RUNTIME "" CACHE FILEPATH "Path to dxcompiler.dll copied next to shaderc for DXIL graph cooking")
 option(KB_BUILD_PROVIDER_MODULES_AS_DLL "Build provider engine modules as hot-reloadable DLL/shared libraries instead of static libraries" ON)
+
+option(KB_HARDENING "Build with exploit mitigations" ON)
+option(KB_HARDENING_SHADOW_STACK "Mark Windows images compatible with hardware-enforced shadow stacks (CET); costs CPU time in call-heavy engine code" OFF)
+
+# Exploit mitigations for everything the build produces, third-party code included, so they cover a whole
+# player: Control Flow Guard, ASLR and DEP on MSVC (shadow stacks on request); stack protector, fortified libc calls,
+# position-independent executables and read-only relocations with GCC and Clang. AddressSanitizer builds
+# leave out the ones it cannot be combined with.
+if(KB_HARDENING AND NOT EMSCRIPTEN)
+    if(MSVC)
+        if(NOT KB_ENABLE_SANITIZERS)
+            add_compile_options(/guard:cf)
+            add_link_options(/GUARD:CF)
+        endif()
+        add_link_options(/DYNAMICBASE /NXCOMPAT)
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            add_link_options(/HIGHENTROPYVA)
+        endif()
+        # Shadow stacks check every return; in the engine's call-heavy loops that measured 10-20% slower,
+        # so a game opts in with KB_HARDENING_SHADOW_STACK when it can afford that.
+        if(KB_HARDENING_SHADOW_STACK AND CMAKE_CXX_COMPILER_ARCHITECTURE_ID MATCHES "^(x64|X86)$")
+            add_link_options(/CETCOMPAT)
+        endif()
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(-fstack-protector-strong)
+        if(NOT KB_ENABLE_SANITIZERS)
+            add_compile_definitions($<$<NOT:$<CONFIG:Debug>>:_FORTIFY_SOURCE=2>)
+        endif()
+        set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+        include(CheckPIESupported)
+        check_pie_supported()
+        if(NOT APPLE)
+            add_link_options(LINKER:-z,relro LINKER:-z,now LINKER:-z,noexecstack)
+        endif()
+    endif()
+endif()
 
 if((ANDROID AND KB_BUILD_ANDROID_HOST) OR
    ((EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Linux") AND KB_BUILD_PACKAGED_GAME_HOST))
@@ -172,7 +226,15 @@ function(kb_add_bgfx_subdirectory)
         if(MSVC)
             target_compile_options(bimg_decode PRIVATE /EHsc)
         endif()
+        # An image file states its own size and the decoders allocate for it before
+        # reading a pixel. Nothing wider or taller than the largest GPU texture is
+        # usable, so the stb decoders refuse such a header instead of allocating.
+        target_compile_definitions(bimg_decode PRIVATE STBI_MAX_DIMENSIONS=16384)
     endif()
+    # The image decoders behind texture import are fuzzed with the engine code that calls them.
+    foreach(_kb_bimg_target IN ITEMS bimg bimg_decode)
+        kb_apply_fuzz_instrumentation(${_kb_bimg_target})
+    endforeach()
 
     if(MSVC)
         foreach(_kb_bgfx_exception_target IN ITEMS glslang spirv-opt spirv-cross tint shaderc)
@@ -237,6 +299,45 @@ function(kb_apply_quality_gates target_name)
             message(WARNING "KB_ENABLE_SANITIZERS is not configured for ${CMAKE_CXX_COMPILER_ID}; continuing without sanitizer flags.")
         endif()
     endif()
+
+    kb_apply_fuzz_coverage(${target_name})
+endfunction()
+
+# Coverage feedback for libFuzzer. Instrumented objects call back into the fuzzer
+# runtime, so a fuzzing tree builds the kb_fuzzers target rather than everything.
+function(kb_apply_fuzz_coverage target_name)
+    if(NOT KB_BUILD_FUZZERS)
+        return()
+    endif()
+    if(MSVC)
+        target_compile_options(${target_name} PRIVATE
+            /fsanitize-coverage=inline-8bit-counters
+            /fsanitize-coverage=edge
+            /fsanitize-coverage=trace-cmp
+            /fsanitize-coverage=trace-div)
+    else()
+        target_compile_options(${target_name} PRIVATE -fsanitize=fuzzer-no-link)
+    endif()
+endfunction()
+
+# Vendored parsers reached by the fuzz harnesses get the same address checking and
+# coverage as first-party code; their warnings stay unmanaged.
+function(kb_apply_fuzz_instrumentation target_name)
+    if(NOT KB_BUILD_FUZZERS OR NOT TARGET ${target_name})
+        return()
+    endif()
+    if(MSVC)
+        # /Zi so a report inside the vendored code names its lines.
+        target_compile_options(${target_name} PRIVATE /fsanitize=address /Zi)
+        target_compile_definitions(${target_name} PRIVATE
+            _DISABLE_STRING_ANNOTATION
+            _DISABLE_VECTOR_ANNOTATION
+            _DISABLE_OPTIONAL_ANNOTATION
+        )
+    else()
+        target_compile_options(${target_name} PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+    endif()
+    kb_apply_fuzz_coverage(${target_name})
 endfunction()
 
 set(FLECS_STATIC ON CACHE BOOL "Build Flecs as a static library" FORCE)
@@ -269,6 +370,9 @@ set(TARGET_VIEWER OFF CACHE BOOL "Do not build Jolt viewer" FORCE)
 set(JPH_USE_DX12 OFF CACHE BOOL "Do not build Jolt DirectX compute support" FORCE)
 set(JPH_USE_VK OFF CACHE BOOL "Do not build Jolt Vulkan compute support" FORCE)
 set(JPH_USE_MTL OFF CACHE BOOL "Do not build Jolt Metal compute support" FORCE)
+# World positions are double precision (docs/large_worlds.md). Jolt publishes JPH_DOUBLE_PRECISION as a PUBLIC
+# definition of its target, so every target that links Jolt and includes its headers compiles the same RVec3.
+set(DOUBLE_PRECISION ON CACHE BOOL "Build Jolt with double-precision world positions" FORCE)
 add_subdirectory(third_party/jolt/Build third_party/jolt EXCLUDE_FROM_ALL)
 if(TARGET Jolt AND NOT WIN32)
     set_target_properties(Jolt PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -295,6 +399,7 @@ target_include_directories(kb_ufbx PUBLIC
 if(NOT WIN32)
     set_target_properties(kb_ufbx PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
+kb_apply_fuzz_instrumentation(kb_ufbx)
 
 FetchContent_Declare(
     kb_lua
@@ -345,6 +450,129 @@ if(NOT TARGET kb_lua)
     endif()
 endif()
 
+# Every cryptographic primitive the engine uses (Ed25519, SHA-512, HMAC-SHA512,
+# XChaCha20-Poly1305) comes from this audited release. The engine reaches it only
+# through engine/security/Crypto.hpp and never implements a primitive itself.
+FetchContent_Declare(
+    kb_monocypher
+    URL https://monocypher.org/download/monocypher-4.0.2.tar.gz
+    URL_HASH SHA256=38d07179738c0c90677dba3ceb7a7b8496bcfea758ba1a53e803fed30ae0879c
+)
+FetchContent_MakeAvailable(kb_monocypher)
+if(NOT TARGET kb_monocypher)
+    add_library(kb_monocypher STATIC
+        ${kb_monocypher_SOURCE_DIR}/src/monocypher.c
+        ${kb_monocypher_SOURCE_DIR}/src/optional/monocypher-ed25519.c
+    )
+    target_include_directories(kb_monocypher PUBLIC
+        ${kb_monocypher_SOURCE_DIR}/src
+        ${kb_monocypher_SOURCE_DIR}/src/optional
+    )
+    if(NOT WIN32)
+        set_target_properties(kb_monocypher PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+endif()
+
+# Per-block compression of .kbpack containers. Only the single-threaded compressor and the
+# decompressor of the official release tarball are built; the legacy formats, the dictionary
+# builder and the hand-written x86-64 assembly decoder are left out, so the library compiles
+# the same way on every compiler and platform the engine targets.
+FetchContent_Declare(
+    kb_zstd
+    URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+    URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+)
+FetchContent_MakeAvailable(kb_zstd)
+if(NOT TARGET kb_zstd)
+    add_library(kb_zstd STATIC
+        ${kb_zstd_SOURCE_DIR}/lib/common/debug.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/entropy_common.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/error_private.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/fse_decompress.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/pool.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/threading.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/xxhash.c
+        ${kb_zstd_SOURCE_DIR}/lib/common/zstd_common.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/fse_compress.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/hist.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/huf_compress.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_compress.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_compress_literals.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_compress_sequences.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_compress_superblock.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_double_fast.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_fast.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_lazy.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_ldm.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_opt.c
+        ${kb_zstd_SOURCE_DIR}/lib/compress/zstd_preSplit.c
+        ${kb_zstd_SOURCE_DIR}/lib/decompress/huf_decompress.c
+        ${kb_zstd_SOURCE_DIR}/lib/decompress/zstd_ddict.c
+        ${kb_zstd_SOURCE_DIR}/lib/decompress/zstd_decompress.c
+        ${kb_zstd_SOURCE_DIR}/lib/decompress/zstd_decompress_block.c
+    )
+    target_include_directories(kb_zstd PUBLIC ${kb_zstd_SOURCE_DIR}/lib)
+    target_compile_definitions(kb_zstd PRIVATE ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0)
+    if(NOT WIN32)
+        set_target_properties(kb_zstd PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+    kb_apply_fuzz_instrumentation(kb_zstd)
+endif()
+
+# Navigation mesh generation (Recast), tiled navigation meshes and path queries (Detour), the
+# crowd moving agents over them (DetourCrowd) and the compact layers a tile is rebuilt from when
+# obstacles change (DetourTileCache builder). Only the libraries of the official release tarball
+# are compiled; its own CMake project (demo, tests) is never added. Polygon references are 64-bit
+# so a streamed world can hold millions of tiles, and query filters are virtual so the engine's
+# 32 area types filter paths exactly.
+FetchContent_Declare(
+    kb_recast
+    URL https://github.com/recastnavigation/recastnavigation/archive/refs/tags/v1.6.0.tar.gz
+    URL_HASH SHA256=d48ca0121962fa0639502c0f56c4e3ae72f98e55d88727225444f500775c0074
+    SOURCE_SUBDIR kb-libraries-only
+)
+FetchContent_MakeAvailable(kb_recast)
+if(NOT TARGET kb_recast)
+    add_library(kb_recast STATIC
+        ${kb_recast_SOURCE_DIR}/Recast/Source/Recast.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastAlloc.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastArea.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastAssert.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastContour.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastFilter.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastLayers.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastMesh.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastMeshDetail.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastRasterization.cpp
+        ${kb_recast_SOURCE_DIR}/Recast/Source/RecastRegion.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourAlloc.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourAssert.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourCommon.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMesh.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMeshBuilder.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNavMeshQuery.cpp
+        ${kb_recast_SOURCE_DIR}/Detour/Source/DetourNode.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourCrowd.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourLocalBoundary.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourObstacleAvoidance.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourPathCorridor.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourPathQueue.cpp
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Source/DetourProximityGrid.cpp
+        ${kb_recast_SOURCE_DIR}/DetourTileCache/Source/DetourTileCacheBuilder.cpp
+    )
+    target_include_directories(kb_recast PUBLIC
+        ${kb_recast_SOURCE_DIR}/Recast/Include
+        ${kb_recast_SOURCE_DIR}/Detour/Include
+        ${kb_recast_SOURCE_DIR}/DetourCrowd/Include
+        ${kb_recast_SOURCE_DIR}/DetourTileCache/Include
+    )
+    target_compile_definitions(kb_recast PUBLIC DT_POLYREF64=1 DT_VIRTUAL_QUERYFILTER=1)
+    if(NOT WIN32)
+        set_target_properties(kb_recast PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+    kb_apply_fuzz_instrumentation(kb_recast)
+endif()
+
 add_subdirectory(sources/engine engine)
 add_subdirectory(sources/tools tools)
 add_subdirectory(sources/plugins/physics_jolt physics_jolt)
@@ -359,8 +587,6 @@ if(BUILD_TESTING AND TARGET kb_21kb_particle_stage2_tests)
             "KB_21KB_PARTICLE_PLUGIN_PATH=\"$<TARGET_FILE:kb_21kb_particle_plugin>\"")
     endif()
 endif()
-add_subdirectory(sources/plugins/terrain_editor terrain_editor)
-
 if(TARGET kb_engine_tests)
     add_dependencies(kb_engine_tests kb_physics_jolt_plugin kb_audio_miniaudio_plugin kb_basic_lighting_plugin)
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
@@ -432,6 +658,8 @@ if(KB_BUILD_RENDERER)
 
     include(CMake/KbBgfxRuntimeShaders.cmake)
     add_subdirectory(sources/renderer renderer)
+    # The terrain editor imports heightmaps through bimg_decode, which comes with the renderer.
+    add_subdirectory(sources/plugins/terrain_editor terrain_editor)
     add_subdirectory(sources/game game)
     add_subdirectory(samples/render_smoke render_smoke)
     add_subdirectory(samples/standalone_player standalone_player)
@@ -446,8 +674,64 @@ if(KB_BUILD_EDITOR)
     add_subdirectory(sources/hub hub)
 endif()
 
+if(KB_BUILD_FUZZERS)
+    if(NOT KB_BUILD_RENDERER)
+        message(FATAL_ERROR "KB_BUILD_FUZZERS needs KB_BUILD_RENDERER for the mesh, texture, font and material readers")
+    endif()
+    add_subdirectory(fuzz)
+endif()
+
+# Everything packaging ships links with a full PDB in Release too, and so does the
+# crash test helper that stands in for it; the packager files each PDB into a
+# symbol store outside the shipped folder. /DEBUG turns off the Release reference
+# and folding optimisations, so they are named again.
+if(MSVC)
+    foreach(_kb_shipped_target IN ITEMS
+            kb_game kb_physics_jolt_plugin kb_audio_miniaudio_plugin kb_basic_lighting_plugin
+            kb_21kb_particle_plugin kb_crash_reporting_test_helper)
+        if(TARGET ${_kb_shipped_target})
+            get_target_property(_kb_shipped_type ${_kb_shipped_target} TYPE)
+            if(_kb_shipped_type MATCHES "^(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)$")
+                target_link_options(${_kb_shipped_target} PRIVATE
+                    "$<$<CONFIG:Release>:/DEBUG:FULL;/OPT:REF;/OPT:ICF>")
+            endif()
+        endif()
+    endforeach()
+endif()
+
 # Optional performance harness; use benchmarks/openworld for the repository harness.
 set(KB_PERFORMANCE_SOURCE_DIR "" CACHE PATH "Directory containing the performance harness")
 if(KB_PERFORMANCE_SOURCE_DIR)
     add_subdirectory("${KB_PERFORMANCE_SOURCE_DIR}" performance)
+endif()
+
+# Each test gets its own temporary directory, so tests that ctest runs in parallel never share a file in the
+# system temporary directory. The directories stay in the system temporary directory, outside any source
+# tree, because some tests check that what they write is not inside a project or a repository. Setting a
+# property on another directory's test needs CMake 3.28.
+function(kb_isolate_test_temp_directories directory root)
+    get_property(tests DIRECTORY "${directory}" PROPERTY TESTS)
+    foreach(test IN LISTS tests)
+        set(temp "${root}/${test}")
+        file(MAKE_DIRECTORY "${temp}")
+        set_property(TEST "${test}" DIRECTORY "${directory}" APPEND PROPERTY ENVIRONMENT
+            "TMP=${temp}" "TEMP=${temp}" "TMPDIR=${temp}")
+    endforeach()
+    get_property(subdirectories DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+    foreach(subdirectory IN LISTS subdirectories)
+        kb_isolate_test_temp_directories("${subdirectory}" "${root}")
+    endforeach()
+endfunction()
+if(BUILD_TESTING AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+    if(DEFINED ENV{TEMP})
+        file(TO_CMAKE_PATH "$ENV{TEMP}" _kb_system_temp)
+    elseif(DEFINED ENV{TMPDIR})
+        file(TO_CMAKE_PATH "$ENV{TMPDIR}" _kb_system_temp)
+    else()
+        set(_kb_system_temp "/tmp")
+    endif()
+    # One root per build tree, so two trees testing at once do not share one either.
+    string(SHA1 _kb_tree_tag "${CMAKE_BINARY_DIR}")
+    string(SUBSTRING "${_kb_tree_tag}" 0 12 _kb_tree_tag)
+    kb_isolate_test_temp_directories("${CMAKE_CURRENT_SOURCE_DIR}" "${_kb_system_temp}/21kb-tests-${_kb_tree_tag}")
 endif()

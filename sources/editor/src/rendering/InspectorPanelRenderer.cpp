@@ -11,6 +11,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/IAssetLoader.hpp"
 #include "engine/input/InputAssetIO.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -1710,6 +1711,26 @@ void PaintNavObstacleSection(
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintNavLinkSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::scene::NavLink& link) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::NavLink, HeroIconKind::RotationSnap, "Nav Link", true);
+    section.Field("Kind", link.kind == kb::scene::NavLinkKind::Jump ? "Jump" : link.kind == kb::scene::NavLinkKind::Ladder ? "Ladder" : "Walk",
+        InspectorPropertyId::NavLinkKind);
+    section.Vec3("Start", link.start, InspectorPropertyId::NavLinkStartX, InspectorPropertyId::NavLinkStartY, InspectorPropertyId::NavLinkStartZ);
+    section.Vec3("End", link.end, InspectorPropertyId::NavLinkEndX, InspectorPropertyId::NavLinkEndY, InspectorPropertyId::NavLinkEndZ);
+    section.Field("Radius", FormatFloat(link.radius, 3), InspectorPropertyId::NavLinkRadius);
+    section.Field("Area", std::to_string(link.area), InspectorPropertyId::NavLinkArea);
+    section.Bool("Both Ways", link.bidirectional, InspectorPropertyId::NavLinkBidirectional);
+    section.Bool("Enabled", link.enabled, InspectorPropertyId::NavLinkEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 [[nodiscard]] const char* RegionShapeKindLabel(kb::scene::RegionShapeKind kind) noexcept {
     switch (kind) {
     case kb::scene::RegionShapeKind::Circle2D: return "Circle 2D";
@@ -1756,7 +1777,9 @@ void PaintGuideCurveSection(HDC dc, RECT content, int& y, const EditorTheme& the
 }
 
 void PaintContentInstanceSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::ContentInstanceComponent& instance) {
-    const char* kind = instance.kind == kb::scene::ContentInstanceKind::Prefab ? "Prefab" : instance.kind == kb::scene::ContentInstanceKind::Subscene ? "Subscene" : "World Fragment";
+    const char* kind = instance.kind == kb::scene::ContentInstanceKind::Prefab ? "Prefab" : instance.kind == kb::scene::ContentInstanceKind::Subscene ? "Subscene"
+        : instance.kind == kb::scene::ContentInstanceKind::WorldFragment ? "World Fragment"
+        : instance.kind == kb::scene::ContentInstanceKind::PartitionedWorld ? "Partitioned World" : "Navigation Mesh";
     const char* lifetime = instance.lifetime == kb::scene::ContentInstanceLifetime::Owner ? "Owner" : "Persistent";
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::ContentInstance, HeroIconKind::Cube, "Content Instance", true);
     section.Field("Asset ID", std::to_string(instance.assetId), InspectorPropertyId::ContentInstanceAssetId);
@@ -3215,6 +3238,51 @@ void PaintTagsDropdown(HDC dc, const RECT& content, const EditorTheme& theme, co
     }
 }
 
+// The Prefab section of an object inside a prefab instance: the instance root lists its overrides and
+// the instance actions, any other node names its prefab and leads to the root.
+struct PrefabSectionModel {
+    struct OverrideRow {
+        std::string node;
+        std::string change;
+    };
+
+    bool shown = false;
+    bool root = false;
+    std::string prefabName;
+    std::vector<OverrideRow> overrides;
+
+    [[nodiscard]] int Rows() const noexcept {
+        return root ? 5 + static_cast<int>(overrides.size()) : 2;
+    }
+};
+
+[[nodiscard]] PrefabSectionModel BuildPrefabSection(const EditorSceneContext& sceneContext, kb::scene::SceneEntity entity) {
+    PrefabSectionModel model;
+    const kb::scene::Scene& scene = sceneContext.Scene();
+    const kb::scene::ScenePrefabs prefabs = scene.Prefabs();
+    std::uint32_t nodeIndex = 0U;
+    const kb::scene::ScenePrefabInstanceHandle instance = prefabs.ContainingInstance(entity, nodeIndex);
+    // In prefab edit mode the scene holds the prefab itself, not an instance of it.
+    if (!instance.IsValid() || sceneContext.InPrefabEditMode()) {
+        return model;
+    }
+    model.shown = true;
+    model.root = prefabs.RootInstance(entity) == instance;
+    const std::filesystem::path source = prefabs.SourcePath(prefabs.SourcePrefab(instance));
+    model.prefabName = source.empty() ? std::string{ "Unsaved prefab" } : source.stem().string();
+    if (model.root) {
+        for (const kb::scene::ScenePrefabPropertyOverride& property : sceneContext.PrefabInstanceOverrides(instance).properties) {
+            model.overrides.push_back(PrefabSectionModel::OverrideRow{
+                .node = property.target.IsValid() && scene.Entities().IsAlive(property.target)
+                    ? scene.Entities().Name(property.target)
+                    : "Node " + std::to_string(property.nodeIndex),
+                .change = property.propertyPath + " = " + property.value,
+            });
+        }
+    }
+    return model;
+}
+
 void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& theme, const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
     const kb::scene::Scene& scene = sceneContext.Scene();
     const InspectorPanelState& inspector = sceneContext.Inspector();
@@ -3276,6 +3344,27 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             section.Vec3("Position", transform.localPosition, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ);
             section.Rotation("Rotation", transform.localRotation);
             section.Vec3("Scale", transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
+        }
+        y += h + kSectionGap;
+    }
+
+    if (const PrefabSectionModel prefab = BuildPrefabSection(sceneContext, selected); prefab.shown) {
+        const int h = SectionHeight(inspector, InspectorSectionId::Prefab, prefab.Rows());
+        if (sectionVisible(y, h)) {
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Prefab, HeroIconKind::Cube, "Prefab");
+            if (prefab.root) {
+                section.Field("Source", prefab.prefabName, InspectorPropertyId::PrefabSource);
+                section.Field("Overrides", std::to_string(prefab.overrides.size()));
+                for (const PrefabSectionModel::OverrideRow& row : prefab.overrides) {
+                    section.Field(row.node, row.change);
+                }
+                section.Action("Apply", InspectorPropertyId::PrefabApply, true);
+                section.Action("Revert", InspectorPropertyId::PrefabRevert);
+                section.Action("Unpack", InspectorPropertyId::PrefabUnpack);
+            } else {
+                section.Field("Prefab", prefab.prefabName, InspectorPropertyId::PrefabSource);
+                section.Action("Select Root", InspectorPropertyId::PrefabSelectRoot);
+            }
         }
         y += h + kSectionGap;
     }
@@ -3473,6 +3562,14 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             y += h + kSectionGap;
         }
     }
+    if (const kb::scene::NavLink* link = scene.Components().NavLinks().TryGet(selected); link != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::NavLink, 7);
+        if (sectionVisible(y, h)) {
+            PaintNavLinkSection(dc, content, y, theme, inspector, *link);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody));
         if (sectionVisible(y, h)) {
@@ -3624,6 +3721,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     height += SectionHeight(inspector, InspectorSectionId::General, 3) + kSectionGap;
     if (!scene.Components().UI().Has<kb::scene::UIRectTransform>(selected))
         height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
+    if (const PrefabSectionModel prefab = BuildPrefabSection(sceneContext, selected); prefab.shown) {
+        height += SectionHeight(inspector, InspectorSectionId::Prefab, prefab.Rows()) + kSectionGap;
+    }
     for (const kb::scene::UIComponentType component :
         InspectorUIComponentModel::Components(scene, selected)) {
         height += UIComponentSectionHeight(inspector, component,
@@ -3695,6 +3795,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (scene.Components().NavObstacles().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::NavObstacle, 8) + kSectionGap;
+    }
+    if (scene.Components().NavLinks().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::NavLink, 7) + kSectionGap;
     }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody)) + kSectionGap;
@@ -5056,6 +5159,34 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
 
     }
 
+    if (const PrefabSectionModel prefab = BuildPrefabSection(sceneContext, selected); prefab.shown) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Prefab, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::Prefab)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::Prefab, InspectorPropertyId::PrefabSource, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            std::vector<InspectorPropertyId> actions{ InspectorPropertyId::PrefabSelectRoot };
+            if (prefab.root) {
+                // The override count and list rows only show text.
+                for (std::size_t row = 0U; row <= prefab.overrides.size(); ++row) {
+                    AdvanceRow(y);
+                }
+                actions = { InspectorPropertyId::PrefabApply, InspectorPropertyId::PrefabRevert, InspectorPropertyId::PrefabUnpack };
+            }
+            for (const InspectorPropertyId action : actions) {
+                const RECT row = RowRect(viewport, y);
+                if (Contains(row, x, scrolledY)) {
+                    return MakeHit(InspectorHitKind::TextField, InspectorSectionId::Prefab, action, row);
+                }
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+
     if (sceneContext.Scene().Components().RegionShapes().Has(selected)) {
         if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::RegionShape, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
             return hit;
@@ -5560,6 +5691,30 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavObstacle, InspectorPropertyId::NavObstacleCarve, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavObstacle, InspectorPropertyId::NavObstacleEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().NavLinks().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::NavLink, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::NavLink)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkKind, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkStartX, InspectorPropertyId::NavLinkStartY, InspectorPropertyId::NavLinkStartZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkEndX, InspectorPropertyId::NavLinkEndY, InspectorPropertyId::NavLinkEndZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            const std::array<InspectorPropertyId, 2> scalarRows{ { InspectorPropertyId::NavLinkRadius, InspectorPropertyId::NavLinkArea } };
+            for (const InspectorPropertyId property : scalarRows) {
+                if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::NavLink, property, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkBidirectional, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
         }
         y += kSectionGap;

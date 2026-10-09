@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 
 namespace kb::gameplay {
@@ -22,5 +23,5 @@ bool GameplayModules::Equip(kb::scene::SceneEntity entity, GameplayTagId slot, G
 std::optional<GameplayItemId> GameplayModules::Equipped(kb::scene::SceneEntity entity, GameplayTagId slot) const noexcept { const auto entityFound=equipment_.find(entity.Id()); if(entityFound==equipment_.end())return std::nullopt; const auto itemFound=entityFound->second.find(slot); return itemFound==entityFound->second.end()?std::nullopt:std::optional<GameplayItemId>{itemFound->second}; }
 bool GameplayModules::RegisterPickup(kb::scene::SceneEntity entity, PickupState pickup) { return entity.IsValid()&&pickup.item!=0U&&pickup.quantity!=0U&&pickups_.emplace(entity.Id(),pickup).second; }
 bool GameplayModules::CollectPickup(kb::scene::SceneEntity pickup, kb::scene::SceneEntity collector) { const auto found=pickups_.find(pickup.Id()); if(!collector.IsValid()||found==pickups_.end()||!AddItems(collector,found->second.item,found->second.quantity))return false; pickups_.erase(found); return true; }
-bool GameplayModules::Remove(kb::scene::SceneEntity entity) noexcept { const EntityId id=entity.Id(); return health_.erase(id)!=0U||attributes_.erase(id)!=0U||inventories_.erase(id)!=0U||equipment_.erase(id)!=0U||pickups_.erase(id)!=0U; }
+bool GameplayModules::Remove(kb::scene::SceneEntity entity) noexcept { const EntityId id=entity.Id(); const std::size_t removed=health_.erase(id)+attributes_.erase(id)+inventories_.erase(id)+equipment_.erase(id)+pickups_.erase(id); return removed!=0U; }
 } // namespace kb::gameplay

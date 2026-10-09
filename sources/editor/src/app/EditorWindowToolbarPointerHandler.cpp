@@ -364,6 +364,63 @@ void ActivatePanel(
             } else if (*row == 2) {
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::EditorSettings, DockArea::Right);
             }
+        } else if (shellInteraction.OpenMenu() == EditorMenuCommand::World) {
+            bool changed = false;
+            switch (*row) {
+            case 0:
+                changed = sceneContext.LoadWorldCellsNearCamera();
+                break;
+            case 1:
+                changed = sceneContext.LoadAllWorldCells();
+                break;
+            case 2:
+                changed = sceneContext.UnloadAllWorldCells();
+                break;
+            case 3:
+                changed = sceneContext.BuildOpenWorld();
+                break;
+            case 4:
+                sceneContext.WorldPartition().SetGridVisible(!sceneContext.WorldPartition().GridVisible());
+                sceneContext.Console().Info("World", sceneContext.WorldPartition().GridVisible() ? "Cell grid shown." : "Cell grid hidden.");
+                changed = true;
+                break;
+            case 5: {
+                const std::optional<EditorDirtySceneResolution> resolution =
+                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, L"converting the scene to a world");
+                changed = resolution.has_value() && sceneContext.ConvertCurrentSceneToWorld(128.0, *resolution);
+                break;
+            }
+            case 6: {
+                const std::optional<std::string> name = EditorTextEntryDialog::Show(mainWindow, {
+                    .title = "Add Data Layer",
+                    .label = "Layer name",
+                    .value = {},
+                    .hint = "Letters, digits, '_', '-' or '.'. New layers start active.",
+                    .acceptLabel = "Add",
+                });
+                changed = name.has_value() && sceneContext.DeclareWorldDataLayer(*name);
+                break;
+            }
+            case 7:
+                changed = sceneContext.CycleSelectedObjectDataLayer();
+                break;
+            case 8:
+                changed = sceneContext.ToggleSelectedObjectAlwaysLoaded();
+                break;
+            case 9:
+                changed = sceneContext.BakeNavigation();
+                break;
+            case 10:
+                sceneContext.SetNavigationMeshVisible(!sceneContext.Navigation().Visible());
+                sceneContext.Console().Info("Navigation", sceneContext.Navigation().Visible() ? "Navigation mesh shown." : "Navigation mesh hidden.");
+                changed = true;
+                break;
+            default:
+                break;
+            }
+            if (changed) {
+                sceneViewport.RequestPresent();
+            }
         }
         const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
         shellInteraction.CloseMenu();

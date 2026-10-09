@@ -1,6 +1,8 @@
 #include "ecs/world/WorldInternalAccess.hpp"
 
 #include "engine/ecs/World.hpp"
+#include "ecs/world/WorldComponentMutator.hpp"
+#include "engine/ecs/NativeArchetypeStorage.hpp"
 
 namespace kb::ecs {
 
@@ -34,6 +36,19 @@ void* WorldInternalAccess::TryGetMutableComponent(World& world, Entity entity, C
 
 void* WorldInternalAccess::TryGetMutableNativeComponent(World& world, Entity entity, ComponentId componentId) {
     return world.nativeStorage_ == nullptr ? nullptr : world.nativeStorage_->TryGetMutableComponentData(entity, componentId);
+}
+
+void* WorldInternalAccess::TryGetMutableNativeComponentMarkModified(World& world, Entity entity, ComponentId componentId) {
+    return world.nativeStorage_ == nullptr ? nullptr : world.nativeStorage_->TryGetMutableComponentDataMarkModified(entity, componentId);
+}
+
+void WorldInternalAccess::MarkNativeComponentWritten(World& world, Entity entity, ComponentId componentId, std::size_t size, const void* data) {
+    if (world.MirrorsValueWrites(componentId)) {
+        WorldComponentMutator::SetExisting(world.world_, entity, componentId, size, data);
+    }
+    // OnSet may remove this component, migrate its row or destroy the entity; the lookup that flags the row
+    // also tells whether it is still there.
+    static_cast<void>(world.nativeStorage_->TryGetMutableComponentDataMarkModified(entity, componentId));
 }
 
 void WorldInternalAccess::MarkComponentModified(World& world, Entity entity, ComponentId componentId) {

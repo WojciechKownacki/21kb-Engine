@@ -1,6 +1,7 @@
 #include "scene/pass/MeshPassProcessor.hpp"
 #include "scene/cache/SceneMeshBatchCommandCache.hpp"
 
+#include "engine/scene/ScenePortalVisibility.hpp"
 #include "kb/render/scene/cache/SceneCachedDrawCommand.hpp"
 #include "scene/cache/SceneCachedDrawCommandMaterializer.hpp"
 #include "scene/cache/SceneMaterialTextureDependencySignature.hpp"
@@ -258,7 +259,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 continue;
             }
             const std::pair<std::uint32_t, std::uint32_t> meshletRange = MeshPipelineVisibility::MeshletRangeForSection(meshResource, sectionIndex);
-            if (desc.batchCommandCache != nullptr) result.commandLookupScratch.clear();
+            if (desc.batchCommandCache != nullptr) ClearKeepingNodes(result.commandLookupScratch, result.commandLookupNodes);
             std::uint32_t culledForSection = 0U;
             std::uint64_t lastMaterialAssetId = 0U;
             MeshPipelineMaterialResolution lastMaterialResolution{};
@@ -298,7 +299,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                             materialResource = MeshPipelineResourceResolver::ResolveMaterialOrFallback(instance, materialAssetId, *desc.resources, *desc.resourceMap, materialHandle, result.stats, desc.diagnostics);
                             MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(instance, materialAssetId, materialResource, *desc.resources, *desc.resourceMap, result.stats, desc.diagnostics);
                             if (materialHandle.IsValid() && materialResource != nullptr) {
-                                result.materialResolutionScratch.emplace(materialAssetId, MeshPipelineMaterialResolution{
+                                EmplaceKeptNode(result.materialResolutionScratch, result.materialResolutionNodes, materialAssetId, MeshPipelineMaterialResolution{
                                     .handle = materialHandle,
                                     .resource = materialResource,
                                 });
@@ -351,6 +352,11 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 }
                 if (desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::Gizmo &&
                     MeshPipelineVisibility::IsOccludedByVisibilityBlockers(desc.camera, worldBounds, desc.visibilityBlockers)) {
+                    ++culledForSection;
+                    continue;
+                }
+                if (desc.portalVisibility != nullptr && desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::Gizmo &&
+                    desc.portalVisibility->Hides(kb::math::Vec3{ worldBounds.center[0], worldBounds.center[1], worldBounds.center[2] }, instance.layer)) {
                     ++culledForSection;
                     continue;
                 }
@@ -432,7 +438,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     SceneCachedDrawCommandMaterializer::ApplyTemplate(cachedCommand, *command);
                     command->currentSkinningPalette = instance.currentSkinningPalette;
                     command->previousSkinningPalette = instance.previousSkinningPalette;
-                    result.commandLookupScratch.emplace(commandKey, writeCommandCount);
+                    EmplaceKeptNode(result.commandLookupScratch, result.commandLookupNodes, commandKey, writeCommandCount);
                     result.stats.meshCommandLookupCapacity = std::max<std::uint32_t>(
                         result.stats.meshCommandLookupCapacity,
                         static_cast<std::uint32_t>(result.commandLookupScratch.bucket_count()));

@@ -6,6 +6,7 @@
 #include "app/EditorPlayModeState.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/core/JsonValue.hpp"
 #include "engine/input/InputActionAsset.hpp"
@@ -79,6 +80,14 @@
 #include "rendering/EditorMeshThumbnailService.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "engine/visual/VisualGraphDebugSession.hpp"
+#include "engine/world/WorldCellIndex.hpp"
+#include "engine/world/WorldPartitionRuntime.hpp"
+#include "engine/navigation/NavGeometryCollector.hpp"
+#include "engine/navigation/NavMeshAsset.hpp"
+#include "engine/scene/SceneNavigation.hpp"
+#include "engine/scene/SceneTransforms.hpp"
+#include "kb/render/world/NavMeshBakeTool.hpp"
+#include "kb/render/world/WorldBuildTool.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -97,6 +106,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <ranges>
 #include <chrono>
 #include <cmath>
@@ -694,6 +704,372 @@ ReadScriptValue(
     return std::nullopt;
 }
 
+[[nodiscard]] std::optional<kb::world::WorldCellCoord> CellMember(
+    const JsonValue& step, std::string_view xName, std::string_view zName, std::string& error) {
+    const auto x = NumberMember(step, xName, error);
+    const auto z = NumberMember(step, zName, error);
+    if (!x || !z || std::floor(*x) != *x || std::floor(*z) != *z ||
+        std::fabs(*x) > 9.0e15 || std::fabs(*z) > 9.0e15) {
+        if (error.empty()) error = "cell coordinates must be integers";
+        return std::nullopt;
+    }
+    return kb::world::WorldCellCoord{ static_cast<std::int64_t>(*x), static_cast<std::int64_t>(*z) };
+}
+
+[[nodiscard]] std::optional<kb::world::WorldEditObjectInfo> FindWorldObject(
+    const ScenarioState& state, const JsonValue& step, std::string& error) {
+    const auto alias = StringMember(step, "entity", error, false);
+    const auto name = StringMember(step, "name", error, false);
+    if (!error.empty()) return std::nullopt;
+    const kb::world::WorldEditSession& session = state.context.WorldPartition().Session();
+    if (alias.has_value()) {
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        std::optional<kb::world::WorldEditObjectInfo> object = session.FindObject(entity);
+        if (!object.has_value()) error = "entity is not a loaded world object";
+        return object;
+    }
+    if (name.has_value()) {
+        for (kb::world::WorldEditObjectInfo& object : session.Objects()) {
+            if (object.name == *name) return std::move(object);
+        }
+        error = "the world has no object named " + *name;
+        return std::nullopt;
+    }
+    error = "missing 'entity' or 'name'";
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<kb::world::WorldCellState> ParseCellState(std::string_view text) {
+    if (text == "unloaded") return kb::world::WorldCellState::Unloaded;
+    if (text == "loading") return kb::world::WorldCellState::Loading;
+    if (text == "loaded") return kb::world::WorldCellState::Loaded;
+    if (text == "unloading") return kb::world::WorldCellState::Unloading;
+    if (text == "failed") return kb::world::WorldCellState::Failed;
+    return std::nullopt;
+}
+
+// Partitioned world operations: editing a world one region at a time, building
+// it and checking that a placed world streams in Play mode.
+[[nodiscard]] std::optional<StepOutcome> ExecuteWorldStep(
+    ScenarioState& state, const JsonValue& step, std::string_view operation) {
+    std::string error;
+    EditorSceneContext& context = state.context;
+    if (operation == "world_convert_scene") {
+        const double cellSize = NumberMember(step, "cell_size", error, false).value_or(128.0);
+        if (!error.empty()) return StepOutcome{ false, error };
+        const bool converted = context.ConvertCurrentSceneToWorld(cellSize, EditorDirtySceneResolution::Save);
+        return StepOutcome{ converted && context.IsWorldOpen(), "converted to " + context.CurrentScenePath().generic_string() };
+    }
+    if (operation == "open_world") {
+        const auto path = StringMember(step, "path", error);
+        if (!path) return StepOutcome{ false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return StepOutcome{ false, error };
+        return StepOutcome{ context.OpenWorld(*resolved, EditorDirtySceneResolution::Discard), resolved->generic_string() };
+    }
+    if (operation == "world_load_region" || operation == "world_unload_region") {
+        const auto min = CellMember(step, "min_x", "min_z", error);
+        const auto max = min ? CellMember(step, "max_x", "max_z", error) : std::nullopt;
+        if (!min || !max) return StepOutcome{ false, error };
+        const bool changed = operation == "world_load_region" ? context.LoadWorldRegion(*min, *max) : context.UnloadWorldRegion(*min, *max);
+        return StepOutcome{ changed, std::to_string(context.WorldPartition().Session().LoadedObjectCount()) + " object(s) loaded" };
+    }
+    if (operation == "world_load_near_camera") {
+        return StepOutcome{ context.LoadWorldCellsNearCamera(), std::to_string(context.WorldPartition().Session().LoadedObjectCount()) + " object(s) loaded" };
+    }
+    if (operation == "world_load_all") {
+        return StepOutcome{ context.LoadAllWorldCells(), std::to_string(context.WorldPartition().Session().LoadedObjectCount()) + " object(s) loaded" };
+    }
+    if (operation == "world_unload_all") {
+        return StepOutcome{ context.UnloadAllWorldCells(), std::to_string(context.WorldPartition().Session().LoadedObjectCount()) + " object(s) loaded" };
+    }
+    if (operation == "world_build") {
+        return StepOutcome{ context.BuildOpenWorld(), "world built" };
+    }
+    if (operation == "world_set_grid_visible") {
+        const auto visible = BoolMember(step, "visible", error);
+        if (!visible) return StepOutcome{ false, error };
+        context.WorldPartition().SetGridVisible(*visible);
+        return StepOutcome{ context.WorldPartition().GridVisible() == *visible, *visible ? "grid shown" : "grid hidden" };
+    }
+    if (operation == "world_declare_data_layer") {
+        const auto name = StringMember(step, "name", error);
+        const bool active = BoolMember(step, "initially_active", error, false).value_or(true);
+        if (!name || !error.empty()) return StepOutcome{ false, error };
+        return StepOutcome{ context.DeclareWorldDataLayer(*name, active), *name };
+    }
+    if (operation == "world_bind_object") {
+        const auto alias = StringMember(step, "id", error);
+        const auto name = StringMember(step, "name", error);
+        if (!alias || !name) return StepOutcome{ false, error };
+        for (const kb::world::WorldEditObjectInfo& object : context.WorldPartition().Session().Objects()) {
+            if (object.name == *name && object.loaded && context.Scene().Entities().IsAlive(object.root)) {
+                state.entities.insert_or_assign(*alias, EntityAlias{ .entity = object.root, .name = *name });
+                return StepOutcome{ true, *alias + '=' + std::to_string(object.root.Id()) };
+            }
+        }
+        return StepOutcome{ false, "no loaded world object is named " + *name };
+    }
+    if (operation == "world_cycle_layer" || operation == "world_toggle_always_loaded") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return StepOutcome{ false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!context.Scene().Entities().IsAlive(entity)) return StepOutcome{ false, "entity alias is not alive" };
+        context.SelectEntity(entity);
+        return StepOutcome{ operation == "world_cycle_layer" ? context.CycleSelectedObjectDataLayer() : context.ToggleSelectedObjectAlwaysLoaded(), *alias };
+    }
+    if (operation == "assert_world") {
+        const kb::world::WorldEditSession& session = context.WorldPartition().Session();
+        const bool open = BoolMember(step, "open", error, false).value_or(true);
+        if (!error.empty()) return StepOutcome{ false, error };
+        if (context.IsWorldOpen() != open) return StepOutcome{ false, open ? "no world is open" : "a world is open" };
+        const kb::math::DVec3& camera = context.ViewportCamera().PrecisePosition();
+        const std::size_t loadedObjects = session.LoadedObjectCount();
+        const std::size_t loadedCells = session.LoadedCells().size();
+        const std::size_t occupiedCells = session.OccupiedCells().size();
+        const std::size_t gridLines = context.WorldPartition().GridLines(camera.x, 0.0, camera.z).size();
+        const std::size_t objectFiles = open
+            ? kb::world::WorldObjectFileIO::List(kb::world::WorldPaths::ObjectsDirectory(session.DescriptorPath(), session.Descriptor())).size()
+            : 0U;
+        const std::string detail = "objects=" + std::to_string(loadedObjects) + " loaded_cells=" + std::to_string(loadedCells) +
+            " occupied_cells=" + std::to_string(occupiedCells) + " grid_lines=" + std::to_string(gridLines) +
+            " object_files=" + std::to_string(objectFiles);
+        const auto expect = [&](std::string_view name, std::size_t actual) {
+            const auto expected = UInt32Member(step, name, error, false);
+            return !expected.has_value() || *expected == actual;
+        };
+        const bool matched = expect("loaded_objects", loadedObjects) && expect("loaded_cells", loadedCells) &&
+            expect("occupied_cells", occupiedCells) && expect("grid_lines", gridLines) && expect("object_files", objectFiles);
+        return StepOutcome{ matched && error.empty(), error.empty() ? detail : error };
+    }
+    if (operation == "assert_world_object") {
+        const std::optional<kb::world::WorldEditObjectInfo> object = FindWorldObject(state, step, error);
+        if (!object) return StepOutcome{ false, error };
+        const auto layer = StringMember(step, "layer", error, false);
+        const auto alwaysLoaded = BoolMember(step, "always_loaded", error, false);
+        const auto loaded = BoolMember(step, "loaded", error, false);
+        const auto x = NumberMember(step, "x", error, false);
+        const auto z = NumberMember(step, "z", error, false);
+        if (!error.empty()) return StepOutcome{ false, error };
+        const bool matched = (!layer || object->dataLayer == *layer) && (!alwaysLoaded || object->alwaysLoaded == *alwaysLoaded) &&
+            (!loaded || object->loaded == *loaded) && (!x || std::fabs(object->position.x - *x) < 0.01) &&
+            (!z || std::fabs(object->position.z - *z) < 0.01);
+        return StepOutcome{ matched, object->name + " layer='" + object->dataLayer + "' always_loaded=" +
+            (object->alwaysLoaded ? "true" : "false") + " loaded=" + (object->loaded ? "true" : "false") +
+            " x=" + std::to_string(object->position.x) + " z=" + std::to_string(object->position.z) };
+    }
+    if (operation == "assert_world_build") {
+        const auto path = StringMember(step, "path", error);
+        if (!path) return StepOutcome{ false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return StepOutcome{ false, error };
+        const kb::world::WorldCellIndexReadResult index = kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(*resolved));
+        if (!index.succeeded) return StepOutcome{ false, index.error };
+        std::size_t persistent = 0U;
+        std::size_t layered = 0U;
+        for (const kb::world::WorldCellUnit& unit : index.index.units) {
+            persistent += unit.persistent ? 1U : 0U;
+            layered += unit.dataLayer.empty() ? 0U : 1U;
+        }
+        const std::string detail = "cells=" + std::to_string(index.index.units.size()) + " hlods=" + std::to_string(index.index.hlods.size()) +
+            " persistent=" + std::to_string(persistent) + " layered=" + std::to_string(layered);
+        const auto expect = [&](std::string_view name, std::size_t actual) {
+            const auto expected = UInt32Member(step, name, error, false);
+            return !expected.has_value() || *expected == actual;
+        };
+        const bool matched = expect("cells", index.index.units.size()) && expect("hlods", index.index.hlods.size()) &&
+            expect("persistent", persistent) && expect("layered", layered);
+        return StepOutcome{ matched && error.empty(), error.empty() ? detail : error };
+    }
+    if (operation == "assert_world_build_matches_tools") {
+        // Rebuilds the world from a copy of the project's content with the build kb_cli and
+        // kb_cooker run, and requires every file of the editor's build to match it byte for byte.
+        const auto path = StringMember(step, "path", error);
+        if (!path) return StepOutcome{ false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return StepOutcome{ false, error };
+        const std::filesystem::path assets = EditorProjectPaths::AssetsRoot();
+        const std::filesystem::path relative = resolved->lexically_relative(assets);
+        if (relative.empty() || *relative.begin() == "..") return StepOutcome{ false, "the world is not inside the project's content" };
+        const std::filesystem::path copy = state.automation.ArtifactRoot() / "world-build-tools";
+        std::error_code code;
+        std::filesystem::remove_all(copy, code);
+        std::filesystem::copy(assets, copy, std::filesystem::copy_options::recursive, code);
+        if (code) return StepOutcome{ false, "project content could not be copied: " + code.message() };
+        const kb::world::WorldBuildResult built = kb::render::BuildWorldFromContentRoot(copy, copy / relative);
+        if (!built.succeeded) return StepOutcome{ false, built.error };
+        const auto tree = [](const std::filesystem::path& root) {
+            std::map<std::string, std::vector<std::uint8_t>> files;
+            for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator{ root }) {
+                if (!entry.is_regular_file()) continue;
+                std::ifstream input{ entry.path(), std::ios::binary };
+                files.emplace(entry.path().lexically_relative(root).generic_string(),
+                    std::vector<std::uint8_t>{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} });
+            }
+            return files;
+        };
+        const auto editorFiles = tree(kb::world::WorldPaths::CellsDirectory(*resolved));
+        const auto toolFiles = tree(kb::world::WorldPaths::CellsDirectory(copy / relative));
+        std::size_t proxies = 0U;
+        for (const auto& [name, bytes] : editorFiles) proxies += name.ends_with(".obj") ? 1U : 0U;
+        return StepOutcome{ !editorFiles.empty() && editorFiles == toolFiles,
+            std::to_string(editorFiles.size()) + " file(s), " + std::to_string(proxies) + " HLOD proxies, " +
+                (editorFiles == toolFiles ? "identical" : "different") };
+    }
+    if (operation == "assign_world") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto world = StringMember(step, "world", error);
+        if (!alias || !world) return StepOutcome{ false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::assets::AssetId worldId = ResolveAsset(state, *world);
+        if (!context.Scene().Entities().IsAlive(entity) || !worldId.IsValid()) {
+            return StepOutcome{ false, "entity or world asset was not found" };
+        }
+        const auto asset = kb::script::ScriptSceneComponentApi::SetProperty(context.Scene(), entity, "ContentInstance", "assetId",
+            kb::script::ScriptValue{ worldId.value, kb::script::ScriptValueType::Hash });
+        const auto kind = asset.succeeded
+            ? kb::script::ScriptSceneComponentApi::SetProperty(context.Scene(), entity, "ContentInstance", "kind",
+                kb::script::ScriptValue{ static_cast<int>(kb::scene::ContentInstanceKind::PartitionedWorld) })
+            : asset;
+        if (kind.succeeded) {
+            context.MarkSceneDocumentDirty();
+        }
+        return StepOutcome{ kind.succeeded, kind.succeeded ? *world : kind.error };
+    }
+    if (operation == "assert_world_cell") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto expectedText = StringMember(step, "state", error);
+        const auto layer = StringMember(step, "layer", error, false);
+        const bool persistent = BoolMember(step, "persistent", error, false).value_or(false);
+        const double timeout = NumberMember(step, "timeout_ms", error, false).value_or(0.0);
+        const auto hlod = BoolMember(step, "hlod_visible", error, false);
+        if (!alias || !expectedText || !error.empty()) return StepOutcome{ false, error };
+        const std::optional<kb::world::WorldCellState> expected = ParseCellState(*expectedText);
+        if (!expected) return StepOutcome{ false, "state must be unloaded, loading, loaded, unloading or failed" };
+        kb::world::WorldCellCoord cell{};
+        if (!persistent) {
+            const auto parsed = CellMember(step, "x", "z", error);
+            if (!parsed) return StepOutcome{ false, error };
+            cell = *parsed;
+        }
+        const kb::scene::SceneEntity owner = ResolveEntity(state, *alias);
+        if (!context.Scene().Entities().IsAlive(owner)) return StepOutcome{ false, "world owner alias is not alive" };
+        kb::world::WorldPartitionRuntime runtime{ context.Scene() };
+        const auto current = [&] {
+            return persistent ? runtime.PersistentState(owner, layer.value_or("")) : runtime.CellState(owner, cell, layer.value_or(""));
+        };
+        const auto matches = [&] {
+            return current() == *expected && (!hlod.has_value() || runtime.IsHlodVisible(owner, cell) == *hlod);
+        };
+        // Cells decode on worker threads: keep Play ticking until the state arrives or time runs out.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(timeout);
+        while (!matches() && state.playMode.IsPlaying() && std::chrono::steady_clock::now() < deadline) {
+            if (!state.automation.StepRuntime(1U, 1.0F / 60.0F, false, false, false)) {
+                return StepOutcome{ false, "Play mode could not advance" };
+            }
+        }
+        const std::vector<kb::world::WorldInstanceInfo> worlds = runtime.Worlds();
+        const std::string diagnostic = worlds.empty() ? std::string{ "no world is streaming" }
+            : (worlds.front().error.empty() ? worlds.front().lastFailure : worlds.front().error);
+        return StepOutcome{ matches(), "state=" + std::to_string(static_cast<int>(current())) + (diagnostic.empty() ? "" : " " + diagnostic) };
+    }
+    return std::nullopt;
+}
+
+// Navigation operations: baking a scene's navigation mesh, its debug view and agents walking on it.
+[[nodiscard]] std::optional<StepOutcome> ExecuteNavigationStep(
+    ScenarioState& state, const JsonValue& step, std::string_view operation) {
+    std::string error;
+    EditorSceneContext& context = state.context;
+    if (operation == "navmesh_bake") {
+        return StepOutcome{ context.BakeNavigation(), std::to_string(context.Navigation().TriangleCount()) + " triangle(s) shown" };
+    }
+    if (operation == "navmesh_set_visible") {
+        const auto visible = BoolMember(step, "visible", error);
+        if (!visible) return StepOutcome{ false, error };
+        context.SetNavigationMeshVisible(*visible);
+        return StepOutcome{ context.Navigation().Visible() == *visible, *visible ? "navigation mesh shown" : "navigation mesh hidden" };
+    }
+    if (operation == "assert_navmesh") {
+        // `path` names the scene; its navigation mesh lies beside it.
+        const auto path = StringMember(step, "path", error);
+        if (!path) return StepOutcome{ false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return StepOutcome{ false, error };
+        const std::filesystem::path navPath = resolved->extension() == kb::navigation::NavMeshAsset::Extension
+            ? *resolved : kb::navigation::SceneNavMeshPath(*resolved);
+        const kb::navigation::NavMeshAssetReadResult read = kb::navigation::NavMeshAssetIO::Read(navPath);
+        if (!read.succeeded) return StepOutcome{ false, read.error };
+        const auto asset = std::make_shared<const kb::navigation::NavMeshAsset>(read.asset);
+        const std::vector<kb::math::DVec3> triangles = kb::navigation::NavMeshAssetTriangles(asset, 0U);
+        double area = 0.0;
+        for (std::size_t index = 0U; index + 2U < triangles.size(); index += 3U) {
+            const kb::math::DVec3 a = triangles[index + 1U] - triangles[index];
+            const kb::math::DVec3 b = triangles[index + 2U] - triangles[index];
+            area += std::fabs(a.x * b.z - a.z * b.x) * 0.5;
+        }
+        const std::size_t drawn = context.Navigation().TriangleCount();
+        const auto minTiles = UInt32Member(step, "min_tiles", error, false);
+        const auto profiles = UInt32Member(step, "profiles", error, false);
+        const auto minArea = NumberMember(step, "min_area", error, false);
+        const auto maxArea = NumberMember(step, "max_area", error, false);
+        const auto minDrawn = UInt32Member(step, "min_drawn_triangles", error, false);
+        if (!error.empty()) return StepOutcome{ false, error };
+        const bool matched = (!minTiles || read.asset.tiles.size() >= *minTiles) && (!profiles || read.asset.settings.profiles.size() == *profiles) &&
+            (!minArea || area >= *minArea) && (!maxArea || area <= *maxArea) && (!minDrawn || drawn >= *minDrawn);
+        return StepOutcome{ matched, "tiles=" + std::to_string(read.asset.tiles.size()) + " profiles=" + std::to_string(read.asset.settings.profiles.size()) +
+            " area=" + std::to_string(area) + " drawn_triangles=" + std::to_string(drawn) };
+    }
+    if (operation == "assert_navmesh_matches_tools") {
+        // Bakes the scene again from a copy of the project's content, the way kb_cli does, and
+        // requires the same bytes as the editor's navigation mesh.
+        const auto path = StringMember(step, "path", error);
+        if (!path) return StepOutcome{ false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return StepOutcome{ false, error };
+        const std::filesystem::path assets = EditorProjectPaths::AssetsRoot();
+        const std::filesystem::path relative = resolved->lexically_relative(assets);
+        if (relative.empty() || *relative.begin() == "..") return StepOutcome{ false, "the scene is not inside the project's content" };
+        const std::filesystem::path copy = state.automation.ArtifactRoot() / "navmesh-bake-tools";
+        std::error_code code;
+        std::filesystem::remove_all(copy, code);
+        std::filesystem::copy(assets, copy, std::filesystem::copy_options::recursive, code);
+        if (code) return StepOutcome{ false, "project content could not be copied: " + code.message() };
+        const kb::navigation::NavSceneBakeResult baked = kb::render::BakeSceneNavMeshFromContentRoot(copy, copy / relative,
+            kb::navigation::SceneNavMeshSettings(*resolved));
+        if (!baked.succeeded) return StepOutcome{ false, baked.error };
+        const std::vector<std::uint8_t> tool = kb::navigation::NavMeshAssetIO::Serialize(baked.asset);
+        std::ifstream input{ kb::navigation::SceneNavMeshPath(*resolved), std::ios::binary };
+        const std::vector<std::uint8_t> editor{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        return StepOutcome{ !tool.empty() && tool == editor, std::to_string(editor.size()) + " byte(s), " + (tool == editor ? "identical" : "different") };
+    }
+    if (operation == "assert_agent_reaches") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto z = NumberMember(step, "z", error);
+        const double tolerance = NumberMember(step, "tolerance", error, false).value_or(0.25);
+        const double timeout = NumberMember(step, "timeout_ms", error, false).value_or(10000.0);
+        if (!alias || !x || !z || !error.empty()) return StepOutcome{ false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!context.Scene().Entities().IsAlive(entity)) return StepOutcome{ false, "entity alias is not alive" };
+        const auto distance = [&] {
+            const kb::math::DVec3 position = context.Scene().Transforms().WorldTranslation(entity);
+            return std::hypot(position.x - *x, position.z - *z);
+        };
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(timeout);
+        while (distance() > tolerance && state.playMode.IsPlaying() && std::chrono::steady_clock::now() < deadline) {
+            if (!state.automation.StepRuntime(1U, 1.0F / 60.0F, false, false, false)) {
+                return StepOutcome{ false, "Play mode could not advance" };
+            }
+        }
+        const kb::scene::NavAgent* agent = context.Scene().Components().NavAgents().TryGet(entity);
+        return StepOutcome{ distance() <= tolerance, "distance=" + std::to_string(distance()) + " status=" +
+            std::to_string(agent != nullptr ? static_cast<int>(agent->pathStatus) : -1) + " navmesh_tiles=" +
+            std::to_string(context.Scene().Navigation().NavMeshTileCount()) };
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] StepOutcome ExecuteStep(
     ScenarioState& state, const JsonValue& step) {
     std::string error;
@@ -702,7 +1078,16 @@ ReadScriptValue(
     }
     const auto operation = StringMember(step, "op", error);
     if (!operation.has_value()) return { false, error };
+    if (std::optional<StepOutcome> world = ExecuteWorldStep(state, step, *operation)) {
+        return *world;
+    }
+    if (std::optional<StepOutcome> navigation = ExecuteNavigationStep(state, step, *operation)) {
+        return *navigation;
+    }
 
+    if (*operation == "verify_prefab_round_trip") {
+        return {state.automation.VerifyPrefabRoundTrip(), "Prefab create, place, override, apply, save, reopen, play, stop and undo keep the asset link"};
+    }
     if (*operation == "verify_ui_2d") {
         return {state.automation.VerifyUI2DEditing(), "2D toolbar, UI selection, eight resize handles, move, undo and cancel"};
     }
@@ -4098,6 +4483,55 @@ ReadScriptValue(
         return {changed >= 100U, "changed pixels: " + std::to_string(changed) + " (minimum 100)"};
     }
 
+    if (*operation == "capture_scene_viewport") {
+        // The Scene panel's viewport as the GPU renders it in edit mode (its camera, its
+        // overlays such as the world cell grid), read back to a PNG.
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        if (!checkpoint) return { false, error };
+        return { state.automation.CaptureSceneViewport(*checkpoint), "scene:" + *checkpoint };
+    }
+
+    if (*operation == "assert_capture_color_difference") {
+        // Pixels that differ between two captures and show `color` in `with`: what drawing one
+        // thing (such as the cell grid) added to an otherwise identical frame.
+        const auto with = StringMember(step, "with", error);
+        const auto without = StringMember(step, "without", error);
+        const JsonValue* color = Member(step, "color", JsonValue::Kind::Array, error);
+        const std::uint32_t minimum = UInt32Member(step, "min_pixels", error, false).value_or(100U);
+        const double tolerance = NumberMember(step, "tolerance", error, false).value_or(48.0);
+        if (!with || !without || color == nullptr || color->Size() != 3U || !error.empty()) {
+            return { false, error.empty() ? "color must be [r, g, b] in 0..255" : error };
+        }
+        const double red = color->At(0)->AsNumber();
+        const double green = color->At(1)->AsNumber();
+        const double blue = color->At(2)->AsNumber();
+        const auto root = state.automation.ArtifactRoot() / "screenshots";
+        HeroIconGdiplusRuntime::EnsureStarted();
+        Gdiplus::Bitmap first((root / (*with + ".png")).wstring().c_str());
+        Gdiplus::Bitmap second((root / (*without + ".png")).wstring().c_str());
+        if (first.GetLastStatus() != Gdiplus::Ok || second.GetLastStatus() != Gdiplus::Ok ||
+            first.GetWidth() != second.GetWidth() || first.GetHeight() != second.GetHeight()) {
+            return { false, "capture images must be readable and have equal dimensions" };
+        }
+        std::size_t changed = 0U;
+        std::size_t matching = 0U;
+        for (UINT y = 0U; y < first.GetHeight(); ++y) {
+            for (UINT x = 0U; x < first.GetWidth(); ++x) {
+                Gdiplus::Color lhs{}, rhs{};
+                if (first.GetPixel(x, y, &lhs) != Gdiplus::Ok || second.GetPixel(x, y, &rhs) != Gdiplus::Ok)
+                    return { false, "capture pixel read failed" };
+                if (lhs.GetValue() == rhs.GetValue()) continue;
+                ++changed;
+                if (std::fabs(lhs.GetR() - red) <= tolerance && std::fabs(lhs.GetG() - green) <= tolerance &&
+                    std::fabs(lhs.GetB() - blue) <= tolerance) {
+                    ++matching;
+                }
+            }
+        }
+        return { matching >= minimum, "changed pixels: " + std::to_string(changed) + ", in the color: " + std::to_string(matching) +
+            " (minimum " + std::to_string(minimum) + ")" };
+    }
+
     if (*operation == "capture_runtime") {
         const auto checkpoint =
             StringMember(step, "checkpoint", error);
@@ -4418,15 +4852,21 @@ ReadScriptValue(
             static_cast<const kb::scene::Scene&>(state.context.Scene()).Runtime();
         const std::shared_ptr<const kb::scene::SceneRuntimeReadSnapshot> before =
             workerView.ReadSnapshot();
-        bool queued = false;
-        std::thread worker{ [&state, &queued] {
+        // The command comes from a thread that is not the scene's owner: a background worker.
+        std::atomic<bool> queued{ false };
+        const std::shared_ptr<kb::assets::streaming::BackgroundLoadService> background =
+            kb::assets::streaming::BackgroundLoadService::Shared();
+        const kb::assets::streaming::BackgroundRequestHandle worker = background->Run([&state, &queued](std::string&) {
             queued = state.context.Scene().Runtime().EnqueueCommand(
                 kb::scene::SceneRuntimeCommand{
                     .kind = kb::scene::SceneRuntimeCommandKind::SetTimeScale,
                     .timeScale = 0.5F,
                 });
-        } };
-        worker.join();
+            return true;
+        }, 0);
+        // Like a join: the job uses these locals until it is done.
+        static_cast<void>(kb::assets::streaming::BackgroundLoadService::WaitUntilDone(
+            worker, std::chrono::steady_clock::time_point::max()));
         if (!queued || before == nullptr) {
             return { false, "worker could not enqueue runtime command" };
         }

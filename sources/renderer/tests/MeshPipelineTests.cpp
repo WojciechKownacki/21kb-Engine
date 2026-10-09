@@ -16,6 +16,21 @@
 #include "../src/scene/cache/SceneMeshCommandReuseGate.hpp"
 #include "../src/scene/cache/SceneMeshBatchCommandCache.hpp"
 #include "../src/renderer/RendererTemporalJitter.hpp"
+#include "../src/scene/SceneRenderVisibilityPublisher.hpp"
+
+#include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneObject.hpp"
+#include "engine/scene/ScenePortalVisibility.hpp"
+#include "engine/scene/SceneRegionPortalComponents.hpp"
+#include "engine/scene/SceneRegionShapeComponents.hpp"
+#include "engine/scene/SceneRenderFeedback.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneVisibilityCellComponents.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
 
 #include <array>
 #include <string_view>
@@ -1647,6 +1662,98 @@ void RunMeshPipelineCullsWithVisibilityBlockerTest() {
         "Orthographic visibility used perspective angular bounds to hide a mesh beside the blocker");
 }
 
+// Cells A, B and C in a row along +Z with portals A -> B and B -> C: the mesh passes and the visibility
+// feedback cull what stands in a cell the camera cannot see through the portals.
+void RunMeshPipelineCullsInvisibleVisibilityCellsTest() {
+    kb::scene::Scene scene;
+    const auto addCell = [&scene](float z) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Cell", .transform = kb::scene::TransformComponent{ .localPosition = { 0.0F, 0.0F, z } } });
+        scene.Components().RegionShapes().Set(object.Entity(),
+            kb::scene::RegionShapeComponent{ .kind = kb::scene::RegionShapeKind::Box, .size = { 10.0F, 6.0F, 10.0F } });
+        scene.Components().VisibilityCells().Set(object.Entity(), kb::scene::VisibilityCellComponent{});
+        return object.Entity();
+    };
+    const auto addPortal = [&scene](float z, kb::scene::SceneEntity from, kb::scene::SceneEntity to) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Portal", .transform = kb::scene::TransformComponent{ .localPosition = { 0.0F, 0.0F, z } } });
+        scene.Components().RegionShapes().Set(object.Entity(),
+            kb::scene::RegionShapeComponent{ .kind = kb::scene::RegionShapeKind::Box, .size = { 2.0F, 3.0F, 0.5F } });
+        scene.Components().RegionPortals().Set(object.Entity(),
+            kb::scene::SceneRegionPortalComponent{ .sourceCell = from, .targetCell = to, .enabled = true });
+        return object.Entity();
+    };
+    const kb::scene::SceneEntity a = addCell(0.0F);
+    const kb::scene::SceneEntity b = addCell(10.0F);
+    const kb::scene::SceneEntity c = addCell(20.0F);
+    static_cast<void>(addPortal(5.0F, a, b));
+    const kb::scene::SceneEntity bc = addPortal(15.0F, b, c);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+
+    RenderScene cameras;
+    static_cast<void>(cameras.UpsertCamera(CameraRenderProxyDesc{
+        .entityId = 1U, .position = { 0.0F, 0.0F, -3.0F }, .verticalFovDegrees = 90.0F, .primary = true }));
+    const std::optional<SceneRenderCamera> camera = cameras.BuildPrimaryCamera(1024U, 1024U);
+    Require(camera.has_value(), "Portal culling test camera could not be built");
+    const kb::scene::ScenePortalCamera portalCamera = MeshPipelineVisibility::PortalCamera(*camera);
+    Require(NearlyEqual(portalCamera.position.x, 0.0F) && NearlyEqual(portalCamera.position.y, 0.0F) &&
+            NearlyEqual(portalCamera.position.z, -3.0F),
+        "The portal pass must see the render camera at its position");
+
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.5F };
+    mesh.sections = { RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds } };
+    const std::vector<SceneRenderDrawGroup> drawGroups{ SceneRenderDrawGroup{
+        .meshAssetId = 42U,
+        .instances = {
+            SceneRenderMeshInstance{ .entityId = 11U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 2.0F) },
+            SceneRenderMeshInstance{ .entityId = 12U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 10.0F) },
+            SceneRenderMeshInstance{ .entityId = 13U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 20.0F) },
+        },
+    } };
+    const auto drawnInstances = [&](MeshPassType pass, const kb::scene::ScenePortalVisibility* visibility, std::uint32_t& culled) {
+        const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+            .pass = pass, .drawGroups = &drawGroups, .resolvedMeshResource = &mesh, .camera = &*camera,
+            .portalVisibility = visibility, .resourceValidation = MeshPipelineResourceValidation::Skip,
+        });
+        culled = result.stats.culledInstanceCount;
+        std::size_t drawn = 0U;
+        for (const MeshDrawCommand& command : result.commands) drawn += command.instances.size();
+        return drawn;
+    };
+
+    std::uint32_t culled = 0U;
+    const kb::scene::ScenePortalVisibility open = kb::scene::ComputeScenePortalVisibility(scene, portalCamera);
+    Require(drawnInstances(MeshPassType::BaseOpaque, &open, culled) == 3U && culled == 0U,
+        "Meshes in cells seen through open portals must be drawn");
+
+    kb::scene::SceneRegionPortalComponent closed = *scene.Components().RegionPortals().TryGet(bc);
+    closed.enabled = false;
+    scene.Components().RegionPortals().Set(bc, closed);
+    const kb::scene::ScenePortalVisibility visibility = kb::scene::ComputeScenePortalVisibility(scene, portalCamera);
+    Require(drawnInstances(MeshPassType::BaseOpaque, &visibility, culled) == 2U && culled == 1U,
+        "A mesh in the cell behind a closed portal must be culled from the opaque pass");
+    Require(drawnInstances(MeshPassType::ShadowDepth, &visibility, culled) == 3U,
+        "Shadow casters in hidden cells must still cast into the visible ones");
+    Require(drawnInstances(MeshPassType::BaseOpaque, nullptr, culled) == 3U, "Without portal visibility nothing is culled by cell");
+
+    // The visibility feedback scripts read reports the same.
+    RenderScene renderScene;
+    for (const SceneRenderMeshInstance& instance : drawGroups[0].instances) {
+        static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = instance.entityId, .meshAssetId = 42U, .model = instance.model,
+            .boundsOverride = mesh.bounds, .visible = true, .layer = 1U }));
+    }
+    renderScene.SetPortalVisibility(visibility);
+    kb::scene::SceneRenderVisibilityFrame frame;
+    SceneRenderVisibilityPublisher::BuildFrame(renderScene, &*camera, 1U, 0U, 1024U, 1024U, nullptr, nullptr, frame);
+    Require(frame.entries.size() == 3U && frame.entries[0].visible && frame.entries[1].visible && !frame.entries[2].visible,
+        "Visibility feedback must report a mesh in a hidden cell as not visible");
+    renderScene.SetPortalVisibility(std::nullopt);
+    Require(renderScene.PortalVisibility() == nullptr, "Clearing the portal visibility must stop culling by cell");
+    static_cast<void>(c);
+}
+
 void RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest() {
     RenderMeshResource mesh{};
     mesh.indexCount = 12U;
@@ -2249,6 +2356,7 @@ void RunMeshPipelineTests() {
     RunMeshPipelineCpuCullsByFrustumBoundsTest();
     RunMeshPipelineAnimatedBoundsOverrideControlsCullingTest();
     RunMeshPipelineCullsWithVisibilityBlockerTest();
+    RunMeshPipelineCullsInvisibleVisibilityCellsTest();
     RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest();
     RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest();
     RunGpuDrivenFeatureClassifierGatesByCapabilitiesTest();

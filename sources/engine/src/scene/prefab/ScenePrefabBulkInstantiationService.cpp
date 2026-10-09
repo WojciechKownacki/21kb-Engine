@@ -1,10 +1,12 @@
 #include "scene/prefab/ScenePrefabBulkInstantiationService.hpp"
+#include "ecs/GeometricReserve.hpp"
 #include "scene/prefab/ScenePrefabReferenceResolver.hpp"
 
 #include "engine/ecs/CommandBuffer.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "scene/SceneAccess.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
@@ -12,6 +14,7 @@
 #include "scene/prefab/ScenePrefabBakedData.hpp"
 #include "scene/prefab/ScenePrefabNameResolver.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
+#include "scene/transform/SceneTransformPrecision.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -170,6 +173,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<DrawD3DeformedGeometryComponent> deformedGeometries;
     std::vector<NavAgent> navAgents;
     std::vector<NavObstacle> navObstacles;
+    std::vector<NavLink> navLinks;
     std::vector<kb::ecs::CommandBuffer::BulkComponentView> views;
     std::vector<kb::ecs::World::BulkComponentView> worldViews;
     std::vector<kb::ecs::Entity> createdEntities;
@@ -326,6 +330,10 @@ struct ScenePrefabArchetypeSpawnPayload {
             RepeatComponents(navObstacles, std::span<const NavObstacle>{ archetype.navObstacles }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const NavObstacle>{ navObstacles });
         }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavLink)) {
+            RepeatComponents(navLinks, std::span<const NavLink>{ archetype.navLinks }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const NavLink>{ navLinks });
+        }
     }
 
     void BuildPattern(const ScenePrefabBakedArchetype& archetype, std::size_t instanceCount) {
@@ -479,6 +487,10 @@ struct ScenePrefabArchetypeSpawnPayload {
             AddCommandComponentPatternView(views, std::span<const NavObstacle>{ archetype.navObstacles }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const NavObstacle>{ archetype.navObstacles }, instanceCount);
         }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavLink)) {
+            AddCommandComponentPatternView(views, std::span<const NavLink>{ archetype.navLinks }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const NavLink>{ archetype.navLinks }, instanceCount);
+        }
     }
 };
 
@@ -596,7 +608,9 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
         }
 
         for (std::size_t rootNodeIndex : rootNodeIndices) {
-            (*rootAppendTarget)[rootWriteCursor++] = entities[EntityIndex(instanceIndex, rootNodeIndex, nodes.size())];
+            const SceneEntity root = entities[EntityIndex(instanceIndex, rootNodeIndex, nodes.size())];
+            (*rootAppendTarget)[rootWriteCursor++] = root;
+            if (rootAppendTarget == &state.hierarchyRoots) SceneHierarchyCache::NoteRootAppended(state, root);
         }
 
         for (std::size_t parentNodeIndex = 0; parentNodeIndex < childNodesByParentNode.size(); ++parentNodeIndex) {
@@ -618,6 +632,10 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
         }
     }
 
+    for (const SceneEntity entity : entities) {
+        SceneHierarchyCache::RefreshTransformLink(state, entity);
+    }
+    SceneHierarchyCache::RefreshTransformLink(state, settings.parent.Entity());
     const auto previousTopologyVersion = state.hierarchyTopologyVersion;
     ++state.hierarchyTopologyVersion;
     ++state.renderTopologyVersion;
@@ -677,16 +695,16 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
             ++childrenPerNode[node.parentNode];
         }
     }
-    state.hierarchyRoots.reserve(state.hierarchyRoots.size() + (settings.parent.Entity().IsValid() ? 0U : rootCount * instanceCount));
+    kb::ecs::ReserveGeometric(state.hierarchyRoots, state.hierarchyRoots.size() + (settings.parent.Entity().IsValid() ? 0U : rootCount * instanceCount));
     if (settings.parent.Entity().IsValid()) {
         const std::uint32_t parentIndex = kb::ecs::GeneratedEntityIndex(settings.parent.Entity());
         if (parentIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
             if (state.denseHierarchyChildren.size() <= parentIndex) {
                 state.denseHierarchyChildren.resize(static_cast<std::size_t>(parentIndex) + 1U);
             }
-            state.denseHierarchyChildren[parentIndex].reserve(state.denseHierarchyChildren[parentIndex].size() + rootCount * instanceCount);
+            kb::ecs::ReserveGeometric(state.denseHierarchyChildren[parentIndex], state.denseHierarchyChildren[parentIndex].size() + rootCount * instanceCount);
         } else {
-            state.hierarchyChildren[settings.parent.Entity().Id()].reserve(state.hierarchyChildren[settings.parent.Entity().Id()].size() + rootCount * instanceCount);
+            kb::ecs::ReserveGeometric(state.hierarchyChildren[settings.parent.Entity().Id()], state.hierarchyChildren[settings.parent.Entity().Id()].size() + rootCount * instanceCount);
         }
     }
 
@@ -712,6 +730,7 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
 
             if (!parent.IsValid()) {
                 state.hierarchyRoots.push_back(entity);
+                SceneHierarchyCache::NoteRootAppended(state, entity);
                 continue;
             }
             const std::uint32_t parentIndex = kb::ecs::GeneratedEntityIndex(parent);
@@ -722,6 +741,10 @@ void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEnt
             }
         }
     }
+    for (const SceneEntity entity : entities) {
+        SceneHierarchyCache::RefreshTransformLink(state, entity);
+    }
+    SceneHierarchyCache::RefreshTransformLink(state, settings.parent.Entity());
     const auto previousTopologyVersion = state.hierarchyTopologyVersion;
     ++state.hierarchyTopologyVersion;
     ++state.renderTopologyVersion;
@@ -904,6 +927,21 @@ void ResolvePrefabReferences(Scene& scene, std::span<const ScenePrefabNodeDesc> 
     }
 }
 
+// A node whose translation is finer than float precision gives that part to its entity in every instance.
+void ApplyTranslationResiduals(Scene& scene, std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities, std::size_t instanceCount) {
+    if (std::ranges::none_of(nodes, [](const ScenePrefabNodeDesc& node) {
+        return !IsZero(FittingResidual(node.transform.localPosition, node.localPositionResidual));
+    })) return;
+    SceneState& state = SceneAccess::State(scene);
+    for (std::size_t instance = 0U; instance < instanceCount; ++instance) {
+        for (std::size_t index = 0U; index < nodes.size(); ++index) {
+            const Vec3 residual = FittingResidual(nodes[index].transform.localPosition, nodes[index].localPositionResidual);
+            if (!IsZero(residual)) SceneTransformPrecision::StoreLocalResidual(state, entities[EntityIndex(instance, index, nodes.size())], residual);
+        }
+    }
+}
+
 [[nodiscard]] std::vector<ScenePrefabInstance> BuildInstances(
     Scene& scene,
     std::span<const ScenePrefabNodeDesc> nodes,
@@ -1007,7 +1045,9 @@ void ResolvePrefabReferences(Scene& scene, std::span<const ScenePrefabNodeDesc> 
         const auto createStart = PrefabStatsClock::now();
         const std::vector<SceneEntity> entities = CreateBakedEntitiesDirect(state.world, *baked, count, spawnPayloads, nativeOnlyBatch, createBreakdown);
         const std::uint64_t entityCreateNanoseconds = ElapsedNanoseconds(createStart, PrefabStatsClock::now());
+        SceneHistoryService::NoteObjectsCreated(scene, entities);
         ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
+        ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ entities }, count);
 
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
         std::uint64_t instanceObjectSlabNanoseconds = 0;
@@ -1071,7 +1111,9 @@ void ResolvePrefabReferences(Scene& scene, std::span<const ScenePrefabNodeDesc> 
     for (std::size_t index = 0U; index < entities.size(); ++index) {
         resolvedEntities[index] = playback.Resolve(entities[index]);
     }
+    SceneHistoryService::NoteObjectsCreated(scene, resolvedEntities);
     ResolvePrefabReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
+    ApplyTranslationResiduals(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
 
     std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t hierarchyRecordNanoseconds = 0;

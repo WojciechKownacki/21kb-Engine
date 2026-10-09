@@ -314,7 +314,8 @@ template <typename T, typename Components>
     }
 
     const TransformComponent* currentTransform = transforms.TryGet(entity);
-    if (currentTransform == nullptr || !Equals(*currentTransform, node.transform)) {
+    if (currentTransform == nullptr || !Equals(*currentTransform, node.transform) ||
+        transforms.LocalTranslation(entity, *currentTransform) != node.LocalTranslation()) {
         return false;
     }
     if (!Equals(componentReaders.visibility.Get(entity), node.visibility)) {

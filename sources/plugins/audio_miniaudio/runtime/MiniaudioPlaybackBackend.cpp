@@ -18,7 +18,10 @@ MiniaudioPlaybackBackend::MiniaudioPlaybackBackend()
 #if !defined(NDEBUG)
     : ownerThread_(std::this_thread::get_id())
 #endif
-{}
+{
+    sourceRegistry_.SetAudioSpace(&audioSpace_);
+    voicePool_.SetAudioSpace(&audioSpace_);
+}
 
 MiniaudioPlaybackBackend::~MiniaudioPlaybackBackend() {
     Shutdown();
@@ -62,7 +65,11 @@ void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) 
         return;
     }
 
-    const MiniaudioListenerSynchronizer::State listenerState = listenerSynchronizer_.Sync(engine_.Native(), context);
+    const MiniaudioListenerSynchronizer::State listenerState = listenerSynchronizer_.Sync(engine_.Native(), context, &audioSpace_);
+    if (listenerState.shift.x != 0.0F || listenerState.shift.y != 0.0F || listenerState.shift.z != 0.0F) {
+        sourceRegistry_.ShiftPositions(listenerState.shift);
+        voicePool_.ShiftPositions(listenerState.shift);
+    }
     // LIB-147: bus groups sync FIRST (sources route into them below). A topology rebuild
     // invalidates every ma_sound_group, so entity sounds must recreate (their signatures
     // carry the bus generation) and one-shot voices must stop - both BEFORE any of them
@@ -76,7 +83,7 @@ void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) 
     kb::scene::Vec3 listenerPosition{};
     if (occlusionSettings.enabled && listenerState.active) {
         listenerPosition = listenerState.position;
-        occlusionSampler_.BeginTick(occlusionSettings);
+        occlusionSampler_.BeginTick(occlusionSettings, audioSpace_.Origin());
         occlusionSampler = &occlusionSampler_;
     }
     sourceRegistry_.Sync(engine_.Native(), context, clipResolver_, busRegistry_, occlusionSampler, listenerPosition, playbackAvailable);
@@ -107,6 +114,7 @@ void MiniaudioPlaybackBackend::Shutdown() noexcept {
     clipResolver_.Reset();
     occlusionSampler_.Clear();
     listenerSynchronizer_.Reset();
+    audioSpace_.Reset();
     engine_.Shutdown();
 }
 
@@ -221,6 +229,7 @@ kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeInternal(kb::
     clipResolver_.Reset();
     occlusionSampler_.Clear();
     listenerSynchronizer_.Reset();
+    audioSpace_.Reset();
     engine_.Shutdown();
     engine_.Initialize(forceNoDevice);
     return engine_.Status();

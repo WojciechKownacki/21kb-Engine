@@ -63,6 +63,27 @@ kb::scene::TransformComponent EcsRenderTransformResolver::Resolve(kb::scene::Sce
     return resolved;
 }
 
+kb::math::DVec3 EcsRenderTransformResolver::ResolveWorldTranslation(kb::scene::SceneEntity entity) {
+    const kb::scene::TransformComponent* row = entity.IsValid() ? scene_.Transforms().TryGet(entity) : nullptr;
+    if (row == nullptr) {
+        return kb::math::DVec3{};
+    }
+    if (!row->worldDirty) {
+        return scene_.Transforms().WorldTranslation(entity, *row);
+    }
+    const kb::math::DVec3 local = scene_.Transforms().LocalTranslation(entity, *row);
+    const kb::scene::SceneEntity parent = scene_.Hierarchy().Parent(entity);
+    if (!parent.IsValid() || !scene_.Entities().IsAlive(parent) || resolving_.contains(entity.Id())) {
+        return local;
+    }
+    resolving_.insert(entity.Id());
+    const kb::scene::TransformComponent parentTransform = Resolve(parent);
+    const kb::math::DVec3 parentWorld = ResolveWorldTranslation(parent);
+    resolving_.erase(entity.Id());
+    const kb::math::DVec3 scaled{ local.x * parentTransform.worldScale.x, local.y * parentTransform.worldScale.y, local.z * parentTransform.worldScale.z };
+    return parentWorld + kb::math::RotateDouble(Normalize(parentTransform.worldRotation), scaled);
+}
+
 kb::scene::TransformComponent EcsRenderTransformResolver::Identity() noexcept {
     return kb::scene::TransformComponent{
         .localScale = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F },

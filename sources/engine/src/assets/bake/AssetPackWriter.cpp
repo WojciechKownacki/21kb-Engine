@@ -1,6 +1,7 @@
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 
+#include "assets/bake/AssetPackCompression.hpp"
 #include "assets/bake/BakeStorePath.hpp"
 
 #include <algorithm>
@@ -140,13 +141,46 @@ constexpr std::uint64_t kPayloadStampBytes = 16U;
 
 } // namespace
 
+bool IsValidAssetPackWriterOptions(const AssetPackWriterOptions& options) noexcept {
+    if (options.compression != AssetPackBlockCompression::None &&
+        options.compression != AssetPackBlockCompression::Zstd) {
+        return false;
+    }
+    if (options.compression == AssetPackBlockCompression::Zstd &&
+        (options.compressionLevel < kMinAssetPackCompressionLevel ||
+            options.compressionLevel > kMaxAssetPackCompressionLevel)) {
+        return false;
+    }
+    const bool hasBase = options.baseIdentity.high != 0U || options.baseIdentity.low != 0U;
+    if (!options.label.empty() && !IsValidBakeCacheName(options.label)) {
+        return false;
+    }
+    switch (options.role) {
+    case AssetPackRole::Base:
+        return options.patchLevel == 0U && !hasBase;
+    case AssetPackRole::Chunk:
+        return options.patchLevel == 0U && hasBase && !options.label.empty();
+    case AssetPackRole::Patch:
+        return options.patchLevel != 0U && hasBase && !options.label.empty();
+    }
+    return false;
+}
+
 AssetPackWriter::AssetPackWriter(std::filesystem::path packPath, const BakeTargetProfile& profile)
+    : AssetPackWriter{ std::move(packPath), profile, AssetPackWriterOptions{} } {}
+
+AssetPackWriter::AssetPackWriter(
+    std::filesystem::path packPath,
+    const BakeTargetProfile& profile,
+    AssetPackWriterOptions options)
     : packPath_{ store::Normalize(std::move(packPath)) }
     , targetProfileId_{ profile.identifier }
     , targetProfileHash_{ BakeTargetProfileFingerprint(profile) }
     , packageAlignmentBytes_{ profile.packageBlockAlignmentBytes }
     , mappedAlignmentBytes_{ profile.mappedBlockAlignmentBytes }
-    , profileIsValid_{ IsValidBakeTargetProfile(profile) } {
+    , profileIsValid_{ IsValidBakeTargetProfile(profile) }
+    , options_{ std::move(options) }
+    , optionsAreValid_{ IsValidAssetPackWriterOptions(options_) } {
     lockPath_ = WithSuffix(packPath_, kLockSuffix);
 }
 
@@ -364,6 +398,33 @@ BakedAssetSinkStatus AssetPackWriter::AppendPayload(std::span<const std::uint8_t
     return BakedAssetSinkStatus::Success;
 }
 
+BakedAssetSinkStatus AssetPackWriter::AppendBlock(
+    std::span<const std::uint8_t> bytes,
+    BakedAssetBlockResidency residency,
+    PendingBlock& block) {
+    block.residency = residency;
+    block.uncompressedBytes = bytes.size();
+    block.payloadDigest = HashBakeDigest(bytes);
+    block.compression = AssetPackBlockCompression::None;
+    std::span<const std::uint8_t> stored = bytes;
+    std::vector<std::uint8_t> compressed;
+    // A Mapped block is handed out by a mapping exactly as it lies in the file, so it is never
+    // stored in any other form.
+    if (options_.compression == AssetPackBlockCompression::Zstd &&
+        residency != BakedAssetBlockResidency::Mapped && bytes.size() >= kMinimumCompressibleBlockBytes) {
+        if (!CompressAssetPackBlock(bytes, options_.compressionLevel, compressed)) {
+            return BakedAssetSinkStatus::WriteFailed;
+        }
+        if (compressed.size() <= bytes.size() - bytes.size() / kMinimumCompressionSavingsDivisor &&
+            compressed.size() < bytes.size()) {
+            stored = compressed;
+            block.compression = AssetPackBlockCompression::Zstd;
+        }
+    }
+    block.bytes = stored.size();
+    return AppendPayload(stored, block.payloadOffset);
+}
+
 BakedAssetSinkStatus AssetPackWriter::BeginAsset(const BakedAssetDescriptor& descriptor) {
     if (finished_) {
         return BakedAssetSinkStatus::PackAlreadyFinished;
@@ -374,6 +435,9 @@ BakedAssetSinkStatus AssetPackWriter::BeginAsset(const BakedAssetDescriptor& des
     if (!profileIsValid_) {
         return BakedAssetSinkStatus::InvalidProfile;
     }
+    if (!optionsAreValid_) {
+        return BakedAssetSinkStatus::InvalidPackOptions;
+    }
     if (!descriptor.key.IsValid()) {
         return BakedAssetSinkStatus::InvalidKey;
     }
@@ -381,7 +445,11 @@ BakedAssetSinkStatus AssetPackWriter::BeginAsset(const BakedAssetDescriptor& des
         descriptor.key.targetProfileHash != targetProfileHash_) {
         return BakedAssetSinkStatus::InvalidProfile;
     }
-    if (!IsValidBakeCacheName(descriptor.assetTypeId)) {
+    return OpenArtifact(descriptor.key.Digest(), descriptor.assetTypeId);
+}
+
+BakedAssetSinkStatus AssetPackWriter::OpenArtifact(const AssetBakeDigest& key, std::string_view assetTypeId) {
+    if (!IsValidBakeCacheName(assetTypeId)) {
         return BakedAssetSinkStatus::InvalidAssetType;
     }
     if (const BakedAssetSinkStatus staging = EnsureStagingOpen(); staging != BakedAssetSinkStatus::Success) {
@@ -389,11 +457,86 @@ BakedAssetSinkStatus AssetPackWriter::BeginAsset(const BakedAssetDescriptor& des
     }
 
     openArtifact_ = PendingArtifact{};
-    openArtifact_.key = descriptor.key.Digest();
-    openArtifact_.assetTypeId = descriptor.assetTypeId;
+    openArtifact_.key = key;
+    openArtifact_.assetTypeId = std::string{ assetTypeId };
     openArtifactPayloadStart_ = payloadBytes_;
     primaryWritten_ = false;
     open_ = true;
+    return BakedAssetSinkStatus::Success;
+}
+
+BakedAssetSinkStatus AssetPackWriter::CopyArtifact(AssetPackReader& source, const AssetPackArtifactEntry& artifact) {
+    if (finished_) {
+        return BakedAssetSinkStatus::PackAlreadyFinished;
+    }
+    if (open_) {
+        return BakedAssetSinkStatus::AssetAlreadyOpen;
+    }
+    if (!profileIsValid_) {
+        return BakedAssetSinkStatus::InvalidProfile;
+    }
+    if (!optionsAreValid_) {
+        return BakedAssetSinkStatus::InvalidPackOptions;
+    }
+    // The key's digest is all that survives in a pack, and it already folds the profile in; the
+    // pack the artifact comes from has to have been baked for the same one.
+    if (!source.IsMounted() || source.Header().targetProfileId != targetProfileId_ ||
+        source.Header().targetProfileHash != targetProfileHash_) {
+        return BakedAssetSinkStatus::InvalidProfile;
+    }
+    if (artifact.key.high == 0U && artifact.key.low == 0U) {
+        return BakedAssetSinkStatus::InvalidKey;
+    }
+    if (const BakedAssetSinkStatus opened = OpenArtifact(artifact.key, artifact.assetTypeId);
+        opened != BakedAssetSinkStatus::Success) {
+        return opened;
+    }
+    const auto abandon = [this](BakedAssetSinkStatus status) {
+        AbortAsset();
+        return status;
+    };
+    std::vector<std::uint8_t> bytes;
+    // The primary block first, as every baker writes it; the auxiliary blocks keep their order,
+    // which is semantic for streaming fragments.
+    for (const bool primaryPass : { true, false }) {
+        for (const AssetPackBlockEntry& block : artifact.blocks) {
+            const bool primary = store::EqualsIgnoreAsciiCase(block.name, kBakedAssetPrimaryBlockName);
+            if (primary != primaryPass) {
+                continue;
+            }
+            if (source.ReadBlock(artifact, block.name, bytes) != AssetPackReadStatus::Success) {
+                return abandon(BakedAssetSinkStatus::WriteFailed);
+            }
+            if (primary) {
+                if (const BakedAssetSinkStatus status = WritePrimaryBlock(bytes, block.alignmentBytes);
+                    status != BakedAssetSinkStatus::Success) {
+                    return abandon(status);
+                }
+                continue;
+            }
+            BakedAssetBlock description{};
+            description.name = block.name;
+            description.residency = block.residency;
+            description.alignmentBytes = block.alignmentBytes;
+            for (const AssetPackFragmentEntry& fragment : source.Fragments()) {
+                if (fragment.offset == block.offset && fragment.bytes == block.storedBytes) {
+                    description.fragment = BakedAssetBlockFragment{
+                        .boundsMin = fragment.boundsMin,
+                        .boundsMax = fragment.boundsMax,
+                        .clusterCount = fragment.clusterCount,
+                    };
+                    break;
+                }
+            }
+            if (const BakedAssetSinkStatus status = WriteAuxiliaryBlock(description, bytes);
+                status != BakedAssetSinkStatus::Success) {
+                return abandon(status);
+            }
+        }
+    }
+    if (const BakedAssetSinkStatus committed = CommitAsset(); committed != BakedAssetSinkStatus::Success) {
+        return abandon(committed);
+    }
     return BakedAssetSinkStatus::Success;
 }
 
@@ -415,19 +558,15 @@ BakedAssetSinkStatus AssetPackWriter::WritePrimaryBlock(std::span<const std::uin
         return BakedAssetSinkStatus::BlockTooLarge;
     }
 
-    std::uint64_t payloadOffset = 0U;
-    if (const BakedAssetSinkStatus status = AppendPayload(bytes, payloadOffset);
+    PendingBlock block{
+        .name = std::string{ kBakedAssetPrimaryBlockName },
+        .alignmentBytes = alignmentBytes,
+    };
+    if (const BakedAssetSinkStatus status = AppendBlock(bytes, BakedAssetBlockResidency::Resident, block);
         status != BakedAssetSinkStatus::Success) {
         return status;
     }
-    openArtifact_.blocks.push_back(PendingBlock{
-        .name = std::string{ kBakedAssetPrimaryBlockName },
-        .residency = BakedAssetBlockResidency::Resident,
-        .alignmentBytes = alignmentBytes,
-        .payloadOffset = payloadOffset,
-        .bytes = bytes.size(),
-        .payloadDigest = HashBakeDigest(bytes),
-    });
+    openArtifact_.blocks.push_back(std::move(block));
     primaryWritten_ = true;
     return BakedAssetSinkStatus::Success;
 }
@@ -465,20 +604,16 @@ BakedAssetSinkStatus AssetPackWriter::WriteAuxiliaryBlock(const BakedAssetBlock&
         return BakedAssetSinkStatus::BlockTooLarge;
     }
 
-    std::uint64_t payloadOffset = 0U;
-    if (const BakedAssetSinkStatus status = AppendPayload(bytes, payloadOffset);
+    PendingBlock pending{
+        .name = std::string{ block.name },
+        .alignmentBytes = block.alignmentBytes,
+        .fragment = block.fragment,
+    };
+    if (const BakedAssetSinkStatus status = AppendBlock(bytes, block.residency, pending);
         status != BakedAssetSinkStatus::Success) {
         return status;
     }
-    openArtifact_.blocks.push_back(PendingBlock{
-        .name = std::string{ block.name },
-        .residency = block.residency,
-        .alignmentBytes = block.alignmentBytes,
-        .payloadOffset = payloadOffset,
-        .bytes = bytes.size(),
-        .payloadDigest = HashBakeDigest(bytes),
-        .fragment = block.fragment,
-    });
+    openArtifact_.blocks.push_back(std::move(pending));
     return BakedAssetSinkStatus::Success;
 }
 
@@ -562,7 +697,8 @@ bool AssetPackWriter::ArtifactLayoutsMatch(
                 left.alignmentBytes, left.residency, packageAlignmentBytes_, mappedAlignmentBytes_) !=
                 EffectiveAlignment(
                     right.alignmentBytes, right.residency, packageAlignmentBytes_, mappedAlignmentBytes_) ||
-            left.bytes != right.bytes || left.payloadDigest != right.payloadDigest ||
+            left.bytes != right.bytes || left.uncompressedBytes != right.uncompressedBytes ||
+            left.compression != right.compression || left.payloadDigest != right.payloadDigest ||
             !sameFragment(left.fragment, right.fragment)) {
             return false;
         }
@@ -604,12 +740,12 @@ BakedAssetSinkStatus AssetPackWriter::AssembleStagingPack() {
             entry.blocks.push_back(AssetPackBlockEntry{
                 .name = block.name,
                 .residency = block.residency,
-                .compression = AssetPackBlockCompression::None,
+                .compression = block.compression,
                 .alignmentBytes = EffectiveAlignment(
                     block.alignmentBytes, block.residency, packageAlignmentBytes_, mappedAlignmentBytes_),
                 .offset = 0U,
                 .storedBytes = block.bytes,
-                .uncompressedBytes = block.bytes,
+                .uncompressedBytes = block.uncompressedBytes,
                 .payloadDigest = block.payloadDigest,
             });
         }
@@ -701,6 +837,10 @@ BakedAssetSinkStatus AssetPackWriter::AssembleStagingPack() {
     header.packageBlockAlignmentBytes = packageAlignmentBytes_;
     header.mappedBlockAlignmentBytes = mappedAlignmentBytes_;
     header.fileBytes = cursor;
+    header.role = options_.role;
+    header.label = options_.label;
+    header.patchLevel = options_.patchLevel;
+    header.baseIdentity = options_.baseIdentity;
     if (fragmentCount != 0U) {
         header.fragmentIndexOffset = kAssetPackHeaderBytes + indexBytes;
         header.fragmentIndexBytes = fragmentIndexBytes;
@@ -788,6 +928,9 @@ BakedAssetSinkStatus AssetPackWriter::Finish() {
     }
     if (!profileIsValid_) {
         return BakedAssetSinkStatus::InvalidProfile;
+    }
+    if (!optionsAreValid_) {
+        return BakedAssetSinkStatus::InvalidPackOptions;
     }
     if (const BakedAssetSinkStatus staging = EnsureStagingOpen(); staging != BakedAssetSinkStatus::Success) {
         return staging;

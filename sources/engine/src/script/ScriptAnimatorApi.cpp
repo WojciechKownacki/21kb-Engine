@@ -106,6 +106,37 @@ ScriptFunctionCallResult SetIkTarget(
         "Animator.SetIKTarget requires a declared target and finite world pose/weights");
 }
 
+// Animator.SetIKTarget with the target position in double precision (docs/large_worlds.md).
+ScriptFunctionCallResult SetPreciseIkTarget(
+    const ScriptFunctionCallContext& context,
+    std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("Animator.SetPreciseIKTarget requires an active scene");
+    }
+    const auto optionalFloat = [&](std::string_view name, float fallback) {
+        const ScriptValue* value = Arg(arguments, name);
+        return value == nullptr ? fallback : value->AsFloat();
+    };
+    const kb::math::DVec3 position{ Arg(arguments, "x")->AsDouble(), Arg(arguments, "y")->AsDouble(), Arg(arguments, "z")->AsDouble() };
+    const kb::scene::AnimatorIkTarget target{
+        .worldPosition = kb::math::ToVec3(position),
+        .worldRotation = {
+            optionalFloat("rotationX", 0.0F),
+            optionalFloat("rotationY", 0.0F),
+            optionalFloat("rotationZ", 0.0F),
+            optionalFloat("rotationW", 1.0F),
+        },
+        .positionWeight = optionalFloat("positionWeight", 1.0F),
+        .rotationWeight = optionalFloat("rotationWeight", 1.0F),
+        .preciseWorldPosition = position,
+    };
+    return Applied(
+        context.scene->Animators().SetIkTarget(
+            Target(context, arguments), Arg(arguments, "name")->AsString(),
+            target),
+        "Animator.SetPreciseIKTarget requires a declared target and finite world pose/weights");
+}
+
 ScriptFunctionCallResult ClearIkTarget(
     const ScriptFunctionCallContext& context,
     std::span<const ScriptFunctionArgument> arguments) {
@@ -183,6 +214,18 @@ bool ScriptAnimatorApi::Register(ScriptRuntimeHost& host) {
             { "positionWeight", ScriptValueType::Float, false },
             { "rotationWeight", ScriptValueType::Float, false },
         }), applied, &SetIkTarget) &&
+        RegisterFunction(host, "Animator.SetPreciseIKTarget", Targeted({
+            { "name", ScriptValueType::String, true },
+            { "x", ScriptValueType::Double, true },
+            { "y", ScriptValueType::Double, true },
+            { "z", ScriptValueType::Double, true },
+            { "rotationX", ScriptValueType::Float, false },
+            { "rotationY", ScriptValueType::Float, false },
+            { "rotationZ", ScriptValueType::Float, false },
+            { "rotationW", ScriptValueType::Float, false },
+            { "positionWeight", ScriptValueType::Float, false },
+            { "rotationWeight", ScriptValueType::Float, false },
+        }), applied, &SetPreciseIkTarget) &&
         RegisterFunction(host, "Animator.ClearIKTarget",
             Targeted({ { "name", ScriptValueType::String, true } }),
             applied, &ClearIkTarget) &&

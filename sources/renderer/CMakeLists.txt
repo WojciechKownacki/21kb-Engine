@@ -5,6 +5,10 @@ add_library(kb_renderer STATIC
     include/kb/render/RendererCapabilityReport.hpp
     include/kb/render/RenderSurface.hpp
     include/kb/render/bake/MeshBaker.hpp
+    include/kb/render/world/NavMeshBakeTool.hpp
+    include/kb/render/world/RenderNavGeometrySource.hpp
+    include/kb/render/world/WorldBuildTool.hpp
+    include/kb/render/world/WorldHlodMeshBaker.hpp
     include/kb/render/bake/TextureBaker.hpp
     include/kb/render/SceneDeferredLightingPass.hpp
     include/kb/render/SceneDepthPolicy.hpp
@@ -75,6 +79,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/RenderResources.hpp
     include/kb/render/resources/RenderTextureAssetLoader.hpp
     include/kb/render/resources/detail/RenderResourceSlotPool.hpp
+    include/kb/render/runtime/RuntimeContentStreamer.hpp
     include/kb/render/runtime/RuntimeFrameResourceReferences.hpp
     include/kb/render/runtime/RuntimeMaterialResolver.hpp
     include/kb/render/runtime/RuntimeMaterialParameterValidation.hpp
@@ -106,10 +111,17 @@ add_library(kb_renderer STATIC
     include/kb/render/shadow/ShadowMapResource.hpp
     include/kb/render/shadow/PointShadowUniforms.hpp
     include/kb/render/gi/SceneGiHistory.hpp
+    include/kb/render/gi/SceneGiResolvePass.hpp
+    include/kb/render/gi/SceneGiUniforms.hpp
+    include/kb/render/gi/SceneGiVoxelGrid.hpp
     include/kb/render/particles/ParticleGpuEmitterSimulation.hpp
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
     src/bake/MeshBaker.cpp
+    src/world/NavMeshBakeTool.cpp
+    src/world/RenderNavGeometrySource.cpp
+    src/world/WorldBuildTool.cpp
+    src/world/WorldHlodMeshBaker.cpp
     src/bake/TextureBakedPayload.cpp
     src/DisplayConfig.cpp
     src/Renderer.cpp
@@ -123,6 +135,7 @@ add_library(kb_renderer STATIC
     src/renderer/RendererMeshPassSubmitter.cpp
     src/renderer/RendererMeshPassSubmitter.hpp
     src/renderer/RendererMatrixMath.cpp
+    src/renderer/RendererRenderOrigin.cpp
     src/renderer/RendererMatrixMath.hpp
     src/renderer/RendererPostProcessSubmitter.cpp
     src/renderer/RendererPostProcessSubmitter.hpp
@@ -232,6 +245,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshGltfImporter.hpp
     src/resources/RenderMeshGltfMaterialImporter.cpp
     src/resources/RenderMeshGltfMaterialImporter.hpp
+    src/resources/TextureContainerMagic.hpp
     src/resources/RenderMeshSourceImport.cpp
     src/resources/RenderMeshGltfTransforms.cpp
     src/resources/RenderMeshGltfTransforms.hpp
@@ -252,6 +266,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderTextureAssetLoader.cpp
     src/resources/RenderTextureResourceBuilder.cpp
     src/resources/RenderTextureResourceBuilder.hpp
+    src/runtime/RuntimeContentStreamer.cpp
     src/runtime/RuntimeFrameResourceReferences.cpp
     src/runtime/RuntimeMaterialGraphDependencyLoader.cpp
     src/runtime/RuntimeMaterialGraphDependencyLoader.hpp
@@ -348,6 +363,9 @@ add_library(kb_renderer STATIC
     src/shadow/ShadowMapResource.cpp
     src/shadow/PointShadowPassPlanner.cpp
     src/gi/SceneGiHistory.cpp
+    src/gi/SceneGiResolvePass.cpp
+    src/gi/SceneGiUniforms.cpp
+    src/gi/SceneGiVoxelGrid.cpp
     src/particles/ParticleGpuEmitterSimulation.cpp
     src/shadow/PointShadowPassPlanner.hpp
     src/private/ui/ScreenUIBackgroundBlur.hpp
@@ -453,6 +471,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_mesh.sc
     fs_mesh_gbuffer_instanced.sc
     fs_mesh_instanced.sc
+    fs_mesh_motion_vectors.sc
     fs_mesh_selection_instanced.sc
     fs_mesh_shadow_instanced.sc
     fs_post_bloom_blur.sc
@@ -475,7 +494,11 @@ set(KB_RENDERER_SHADER_MANIFEST
     vs_lit_trs_gpu_cull.sc
     vs_mesh.sc
     vs_mesh_instanced.sc
+    vs_mesh_motion_vectors_instanced.sc
     vs_mesh_shadow_instanced.sc
+    vs_mesh_shadow_skinned_instanced.sc
+    vs_mesh_skinned_instanced.sc
+    vs_mesh_skinned_motion_vectors_instanced.sc
     vs_present.sc
     vs_particle_instanced.sc
     vs_screen_ui.sc
@@ -549,6 +572,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_taa_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_ssgi_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_selection_outline.sc
@@ -569,6 +593,11 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull_finalize.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_visual_integrate.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_emit.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_collide.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_rebase.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_keys.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_step.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_gather.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS
@@ -716,8 +745,20 @@ if((ANDROID OR EMSCRIPTEN) AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_validation)
+    add_executable(kb_renderer_cpu_contract_tests tests/RendererCpuContractTests.cpp)
+    target_link_libraries(kb_renderer_cpu_contract_tests PRIVATE
+        kb_renderer kb_renderer_bake kb_runtime_asset_pack_validation flecs::flecs_static)
+    kb_apply_quality_gates(kb_renderer_cpu_contract_tests)
+    set_target_properties(kb_renderer_cpu_contract_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    kb_target_copy_bgfx_runtime_shaders(kb_renderer_cpu_contract_tests)
+    add_test(NAME kb_renderer_cpu_contract_tests COMMAND $<TARGET_FILE:kb_renderer_cpu_contract_tests>)
+    set_tests_properties(kb_renderer_cpu_contract_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;headless;correctness")
+
     add_executable(kb_renderer_tests
         tests/RendererTests.cpp
+        tests/AssetImportCatalogCoverageTests.cpp
+        tests/GltfExternalResourceTests.cpp
         tests/SceneLightGridTests.cpp
         tests/SceneLightGridGpuTests.cpp
         tests/RendererTestSupport.hpp
@@ -738,6 +779,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/SceneExposureMeterTests.cpp
         tests/SceneDepthPolicyTests.cpp
         tests/RenderSceneSyncTests.cpp
+        tests/LargeWorldRenderTests.cpp
         tests/SceneRenderTargetFormatTests.cpp
         tests/SceneRenderExtractorTests.cpp
         tests/ShaderManifestTests.cpp
@@ -745,6 +787,8 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/ShaderPrewarmParseTests.cpp
         tests/MeshBakeTests.cpp
         tests/TextureBakeTests.cpp
+        tests/WorldHlodMeshBakerTests.cpp
+        tests/RuntimeContentStreamingTests.cpp
     )
 
     target_link_libraries(kb_renderer_tests
@@ -763,10 +807,22 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     target_compile_definitions(kb_renderer_tests
         PRIVATE
             KB_TEST_AUDIO_ASSET_DIR="${CMAKE_SOURCE_DIR}/sources/plugins/audio_miniaudio/tests/assets"
+            KB_RENDERER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
     )
+
+    # The file-to-pixel particle test loads the real particle provider as a module.
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL AND TARGET kb_21kb_particle_plugin)
+        target_compile_definitions(kb_renderer_tests PRIVATE
+            KB_21KB_PARTICLE_PLUGIN_PATH="$<TARGET_FILE:kb_21kb_particle_plugin>")
+        add_dependencies(kb_renderer_tests kb_21kb_particle_plugin)
+    endif()
 
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)
     add_test(NAME kb_renderer_editor_ui_view COMMAND $<TARGET_FILE:kb_renderer_tests> editor-ui-view)
+    # The committed Vulkan and OpenGL shader binaries, executed on those backends where this
+    # machine has a device for them (skipped, with the reason printed, where it has none).
+    add_test(NAME kb_renderer_backend_shader_gpu COMMAND $<TARGET_FILE:kb_renderer_tests> backend-shader-gpu)
+    set_tests_properties(kb_renderer_backend_shader_gpu PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu")
     set_tests_properties(kb_renderer_editor_ui_view PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;headless;ui")
     set_tests_properties(kb_renderer_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -40,12 +41,17 @@ public:
     QueryState(QueryState&&) = delete;
     QueryState& operator=(QueryState&&) = delete;
 
+    // A freed state's memory is kept for the next one: a query created and dropped every frame allocates nothing.
+    [[nodiscard]] static void* operator new(std::size_t size);
+    static void operator delete(void* pointer, std::size_t size) noexcept;
+
     [[nodiscard]] bool IsValid() const noexcept;
     [[nodiscard]] std::span<const ComponentId> ComponentIds() const noexcept;
     [[nodiscard]] std::span<const std::size_t> ComponentSizes() const noexcept;
     [[nodiscard]] std::uint64_t StructuralVersion() const noexcept;
     void PrepareBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
     void PrepareMutableBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
+    [[nodiscard]] bool RefreshMutableChunksAfterAppends(std::uint64_t structuralVersion, QueryBatchExecutionScratch& scratch, std::size_t& firstChangedRecord) const;
     void ForEach(QueryRawVisitor visitor, void* context) const;
     void ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context) const;
     void ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context, QueryBatchExecutionScratch& scratch) const;
@@ -68,14 +74,22 @@ private:
         }
     };
 
-    [[nodiscard]] bool RecordChanged(const QueryTableDispatchRecord& record) const;
-    [[nodiscard]] bool RecordChanged(const MutableQueryTableDispatchRecord& record) const;
+    struct ChangeVersionSnapshot {
+        std::uint64_t version = 0;
+        std::optional<std::uint64_t> previousObservation;
+        bool changed = false;
+    };
+
+    using ChangeVersionSnapshots = std::optional<std::unordered_map<ChangeVersionKey, ChangeVersionSnapshot, ChangeVersionKeyHash>>;
+
+    template <typename Record>
+    [[nodiscard]] ChangeVersionSnapshots SnapshotRecordVersions(std::span<const Record> records) const;
+    [[nodiscard]] bool RecordChanged(std::size_t archetypeIndex, const ChangeVersionSnapshots& snapshots) const;
     void PrepareReadRecords(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch, bool refreshMetadata) const;
     void PrepareMutableRecords(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch, bool refreshMetadata) const;
     void RefreshRecordMetadata(std::span<QueryTableDispatchRecord> records) const;
     void RefreshRecordMetadata(std::span<MutableQueryTableDispatchRecord> records) const;
-    void CommitRecordVersions(const QueryTableDispatchRecord& record) const;
-    void CommitRecordVersions(const MutableQueryTableDispatchRecord& record) const;
+    void CommitRecordVersions(const ChangeVersionSnapshots& snapshots) const;
 
     NativeArchetypeStorage* nativeStorage_ = nullptr;
     std::shared_ptr<QueryPlan> plan_;
@@ -87,7 +101,8 @@ private:
     std::mutex* telemetryMutex_ = nullptr;
     std::size_t defaultExecutionGrainSize_ = kDefaultQueryExecutionGrainSize;
     std::size_t defaultPrefetchDistance_ = 0;
-    mutable std::unordered_map<ChangeVersionKey, std::uint64_t, ChangeVersionKeyHash> observedVersions_;
+    // Created by the first commit of a query with change filters: the map allocates when it is constructed.
+    mutable std::optional<std::unordered_map<ChangeVersionKey, std::uint64_t, ChangeVersionKeyHash>> observedVersions_;
     mutable std::vector<QueryTableDispatchRecord> cachedReadRecords_;
     mutable std::vector<MutableQueryTableDispatchRecord> cachedMutableRecords_;
     mutable std::uint64_t cachedReadStructuralVersion_ = 0;

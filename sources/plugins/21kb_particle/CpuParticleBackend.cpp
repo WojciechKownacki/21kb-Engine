@@ -213,6 +213,8 @@ void CpuParticleBackend::Warmup() {
     particleLifetimes_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleColors_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleSizes_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
+    particleSpins_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
+    particleSpinRates_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleEventDepths_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particlePrewarmGroups_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     renderEmitterScratch_.resize(kb::particles::kParticleRenderSnapshotMaxEmitterRecords);
@@ -621,6 +623,7 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
         std::abs(fixedDeltaSeconds - kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds) > 0.0000001F) {
         return Result(kb::particles::ParticleRuntimeStatus::InvalidRequest);
     }
+    FollowSimulationOrigin(kb::particles::ParticlePlayback::SimulationOrigin(scene));
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
         reloadRestarted_[denseIndex] = 0U;
     }
@@ -646,6 +649,7 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     BeginEventStep();
     gpuScene_ = &scene;
     gpuSimTime_ = static_cast<double>(scene.Runtime().FixedStepIndex() + 1U) * static_cast<double>(fixedDeltaSeconds);
+    ReleaseDueGpuEvents();
     std::uint32_t remainingSpawnBudget = kb::scene::kParticleEffectMaxSpawnsPerStep;
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
         if (playbackStates_[denseIndex] == PlaybackState::Playing) {
@@ -658,6 +662,28 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     FlushGpuSpawns();
     ProcessOwnerLifecycle(scene);
     return Result(kb::particles::ParticleRuntimeStatus::Success);
+}
+
+void CpuParticleBackend::FollowSimulationOrigin(const kb::math::DVec3& origin) noexcept {
+    if (origin == simulationOrigin_) return;
+    // The origin moves by whole grid steps, so the shift is exact for positions near it. GPU particles already
+    // handed to the renderer keep the origin their commands carried.
+    const kb::math::Vec3 shift = kb::math::ToVec3(simulationOrigin_ - origin);
+    simulationOrigin_ = origin;
+    for (kb::math::Vec3& position : particlePositions_) position = position + shift;
+    for (kb::math::Vec3& position : particlePreviousPositions_) position = position + shift;
+    for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
+        ownerTransforms_[denseIndex].position = ownerTransforms_[denseIndex].position + shift;
+    }
+    for (std::vector<InternalEvent>* events : { &currentEvents_, &nextEvents_, &prewarmCurrentEvents_, &prewarmNextEvents_ }) {
+        for (InternalEvent& event : *events) event.position = event.position + shift;
+    }
+    for (ScheduledGpuEvent& scheduled : gpuScheduledEvents_) scheduled.event.position = scheduled.event.position + shift;
+}
+
+float CpuParticleBackend::PlaneDistance(const kb::scene::ParticleCollisionPlaneModule& plane) const noexcept {
+    return static_cast<float>(static_cast<double>(plane.distance) - (static_cast<double>(plane.normal.x) * simulationOrigin_.x +
+        static_cast<double>(plane.normal.y) * simulationOrigin_.y + static_cast<double>(plane.normal.z) * simulationOrigin_.z));
 }
 
 kb::particles::ParticleRuntimeResult CpuParticleBackend::Simulate(
@@ -794,6 +820,8 @@ void CpuParticleBackend::RemoveParticles(std::uint64_t instanceId) noexcept {
         particleLifetimes_[index] = particleLifetimes_[last];
         particleColors_[index] = particleColors_[last];
         particleSizes_[index] = particleSizes_[last];
+        particleSpins_[index] = particleSpins_[last];
+        particleSpinRates_[index] = particleSpinRates_[last];
         particleEventDepths_[index] = particleEventDepths_[last];
         particlePrewarmGroups_[index] = particlePrewarmGroups_[last];
         particleInstanceIds_.pop_back();
@@ -808,6 +836,8 @@ void CpuParticleBackend::RemoveParticles(std::uint64_t instanceId) noexcept {
         particleLifetimes_.pop_back();
         particleColors_.pop_back();
         particleSizes_.pop_back();
+        particleSpins_.pop_back();
+        particleSpinRates_.pop_back();
         particleEventDepths_.pop_back();
         particlePrewarmGroups_.pop_back();
     }
@@ -1141,6 +1171,11 @@ bool CpuParticleBackend::SpawnExact(
     InstanceRuntime& runtime = instanceRuntime_[denseIndex];
     const CompiledEffect& effect = *compiledEffects_[runtime.compiledEffectIndex].effect;
     if (emitterIndex >= effect.emitterCount) return false;
+    if (GpuEligible(denseIndex, emitterIndex, prewarmGroup)) {
+        // A sub-emitter child or a manual emit of a GPU emitter is a birth record like any other.
+        SpawnGpu(denseIndex, emitterIndex, count, eventPosition, eventDepth);
+        return true;
+    }
     const CompiledEmitter& emitter = effect.emitters[emitterIndex];
     const std::uint32_t instanceLive = LiveParticleCount(
         MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]));
@@ -1194,6 +1229,22 @@ bool CpuParticleBackend::SpawnExact(
             ? EvaluateCurve(emitter.sizeOverLife, 0.0F) : 1.0F);
         particleEventDepths_.push_back(eventDepth);
         particlePrewarmGroups_.push_back(prewarmGroup);
+        // Spin is drawn after everything else of the particle, and only from a real range, so effects that do not
+        // use it consume exactly the random numbers they always did.
+        const auto drawAxis = [this, &runtime](float low, float high) noexcept {
+            return low != high ? low + (high - low) * NextRandom01(runtime) : low;
+        };
+        // Axis by axis, X then Y then Z, angles before velocities.
+        kb::math::Vec3 spin{};
+        spin.x = drawAxis(emitter.spinMinRadians.x, emitter.spinMaxRadians.x);
+        spin.y = drawAxis(emitter.spinMinRadians.y, emitter.spinMaxRadians.y);
+        spin.z = drawAxis(emitter.spinMinRadians.z, emitter.spinMaxRadians.z);
+        kb::math::Vec3 spinRate{};
+        spinRate.x = drawAxis(emitter.spinRateMinRadians.x, emitter.spinRateMaxRadians.x);
+        spinRate.y = drawAxis(emitter.spinRateMinRadians.y, emitter.spinRateMaxRadians.y);
+        spinRate.z = drawAxis(emitter.spinRateMinRadians.z, emitter.spinRateMaxRadians.z);
+        particleSpins_.push_back(spin);
+        particleSpinRates_.push_back(spinRate);
         static_cast<void>(QueueInternalEvent({
             .instanceId = instanceId,
             .sourceEmitterIndex = emitterIndex,
@@ -1381,6 +1432,8 @@ void CpuParticleBackend::AdvanceParticleAges(
         particleLifetimes_[index] = particleLifetimes_[last];
         particleColors_[index] = particleColors_[last];
         particleSizes_[index] = particleSizes_[last];
+        particleSpins_[index] = particleSpins_[last];
+        particleSpinRates_[index] = particleSpinRates_[last];
         particleEventDepths_[index] = particleEventDepths_[last];
         particlePrewarmGroups_[index] = particlePrewarmGroups_[last];
         particleInstanceIds_.pop_back();
@@ -1395,6 +1448,8 @@ void CpuParticleBackend::AdvanceParticleAges(
         particleLifetimes_.pop_back();
         particleColors_.pop_back();
         particleSizes_.pop_back();
+        particleSpins_.pop_back();
+        particleSpinRates_.pop_back();
         particleEventDepths_.pop_back();
         particlePrewarmGroups_.pop_back();
         ++stepTelemetry_.deaths;
@@ -1463,7 +1518,7 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
             const kb::scene::ParticleCollisionPlaneModule& collision =
                 std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload);
             const float signedDistance = kb::math::Dot(collision.normal, particlePositions_[index]) -
-                collision.distance;
+                PlaneDistance(collision);
             if (signedDistance >= 0.0F) continue;
             particlePositions_[index] = particlePositions_[index] - collision.normal * signedDistance;
             const float normalVelocity = kb::math::Dot(velocity, collision.normal);
@@ -1827,7 +1882,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
             .position = particlePositions_[particleIndex],
             .size = particleSizes_[particleIndex],
             .previousPosition = particlePreviousPositions_[particleIndex],
-            .rotationRadians = 0.0F,
+            .rotationRadians = particleSpins_[particleIndex].z + particleSpinRates_[particleIndex].z * particleAges_[particleIndex],
             .velocity = particleVelocities_[particleIndex],
             .stretch = std::max(emitter.stretchMinimumLength, speed * emitter.stretchVelocityScale),
             .particleId = particleIds_[particleIndex],
@@ -1841,6 +1896,10 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
                         : 0.0F,
                     0.0F,
                     1.0F) * 65535.0F)),
+            .rotationXSnorm = kb::particles::PackParticleAngle(
+                particleSpins_[particleIndex].x + particleSpinRates_[particleIndex].x * particleAges_[particleIndex]),
+            .rotationYSnorm = kb::particles::PackParticleAngle(
+                particleSpins_[particleIndex].y + particleSpinRates_[particleIndex].y * particleAges_[particleIndex]),
         };
         kb::particles::ParticleRenderEmitterRecord& batch =
             renderEmitterScratch_[renderGroupRecordIndices_[groupIndex]];
@@ -1856,6 +1915,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
     return kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, *this, {
         .revision = ++renderSnapshotRevision_,
         .fixedStepIndex = fixedStepIndex,
+        .origin = simulationOrigin_,
         .emitters = std::span<const kb::particles::ParticleRenderEmitterRecord>{
             renderEmitterScratch_.data(), emitterRecordCount},
         .particles = std::span<const kb::particles::ParticleRenderRecord>{
@@ -1870,6 +1930,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderTom
         .revision = ++renderSnapshotRevision_,
         .fixedStepIndex = fixedStepIndex,
         .tombstone = true,
+        .origin = simulationOrigin_,
     });
 }
 
@@ -1883,25 +1944,67 @@ bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emit
         return false;
     }
     const CompiledEmitter& emitter = effect.emitters[emitterIndex];
-    if (emitter.simulationSpace != kb::scene::ParticleSimulationSpace::World ||
+    if ((emitter.simulationSpace != kb::scene::ParticleSimulationSpace::World &&
+         emitter.simulationSpace != kb::scene::ParticleSimulationSpace::Local) ||
         (emitter.outputType != kb::scene::ParticleOutputType::Billboard &&
-         emitter.outputType != kb::scene::ParticleOutputType::StretchedBillboard) ||
+         emitter.outputType != kb::scene::ParticleOutputType::StretchedBillboard &&
+         emitter.outputType != kb::scene::ParticleOutputType::Mesh &&
+         emitter.outputType != kb::scene::ParticleOutputType::Trail) ||
         emitter.alignment == kb::scene::ParticleAlignment::Local || emitter.flipbookFrameCount > 1U ||
         emitter.maxParticles > kb::particles::kParticleGpuMaxCapacity) {
         return false;
     }
+    if (emitter.outputType == kb::scene::ParticleOutputType::Mesh && (emitter.meshAssetId == 0U || emitter.materialAssetId == 0U)) {
+        return false;
+    }
+    // A trail follows the closed form back in time, which a colliding or local-space particle does not obey.
+    const bool trail = emitter.outputType == kb::scene::ParticleOutputType::Trail;
+    if (trail && (emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local || emitter.trailMaxSamplesPerParticle < 2U ||
+        static_cast<std::uint64_t>(emitter.maxParticles) * (emitter.trailMaxSamplesPerParticle - 1U) > kb::particles::kParticleGpuMaxTrailSegments)) {
+        return false;
+    }
+    const bool local = emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local;
+    bool collisionPlane = false;
+    bool eventActions = false;
     for (std::uint8_t index = 0U; index < emitter.moduleCount; ++index) {
         const auto& module = emitter.modules[index];
-        if (module.enabled && (module.type == kb::scene::ParticleModuleType::CollisionPlane ||
-                module.type == kb::scene::ParticleModuleType::SubEmitter)) {
-            return false;
+        if (!module.enabled) continue;
+        if (module.type == kb::scene::ParticleModuleType::CollisionPlane) {
+            // A plane runs on the GPU too, but in world space only.
+            if (local || trail) return false;
+            collisionPlane = true;
+        } else if (module.type == kb::scene::ParticleModuleType::SubEmitter) {
+            // Collision events would have to come back from the GPU.
+            if (std::get<kb::scene::ParticleSubEmitterModule>(module.payload).trigger == kb::scene::ParticleEventTrigger::Collision) {
+                return false;
+            }
+            eventActions = true;
         }
     }
     for (std::uint8_t index = 0U; index < effect.eventBindingCount; ++index) {
-        if (effect.eventBindings[index].sourceEmitterIndex == emitterIndex) return false;
+        if (effect.eventBindings[index].sourceEmitterIndex != emitterIndex) continue;
+        if (effect.eventBindings[index].trigger == kb::scene::ParticleEventTrigger::Collision) return false;
+        eventActions = true;
     }
-    return true;
+    // Death positions come from the closed form, which needs a free-flying world-space particle.
+    return !(eventActions && (collisionPlane || local));
 }
+
+namespace {
+
+// The closed-form motion the GPU kernel evaluates (constant acceleration, linear drag), on the CPU: where a
+// particle born at `start` with `velocity` is after `age` seconds.
+[[nodiscard]] kb::math::Vec3 GpuClosedFormPosition(
+    kb::math::Vec3 start, kb::math::Vec3 velocity, kb::math::Vec3 acceleration, float drag, float age) noexcept {
+    if (drag > 0.0001F) {
+        const kb::math::Vec3 terminal = acceleration * (1.0F / drag);
+        const float decay = std::exp(-drag * age);
+        return start + terminal * age + (velocity - terminal) * ((1.0F - decay) / drag);
+    }
+    return start + velocity * age + acceleration * (0.5F * age * age);
+}
+
+} // namespace
 
 kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
     std::uint32_t denseIndex, std::uint8_t emitterIndex) const noexcept {
@@ -1924,8 +2027,16 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
             drag += std::get<kb::scene::ParticleDragModule>(module.payload).coefficient;
         } else if (module.type == kb::scene::ParticleModuleType::AlphaOverLife) {
             alphaOverLife = true;
+        } else if (module.type == kb::scene::ParticleModuleType::CollisionPlane) {
+            const auto& plane = std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload);
+            params.plane = {
+                .normal = plane.normal, .distance = PlaneDistance(plane), .restitution = plane.restitution, .friction = plane.friction };
+            params.hasPlane = true;
         }
     }
+    // A colliding emitter also bounces off the surfaces the renderer's depth buffer shows.
+    params.sceneDepthCollision = params.hasPlane;
+    params.localSpace = emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local;
     params.acceleration = acceleration;
     params.drag = drag;
     for (std::size_t sample = 0U; sample < kb::particles::kParticleGpuCurveSamples; ++sample) {
@@ -1936,6 +2047,10 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
         params.size[sample] = emitter.sizeOverLife.keyCount > 0U ? EvaluateCurve(emitter.sizeOverLife, age) : 1.0F;
     }
     params.textureAtlasAssetId = emitter.textureAtlasAssetId;
+    params.spinMin = emitter.spinMinRadians;
+    params.spinMax = emitter.spinMaxRadians;
+    params.spinRateMin = emitter.spinRateMinRadians;
+    params.spinRateMax = emitter.spinRateMaxRadians;
     params.capacity = maxParticlesOverrides_[denseIndex] != 0U
         ? std::min(emitter.maxParticles, maxParticlesOverrides_[denseIndex]) : emitter.maxParticles;
     params.output = ToRenderOutput(emitter.outputType);
@@ -1945,11 +2060,23 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
     params.softParticles = emitter.softParticles;
     params.stretchVelocityScale = emitter.stretchVelocityScale;
     params.stretchMinimumLength = emitter.stretchMinimumLength;
+    if (emitter.outputType == kb::scene::ParticleOutputType::Mesh) {
+        params.meshAssetId = emitter.meshAssetId;
+        params.materialAssetId = emitter.materialAssetId;
+        params.castsShadow = emitter.meshCastsShadow;
+        params.receivesShadow = emitter.meshReceivesShadow;
+    } else if (emitter.outputType == kb::scene::ParticleOutputType::Trail) {
+        // The CPU path records a sample every `cadence` fixed steps; the closed form is sampled at the same spacing.
+        const float stepsPerSecond = static_cast<float>(kb::scene::kParticleEffectFixedStepsPerSecond);
+        params.trailSegments = emitter.trailMaxSamplesPerParticle - 1U;
+        params.trailSegmentSeconds = std::max(1.0F, std::ceil(emitter.trailSampleIntervalSeconds * stepsPerSecond)) / stepsPerSecond;
+        params.trailWidth = emitter.trailWidth;
+    }
     return params;
 }
 
 void CpuParticleBackend::SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count,
-    const kb::math::Vec3* eventPosition) noexcept {
+    const kb::math::Vec3* eventPosition, std::uint8_t eventDepth) noexcept {
     InstanceRuntime& runtime = instanceRuntime_[denseIndex];
     const CompiledEmitter& emitter = compiledEffects_[runtime.compiledEffectIndex].effect->emitters[emitterIndex];
     const std::uint64_t instanceId = MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]);
@@ -1964,14 +2091,59 @@ void CpuParticleBackend::SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitter
     const kb::scene::WorldTransform& ownerTransform = ownerTransforms_[denseIndex];
     const kb::math::Vec3 emitterOffset = TransformDirection(ownerTransform,
         Scale(emitter.localPosition, ownerTransform.scale));
-    const kb::math::Vec3 origin = (eventPosition != nullptr ? *eventPosition : ownerTransform.position) + emitterOffset;
+    // Birth and death events matter only when something is bound to them.
+    InternalEvent eventPrototype{ .instanceId = instanceId, .sourceEmitterIndex = emitterIndex, .depth = eventDepth };
+    eventPrototype.trigger = kb::scene::ParticleEventTrigger::Birth;
+    const bool birthAction = EventHasAction(eventPrototype);
+    eventPrototype.trigger = kb::scene::ParticleEventTrigger::Death;
+    const bool deathAction = EventHasAction(eventPrototype);
+    const kb::particles::ParticleGpuEmitterParams motion = deathAction ? BuildGpuParams(denseIndex, emitterIndex)
+                                                                       : kb::particles::ParticleGpuEmitterParams{};
+    const bool local = emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local;
+    // A local-space record is in the owner's frame, so the world matrix sent each step puts it where the
+    // world-space record would have been (the velocity matches the CPU path's rotation-only spawn velocity).
+    const kb::math::Vec3 origin = local ? emitter.localPosition
+        : (eventPosition != nullptr ? *eventPosition : ownerTransform.position) + emitterOffset;
     pending->spawns.reserve(pending->spawns.size() + count);
     for (std::uint32_t index = 0U; index < count; ++index) {
         const float lifetime = emitter.lifetimeMin + (emitter.lifetimeMax - emitter.lifetimeMin) * NextRandom01(runtime);
-        const kb::math::Vec3 velocity = TransformDirection(ownerTransform, SampleInitialVelocity(emitter, runtime));
+        const kb::math::Vec3 sampled = SampleInitialVelocity(emitter, runtime);
+        const kb::math::Vec3 velocity = local ? Unscale(sampled, ownerTransform.scale) : TransformDirection(ownerTransform, sampled);
         pending->spawns.push_back(kb::particles::ParticleGpuSpawn{
             .position = origin, .birthTime = static_cast<float>(gpuSimTime_), .velocity = velocity, .lifetime = lifetime });
         ++runtime.spawnOrdinals[emitterIndex];
+        eventPrototype.position = origin;
+        if (birthAction) {
+            eventPrototype.trigger = kb::scene::ParticleEventTrigger::Birth;
+            static_cast<void>(QueueInternalEvent(eventPrototype));
+        }
+        if (deathAction) {
+            eventPrototype.trigger = kb::scene::ParticleEventTrigger::Death;
+            eventPrototype.position = GpuClosedFormPosition(origin, velocity, motion.acceleration, motion.drag, lifetime);
+            ScheduleGpuDeath(eventPrototype, gpuSimTime_ + static_cast<double>(lifetime));
+        }
+    }
+}
+
+void CpuParticleBackend::ScheduleGpuDeath(const InternalEvent& event, double due) noexcept {
+    // Pending deaths of a huge GPU emitter are bounded like the per-step event queue is.
+    if (gpuScheduledEvents_.size() >= kb::scene::kParticleEffectMaxEventsPerStep * 64U) {
+        ++stepTelemetry_.rejectedByEventBudget;
+        eventQueueOverflowed_ = true;
+        return;
+    }
+    gpuScheduledEvents_.push_back({ due, event });
+    std::push_heap(gpuScheduledEvents_.begin(), gpuScheduledEvents_.end(),
+        [](const ScheduledGpuEvent& lhs, const ScheduledGpuEvent& rhs) { return lhs.due > rhs.due; });
+}
+
+void CpuParticleBackend::ReleaseDueGpuEvents() noexcept {
+    const auto later = [](const ScheduledGpuEvent& lhs, const ScheduledGpuEvent& rhs) { return lhs.due > rhs.due; };
+    while (!gpuScheduledEvents_.empty() && gpuScheduledEvents_.front().due <= gpuSimTime_) {
+        const InternalEvent event = gpuScheduledEvents_.front().event;
+        std::pop_heap(gpuScheduledEvents_.begin(), gpuScheduledEvents_.end(), later);
+        gpuScheduledEvents_.pop_back();
+        static_cast<void>(QueueInternalEvent(event));
     }
 }
 
@@ -1989,15 +2161,55 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
         command.hasParams = true;
         command.params = BuildGpuParams(pending.denseIndex, pending.emitterIndex);
         command.spawns = std::move(pending.spawns);
+        command.simulationOrigin = simulationOrigin_;
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(*gpuScene_, std::move(command));
     }
     gpuPending_.clear();
+    // Local-space emitters follow their owner (world matrix) and mesh emitters orient their instances by it
+    // (owner rotation times the emitter's own): refresh both of them each step.
+    for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
+        if (playbackStates_[denseIndex] == PlaybackState::Stopped) continue;
+        const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
+        for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
+            const bool local = effect.emitters[emitterIndex].simulationSpace == kb::scene::ParticleSimulationSpace::Local;
+            const bool mesh = effect.emitters[emitterIndex].outputType == kb::scene::ParticleOutputType::Mesh;
+            if ((!local && !mesh) || !GpuEligible(denseIndex, emitterIndex, UINT8_MAX)) {
+                continue;
+            }
+            const kb::scene::WorldTransform& owner = ownerTransforms_[denseIndex];
+            const kb::math::Vec3 axisX = kb::math::Rotate(owner.rotation, { owner.scale.x, 0.0F, 0.0F });
+            const kb::math::Vec3 axisY = kb::math::Rotate(owner.rotation, { 0.0F, owner.scale.y, 0.0F });
+            const kb::math::Vec3 axisZ = kb::math::Rotate(owner.rotation, { 0.0F, 0.0F, owner.scale.z });
+            kb::particles::ParticleGpuEmitterCommand command{};
+            command.key = { MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]), effect.emitters[emitterIndex].emitterId };
+            command.simTime = gpuSimTime_;
+            command.simulationOrigin = simulationOrigin_;
+            if (local) {
+                command.hasWorldMatrix = true;
+                command.worldMatrix = { axisX.x, axisX.y, axisX.z, 0.0F, axisY.x, axisY.y, axisY.z, 0.0F,
+                    axisZ.x, axisZ.y, axisZ.z, 0.0F, owner.position.x, owner.position.y, owner.position.z, 1.0F };
+            }
+            if (mesh) {
+                const kb::math::Quat basis = kb::math::Normalize(owner.rotation * effect.emitters[emitterIndex].localRotation);
+                command.hasOrientation = true;
+                command.orientation = { basis.x, basis.y, basis.z, basis.w };
+                const kb::math::Vec3 origin = owner.position + TransformDirection(owner,
+                    Scale(effect.emitters[emitterIndex].localPosition, owner.scale));
+                command.origin = { origin.x, origin.y, origin.z };
+            }
+            kb::particles::ParticlePlayback::QueueGpuEmitterCommand(*gpuScene_, std::move(command));
+        }
+    }
 }
 
 void CpuParticleBackend::QueueGpuRelease(std::uint64_t instanceId, std::uint32_t denseIndex, bool release) noexcept {
     if (gpuScene_ == nullptr || !kb::particles::ParticlePlayback::HasGpuEmitterConsumer(*gpuScene_)) return;
     // Drop spawns of this instance that were produced but not yet flushed.
     std::erase_if(gpuPending_, [instanceId](const GpuPending& pending) { return pending.instanceId == instanceId; });
+    if (std::erase_if(gpuScheduledEvents_, [instanceId](const ScheduledGpuEvent& scheduled) { return scheduled.event.instanceId == instanceId; }) != 0U) {
+        std::make_heap(gpuScheduledEvents_.begin(), gpuScheduledEvents_.end(),
+            [](const ScheduledGpuEvent& lhs, const ScheduledGpuEvent& rhs) { return lhs.due > rhs.due; });
+    }
     const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
     if (effect.backendPolicy == kb::scene::ParticleBackendPolicy::CpuDeterministic) return;
     for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
@@ -2006,6 +2218,7 @@ void CpuParticleBackend::QueueGpuRelease(std::uint64_t instanceId, std::uint32_t
         command.simTime = gpuSimTime_;
         command.release = release;
         command.clear = !release;
+        command.simulationOrigin = simulationOrigin_;
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(*gpuScene_, std::move(command));
     }
 }

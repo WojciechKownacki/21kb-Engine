@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -16,10 +17,12 @@ const ColliderComponent* SceneComponentQueryService::TryGetCollider(const Scene&
 }
 
 ColliderComponent* SceneComponentMutationService::TryGetCollider(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Colliders().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetCollider(Scene& scene, SceneEntity entity, const ColliderComponent& collider) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Colliders().Set(entity, collider);
@@ -28,6 +31,7 @@ void SceneComponentMutationService::SetCollider(Scene& scene, SceneEntity entity
 }
 
 void SceneComponentMutationService::RemoveCollider(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Colliders().Remove(entity);

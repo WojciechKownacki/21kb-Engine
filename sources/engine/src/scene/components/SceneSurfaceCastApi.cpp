@@ -6,6 +6,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
@@ -14,9 +15,9 @@ namespace kb::scene {
 
 bool SceneComponentQueryService::HasSurfaceCast(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.SurfaceCasts().Has(entity); }
 const SurfaceCastComponent* SceneComponentQueryService::TryGetSurfaceCast(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.SurfaceCasts().TryGet(entity) : nullptr; }
-SurfaceCastComponent* SceneComponentMutationService::TryGetSurfaceCast(Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.SurfaceCasts().TryGet(entity) : nullptr; }
-void SceneComponentMutationService::SetSurfaceCast(Scene& scene, SceneEntity entity, const SurfaceCastComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.SurfaceCasts().Set(entity, component); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::RemoveSurfaceCast(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.SurfaceCasts().Remove(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
+SurfaceCastComponent* SceneComponentMutationService::TryGetSurfaceCast(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.SurfaceCasts().TryGet(entity) : nullptr; }
+void SceneComponentMutationService::SetSurfaceCast(Scene& scene, SceneEntity entity, const SurfaceCastComponent& component) { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.SurfaceCasts().Set(entity, component); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::RemoveSurfaceCast(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.SurfaceCasts().Remove(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
 void SceneComponentMutationService::MarkSurfaceCastModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.SurfaceCasts().MarkModified(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
 
 SceneSurfaceCastComponentQueries::SceneSurfaceCastComponentQueries(const Scene& scene) noexcept : scene_(scene) {}

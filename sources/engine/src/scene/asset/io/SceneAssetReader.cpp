@@ -33,12 +33,13 @@ using SceneAssetBinaryIO::ReadAllBytes;
     return count;
 }
 
-[[nodiscard]] bool ReadNestedOverride(ByteReader& input, ScenePrefabPropertyOverride& output) {
+[[nodiscard]] bool ReadNestedOverride(ByteReader& input, std::uint32_t fileVersion, ScenePrefabPropertyOverride& output) {
     std::uint32_t flag = 0;
     if (!input.ReadUInt32(output.nodeIndex) ||
         !input.ReadUInt32(flag) ||
         !input.ReadString(output.propertyPath) ||
-        !input.ReadString(output.value)) {
+        !input.ReadString(output.value) ||
+        (fileVersion >= SceneDocument::PrefabNodeIdentityFileVersion && (!input.ReadUInt64(output.nodeId) || !input.ReadUInt64(output.objectReferenceNodeId)))) {
         return false;
     }
     output.flag = static_cast<ScenePrefabOverrideFlag>(flag);
@@ -61,14 +62,35 @@ using SceneAssetBinaryIO::ReadAllBytes;
     output.nestedPrefabOverrides.reserve(nestedOverrideCount);
     for (std::uint32_t index = 0U; index < nestedOverrideCount; ++index) {
         ScenePrefabPropertyOverride property;
-        if (!ReadNestedOverride(input, property)) {
+        if (!ReadNestedOverride(input, fileVersion, property)) {
             return false;
         }
         output.nestedPrefabOverrides.push_back(std::move(property));
     }
+    std::uint32_t nestedNodeIdCount = 0U;
+    if (fileVersion >= SceneDocument::PrefabNodeIdentityFileVersion && (!input.ReadUInt32(nestedNodeIdCount) || nestedNodeIdCount > SceneAssetFormat::MaxNodeCount)) {
+        return false;
+    }
+    output.nestedPrefabNodeIds.assign(nestedNodeIdCount, ScenePrefabNodeDesc::InvalidStableId);
+    for (std::uint64_t& nodeId : output.nestedPrefabNodeIds) {
+        if (!input.ReadUInt64(nodeId)) {
+            return false;
+        }
+    }
+    if (fileVersion >= SceneDocument::PrefabNodeIdentityFileVersion && !input.ReadUInt64(output.nestedPrefabContentHash)) {
+        return false;
+    }
 
-    if (!input.ReadUInt32(output.parentNode) ||
-        !SceneAssetPrimitiveCodec::ReadVec3(input, output.transform.localPosition) ||
+    if (!input.ReadUInt32(output.parentNode)) {
+        return false;
+    }
+    // Files older than SceneDocument::DoubleTranslationFileVersion store the local translation as float32.
+    kb::math::DVec3 translation{};
+    const bool translationRead = fileVersion >= SceneDocument::DoubleTranslationFileVersion
+        ? SceneAssetPrimitiveCodec::ReadDVec3(input, translation)
+        : SceneAssetPrimitiveCodec::ReadVec3(input, output.transform.localPosition);
+    if (fileVersion >= SceneDocument::DoubleTranslationFileVersion) output.SetLocalTranslation(translation);
+    if (!translationRead ||
         !SceneAssetPrimitiveCodec::ReadQuat(input, output.transform.localRotation) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.transform.localScale) ||
         !input.ReadBool(visible) ||
@@ -130,8 +152,11 @@ void SceneAssetReader::ConvertChildDropdownOptions(ScenePrefab& prefab) {
     const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
     for (std::uint32_t owner = 0U; owner < static_cast<std::uint32_t>(nodes.size()); ++owner) {
         if (!nodes[owner].components.ui.dropdown.has_value()) continue;
+        // Readers convert before they validate the hierarchy, so only nodes after the
+        // owner count: a child always follows its parent, and a node naming itself or a
+        // later node as parent must not become an option of its own dropdown.
         std::vector<std::uint32_t> children;
-        for (std::uint32_t index = 0U; index < static_cast<std::uint32_t>(nodes.size()); ++index) {
+        for (std::uint32_t index = owner + 1U; index < static_cast<std::uint32_t>(nodes.size()); ++index) {
             if (nodes[index].parentNode == owner) children.push_back(index);
         }
         ScenePrefabNodeDesc* dropdownNode = prefab.TryGetMutableNode(owner);
@@ -199,7 +224,7 @@ SceneDocumentLoadResult SceneAssetReader::Read(std::vector<std::uint8_t> bytes) 
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset descriptor fields are invalid." };
     }
     scene.fileVersion = fileVersion;
-    scene.worldPrefab.Reserve(nodeCount);
+    scene.worldPrefab.ReserveDeclared(nodeCount);
     for (std::uint32_t nodeIndex = 0U; nodeIndex < nodeCount; ++nodeIndex) {
         ScenePrefabNodeDesc node;
         if (!ReadNode(input, fileVersion, node)) {

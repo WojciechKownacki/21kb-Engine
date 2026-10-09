@@ -3,9 +3,13 @@ add_library(kb_cli_core STATIC
     src/CliCommon.cpp
     src/CliImportCommand.cpp
     src/CliMcpCommand.cpp
+    src/CliNavMeshCommands.cpp
+    src/CliPackSetCommands.cpp
     src/CliRunCommand.cpp
     src/CliSceneCommands.cpp
+    src/CliSecurityCommands.cpp
     src/CliValidateCommand.cpp
+    src/CliWorldCommands.cpp
     src/private/CliCommands.hpp
     src/private/CliCommon.hpp
 )
@@ -13,12 +17,26 @@ add_library(kb_cli_core STATIC
 target_include_directories(kb_cli_core PUBLIC src/private)
 
 target_link_libraries(kb_cli_core PUBLIC kb_engine)
+# world build resolves meshes for HLOD proxies with the same loaders kb_cooker uses.
+if(KB_BUILD_RENDERER)
+    target_link_libraries(kb_cli_core PUBLIC kb_renderer)
+    target_compile_definitions(kb_cli_core PUBLIC KB_CLI_WORLD_HLOD=1)
+endif()
 
 kb_apply_quality_gates(kb_cli_core)
 
 add_executable(kb_cli
     src/main.cpp
 )
+
+if(WIN32)
+    # Authenticode-signs shipped Windows images with a PFX whose password arrives on
+    # standard input. The editor's signing broker and the package script run it.
+    add_executable(kb_authenticode_signer src/AuthenticodeSignerMain.cpp)
+    set_target_properties(kb_authenticode_signer PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+    target_link_libraries(kb_authenticode_signer PRIVATE crypt32 ncrypt)
+    kb_apply_quality_gates(kb_authenticode_signer)
+endif()
 
 set_target_properties(kb_cli PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 

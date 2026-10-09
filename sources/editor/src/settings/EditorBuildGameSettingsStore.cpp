@@ -108,6 +108,7 @@ EditorBuildGameSettingsLoadResult EditorBuildGameSettingsStore::Load(const std::
         result.settings.builderExecutable = builder;
     }
     result.settings.buildRoot = ReadPath(document, kGlobal, "BuildRoot");
+    result.settings.releaseSigningKey = ReadPath(document, kGlobal, "ReleaseSigningKey");
     result.settings.emsdkRoot = ReadPath(document, kWeb, "EmsdkRoot");
     if (const auto value = document.GetString(kLinux, "Host")) result.settings.linuxHost = std::string{ *value };
     if (const auto value = document.GetString(kLinux, "User")) result.settings.linuxUser = std::string{ *value };
@@ -125,6 +126,13 @@ EditorBuildGameSettingsLoadResult EditorBuildGameSettingsStore::Load(const std::
         targetSettings.androidKeystore = ReadPath(document, section, "AndroidKeystore");
         if (const std::optional<std::string_view> alias = document.GetString(section, "AndroidKeyAlias")) {
             targetSettings.androidKeyAlias = std::string{ *alias };
+        }
+        if (const std::optional<std::string_view> thumbprint = document.GetString(section, "WindowsCertificateThumbprint")) {
+            targetSettings.windowsCertificateThumbprint = std::string{ *thumbprint };
+        }
+        targetSettings.windowsCertificateFile = ReadPath(document, section, "WindowsCertificateFile");
+        if (const std::optional<std::string_view> url = document.GetString(section, "WindowsTimestampUrl")) {
+            targetSettings.windowsTimestampUrl = std::string{ *url };
         }
     }
     return result;
@@ -152,6 +160,7 @@ bool EditorBuildGameSettingsStore::Save(
 
     document.SetString(kGlobal, "BuilderExecutable", settings.builderExecutable.generic_string());
     document.SetString(kGlobal, "BuildRoot", settings.buildRoot.generic_string());
+    document.SetString(kGlobal, "ReleaseSigningKey", settings.releaseSigningKey.generic_string());
     document.SetString(kWeb, "EmsdkRoot", settings.emsdkRoot.generic_string());
     document.SetString(kLinux, "Host", settings.linuxHost);
     document.SetString(kLinux, "User", settings.linuxUser);
@@ -167,6 +176,11 @@ bool EditorBuildGameSettingsStore::Save(
         document.SetBool(section, "LaunchAfterBuild", targetSettings.launchAfterBuild);
         document.SetString(section, "AndroidKeystore", targetSettings.androidKeystore.generic_string());
         document.SetString(section, "AndroidKeyAlias", targetSettings.androidKeyAlias);
+        if (target.target == kb::packaging::PackagingTarget::WindowsX64) {
+            document.SetString(section, "WindowsCertificateThumbprint", targetSettings.windowsCertificateThumbprint);
+            document.SetString(section, "WindowsCertificateFile", targetSettings.windowsCertificateFile.generic_string());
+            document.SetString(section, "WindowsTimestampUrl", targetSettings.windowsTimestampUrl);
+        }
     }
     return document.Save(path, error);
 }

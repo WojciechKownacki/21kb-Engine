@@ -18,6 +18,7 @@
 #include "engine/script/ScriptMeshRendererApi.hpp"
 #include "engine/script/ScriptParticleSystemApi.hpp"
 #include "engine/script/ScriptPostProcessApi.hpp"
+#include "engine/script/ScriptNavigationApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRendererApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -262,9 +263,11 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
         // Settings.* (user preferences, SaveDomain::UserSettings, Scene::
         // AmbientSettings). Each exposes SetInt/SetFloat/SetString/SetBool/
         // GetInt/.../Has/Remove/Clear/Write/Read; Write/Read serialize through
-        // kb::save::SaveGameService (versioned schema, migration on load,
-        // atomic write) stamping the matching domain, so a save-game file can
-        // never be loaded as settings or vice versa (WrongDomain). Scene state
+        // kb::save::SaveGameService (versioned schema, migration on load)
+        // into a named slot of the host's kb::platform::UserStorage (atomic,
+        // quota-bound, never a script-chosen path), stamping the matching
+        // domain, so a save-game file can never be loaded as settings or vice
+        // versa (WrongDomain). Scene state
         // (kb::scene::SceneDocumentService) and network data (section 18) are
         // already separate subsystems, not kb::save domains. No Lua sugar
         // table (mirrors Assets/Task/Timer — generic CallFunction).
@@ -294,6 +297,13 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Text",
             .ownerRuntime = "kb::library::TryParse* (EngineLibraryParsing)",
             .Register = &kb::script::ScriptTextApi::Register,
+        },
+        // Navigation.*: path queries, raycasts and nearest points on the scene's polygon
+        // navigation meshes, and area costs.
+        LibraryModuleDesc{
+            .name = "Navigation",
+            .ownerRuntime = "kb::scene::SceneNavigation",
+            .Register = &kb::script::ScriptNavigationApi::Register,
         },
     };
     return kCatalog;

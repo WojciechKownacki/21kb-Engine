@@ -94,6 +94,8 @@ enum class InspectorSectionId : std::uint8_t {
     UIDropdown,
     UIProgressBar,
     UIWidgetSwitcher,
+    Prefab,
+    NavLink,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -554,6 +556,22 @@ enum class InspectorPropertyId : std::uint16_t {
     UIDropdownOptionRemove,
     UIDropdownOptionSelect,
     UIDropdownOptionHandle,
+    PrefabSource,
+    PrefabApply,
+    PrefabRevert,
+    PrefabUnpack,
+    PrefabSelectRoot,
+    NavLinkKind,
+    NavLinkStartX,
+    NavLinkStartY,
+    NavLinkStartZ,
+    NavLinkEndX,
+    NavLinkEndY,
+    NavLinkEndZ,
+    NavLinkRadius,
+    NavLinkArea,
+    NavLinkBidirectional,
+    NavLinkEnabled,
 };
 
 struct InspectorDynamicRowIdentity {

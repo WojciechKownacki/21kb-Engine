@@ -26,6 +26,7 @@
 #include "scene/EditorPlayModeSelectionSnapshot.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
+#include "scene/EditorSceneHierarchyActions.hpp"
 
 #include <array>
 #include <cstdint>
@@ -244,6 +245,20 @@ void RunHierarchyRowEpochTracksOnlyDisplayedCameraAndVisibilityChangesTest() {
     kb::editor::tests::Require(scene.Hierarchy().RootAppendEpoch() != hiddenEpoch &&
         kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "").front().visible,
         "Showing an entity through MarkModified must invalidate its hierarchy row");
+}
+
+void RunToggleVisibilityShowsHiddenEntityAgainTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Toggled" }).Entity();
+    kb::editor::tests::Require(kb::editor::EditorSceneHierarchyActions::ToggleVisibility(scene, entity) &&
+            scene.Components().Visibility().Get(entity).mode == kb::scene::VisibilityMode::Hidden,
+        "The first visibility toggle must hide the entity");
+    kb::editor::tests::Require(kb::editor::EditorSceneHierarchyActions::ToggleVisibility(scene, entity) &&
+            scene.Components().Visibility().Get(entity).mode == kb::scene::VisibilityMode::Visible &&
+            scene.Components().Visibility().Get(entity).visible,
+        "The second visibility toggle must show the hidden entity again");
+    kb::editor::tests::Require(kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "").front().visible,
+        "A re-shown entity must render its hierarchy row as visible");
 }
 
 void RunHierarchySelectionModelTest() {
@@ -505,6 +520,7 @@ void RunEditorHierarchyTests() {
     RunRowBuilderCreationOrderTest();
     RunAppendOnlyRootHierarchyTest();
     RunHierarchyRowEpochTracksOnlyDisplayedCameraAndVisibilityChangesTest();
+    RunToggleVisibilityShowsHiddenEntityAgainTest();
     RunHierarchySelectionModelTest();
     RunHierarchySelectionNormalizerKeepsAliveMultiSelectionTest();
     RunHierarchySelectionNormalizerSelectsFirstVisibleWhenSelectionIsDeadTest();

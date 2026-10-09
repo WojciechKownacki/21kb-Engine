@@ -7,6 +7,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
@@ -343,7 +344,8 @@ EditorSceneContext::EditorSceneContext()
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
     , projectConfig_(projectBootstrap_.settings)
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : EditorProjectPaths::ProjectFile())
-    , scene_(std::make_unique<kb::scene::Scene>(project_))
+    , documentScene_(std::make_unique<kb::scene::Scene>(project_))
+    , scene_(documentScene_.get())
     , inspectorMaterialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
     , materialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
     , animationPreviewScene_(std::make_unique<EditorAnimationPreviewScene>())
@@ -398,10 +400,28 @@ EditorSceneContext::EditorSceneContext()
     static_cast<void>(ActivateProjectPhysicsLayers(*scene_));
     currentScenePath_ = ResolveDefaultScenePath();
     std::error_code error;
-    if (!currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error && kb::scene::SceneDocumentService::LoadFileIntoScene(*scene_, currentScenePath_)) {
+    kb::scene::SceneDocumentLoadResult loaded;
+    const bool sceneFileExists = !currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error;
+    if (sceneFileExists) {
+        loaded = kb::scene::SceneDocumentService::Load(currentScenePath_);
+    }
+    if (loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
         EditorSceneAudioSettingsService::PrepareDocument(*scene_);
         SelectFirstSceneEntityOrClear();
         console_.Info("Project", "Opened default scene: " + currentScenePath_.generic_string());
+        UpgradePrefabLinksOnSave(loaded.document);
+    } else if (sceneFileExists) {
+        // A scene that cannot be read is still the project's work: leave the file alone and start on a new
+        // scene of its own name, so no save can write over it.
+        console_.Error("Project", "Scene could not be opened: " + currentScenePath_.generic_string() + ": " +
+            (loaded.succeeded ? std::string{ "its objects could not be created." } : loaded.error) +
+            " The file was left as it is; the editor started on a new scene.");
+        for (const kb::scene::SceneEntity root : scene_->Hierarchy().RootEntities()) {
+            scene_->Entities().Destroy(root);
+        }
+        hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
+        currentScenePath_ = EditorProjectPaths::UniqueScenePath("Untitled");
+        MarkSceneDocumentDirty();
     } else {
         hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
         if (SaveCurrentScene()) {
@@ -414,9 +434,8 @@ EditorSceneContext::EditorSceneContext()
 
 EditorSceneContext::~EditorSceneContext() {
     ClearBuildGameSigningPasswords();
-    if (assetImportWorker_.joinable()) {
-        assetImportWorker_.join();
-    }
+    // Waits for an import that is running; one that has not started is dropped.
+    assetImportLane_.reset();
     if (particlePreviewSession_ != nullptr && particlePreviewReleaseHandler_) {
         CloseParticleEditorAsset();
     }
@@ -425,7 +444,9 @@ EditorSceneContext::~EditorSceneContext() {
     // Destroy the scene explicitly while console_ is still alive; the default
     // member order would otherwise destroy console_ before scene_ and leave the
     // registered Log callback pointing at released storage.
-    scene_.reset();
+    prefabEdit_ = {};
+    scene_ = nullptr;
+    documentScene_.reset();
     scriptModule_ = nullptr;
     scriptModuleHost_.reset();
 }
@@ -437,6 +458,9 @@ void EditorSceneContext::EnsureScriptRuntime() {
     EditorConsoleState* console = &console_;
 
     kb::script::ScriptModuleOptions scriptOptions;
+    // Play mode persists script saves and settings beside the project, in the
+    // same per-game layout a packaged game uses under the player's profile.
+    scriptOptions.runtimeOptions.userStorageRoot = EditorProjectPaths::ProjectRoot() / "Saves";
     scriptOptions.configureHost = [console](kb::script::ScriptRuntimeHost& host) {
         // Log("...") in any script prints to the editor Console. console_ outlives
         // scriptModuleHost_ (declared last, destroyed first), so capturing it is safe.
@@ -944,7 +968,7 @@ bool EditorSceneContext::TickAutosave(
         HasDirtyMaterialAssetEdit() || ParticleEditorDirty();
     const EditorAutosaveTickResult tick = autosave_.Tick(
         elapsedSeconds,
-        saveEligible && !playModeSceneSession_.Active(),
+        saveEligible && !playModeSceneSession_.Active() && !InPrefabEditMode(),
         dirty);
     if (!tick.saveRequested) {
         return tick.visualChanged;
@@ -1071,6 +1095,9 @@ bool EditorSceneContext::SaveOpenDocuments() {
     if (ParticleEditorDirty() && !SaveParticleEditorAsset()) {
         console_.Error("Particles", "Global Save could not persist the open particle effect.");
         return false;
+    }
+    if (InPrefabEditMode()) {
+        return !HasUnsavedPrefabEdit() || SavePrefabEditMode();
     }
     if (!sceneDocumentDirty_) {
         LogMaterialGraphDebug(console_, "save-open-documents-ok no dirty scene");
@@ -1814,7 +1841,7 @@ bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {
 bool EditorSceneContext::FrameSelectedEntitiesInViewport() noexcept {
     const kb::scene::SceneEntity primary = SelectedEntity();
     const std::vector<kb::scene::SceneEntity>& selected = SelectedHierarchyEntities();
-    const std::optional<kb::scene::Vec3> center = EditorSceneSelectionPivot::Resolve(*scene_, selected, primary);
+    const std::optional<kb::math::DVec3> center = EditorSceneSelectionPivot::ResolvePrecise(*scene_, selected, primary);
     if (!center.has_value()) {
         return false;
     }
@@ -1831,11 +1858,7 @@ bool EditorSceneContext::FrameSelectedEntitiesInViewport() noexcept {
         if (transform == nullptr) {
             continue;
         }
-        const kb::scene::Vec3 delta{
-            transform->localPosition.x - center->x,
-            transform->localPosition.y - center->y,
-            transform->localPosition.z - center->z,
-        };
+        const kb::scene::Vec3 delta = kb::math::RelativeTo(scene_->Transforms().LocalTranslation(entity, *transform), *center);
         maxSpread = std::max(maxSpread, std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z));
     }
 
@@ -2161,7 +2184,26 @@ bool EditorSceneContext::AdoptCreatedHierarchyEntities(std::string label, std::s
     return true;
 }
 
+// A prefab file is what its scene instances are linked to; it moves or goes only once no instance uses it.
+bool EditorSceneContext::PrefabAssetHasSceneInstances(kb::assets::AssetId id, std::string_view action) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
+    if (metadata == nullptr || metadata->type != "ScenePrefab") {
+        return false;
+    }
+    const std::vector<std::string> instances = EditorScenePrefabActions::FindSceneInstances(*documentScene_, metadata->physicalPath);
+    if (instances.empty()) {
+        return false;
+    }
+    console_.Warning(
+        "Prefabs",
+        "Prefab " + std::string{ action } + " blocked; " + std::to_string(instances.size()) + " instance(s) in the open scene. First: " + instances.front());
+    return true;
+}
+
 bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
+    if (PrefabAssetHasSceneInstances(id, "delete")) {
+        return false;
+    }
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
     if (metadata != nullptr && EditorSceneMaterialAssetActions::IsMaterialAsset(*metadata)) {
         const std::vector<std::string> references = EditorMaterialReferenceFinder::FindSceneReferences(*scene_, id);
@@ -2193,6 +2235,9 @@ bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& v
 }
 
 bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
+    if (PrefabAssetHasSceneInstances(id, "move")) {
+        return false;
+    }
     const bool moved = EditorSceneAssetBrowserCommands::MoveAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder);
     if (moved) {
         console_.Info("Assets", "Asset moved to " + destinationVirtualFolder.generic_string());
@@ -2257,7 +2302,7 @@ bool EditorSceneContext::BeginAssetImport(
     const std::filesystem::path& destinationVirtualFolder,
     const kb::assets::AssetImportOptions& options) {
     if (sourceFiles.empty()) return false;
-    if (assetImportWorker_.joinable()) {
+    if (assetImportJob_ != nullptr) {
         console_.Warning("Assets", "An asset import is already running.");
         return false;
     }
@@ -2266,8 +2311,12 @@ bool EditorSceneContext::BeginAssetImport(
     assetImportRunning_.store(true, std::memory_order_release);
     console_.Info("Assets", "Import started in background for " + std::to_string(files.size()) + " file(s).");
     try {
-        assetImportWorker_ = std::thread{
-            [this, files, destinationVirtualFolder, options, projectRoot]() mutable {
+        if (assetImportLane_ == nullptr) {
+            assetImportLane_ = std::make_unique<kb::assets::streaming::BackgroundLane>(
+                kb::assets::streaming::BackgroundLoadService::Shared(), kb::assets::streaming::BackgroundJobClass::Long);
+        }
+        assetImportJob_ = assetImportLane_->Run(
+            [this, files, destinationVirtualFolder, options, projectRoot](std::string&) mutable {
                 kb::assets::AssetImportResult report{};
                 try {
                     kb::scene::Scene importScene{ kb::scene::SceneMode::Runtime };
@@ -2295,9 +2344,10 @@ bool EditorSceneContext::BeginAssetImport(
                     completedAssetImport_ = std::move(report);
                 }
                 assetImportRunning_.store(false, std::memory_order_release);
-            }
-        };
+                return true;
+            });
     } catch (const std::exception& error) {
+        assetImportJob_.reset();
         assetImportRunning_.store(false, std::memory_order_release);
         console_.Error("Assets", std::string{ "Asset import worker could not start: " } + error.what());
         return false;
@@ -2313,7 +2363,7 @@ std::size_t EditorSceneContext::PumpAssetImportResults() {
         completed = std::move(completedAssetImport_);
         completedAssetImport_.reset();
     }
-    if (assetImportWorker_.joinable()) assetImportWorker_.join();
+    assetImportJob_.reset();
 
     static_cast<void>(scene_->Assets().Discover());
     LogAssetImportReport(console_, *completed, assetBrowser_.SelectedFolder());
@@ -2519,9 +2569,11 @@ bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity
 }
 
 bool EditorSceneContext::CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path) {
-    const bool created = EditorScenePrefabActions::CreateAsset(*scene_, entity, path);
+    // Undo unlinks the entity again; the written asset file stays in the project.
+    const bool created = ExecuteSceneCommand("Create Prefab", [this, entity, &path]() {
+        return EditorScenePrefabActions::CreateAsset(*scene_, entity, path);
+    });
     if (created) {
-        InvalidateHierarchyRows();
         static_cast<void>(scene_->Assets().Discover());
         if (const std::optional<std::filesystem::path> virtualPath = scene_->Assets().Manager().Mounts().ToVirtual(path)) {
             if (const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().FindByPath(*virtualPath); metadata != nullptr) {
@@ -2533,6 +2585,85 @@ bool EditorSceneContext::CreatePrefabAsset(kb::scene::SceneEntity entity, const 
         console_.Error("Prefabs", AssetErrorOr(scene_->Assets().Manager(), "Prefab asset creation failed."));
     }
     return created;
+}
+
+bool EditorSceneContext::SelectPrefabSourceAsset(kb::scene::SceneEntity entity) {
+    const std::filesystem::path path = scene_->Prefabs().SourcePath(scene_->Prefabs().SourcePrefab(entity));
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const std::optional<std::filesystem::path> virtualPath = path.empty() ? std::nullopt : manager.Mounts().ToVirtual(path);
+    const kb::assets::AssetMetadata* metadata = virtualPath.has_value() ? manager.Registry().FindByPath(*virtualPath) : nullptr;
+    if (metadata == nullptr || !assetBrowser_.SelectAsset(metadata->id, manager)) {
+        return false;
+    }
+    assetBrowser_.FocusSelection(true);
+    return true;
+}
+
+const kb::scene::ScenePrefabOverrideReport& EditorSceneContext::PrefabInstanceOverrides(kb::scene::ScenePrefabInstanceHandle instance) const {
+    PrefabOverridesCache& cache = prefabOverridesCache_;
+    // Editor commands move the editor's revision; a change made to an instance's objects any other way moves the scene's.
+    const std::uint64_t instanceRevision = scene_->Prefabs().InstanceChangeRevision();
+    if (cache.scene != scene_ || cache.instance != instance || cache.revision != sceneRenderRevision_ ||
+        cache.instanceRevision != instanceRevision) {
+        cache = PrefabOverridesCache{
+            .scene = scene_,
+            .instance = instance,
+            .revision = sceneRenderRevision_,
+            .instanceRevision = instanceRevision,
+            .report = scene_->Prefabs().Overrides(instance),
+        };
+    }
+    return cache.report;
+}
+
+bool EditorSceneContext::SelectPrefabInstanceRoot(kb::scene::SceneEntity entity) {
+    std::uint32_t nodeIndex = 0U;
+    const kb::scene::ScenePrefabInstanceHandle instance = scene_->Prefabs().ContainingInstance(entity, nodeIndex);
+    if (!instance.IsValid()) {
+        return false;
+    }
+    for (kb::scene::SceneEntity candidate = entity; candidate.IsValid(); candidate = scene_->Hierarchy().Parent(candidate)) {
+        if (scene_->Prefabs().RootInstance(candidate) == instance) {
+            SelectEntity(candidate);
+            return true;
+        }
+    }
+    return false;
+}
+
+// Apply writes the prefab asset and refreshes the other instances; undo restores both.
+bool EditorSceneContext::ApplyPrefabInstance(kb::scene::SceneEntity entity) {
+    const kb::scene::ScenePrefabInstanceHandle instance = scene_->Prefabs().RootInstance(entity);
+    if (!instance.IsValid()) {
+        return false;
+    }
+    const std::filesystem::path assetPath = scene_->Prefabs().SourcePath(scene_->Prefabs().SourcePrefab(instance));
+    const bool applied = ExecuteSceneCommand("Apply Prefab", [this, instance, assetPath]() {
+        return assetPath.empty()
+            ? scene_->Prefabs().ApplyOverrides(instance)
+            : scene_->Prefabs().ApplyOverrides(instance, assetPath);
+    }, EditorSceneHistoryCommand::AssetFile{
+        .path = assetPath,
+        .reload = [this, assetPath]() { static_cast<void>(scene_->Prefabs().Load(assetPath)); },
+    });
+    if (applied) {
+        console_.Info("Prefabs", "Prefab overrides applied.");
+    }
+    return applied;
+}
+
+bool EditorSceneContext::RevertPrefabInstance(kb::scene::SceneEntity entity) {
+    const kb::scene::ScenePrefabInstanceHandle instance = scene_->Prefabs().RootInstance(entity);
+    return instance.IsValid() && ExecuteSceneCommand("Revert Prefab", [this, instance]() {
+        return scene_->Prefabs().RevertOverrides(instance);
+    });
+}
+
+bool EditorSceneContext::UnpackPrefabInstance(kb::scene::SceneEntity entity) {
+    const kb::scene::ScenePrefabInstanceHandle instance = scene_->Prefabs().RootInstance(entity);
+    return instance.IsValid() && ExecuteSceneCommand("Unpack Prefab", [this, instance]() {
+        return scene_->Prefabs().Unpack(instance);
+    });
 }
 
 EditorInputActionAuthoring EditorSceneContext::InputActionAuthoring() noexcept {
@@ -2997,7 +3128,12 @@ bool EditorSceneContext::ActivateProjectPhysicsLayers(kb::scene::Scene& scene) {
     if (projectConfig_.physicsLayersAsset.empty()) {
         return true;
     }
-    if (kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, projectConfig_.physicsLayersAsset)) {
+    // Play no longer rescans the project, so the one file this needs is re-read here: an edit made outside
+    // the editor applies, and a deleted file stops Play instead of leaving the cached layers in force.
+    kb::assets::AssetManager& assets = scene.Assets().Manager();
+    const kb::assets::AssetMetadata* layers = assets.Registry().FindByPath(projectConfig_.physicsLayersAsset);
+    if ((layers == nullptr || assets.RefreshAsset(layers->id)) &&
+        kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, projectConfig_.physicsLayersAsset)) {
         return true;
     }
     std::string error = "Project physics layers could not be loaded and applied: " + projectConfig_.physicsLayersAsset;
@@ -3119,6 +3255,13 @@ bool EditorSceneContext::InstantiatePrefabAssetAt(
     const std::filesystem::path& path,
     const std::filesystem::path& virtualPath,
     kb::scene::Vec3 position) {
+    return InstantiatePrefabAssetAt(path, virtualPath, kb::math::ToDVec3(position));
+}
+
+bool EditorSceneContext::InstantiatePrefabAssetAt(
+    const std::filesystem::path& path,
+    const std::filesystem::path& virtualPath,
+    const kb::math::DVec3& position) {
     return CreatePrefabAssetEntity(path, virtualPath, position, true).IsValid();
 }
 
@@ -3126,6 +3269,14 @@ kb::scene::SceneEntity EditorSceneContext::CreatePrefabAssetEntity(
     const std::filesystem::path& path,
     const std::filesystem::path& virtualPath,
     kb::scene::Vec3 position,
+    bool logCreation) {
+    return CreatePrefabAssetEntity(path, virtualPath, kb::math::ToDVec3(position), logCreation);
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreatePrefabAssetEntity(
+    const std::filesystem::path& path,
+    const std::filesystem::path& virtualPath,
+    const kb::math::DVec3& position,
     bool logCreation) {
     if (pendingSceneTransactionLabel_.has_value()) {
         console_.Warning("Edit", "Scene command ignored while another scene transaction is active.");
@@ -3138,9 +3289,7 @@ kb::scene::SceneEntity EditorSceneContext::CreatePrefabAssetEntity(
         return {};
     }
 
-    kb::scene::TransformComponent transform = scene_->Transforms().Get(*root);
-    transform.localPosition = position;
-    scene_->Transforms().Set(*root, transform);
+    scene_->Transforms().SetLocalTranslation(*root, position);
     scene_->Runtime().SynchronizeTransforms();
     if (!logCreation) {
         SelectEntity(*root);
@@ -3160,16 +3309,27 @@ kb::scene::SceneEntity EditorSceneContext::CreatePrefabAssetEntity(
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId) {
-    return CreateMeshAssetEntity(assetId, {}, true);
+    return CreateMeshAssetEntity(assetId, kb::math::DVec3{}, true);
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(kb::assets::AssetId assetId) {
-    return CreateParticleEffectEntity(assetId, {}, true);
+    return CreateParticleEffectEntity(assetId, kb::math::DVec3{}, true);
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(
     kb::assets::AssetId assetId,
     kb::scene::Vec3 position,
+    bool logCreation) {
+    return CreateParticleEffectEntity(assetId, kb::math::ToDVec3(position), logCreation);
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation) {
+    return CreateMeshAssetEntity(assetId, kb::math::ToDVec3(position), logCreation);
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(
+    kb::assets::AssetId assetId,
+    const kb::math::DVec3& position,
     bool logCreation) {
     if (!assetId.IsValid()) {
         console_.Warning("Particles", "Particle Effect entity creation ignored for invalid asset.");
@@ -3191,9 +3351,7 @@ kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(
         if (!entity.IsValid()) {
             return kb::scene::SceneEntity{};
         }
-        kb::scene::TransformComponent authoredTransform = scene_->Transforms().Get(entity);
-        authoredTransform.localPosition = position;
-        scene_->Transforms().Set(entity, authoredTransform);
+        scene_->Transforms().SetLocalTranslation(entity, position);
         scene_->Runtime().SynchronizeTransforms();
         scene_->Components().ParticleEffects().Set(entity, kb::scene::ParticleEffectComponent{
             .effectAssetId = assetId.value,
@@ -3245,7 +3403,7 @@ kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(
     return entity;
 }
 
-kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation) {
+kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId, const kb::math::DVec3& position, bool logCreation) {
     if (!assetId.IsValid()) {
         console_.Warning("Assets", "Mesh entity creation ignored for invalid asset.");
         return {};
@@ -3299,10 +3457,14 @@ kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::Ass
     }
 
     const auto createEntity = [this, assetId, skeletonAssetId, skeletonCompatibilitySignature, metadata, position, isSkeletalMesh]() {
-        return isSkeletalMesh
+        const kb::scene::SceneEntity entity = isSkeletalMesh
             ? EditorSceneMeshAssetActions::CreateSkeletalMeshEntity(
-                *scene_, assetId, skeletonAssetId, skeletonCompatibilitySignature, metadata->name, position)
-            : EditorSceneMeshAssetActions::CreateMeshEntity(*scene_, assetId, metadata->name, position);
+                *scene_, assetId, skeletonAssetId, skeletonCompatibilitySignature, metadata->name, kb::math::ToVec3(position))
+            : EditorSceneMeshAssetActions::CreateMeshEntity(*scene_, assetId, metadata->name, kb::math::ToVec3(position));
+        if (entity.IsValid() && scene_->Transforms().LocalTranslation(entity) != position) {
+            scene_->Transforms().SetLocalTranslation(entity, position);
+        }
+        return entity;
     };
 
     kb::scene::SceneEntity entity{};
@@ -3892,6 +4054,15 @@ bool EditorSceneContext::CompleteUIComponentDependencies(kb::scene::SceneEntity 
     return scene_->Hierarchy().SetParent(root, canvas);
 }
 
+void EditorSceneContext::UpgradePrefabLinksOnSave(const kb::scene::SceneDocument& document) {
+    if (!document.LinksPrefabInstancesByName()) {
+        return;
+    }
+    MarkSceneDocumentDirty();
+    console_.Warning("Prefabs", "This scene was saved by an older version, which links prefab instances to their "
+        "prefabs by object name. Save it once to link each object to its prefab node instead.");
+}
+
 void EditorSceneContext::CompleteLoadedUIComponents() {
     std::vector<kb::scene::SceneEntity> incomplete;
     for (const auto& row : HierarchyRows()) {
@@ -4341,6 +4512,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Nav Obstacle Component", [this, entity]() {
             scene_->Components().NavObstacles().Set(entity, kb::scene::NavObstacle{});
+            return true;
+        });
+    }
+    if (componentId == "NavLink") {
+        if (scene_->Components().NavLinks().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Nav Link component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Nav Link Component", [this, entity]() {
+            scene_->Components().NavLinks().Set(entity, kb::scene::NavLink{});
             return true;
         });
     }
@@ -5516,10 +5697,10 @@ bool EditorSceneContext::BeginSelectedTransformEdit(std::string label) {
         return false;
     }
 
-    const kb::scene::Vec3 targetStart = EditorSceneSelectionPivot::Resolve(
+    const kb::math::DVec3 targetStart = EditorSceneSelectionPivot::ResolvePrecise(
         *scene_,
         hierarchySelection_.SelectedEntities(),
-        primary).value_or(scene_->Transforms().Get(primary).localPosition);
+        primary).value_or(scene_->Transforms().LocalTranslation(primary));
     activeTransformEdit_.Begin(std::move(label), primary, targetStart, std::move(changes));
     return true;
 }
@@ -5528,6 +5709,16 @@ bool EditorSceneContext::ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3
     const EditorSceneTransformEditApplyResult result =
         EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyPrimaryPosition(position);
     return FinalizeActiveTransformEditApply(result.changed, result.touched);
+}
+
+bool EditorSceneContext::ApplyActiveTransformEditPositionDelta(const kb::math::DVec3& delta) {
+    const EditorSceneTransformEditApplyResult result =
+        EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyPositionDelta(delta);
+    return FinalizeActiveTransformEditApply(result.changed, result.touched);
+}
+
+const kb::math::DVec3& EditorSceneContext::ActiveTransformEditTargetStart() const noexcept {
+    return activeTransformEdit_.TargetStartPrecise();
 }
 
 bool EditorSceneContext::ApplyActiveTransformEditPrimaryRotation(kb::scene::Vec3 rotation) {
@@ -5634,8 +5825,13 @@ EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
     };
 }
 
-bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bool()> mutation) {
-    return SceneCommands().Execute(std::move(label), std::move(mutation));
+bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bool()> mutation, EditorSceneHistoryCommand::AssetFile assetFile) {
+    return SceneCommands().Execute(std::move(label), std::move(mutation), std::move(assetFile));
+}
+
+void EditorSceneContext::RemapRecreatedEntities(std::span<const kb::scene::SceneEntityRemap> recreated) {
+    scene_->History().RemapEntities(recreated);
+    commandStack_.RemapEntities(EditorCommandHistoryKey::Scene(), recreated);
 }
 
 void EditorSceneContext::ClearSceneDocumentDirty() noexcept {

@@ -91,14 +91,14 @@ MeshPipelineBuildResult MeshPipelineProcessor::Build(const MeshPipelineBuildDesc
 
 void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPipelineBuildResult& result) noexcept {
     auto* batchCache = desc.pass != MeshPassType::BaseTransparent && desc.selectedEntityIds.empty() &&
-        desc.visibilityBlockers.empty() ? desc.batchCommandCache : nullptr;
+        desc.visibilityBlockers.empty() && desc.portalVisibility == nullptr ? desc.batchCommandCache : nullptr;
     if (batchCache == nullptr && desc.batchCommandCache != nullptr) desc.batchCommandCache->Reset();
     if (batchCache != nullptr) batchCache->BeginBuild(desc.pass, result);
     else for (MeshDrawCommand& command : result.commands) command.instances.clear();
     result.gpuDrivenInputRecords.clear();
     result.transparentInstanceScratch.clear();
-    result.commandLookupScratch.clear();
-    result.materialResolutionScratch.clear();
+    ClearKeepingNodes(result.commandLookupScratch, result.commandLookupNodes);
+    ClearKeepingNodes(result.materialResolutionScratch, result.materialResolutionNodes);
     result.stats = SceneRenderSubmitStats{};
     const bool hasBatchSource = desc.meshBatches != nullptr || desc.drawGroups != nullptr;
     const std::span<const SceneMeshBatch> meshBatches = SceneMeshBatchSourceResolver::Resolve(SceneMeshBatchSourceDesc{
@@ -132,6 +132,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         .resolvedMaterialResource = desc.resolvedMaterialResource,
         .camera = desc.camera,
         .visibilityBlockers = desc.visibilityBlockers,
+        .portalVisibility = desc.portalVisibility,
         .diagnostics = desc.diagnostics,
         .maxDrawCommands = desc.maxDrawCommands,
         .maxVisibleInstances = desc.maxVisibleInstances,

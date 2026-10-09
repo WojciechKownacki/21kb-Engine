@@ -16,6 +16,11 @@ struct EditorBuildGameTargetSettings {
     // active editor build and are never written to this store.
     std::filesystem::path androidKeystore;
     std::string androidKeyAlias;
+    // Windows Authenticode: a certificate in the user's personal store by SHA-1
+    // thumbprint, or a PFX file whose password is entered for one build only.
+    std::string windowsCertificateThumbprint;
+    std::filesystem::path windowsCertificateFile;
+    std::string windowsTimestampUrl;
 
     [[nodiscard]] bool operator==(const EditorBuildGameTargetSettings&) const noexcept = default;
 };
@@ -31,6 +36,9 @@ struct EditorBuildGameSettings {
     std::string linuxEngineRoot;
     std::string linuxDisplay = ":0";
     std::filesystem::path linuxIdentity;
+    // Release signing key file (kb_cli keys generate). Empty: packaging uses the per-product
+    // key it keeps in the user's profile. Never a path inside the project.
+    std::filesystem::path releaseSigningKey;
     std::array<EditorBuildGameTargetSettings, 6> targets{};
 
     [[nodiscard]] EditorBuildGameTargetSettings& For(kb::packaging::PackagingTarget target);

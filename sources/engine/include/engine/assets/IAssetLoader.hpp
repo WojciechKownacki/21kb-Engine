@@ -3,6 +3,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -18,6 +19,7 @@ namespace bake {
 class RuntimeAssetPack;
 enum class RuntimeArtifactEncoding : std::uint8_t;
 struct RuntimeAssetPayload;
+struct AssetPackBlockEntry;
 }
 
 struct AssetLoadRequest {
@@ -60,6 +62,16 @@ struct AssetLoadRequest {
     [[nodiscard]] bool ReadPackagedPayload(
         bake::RuntimeArtifactEncoding encoding,
         std::string_view qualifier,
+        bake::RuntimeAssetPayload& out,
+        std::string& error) const;
+
+    // Like ReadPackagedPayload, but reads only the primary block and the blocks `include`
+    // accepts; every other block comes back named and empty. A streamed asset loads this way
+    // with its low detail, and the rest arrives through content streaming.
+    [[nodiscard]] bool ReadPackagedPayloadBlocks(
+        bake::RuntimeArtifactEncoding encoding,
+        std::string_view qualifier,
+        const std::function<bool(const bake::AssetPackBlockEntry&)>& include,
         bake::RuntimeAssetPayload& out,
         std::string& error) const;
 };

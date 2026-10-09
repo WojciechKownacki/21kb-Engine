@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -433,6 +434,17 @@ struct SkinnedMeshNode {
 
 } // namespace
 
+std::size_t FbxLoadMemoryLimit(std::uintmax_t fileBytes) noexcept {
+    // Generous for real files, which load in a few times their size, and still a
+    // ceiling: a few hundred bytes cannot ask for gigabytes.
+    constexpr std::uintmax_t kBaseBytes = 64ULL * 1024ULL * 1024ULL;
+    constexpr std::uintmax_t kBytesPerFileByte = 64U;
+    constexpr std::uintmax_t kCeilingBytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
+    const std::uintmax_t scaled = fileBytes > (kCeilingBytes - kBaseBytes) / kBytesPerFileByte
+        ? kCeilingBytes : kBaseBytes + fileBytes * kBytesPerFileByte;
+    return static_cast<std::size_t>(std::min(scaled, kCeilingBytes));
+}
+
 std::optional<SkeletalMeshFbxImportResult> SkeletalMeshFbxImporter::Import(
     const std::filesystem::path& path, std::uint64_t skeletonAssetId,
     const SkeletalMeshFbxImportOptions& options, std::string* error) {
@@ -449,6 +461,10 @@ std::optional<SkeletalMeshFbxImportResult> SkeletalMeshFbxImporter::Import(
     loadOptions.handedness_conversion_axis = UFBX_MIRROR_AXIS_Z;
     loadOptions.space_conversion = UFBX_SPACE_CONVERSION_MODIFY_GEOMETRY;
     loadOptions.generate_missing_normals = true;
+    std::error_code sizeError;
+    const std::size_t memoryLimit = FbxLoadMemoryLimit(std::filesystem::file_size(path, sizeError));
+    loadOptions.temp_allocator.memory_limit = memoryLimit;
+    loadOptions.result_allocator.memory_limit = memoryLimit;
     ufbx_error loadError{};
     FbxScene scene{ ufbx_load_file(path.string().c_str(), &loadOptions, &loadError) };
     if (!scene) return Fail<SkeletalMeshFbxImportResult>(error,

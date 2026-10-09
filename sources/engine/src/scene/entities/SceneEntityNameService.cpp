@@ -2,6 +2,7 @@
 
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
@@ -24,6 +25,7 @@ void SceneEntityNameService::SetName(Scene& scene, SceneObject object, std::stri
 
 void SceneEntityNameService::SetName(Scene& scene, SceneEntity entity, std::string_view name) {
     if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneHistoryService::NoteObjectChanging(scene, entity);
         SceneState& state = SceneAccess::State(scene);
         SceneEntityNaming::SetName(state, entity, name);
         MarkScenePrefabNodeDirty(state, entity);

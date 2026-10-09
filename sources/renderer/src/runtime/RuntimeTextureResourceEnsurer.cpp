@@ -41,13 +41,15 @@ void RuntimeTextureResourceEnsurer::Ensure(
     const RuntimeRenderResourceEnsureContext& context,
     const RuntimeMaterialResourceMap& materials,
     const RuntimeMaterialResourceMap& embeddedMaterials,
-    RuntimeTextureResourceMap& textures) {
+    RuntimeTextureResourceMap& textures,
+    RuntimeContentStreamer& streamer) {
     kb::assets::AssetManager& manager = context.scene.Assets().Manager();
 
     auto ensureTexture = [&](
                              std::uint64_t textureAssetId,
                              RenderTextureColorSpace colorSpace,
-                             RenderTextureDimension expectedDimension) {
+                             RenderTextureDimension expectedDimension,
+                             std::uint64_t materialAssetId) {
         if (textureAssetId == 0U) {
             return;
         }
@@ -58,6 +60,8 @@ void RuntimeTextureResourceEnsurer::Ensure(
             .colorSpace = colorSpace,
         };
         context.frameReferences.MarkTexture(runtimeKey);
+        // Content streaming sizes a texture by the on-screen size of what its material is on.
+        streamer.NoteTextureUse(runtimeKey, materialAssetId);
 
         const kb::assets::AssetId assetId{ textureAssetId };
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetId);
@@ -193,6 +197,11 @@ void RuntimeTextureResourceEnsurer::Ensure(
             .dimension = textureRef->dimension,
         };
         context.sceneRenderer.ResourceMap().BindTexture(textureAssetId, colorSpace, handle);
+        // A packaged texture with streamed mips was created from its tail; the rest streams.
+        if (packaged && textureRef->streaming.has_value() && !generatedMipChain.has_value()) {
+            streamer.TrackTexture(runtimeKey, handle, textureRef.Shared(), runtimePack);
+            streamer.NoteTextureUse(runtimeKey, materialAssetId);
+        }
         if (textureRef->dimension != expectedDimension) {
             std::ostringstream row;
             row << "texture-dimension-mismatch assetId=" << textureAssetId
@@ -223,11 +232,12 @@ void RuntimeTextureResourceEnsurer::Ensure(
                 ensureTexture(
                     slot.assetId,
                     RenderTextureBindingColorSpace(slot.policy.expectedColorSpace),
-                    RenderTextureDimension::Texture2D);
+                    RenderTextureDimension::Texture2D,
+                    materialKey.assetId);
             }
         }
         for (const RenderMaterialGraphTextureBinding& graphTexture : material->graphProgram.textures) {
-            ensureTexture(graphTexture.textureAssetId, graphTexture.colorSpace, graphTexture.dimension);
+            ensureTexture(graphTexture.textureAssetId, graphTexture.colorSpace, graphTexture.dimension, materialKey.assetId);
         }
     }
     // Some renderer features, such as the World Backdrop environment map, consume a
@@ -235,7 +245,7 @@ void RuntimeTextureResourceEnsurer::Ensure(
     // validation and lifetime path as material textures.
     for (const RuntimeTextureAssetKey textureKey : context.frameReferences.Textures()) {
         if (textureKey.sceneId == context.scene.Id()) {
-            ensureTexture(textureKey.assetId, textureKey.colorSpace, RenderTextureDimension::Texture2D);
+            ensureTexture(textureKey.assetId, textureKey.colorSpace, RenderTextureDimension::Texture2D, 0U);
         }
     }
 }

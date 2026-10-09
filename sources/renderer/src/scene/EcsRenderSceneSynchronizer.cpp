@@ -46,9 +46,12 @@
 
 #include <algorithm>
 #include <array>
+#include "engine/ecs/NativeArchetypeStorage.hpp"
 #include <atomic>
+#include <mutex>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 
@@ -71,9 +74,6 @@ namespace {
     return count;
 }
 
-[[nodiscard]] std::array<float, 3> PositionOf(const kb::scene::TransformComponent& transform) noexcept {
-    return { transform.worldPosition.x, transform.worldPosition.y, transform.worldPosition.z };
-}
 
 [[nodiscard]] std::array<float, 4> RotationOf(const kb::scene::TransformComponent& transform) noexcept {
     return { transform.worldRotation.x, transform.worldRotation.y, transform.worldRotation.z, transform.worldRotation.w };
@@ -140,7 +140,9 @@ namespace {
 }
 
 [[nodiscard]] std::array<float, 16> HistoryRibbonSegmentModel(
-    const std::array<float, 3>& start, const std::array<float, 3>& end, float width) noexcept {
+    const kb::math::Vec3& startPoint, const kb::math::Vec3& endPoint, float width) noexcept {
+    const std::array<float, 3> start{ startPoint.x, startPoint.y, startPoint.z };
+    const std::array<float, 3> end{ endPoint.x, endPoint.y, endPoint.z };
     const float dx = end[0] - start[0], dy = end[1] - start[1], dz = end[2] - start[2];
     const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
     if (length <= 1.0e-5F) return {};
@@ -281,11 +283,27 @@ namespace {
     };
 }
 
+// The columnar world affines are absolute float transforms; proxies hold render-space (origin-relative) ones.
+[[nodiscard]] std::array<float, 16> RenderSpaceModel(const RenderScene& renderScene, const kb::scene::WorldTransformAffine3x4& affine) noexcept {
+    std::array<float, 16> model = ModelFromWorldAffine3x4(affine);
+    const kb::math::DVec3& origin = renderScene.RenderOrigin();
+    if (origin != kb::math::DVec3{}) {
+        const kb::math::Vec3 translation = kb::math::RelativeTo(kb::math::ToDVec3(kb::math::Vec3{ model[12], model[13], model[14] }), origin);
+        model[12] = translation.x;
+        model[13] = translation.y;
+        model[14] = translation.z;
+    }
+    return model;
+}
+
 struct SyncContext {
     const kb::scene::Scene* scene = nullptr;
     RenderScene* renderScene = nullptr;
     EcsRenderTransformResolver* transforms = nullptr;
     SceneRenderWorldTransformReader* worldReader = nullptr;
+    // With the render origin at (0, 0, 0) and no translation finer than float anywhere in the scene, the float world
+    // translation already is the render-space one (the common case: nothing far from the origin).
+    bool floatTranslations = true;
     std::vector<std::uint64_t>* meshes = nullptr;
     std::vector<std::uint64_t>* cameras = nullptr;
     std::vector<std::uint64_t>* lights = nullptr;
@@ -299,6 +317,29 @@ struct SyncContext {
     std::vector<kb::math::Mat4>* skinningPoseScratch = nullptr;
     bool basicLightingEnabled = false;
 };
+
+[[nodiscard]] bool UsesFloatTranslations(const kb::scene::Scene& scene, const RenderScene& renderScene) noexcept {
+    return renderScene.RenderOrigin() == kb::math::DVec3{} && !scene.Transforms().HasDoublePrecisionTranslations();
+}
+
+// The translation the GPU sees for a transform read through the world reader (`read`, from the stored row
+// `computed`): the entity's double-precision world translation relative to the render origin.
+[[nodiscard]] kb::math::Vec3 RenderTranslation(const SyncContext& sync, kb::scene::SceneEntity entity,
+    const kb::scene::TransformComponent& computed, const kb::scene::TransformComponent& read) {
+    if (sync.floatTranslations) return read.worldPosition;
+    return kb::math::RelativeTo(sync.worldReader->ReadWorldTranslation(entity, computed), sync.renderScene->RenderOrigin());
+}
+
+[[nodiscard]] std::array<float, 3> RenderPosition(const SyncContext& sync, kb::scene::SceneEntity entity,
+    const kb::scene::TransformComponent& computed, const kb::scene::TransformComponent& read) {
+    const kb::math::Vec3 translation = RenderTranslation(sync, entity, computed, read);
+    return { translation.x, translation.y, translation.z };
+}
+
+[[nodiscard]] std::array<float, 16> RenderModel(const SyncContext& sync, kb::scene::SceneEntity entity,
+    const kb::scene::TransformComponent& computed, const kb::scene::TransformComponent& read) {
+    return SceneTransformMatrices::Model(read, RenderTranslation(sync, entity, computed, read));
+}
 
 [[nodiscard]] RenderSkinningPaletteHandle UploadSkinningPalette(
     RenderSkinningPaletteAllocator* allocator,
@@ -355,7 +396,7 @@ void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformCompone
     sync->cameras->push_back(entity.Id());
     static_cast<void>(sync->renderScene->UpsertCamera(CameraRenderProxyDesc{
         .entityId = entity.Id(),
-        .position = PositionOf(renderTransform),
+        .position = RenderPosition(*sync, entity, transform, renderTransform),
         .rotation = RotationOf(renderTransform),
         .projection = CameraProjectionOf(camera.projection),
         .verticalFovDegrees = camera.verticalFovDegrees,
@@ -474,7 +515,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .materialAssetId = materialAssetId,
         .materialSlotAssetIds = materialSlotAssetIds,
         .materialSlotOverrideCount = effectiveMaterialSlotOverrideCount,
-        .model = SceneTransformMatrices::Model(renderTransform),
+        .model = RenderModel(*sync, entity, transform, renderTransform),
         .boundsOverride = AnimatedBoundsForMesh(*sync->scene, entity, geometry, skeleton),
         .color = NeutralInstanceColor(),
         .currentSkinningPalette = currentSkinningPalette,
@@ -512,7 +553,7 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
     static_cast<void>(sync->renderScene->UpsertLight(LightRenderProxyDesc{
         .entityId = entity.Id(),
         .kind = LightKindOf(light.kind),
-        .position = PositionOf(renderTransform),
+        .position = RenderPosition(*sync, entity, transform, renderTransform),
         .rotation = RotationOf(renderTransform),
         .color = SceneLightColor::Resolve(light),
         .intensity = light.intensity,
@@ -539,7 +580,7 @@ void SyncVisibilityBlocker(kb::scene::SceneEntity entity, const kb::scene::Trans
     const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, transform);
     sync->visibilityBlockers->push_back(entity.Id());
     static_cast<void>(sync->renderScene->UpsertVisibilityBlocker(VisibilityBlockerRenderProxyDesc{
-        .entityId = entity.Id(), .model = SceneTransformMatrices::Model(renderTransform),
+        .entityId = entity.Id(), .model = RenderModel(*sync, entity, transform, renderTransform),
         .localCenter = { blocker.localCenter.x, blocker.localCenter.y, blocker.localCenter.z },
         .size = { blocker.size.x, blocker.size.y, blocker.size.z },
     }));
@@ -572,7 +613,7 @@ void SyncGeometrySwarm(kb::scene::SceneEntity entity, const kb::scene::GeometryS
     const kb::scene::ResolvedVisibility visibility = kb::scene::ResolveVisibility(*sync->scene, entity);
     static_cast<void>(sync->renderScene->UpsertGeometrySwarm(GeometrySwarmRenderProxyDesc{
         .entityId = entity.Id(), .meshAssetId = swarm.meshAssetId, .materialAssetId = swarm.materialAssetId,
-        .model = SceneTransformMatrices::Model(renderTransform), .instanceCount = swarm.instanceCount,
+        .model = RenderModel(*sync, entity, *transform, renderTransform), .instanceCount = swarm.instanceCount,
         .columns = swarm.columns, .rows = swarm.rows, .layers = swarm.layers,
         .spacing = { swarm.spacing.x, swarm.spacing.y, swarm.spacing.z }, .instanceScale = swarm.instanceScale,
         .visible = visibility.visible, .castsShadow = swarm.castsShadow, .receivesShadow = swarm.receivesShadow,
@@ -596,39 +637,143 @@ void SyncSurfaceCast(kb::scene::SceneEntity entity, const kb::scene::SurfaceCast
     sync->surfaceCasts->push_back(entity.Id());
     const kb::scene::ResolvedVisibility visibility = kb::scene::ResolveVisibility(*sync->scene, entity);
     static_cast<void>(sync->renderScene->UpsertSurfaceCast(SurfaceCastRenderProxyDesc{
-        .entityId = entity.Id(), .materialAssetId = surfaceCast.materialAssetId, .model = SceneTransformMatrices::Model(renderTransform),
+        .entityId = entity.Id(), .materialAssetId = surfaceCast.materialAssetId, .model = RenderModel(*sync, entity, *transform, renderTransform),
         .localCenter = { shape->center.x, shape->center.y, shape->center.z }, .size = { shape->size.x, shape->size.y, shape->size.z },
         .radius = shape->radius, .height = shape->height, .receiverLayerMask = surfaceCast.receiverLayerMask,
         .order = surfaceCast.order, .region = SurfaceCastRegionOf(shape->kind), .visible = visibility.visible,
     }));
 }
 
-void SyncFacingPanel(kb::scene::SceneEntity entity, const kb::scene::FacingPanelComponent& panel, void* context) {
-    auto* sync = static_cast<SyncContext*>(context);
-    if (!panel.enabled || !kb::scene::IsFacingPanelComponentValid(panel)) return;
+// Returns whether the panel's mesh got the oriented transform.
+[[nodiscard]] bool OrientFacingPanel(kb::scene::SceneEntity entity, const kb::scene::FacingPanelComponent& panel, SyncContext* sync) {
+    if (!panel.enabled || !kb::scene::IsFacingPanelComponentValid(panel)) return false;
     const kb::scene::TransformComponent* transform = sync->scene->Transforms().TryGet(entity);
-    if (transform == nullptr) return;
+    if (transform == nullptr) return false;
     kb::scene::TransformComponent oriented = sync->worldReader->Read(entity, *transform);
+    const kb::math::Vec3 translation = RenderTranslation(*sync, entity, *transform, oriented);
     kb::math::Vec3 direction{};
     switch (panel.mode) {
     case kb::scene::FacingPanelMode::View: {
         const CameraRenderProxyDesc* camera = sync->renderScene->FindPrimaryCameraProxy();
-        if (camera == nullptr) return;
-        direction = kb::math::Vec3{ camera->position[0] - oriented.worldPosition.x, camera->position[1] - oriented.worldPosition.y, camera->position[2] - oriented.worldPosition.z };
+        if (camera == nullptr) return false;
+        direction = kb::math::Vec3{ camera->position[0] - translation.x, camera->position[1] - translation.y, camera->position[2] - translation.z };
         break;
     }
     case kb::scene::FacingPanelMode::Point:
-        direction = panel.targetPoint - oriented.worldPosition;
+        // The target point is an absolute world position: far from the origin the direction is taken in double precision.
+        direction = sync->floatTranslations ? panel.targetPoint - oriented.worldPosition
+            : kb::math::ToVec3(kb::math::ToDVec3(panel.targetPoint) - sync->worldReader->ReadWorldTranslation(entity, *transform));
         break;
     case kb::scene::FacingPanelMode::Axis:
         direction = panel.axis;
         break;
     case kb::scene::FacingPanelMode::Fixed:
-        return;
+        return false;
     }
-    if (kb::math::Dot(direction, direction) <= 0.000001F) return;
+    if (kb::math::Dot(direction, direction) <= 0.000001F) return false;
     oriented.worldRotation = kb::math::LookRotation(direction, panel.up);
-    static_cast<void>(sync->renderScene->UpdateMeshTransform(entity.Id(), SceneTransformMatrices::Model(oriented)));
+    return sync->renderScene->UpdateMeshTransform(entity.Id(), SceneTransformMatrices::Model(oriented, translation));
+}
+
+void SyncFacingPanel(kb::scene::SceneEntity entity, const kb::scene::FacingPanelComponent& panel, void* context) {
+    static_cast<void>(OrientFacingPanel(entity, panel, static_cast<SyncContext*>(context)));
+}
+
+struct PullContext {
+    SyncContext sync{};
+    bool cameraMoved = false;
+};
+
+// The transform a proxy must show now, or nothing when it shows this world version already. A row written after
+// the last transform sync is resolved and not recorded, so it is pulled again once the sync has composed it.
+[[nodiscard]] std::optional<kb::scene::TransformComponent> PulledTransform(
+    PullContext& pull, kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, std::uint64_t& pulledWorldVersion) {
+    if (transform.worldDirty) return pull.sync.worldReader->Read(entity, transform);
+    if (pulledWorldVersion == transform.worldVersion) return std::nullopt;
+    pulledWorldVersion = transform.worldVersion;
+    return transform;
+}
+
+[[nodiscard]] std::array<float, 16> PulledModel(const SyncContext& sync, kb::scene::SceneEntity entity,
+    const kb::scene::TransformComponent& computed, const kb::scene::TransformComponent& pulled) {
+    if (sync.floatTranslations) return ModelFromWorldAffine3x4(kb::scene::BuildWorldAffine3x4(pulled));
+    return ModelFromWorldAffine3x4(kb::scene::BuildWorldAffine3x4WithTranslation(pulled, RenderTranslation(sync, entity, computed, pulled)));
+}
+
+void PullCamera(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::CameraComponent&, void* context) {
+    auto& pull = *static_cast<PullContext*>(context);
+    const CameraRenderProxy* proxy = pull.sync.renderScene->FindCameraByEntity(entity.Id());
+    if (proxy == nullptr) return;
+    const std::optional<kb::scene::TransformComponent> pulled = PulledTransform(pull, entity, transform, proxy->pulledWorldVersion);
+    if (!pulled) return;
+    CameraRenderProxyDesc desc = proxy->desc;
+    desc.position = RenderPosition(pull.sync, entity, transform, *pulled);
+    desc.rotation = RotationOf(*pulled);
+    static_cast<void>(pull.sync.renderScene->UpsertCamera(desc));
+    pull.cameraMoved = true;
+}
+
+void PullLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::LightComponent&, void* context) {
+    auto& pull = *static_cast<PullContext*>(context);
+    const LightRenderProxy* proxy = pull.sync.renderScene->FindLightByEntity(entity.Id());
+    if (proxy == nullptr) return;
+    const std::optional<kb::scene::TransformComponent> pulled = PulledTransform(pull, entity, transform, proxy->pulledWorldVersion);
+    if (!pulled) return;
+    LightRenderProxyDesc desc = proxy->desc;
+    desc.position = RenderPosition(pull.sync, entity, transform, *pulled);
+    desc.rotation = RotationOf(*pulled);
+    static_cast<void>(pull.sync.renderScene->UpsertLight(desc));
+}
+
+void PullFacingPanel(kb::scene::SceneEntity entity, const kb::scene::FacingPanelComponent& panel, void* context) {
+    auto& pull = *static_cast<PullContext*>(context);
+    const kb::scene::TransformComponent* transform = pull.sync.scene->Transforms().TryGet(entity);
+    const MeshRenderProxy* proxy = pull.sync.renderScene->FindMeshByEntity(entity.Id());
+    if (transform == nullptr || proxy == nullptr) return;
+    if (!pull.cameraMoved && !transform->worldDirty && proxy->pulledWorldVersion == transform->worldVersion) return;
+    // An oriented panel is pulled here; a fixed one, or one with nothing to face, takes its plain model below.
+    if (OrientFacingPanel(entity, panel, &pull.sync) && !transform->worldDirty) proxy->pulledWorldVersion = transform->worldVersion;
+}
+
+void PullMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent&, void* context) {
+    auto& pull = *static_cast<PullContext*>(context);
+    const MeshRenderProxy* proxy = pull.sync.renderScene->FindMeshByEntity(entity.Id());
+    if (proxy == nullptr) return;
+    if (const std::optional<kb::scene::TransformComponent> pulled = PulledTransform(pull, entity, transform, proxy->pulledWorldVersion)) {
+        pull.sync.renderScene->UpdateMeshTransform(entity.Id(), *proxy, PulledModel(pull.sync, entity, transform, *pulled));
+    }
+}
+
+// The model a component proxy must show now, or nothing when it shows this world version already.
+template <typename Proxies>
+[[nodiscard]] std::optional<std::array<float, 16>> PulledComponentModel(PullContext& pull, kb::scene::SceneEntity entity, const Proxies& proxies) {
+    const auto proxy = proxies.find(entity.Id());
+    const kb::scene::TransformComponent* transform = pull.sync.scene->Transforms().TryGet(entity);
+    if (proxy == proxies.end() || transform == nullptr) return std::nullopt;
+    const std::optional<kb::scene::TransformComponent> pulled = PulledTransform(pull, entity, *transform, proxy->second.pulledWorldVersion);
+    if (!pulled) return std::nullopt;
+    return PulledModel(pull.sync, entity, *transform, *pulled);
+}
+
+void PullGeometrySwarm(kb::scene::SceneEntity entity, const kb::scene::GeometrySwarmComponent&, void* context) {
+    auto& pull = *static_cast<PullContext*>(context);
+    if (const auto model = PulledComponentModel(pull, entity, pull.sync.renderScene->GeometrySwarmProxies())) {
+        static_cast<void>(pull.sync.renderScene->UpdateGeometrySwarmTransform(entity.Id(), *model));
+    }
+}
+
+void PullSurfaceCast(kb::scene::SceneEntity entity, const kb::scene::SurfaceCastComponent&, void* context) {
+    auto& pull = *static_cast<PullContext*>(context);
+    if (const auto model = PulledComponentModel(pull, entity, pull.sync.renderScene->SurfaceCastProxies())) {
+        static_cast<void>(pull.sync.renderScene->UpdateSurfaceCastTransform(entity.Id(), *model));
+    }
+}
+
+void PullSpaceStroke(kb::scene::SceneEntity entity, const kb::scene::SpaceStrokeComponent&, void* context) {
+    auto& pull = *static_cast<PullContext*>(context);
+    if (const auto model = PulledComponentModel(pull, entity, pull.sync.renderScene->SpaceStrokeProxies())) {
+        static_cast<void>(pull.sync.renderScene->UpdateSpaceStrokeTransform(entity.Id(), *model));
+    }
 }
 
 void SyncSpaceStroke(kb::scene::SceneEntity entity, const kb::scene::SpaceStrokeComponent& stroke, void* context) {
@@ -639,7 +784,7 @@ void SyncSpaceStroke(kb::scene::SceneEntity entity, const kb::scene::SpaceStroke
     if (curve == nullptr || transform == nullptr || !curve->enabled || !kb::scene::IsGuideCurveControlPointCountValid(curve->controlPointCount)) { static_cast<void>(sync->renderScene->RemoveSpaceStroke(entity.Id())); return; }
     const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, *transform);
     SpaceStrokeRenderProxyDesc proxy{ .entityId = entity.Id(), .meshAssetId = stroke.meshAssetId, .materialAssetId = stroke.materialAssetId,
-        .model = SceneTransformMatrices::Model(renderTransform), .controlPointCount = static_cast<std::uint8_t>(curve->controlPointCount),
+        .model = RenderModel(*sync, entity, *transform, renderTransform), .controlPointCount = static_cast<std::uint8_t>(curve->controlPointCount),
         .splineSegments = stroke.splineSegments, .mode = static_cast<std::uint8_t>(stroke.mode), .width = stroke.width, .cableSag = stroke.cableSag,
         .layer = stroke.layer & kb::scene::ResolveVisibility(*sync->scene, entity).mask, .closed = curve->closed,
         .visible = kb::scene::ResolveVisibility(*sync->scene, entity).visible, .castsShadow = stroke.castsShadow, .receivesShadow = stroke.receivesShadow };
@@ -773,6 +918,7 @@ void EcsRenderSceneSynchronizer::SyncImpl(const kb::scene::Scene& scene, RenderS
         .renderScene = &renderScene,
         .transforms = &transforms,
         .worldReader = &worldReader,
+        .floatTranslations = UsesFloatTranslations(scene, renderScene),
         .meshes = &seenMeshes_,
         .cameras = &seenCameras_,
         .lights = &seenLights_,
@@ -852,6 +998,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
         .renderScene = &renderScene,
         .transforms = &transforms,
         .worldReader = &worldReader,
+        .floatTranslations = UsesFloatTranslations(scene, renderScene),
         .meshes = &seenMeshes_,
         .cameras = &seenCameras_,
         .lights = &seenLights_,
@@ -908,7 +1055,7 @@ void EcsRenderSceneSynchronizer::AdvanceHistoryRibbons(const kb::scene::Scene& s
         if (state.lastSampleTimeSeconds == context.now) return;
         if (state.lastSampleTimeSeconds > context.now) clear();
         if (state.lastSampleTimeSeconds < 0.0 || context.now - state.lastSampleTimeSeconds >= static_cast<double>(ribbon.sampleIntervalSeconds)) {
-            state.samples.push_back(HistoryRibbonSample{ .position = { transform->worldPosition.x, transform->worldPosition.y, transform->worldPosition.z }, .timeSeconds = context.now });
+            state.samples.push_back(HistoryRibbonSample{ .position = context.scene->Transforms().WorldTranslation(entity, *transform), .timeSeconds = context.now });
             state.lastSampleTimeSeconds = context.now;
         }
         const double oldest = context.now - static_cast<double>(ribbon.lifetimeSeconds);
@@ -923,16 +1070,16 @@ void EcsRenderSceneSynchronizer::AdvanceHistoryRibbons(const kb::scene::Scene& s
         for (std::size_t index = 0U; index < segmentCount; ++index) {
             const std::uint64_t generatedId = index < state.generatedMeshEntityIds.size() ? state.generatedMeshEntityIds[index] : HistoryRibbonInstanceId(entity.Id(), static_cast<std::uint32_t>(index));
             if (index == state.generatedMeshEntityIds.size()) state.generatedMeshEntityIds.push_back(generatedId);
-            const float dx = state.samples[index + 1U].position[0] - state.samples[index].position[0];
-            const float dy = state.samples[index + 1U].position[1] - state.samples[index].position[1];
-            const float dz = state.samples[index + 1U].position[2] - state.samples[index].position[2];
-            if (dx * dx + dy * dy + dz * dz <= 1.0e-10F) {
+            const kb::math::Vec3 start = kb::math::RelativeTo(state.samples[index].position, context.renderScene->RenderOrigin());
+            const kb::math::Vec3 end = kb::math::RelativeTo(state.samples[index + 1U].position, context.renderScene->RenderOrigin());
+            const kb::math::Vec3 delta = kb::math::ToVec3(state.samples[index + 1U].position - state.samples[index].position);
+            if (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z <= 1.0e-10F) {
                 static_cast<void>(context.renderScene->RemoveMesh(generatedId));
                 continue;
             }
             static_cast<void>(context.renderScene->UpsertMesh(MeshRenderProxyDesc{
                 .entityId = generatedId, .meshAssetId = ribbon.meshAssetId, .materialAssetId = ribbon.materialAssetId,
-                .model = HistoryRibbonSegmentModel(state.samples[index].position, state.samples[index + 1U].position, ribbon.width),
+                .model = HistoryRibbonSegmentModel(start, end, ribbon.width),
                 .color = NeutralInstanceColor(), .visible = visibility.visible, .castsShadow = ribbon.castsShadow,
                 .receivesShadow = ribbon.receivesShadow, .layer = ribbon.layer & visibility.mask,
             }));
@@ -972,7 +1119,7 @@ void EcsRenderSceneSynchronizer::SyncLensEchoes(const kb::scene::Scene& scene, R
         if (!context.scene->Entities().IsAlive(source)) return;
         const kb::scene::TransformComponent* sourceTransform = context.scene->Transforms().TryGet(source);
         if (sourceTransform == nullptr) return;
-        kb::math::Vec3 position = sourceTransform->worldPosition;
+        kb::math::Vec3 position = kb::math::RelativeTo(context.scene->Transforms().WorldTranslation(source, *sourceTransform), context.renderScene->RenderOrigin());
         const kb::math::Vec3 towardCamera = context.cameraPosition - position;
         if (echo.occlusionRule == kb::scene::LensEchoOcclusionRule::AlwaysVisible && context.camera != nullptr) {
             const float directionLength = kb::math::Length(towardCamera);
@@ -1001,7 +1148,7 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffines(
     std::span<const kb::scene::WorldTransformAffine3x4> worldAffines) const {
     const std::size_t count = std::min(entities.size(), worldAffines.size());
     for (std::size_t index = 0; index < count; ++index) {
-        const std::array<float, 16> model = ModelFromWorldAffine3x4(worldAffines[index]);
+        const std::array<float, 16> model = RenderSpaceModel(renderScene, worldAffines[index]);
         // Returns false for entities without a mesh proxy (cameras, lights); those
         // are handled by the structural sync, so skipping them here is correct.
         static_cast<void>(renderScene.UpdateMeshTransform(entities[index].Id(), model));
@@ -1035,7 +1182,7 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
         std::uint64_t localFallback = 0U;
         const std::size_t end = chunk.begin + chunk.count;
         for (std::size_t index = chunk.begin; index < end; ++index) {
-            const std::array<float, 16> model = ModelFromWorldAffine3x4(worldAffines[index]);
+            const std::array<float, 16> model = RenderSpaceModel(renderScene, worldAffines[index]);
             static_cast<void>(renderScene.UpdateVisibilityBlockerTransform(entities[index].Id(), model));
             if (renderScene.ApplyGeometrySwarmTransform(entities[index].Id(), model)) {
                 geometrySwarmChanged.store(true, std::memory_order_relaxed);
@@ -1129,6 +1276,137 @@ void EcsRenderSceneSynchronizer::SyncFacingPanelUpdates(
     }
 }
 
+// Each listed mesh proxy is refreshed by one worker (ApplyMeshTransform writes only its proxy and instance); the
+// draw groups are invalidated and the updates counted once after the join. A row written after the last transform
+// sync is left to the caller, which has the resolver.
+void EcsRenderSceneSynchronizer::PullComposedMeshTransforms(const kb::scene::Scene& scene, RenderScene& renderScene) const {
+    constexpr std::size_t kMeshPullGrainSize = 1024U;
+    const auto& world = scene.Runtime().EcsWorld();
+    const auto& storage = world.NativeStorage();
+    const std::uint64_t structuralVersion = storage.StructuralVersion();
+    const std::size_t meshCount = storage.CountWithComponent(world.Component<kb::scene::MeshRendererComponent>());
+    if (meshPullScene_ != &scene || meshPullRenderScene_ != &renderScene || !storage.IsAppendOnlySince(meshPullStructuralVersion_) ||
+        meshPullMeshCount_ != meshCount ||
+        meshPullMeshSetVersion_ != renderScene.MeshSetVersion()) {
+        meshPullRows_.clear();
+        struct Context {
+            const RenderScene& renderScene;
+            std::vector<MeshPullRow>& rows;
+        } context{ renderScene, meshPullRows_ };
+        scene.Components().Visitors().ForEachMeshRenderer([](kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent&, void* raw) {
+            auto& data = *static_cast<Context*>(raw);
+            if (const MeshRenderProxy* proxy = data.renderScene.FindMeshByEntity(entity.Id()); proxy != nullptr) {
+                data.rows.push_back(MeshPullRow{ .entity = entity, .transform = &transform, .proxy = proxy });
+            }
+        }, &context);
+        meshPullScene_ = &scene;
+        meshPullRenderScene_ = &renderScene;
+        meshPullMeshSetVersion_ = renderScene.MeshSetVersion();
+        meshPullMeshCount_ = meshCount;
+    }
+    meshPullStructuralVersion_ = structuralVersion;
+    meshPullDirtyRows_.clear();
+    std::mutex dirtyRowsMutex;
+    std::vector<std::size_t>& dirtyRows = meshPullDirtyRows_;
+    std::atomic<std::uint64_t> inPlace{ 0U };
+    std::atomic<std::uint64_t> fallback{ 0U };
+    std::mutex changedGroupsMutex;
+    std::vector<std::uint32_t>& changedGroups = meshPullChangedGroups_;
+    changedGroups.clear();
+    const auto& rows = meshPullRows_;
+    const bool floatTranslations = UsesFloatTranslations(scene, renderScene);
+    const_cast<kb::scene::Scene&>(scene).Runtime().ParallelFor(rows.size(), kMeshPullGrainSize, [&scene, floatTranslations, &renderScene, &rows, &inPlace, &fallback, &changedGroupsMutex, &changedGroups, &dirtyRowsMutex, &dirtyRows](std::size_t begin, std::size_t end) {
+        std::uint64_t localInPlace = 0U;
+        std::uint64_t localFallback = 0U;
+        std::uint32_t lastGroup = UINT32_MAX;
+        for (std::size_t index = begin; index < end; ++index) {
+            const auto [entity, transform, proxy] = rows[index];
+            if (transform->worldDirty) {
+                const std::lock_guard lock{ dirtyRowsMutex };
+                dirtyRows.push_back(index);
+                continue;
+            }
+            if (proxy->pulledWorldVersion == transform->worldVersion) continue;
+            proxy->pulledWorldVersion = transform->worldVersion;
+            const std::array<float, 16> model = floatTranslations
+                ? ModelFromWorldAffine3x4(kb::scene::BuildWorldAffine3x4(*transform))
+                : ModelFromWorldAffine3x4(kb::scene::BuildWorldAffine3x4(*transform, scene.Transforms().WorldTranslation(entity, *transform), renderScene.RenderOrigin()));
+            switch (renderScene.ApplyMeshTransform(entity.Id(), const_cast<MeshRenderProxy&>(*proxy), model, false)) {
+            case RenderScene::TransformUpdateOutcome::InPlace:
+                ++localInPlace;
+                if (proxy->instanceGroupIndex != lastGroup) {
+                    lastGroup = proxy->instanceGroupIndex;
+                    const std::lock_guard lock{ changedGroupsMutex };
+                    changedGroups.push_back(lastGroup);
+                }
+                break;
+            case RenderScene::TransformUpdateOutcome::Fallback:
+                ++localFallback;
+                break;
+            case RenderScene::TransformUpdateOutcome::NotFound:
+                break;
+            }
+        }
+        inPlace.fetch_add(localInPlace, std::memory_order_relaxed);
+        fallback.fetch_add(localFallback, std::memory_order_relaxed);
+    });
+    std::ranges::sort(changedGroups);
+    changedGroups.erase(std::unique(changedGroups.begin(), changedGroups.end()), changedGroups.end());
+    for (const std::uint32_t group : changedGroups) renderScene.MarkDrawGroupContentChanged(group);
+    const std::uint64_t fallbackCount = fallback.load(std::memory_order_relaxed);
+    renderScene.InvalidateDrawGroupsIfFallback(fallbackCount > 0U ? RenderScene::TransformUpdateOutcome::Fallback : RenderScene::TransformUpdateOutcome::InPlace);
+    renderScene.AddTransformUpdateCounts(inPlace.load(std::memory_order_relaxed), fallbackCount);
+}
+
+void EcsRenderSceneSynchronizer::PullTransforms(const kb::scene::Scene& scene, RenderScene& renderScene) const {
+    transformCache_.clear();
+    transformResolving_.clear();
+    EcsRenderTransformResolver transforms{ scene, transformCache_, transformResolving_ };
+    SceneRenderWorldTransformReader worldReader{ transforms };
+    PullContext pull{ .sync = SyncContext{ .scene = &scene, .renderScene = &renderScene, .transforms = &transforms, .worldReader = &worldReader,
+        .floatTranslations = UsesFloatTranslations(scene, renderScene) } };
+    const kb::scene::SceneComponentVisitors visitors = scene.Components().Visitors();
+    for (const RenderTransformProxyKind kind : kRenderTransformProxyKinds) {
+        switch (kind) {
+        case RenderTransformProxyKind::Camera:
+            visitors.ForEachCamera(&PullCamera, &pull);
+            break;
+        case RenderTransformProxyKind::Light:
+            visitors.ForEachLight(&PullLight, &pull);
+            break;
+        case RenderTransformProxyKind::FacingPanel:
+            scene.Components().FacingPanels().ForEach(&PullFacingPanel, &pull);
+            break;
+        case RenderTransformProxyKind::Mesh:
+            PullComposedMeshTransforms(scene, renderScene);
+            for (const std::size_t index : meshPullDirtyRows_) {
+                const MeshPullRow& row = meshPullRows_[index];
+                PullMesh(row.entity, *row.transform, kb::scene::MeshRendererComponent{}, &pull);
+            }
+            break;
+        case RenderTransformProxyKind::VisibilityBlocker:
+            for (const auto& [entityId, proxy] : renderScene.VisibilityBlockerProxies()) {
+                const kb::scene::SceneEntity entity{ entityId };
+                const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(entity);
+                if (transform == nullptr) continue;
+                if (const auto pulled = PulledTransform(pull, entity, *transform, proxy.pulledWorldVersion)) {
+                    static_cast<void>(renderScene.UpdateVisibilityBlockerTransform(entityId, PulledModel(pull.sync, entity, *transform, *pulled)));
+                }
+            }
+            break;
+        case RenderTransformProxyKind::GeometrySwarm:
+            scene.Components().GeometrySwarms().ForEach(&PullGeometrySwarm, &pull);
+            break;
+        case RenderTransformProxyKind::SurfaceCast:
+            scene.Components().SurfaceCasts().ForEach(&PullSurfaceCast, &pull);
+            break;
+        case RenderTransformProxyKind::SpaceStroke:
+            scene.Components().SpaceStrokes().ForEach(&PullSpaceStroke, &pull);
+            break;
+        }
+    }
+}
+
 void EcsRenderSceneSynchronizer::SyncDeformedMeshPalettes(
     const kb::scene::Scene& scene, RenderScene& renderScene) const {
     seenMeshes_.clear();
@@ -1142,6 +1420,7 @@ void EcsRenderSceneSynchronizer::SyncDeformedMeshPalettes(
         .renderScene = &renderScene,
         .transforms = &transforms,
         .worldReader = &worldReader,
+        .floatTranslations = UsesFloatTranslations(scene, renderScene),
         .meshes = &seenMeshes_,
         .skinningPaletteAllocator = skinningPaletteAllocator_,
         .skinningMatrixScratch = &skinningMatrixScratch_,

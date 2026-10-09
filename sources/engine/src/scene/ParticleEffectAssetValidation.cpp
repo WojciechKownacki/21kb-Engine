@@ -31,6 +31,17 @@ void Add(ParticleEffectValidationResult& result, ParticleEffectDiagnosticCode co
 [[nodiscard]] bool Finite(kb::math::Vec3 value) noexcept {
     return Finite(value.x) && Finite(value.y) && Finite(value.z);
 }
+
+// A spin range: finite, ordered on every axis and no larger than `limit` in magnitude.
+[[nodiscard]] bool SpinRangeValid(kb::math::Vec3 minimum, kb::math::Vec3 maximum, float limit) noexcept {
+    if (!Finite(minimum) || !Finite(maximum)) return false;
+    const float lows[3] = {minimum.x, minimum.y, minimum.z};
+    const float highs[3] = {maximum.x, maximum.y, maximum.z};
+    for (int axis = 0; axis < 3; ++axis) {
+        if (lows[axis] > highs[axis] || std::abs(lows[axis]) > limit || std::abs(highs[axis]) > limit) return false;
+    }
+    return true;
+}
 [[nodiscard]] bool Finite(kb::math::Quat value) noexcept {
     return Finite(value.x) && Finite(value.y) && Finite(value.z) && Finite(value.w);
 }
@@ -242,7 +253,9 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
             emitter.spawn.startColor.g < 0.0F || emitter.spawn.startColor.g > 1.0F ||
             emitter.spawn.startColor.b < 0.0F || emitter.spawn.startColor.b > 1.0F ||
             emitter.spawn.startColor.a < 0.0F || emitter.spawn.startColor.a > 1.0F ||
-            !Finite(emitter.spawn.startSize) || emitter.spawn.startSize <= 0.0F)
+            !Finite(emitter.spawn.startSize) || emitter.spawn.startSize <= 0.0F ||
+            !SpinRangeValid(emitter.spawn.initialRotationMinDegrees, emitter.spawn.initialRotationMaxDegrees, 3600.0F) ||
+            !SpinRangeValid(emitter.spawn.angularVelocityMinDegrees, emitter.spawn.angularVelocityMaxDegrees, 36000.0F))
             Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn",
                 "spawn values are outside the supported range", emitter.emitterId);
 

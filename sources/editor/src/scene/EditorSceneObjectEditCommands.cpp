@@ -3,12 +3,14 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/ui/UIEntityReferences.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/transform_edit/EditorSceneTransformEditApplier.hpp"
 #include "scene/transform_edit/EditorSceneTransformEquality.hpp"
 
 #include <unordered_map>
@@ -32,6 +34,22 @@ namespace {
         return {};
     }
     return scene.Entities().Object(parent);
+}
+
+void Remap(const EditorEntityRemap& remap, kb::scene::SceneEntity& entity) {
+    const auto replacement = remap.find(entity.Id());
+    if (replacement != remap.end()) {
+        entity = replacement->second;
+    }
+}
+
+void Remap(const EditorEntityRemap& remap, std::span<EditorSceneObjectPrefabPayload> payloads) {
+    for (EditorSceneObjectPrefabPayload& payload : payloads) {
+        Remap(remap, payload.parent);
+        for (kb::scene::SceneEntity& entity : payload.capturedEntities) {
+            Remap(remap, entity);
+        }
+    }
 }
 
 // Objects outside a restored subtree may refer to it by entity id. Those ids died with the deleted
@@ -128,6 +146,12 @@ bool EditorSceneTransformDeltaCommand::Redo() {
     return Apply(true);
 }
 
+void EditorSceneTransformDeltaCommand::RemapEntities(const EditorEntityRemap& remap) {
+    for (EditorSceneObjectTransformChange& change : changes_) {
+        Remap(remap, change.entity);
+    }
+}
+
 bool EditorSceneTransformDeltaCommand::Apply(bool after) {
     bool changed = false;
     std::vector<kb::scene::SceneEntity> touched;
@@ -139,12 +163,9 @@ bool EditorSceneTransformDeltaCommand::Apply(bool after) {
         }
 
         const kb::scene::TransformComponent& target = after ? change.after : change.before;
-        const kb::scene::TransformComponent current = scene.Transforms().Get(change.entity);
-        if (EditorSceneTransformEquality::Same(current, target)) {
+        if (!EditorSceneTransformEditApplier::Write(scene, change.entity, target, after ? change.afterTranslation : change.beforeTranslation)) {
             continue;
         }
-
-        scene.Transforms().Set(change.entity, target);
         touched.push_back(change.entity);
         changed = true;
     }
@@ -173,7 +194,11 @@ EditorScenePrefabSpawnCommand::EditorScenePrefabSpawnCommand(
     , label_(std::move(label))
     , payloads_(std::move(payloads))
     , createdEntities_(std::move(materializedRoots))
-    , materializedOnConstruction_(true) {}
+    , materializedOnConstruction_(true) {
+    for (const EditorSceneObjectPrefabPayload& payload : payloads_) {
+        createdObjects_.insert(createdObjects_.end(), payload.capturedEntities.begin(), payload.capturedEntities.end());
+    }
+}
 
 std::string_view EditorScenePrefabSpawnCommand::Label() const noexcept {
     return label_;
@@ -205,6 +230,16 @@ bool EditorScenePrefabSpawnCommand::Redo() {
     return InstantiatePayloads();
 }
 
+void EditorScenePrefabSpawnCommand::RemapEntities(const EditorEntityRemap& remap) {
+    for (kb::scene::SceneEntity& entity : createdEntities_) {
+        Remap(remap, entity);
+    }
+    for (kb::scene::SceneEntity& entity : createdObjects_) {
+        Remap(remap, entity);
+    }
+    Remap(remap, payloads_);
+}
+
 const std::vector<kb::scene::SceneEntity>& EditorScenePrefabSpawnCommand::CreatedEntities() const noexcept {
     return createdEntities_;
 }
@@ -217,15 +252,28 @@ bool EditorScenePrefabSpawnCommand::InstantiatePayloads() {
     kb::scene::Scene& scene = context_.Scene();
     createdEntities_.clear();
     createdEntities_.reserve(payloads_.size());
+    std::vector<kb::scene::SceneEntity> createdObjects;
     for (const EditorSceneObjectPrefabPayload& payload : payloads_) {
         kb::scene::SceneObject parent = AliveParentObject(scene, payload.parent);
         const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(
             payload.prefab,
-            kb::scene::ScenePrefabInstantiationSettings{ .parent = parent });
+            kb::scene::ScenePrefabInstantiationSettings{ .parent = parent, .linkPrefabInstances = true });
         if (!instance.Empty() && instance.RootObject().IsValid()) {
             createdEntities_.push_back(instance.RootObject().Entity());
         }
+        for (const kb::scene::SceneObject object : instance.Objects()) {
+            createdObjects.push_back(object.Entity());
+        }
     }
+    if (createdObjects.size() == createdObjects_.size()) {
+        std::vector<kb::scene::SceneEntityRemap> recreated;
+        recreated.reserve(createdObjects.size());
+        for (std::size_t index = 0U; index < createdObjects.size(); ++index) {
+            recreated.push_back(kb::scene::SceneEntityRemap{ .from = createdObjects_[index], .to = createdObjects[index] });
+        }
+        context_.RemapRecreatedEntities(recreated);
+    }
+    createdObjects_ = std::move(createdObjects);
 
     if (createdEntities_.empty()) {
         return false;
@@ -288,6 +336,13 @@ bool EditorScenePrefabRemoveCommand::Redo() {
     return DestroyCurrent();
 }
 
+void EditorScenePrefabRemoveCommand::RemapEntities(const EditorEntityRemap& remap) {
+    for (kb::scene::SceneEntity& entity : currentEntities_) {
+        Remap(remap, entity);
+    }
+    Remap(remap, payloads_);
+}
+
 bool EditorScenePrefabRemoveCommand::DestroyCurrent() {
     kb::scene::Scene& scene = context_.Scene();
     bool destroyed = false;
@@ -315,11 +370,13 @@ bool EditorScenePrefabRemoveCommand::RestorePayloads() {
     currentEntities_.clear();
     currentEntities_.reserve(payloads_.size());
     std::unordered_map<std::uint64_t, std::uint64_t> restoredIds;
+    std::vector<kb::scene::SceneEntity> destroyedObjects;
+    std::vector<kb::scene::SceneObject> restoredObjects;
     for (EditorSceneObjectPrefabPayload& payload : payloads_) {
         kb::scene::SceneObject parent = AliveParentObject(scene, payload.parent);
         const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(
             payload.prefab,
-            kb::scene::ScenePrefabInstantiationSettings{ .parent = parent });
+            kb::scene::ScenePrefabInstantiationSettings{ .parent = parent, .linkPrefabInstances = true });
         if (!instance.Empty() && instance.RootObject().IsValid()) {
             currentEntities_.push_back(instance.RootObject().Entity());
         }
@@ -327,11 +384,20 @@ bool EditorScenePrefabRemoveCommand::RestorePayloads() {
             for (std::size_t index = 0U; index < payload.capturedEntities.size(); ++index) {
                 const kb::scene::SceneEntity restored = instance.ObjectAt(static_cast<std::uint32_t>(index)).Entity();
                 restoredIds.emplace(payload.capturedEntities[index].Id(), restored.Id());
+                destroyedObjects.push_back(payload.capturedEntities[index]);
+                restoredObjects.push_back(instance.ObjectAt(static_cast<std::uint32_t>(index)));
                 payload.capturedEntities[index] = restored;
             }
         }
     }
     RelinkNavigation(scene, restoredIds);
+    scene.Prefabs().RelinkRestoredObjects(destroyedObjects, restoredObjects);
+    std::vector<kb::scene::SceneEntityRemap> recreated;
+    recreated.reserve(destroyedObjects.size());
+    for (std::size_t index = 0U; index < destroyedObjects.size(); ++index) {
+        recreated.push_back(kb::scene::SceneEntityRemap{ .from = destroyedObjects[index], .to = restoredObjects[index].Entity() });
+    }
+    context_.RemapRecreatedEntities(recreated);
 
     if (currentEntities_.empty()) {
         return false;

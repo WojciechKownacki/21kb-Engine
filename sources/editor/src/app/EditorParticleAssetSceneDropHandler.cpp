@@ -25,7 +25,7 @@ bool EditorParticleAssetSceneDropHandler::Drop(
 
     return sceneContext.CreateParticleEffectEntity(
         assetId,
-        sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition),
+        sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->origin + hit->groundPosition),
         true).IsValid();
 }
 

@@ -2,8 +2,13 @@
 
 #include "engine/ecs/System.hpp"
 #include "engine/scene/SceneSystem.hpp"
+#include "engine/ecs/WorkerPool.hpp"
+#include "scene/SceneAccess.hpp"
 #include "scene/SceneRuntimeService.hpp"
+#include "scene/SceneState.hpp"
+#include "scene/transform/SceneTransformHierarchySystem.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace kb::scene {
@@ -53,6 +58,10 @@ SceneRuntimeHotPathReport SceneRuntimeQueries::HotPathReport() const noexcept {
 
 std::optional<TransformComponent> SceneRuntimeQueries::InterpolatedTransform(SceneEntity entity) const noexcept {
     return SceneRuntimeService::InterpolatedTransform(scene_, entity);
+}
+
+std::optional<kb::math::DVec3> SceneRuntimeQueries::InterpolatedWorldTranslation(SceneEntity entity) const noexcept {
+    return SceneRuntimeService::InterpolatedWorldTranslation(scene_, entity);
 }
 
 std::span<const SceneEntity> SceneRuntimeQueries::TransformRenderProxyUpdateEntities() const noexcept {
@@ -130,6 +139,22 @@ std::vector<std::string> SceneRuntime::DrainSceneSystemErrors() {
     return SceneRuntimeService::DrainSceneSystemErrors(scene_);
 }
 
+void SceneRuntime::ParallelFor(std::size_t count, std::size_t grainSize, ParallelForBody body, void* context) {
+    if (body == nullptr || count == 0U) {
+        return;
+    }
+    grainSize = std::max<std::size_t>(grainSize, 1U);
+    if (count <= grainSize) {
+        body(0U, count, context);
+        return;
+    }
+    SceneState& state = SceneAccess::State(scene_);
+    EnsureSceneTransformWorkerPool(state);
+    state.transformWorkerPool->ParallelForChunks(count, grainSize, [body, context](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+        body(chunk.begin, chunk.begin + chunk.count, context);
+    });
+}
+
 void SceneRuntime::SynchronizeTransforms() {
     SceneRuntimeService::SynchronizeTransforms(scene_);
 }
@@ -184,6 +209,10 @@ SceneRuntimeHotPathReport SceneRuntime::HotPathReport() const noexcept {
 
 std::optional<TransformComponent> SceneRuntime::InterpolatedTransform(SceneEntity entity) const noexcept {
     return SceneRuntimeService::InterpolatedTransform(scene_, entity);
+}
+
+std::optional<kb::math::DVec3> SceneRuntime::InterpolatedWorldTranslation(SceneEntity entity) const noexcept {
+    return SceneRuntimeService::InterpolatedWorldTranslation(scene_, entity);
 }
 
 std::span<const SceneEntity> SceneRuntime::TransformRenderProxyUpdateEntities() const noexcept {

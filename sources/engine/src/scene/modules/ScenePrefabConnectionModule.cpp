@@ -9,6 +9,7 @@
 #include "scene/prefab/ScenePrefabInstanceSynchronizer.hpp"
 #include "scene/prefab/ScenePrefabRecord.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <span>
 #include <string>
@@ -39,6 +40,33 @@ namespace {
         current = record->basePrefab;
     }
     return {};
+}
+
+// A prefab and the prefabs it is a variant of, under their own guids.
+ScenePrefabHandle CopyPrefabRecord(const ScenePrefabRegistry& source, ScenePrefabRegistry& target, const ScenePrefabRecord& record) {
+    if (const ScenePrefabHandle copied = target.FindByGuid(record.guid); copied.IsValid()) {
+        return copied;
+    }
+    if (record.kind != ScenePrefabRecordKind::Variant) {
+        return target.RegisterLoaded(record.guid, record.name, record.prefab, record.sourcePath);
+    }
+    const ScenePrefabRecord* base = source.FindRecord(record.basePrefab);
+    if (base == nullptr || !CopyPrefabRecord(source, target, *base).IsValid()) {
+        return {};
+    }
+    return target.RegisterLoadedVariant(record.guid, record.name, record.basePrefabGuid, record.variantOverrides, record.variantAddedChildren);
+}
+
+// The prefabs a private scene's prefab nests, so saving it can tell what the edits change in them.
+void CopyNestedPrefabs(const ScenePrefabRegistry& source, ScenePrefabRegistry& target, const ScenePrefab& prefab) {
+    for (const ScenePrefabNodeDesc& node : prefab.Nodes()) {
+        const ScenePrefabRecord* record = node.nestedPrefabGuid.empty() || target.FindByGuid(node.nestedPrefabGuid).IsValid()
+            ? nullptr
+            : source.FindRecord(source.FindByGuid(node.nestedPrefabGuid));
+        if (record != nullptr && CopyPrefabRecord(source, target, *record).IsValid()) {
+            CopyNestedPrefabs(source, target, record->prefab);
+        }
+    }
 }
 
 void CollectSubtreeEntities(Scene& scene, SceneEntity entity, std::unordered_set<SceneEntity::IdType>& entities) {
@@ -140,7 +168,11 @@ ScenePrefabPrivateScene ScenePrefabs::OpenPrivateScene(ScenePrefabHandle handle)
     }
 
     auto editScene = std::make_unique<Scene>(SceneMode::PrefabPrivate);
-    const ScenePrefabHandle editHandle = editScene->Prefabs().Register("PrivatePrefabEdit", *prefab);
+    // A variant is edited as that variant, so saving records the edits as its overrides.
+    const ScenePrefabRecord* record = state.prefabs.FindRecord(handle);
+    const ScenePrefabHandle editHandle = record->kind == ScenePrefabRecordKind::Variant
+        ? CopyPrefabRecord(state.prefabs, SceneAccess::State(*editScene).prefabs, *record)
+        : editScene->Prefabs().Register("PrivatePrefabEdit", *prefab);
     if (!editHandle.IsValid()) {
         return {};
     }
@@ -149,6 +181,8 @@ ScenePrefabPrivateScene ScenePrefabs::OpenPrivateScene(ScenePrefabHandle handle)
     if (!editInstance.Handle().IsValid()) {
         return {};
     }
+    // Registered after the edit instance exists, so it keeps the prefab's own copy of nested content.
+    CopyNestedPrefabs(state.prefabs, SceneAccess::State(*editScene).prefabs, *prefab);
 
     return ScenePrefabPrivateScene{ scene_, handle, std::move(editScene), editHandle, std::move(editInstance) };
 }
@@ -200,6 +234,30 @@ bool ScenePrefabs::Reconnect(ScenePrefabInstanceHandle handle, ScenePrefabHandle
         instance->SetResolvedPrefab(previousResolvedPrefab);
     }
     return false;
+}
+
+void ScenePrefabs::RelinkRestoredObjects(std::span<const SceneEntity> destroyed, std::span<const SceneObject> restored) {
+    SceneState& state = SceneAccess::State(scene_);
+    // A restored object belongs to the instance that tracks its parent; objects come parent first.
+    for (std::size_t index = 0U; index < destroyed.size() && index < restored.size(); ++index) {
+        std::uint32_t parentNode = 0U;
+        const ScenePrefabInstanceHandle handle = state.prefabInstances.FindContainingEntity(scene_.Hierarchy().Parent(restored[index].Entity()), parentNode);
+        ScenePrefabInstanceRecord* instance = state.prefabInstances.FindMutable(handle);
+        if (instance == nullptr || scene_.Entities().IsAlive(destroyed[index])) {
+            continue;
+        }
+        const std::span<const SceneObject> objects = instance->Objects();
+        const auto slot = std::ranges::find_if(objects, [entity = destroyed[index]](SceneObject object) noexcept {
+            return object.Entity() == entity;
+        });
+        if (slot == objects.end()) {
+            continue;
+        }
+        const SceneObject previous = *slot;
+        const std::size_t nodeIndex = static_cast<std::size_t>(slot - objects.begin());
+        instance->MutableObjects()[nodeIndex] = restored[index];
+        state.prefabInstances.ReindexObjects(handle, std::span<const SceneObject>{ &previous, 1U });
+    }
 }
 
 void ScenePrefabs::Clear() noexcept {

@@ -2,13 +2,18 @@
 #include "EcsTestSuites.hpp"
 #include "SceneSystemTestSuites.hpp"
 #include "TestSuites.hpp"
+#include "TestSupport.hpp"
 
+#include <atomic>
 #include <cstdlib>
+#include <new>
 #include <string_view>
 
 namespace kb::tests {
 void RunScriptNativeHeaderReloadTest();
 void RunPhysicsReplayOnlyTest();
+void RunPhysicsStepSpikeBenchmark();
+void RunAgentsFrameBenchmark();
 }
 
 namespace {
@@ -20,14 +25,20 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunAssetBakeTests();
     } else if (suite == "asset-pack") {
         kb::tests::RunAssetPackTests();
+    } else if (suite == "content-streaming") {
+        kb::tests::RunContentStreamingTests();
     } else if (suite == "save") {
         kb::tests::RunSaveGameTests();
+    } else if (suite == "security") {
+        kb::tests::RunSecurityTests();
     } else if (suite == "ecs") {
         kb::tests::RunEcsRuntimeTests();
     } else if (suite == "ecs-native") {
         kb::tests::RunEcsNativeArchetypeStorageTests();
     } else if (suite == "scene-hierarchy") {
         kb::tests::RunSceneHierarchyTests();
+    } else if (suite == "scene-transform-bench") {
+        kb::tests::RunTransformWriteBenchmark();
     } else if (suite == "scene-ui") {
         kb::tests::RunSceneUITests();
     } else if (suite == "scene-ui-bench") {
@@ -36,6 +47,10 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneSystemTests();
     } else if (suite == "physics-replay") {
         kb::tests::RunPhysicsReplayOnlyTest();
+    } else if (suite == "physics-step-spikes") {
+        kb::tests::RunPhysicsStepSpikeBenchmark();
+    } else if (suite == "agents-frame") {
+        kb::tests::RunAgentsFrameBenchmark();
     } else if (suite == "audio") {
         kb::tests::RunAudioSceneSystemTests();
     } else if (suite == "scene-runtime") {
@@ -76,6 +91,24 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunTimelineRuntimeTests();
     } else if (suite == "localization") {
         kb::tests::RunLocalizationTests();
+    } else if (suite == "ui-text-layout") {
+        kb::tests::RunUITextLineBreakingTests();
+    } else if (suite == "crash-consent") {
+        kb::tests::RunCrashReportConsentTests();
+    } else if (suite == "navigation-runtime") {
+        kb::tests::RunNavigationRuntimeTests();
+    } else if (suite == "navigation-mesh") {
+        kb::tests::RunNavigationMeshTests();
+    } else if (suite == "navigation-crowd-bench") {
+        kb::tests::RunNavigationCrowdBenchmark();
+    } else if (suite == "portal-visibility") {
+        kb::tests::RunPortalVisibilityTests();
+    } else if (suite == "motion-skeleton-rule") {
+        kb::tests::RunMotionSkeletonRuleTests();
+    } else if (suite == "world-partition") {
+        kb::tests::RunWorldPartitionTests();
+    } else if (suite == "large-world") {
+        kb::tests::RunLargeWorldTests();
     } else {
         return false;
     }
@@ -86,7 +119,9 @@ void RunAllSuites() {
     kb::tests::RunAssetRuntimeTests();
     kb::tests::RunAssetBakeTests();
     kb::tests::RunAssetPackTests();
+    kb::tests::RunContentStreamingTests();
     kb::tests::RunSaveGameTests();
+    kb::tests::RunSecurityTests();
     kb::tests::RunEcsRuntimeTests();
     kb::tests::RunSceneHierarchyTests();
     kb::tests::RunSceneUITests();
@@ -105,9 +140,49 @@ void RunAllSuites() {
     kb::tests::RunSkeletalMeshAssetTests();
     kb::tests::RunTimelineRuntimeTests();
     kb::tests::RunLocalizationTests();
+    kb::tests::RunCrashReportConsentTests();
+    kb::tests::RunNavigationRuntimeTests();
+    kb::tests::RunNavigationMeshTests();
+    kb::tests::RunPortalVisibilityTests();
+    kb::tests::RunMotionSkeletonRuleTests();
+    kb::tests::RunWorldPartitionTests();
+    kb::tests::RunLargeWorldTests();
 }
 
 } // namespace
+
+namespace {
+
+std::atomic<bool> g_tallyAllocations{ false };
+std::atomic<std::size_t> g_allocationCount{ 0U };
+std::atomic<std::size_t> g_allocationBytes{ 0U };
+std::atomic<std::size_t> g_largeAllocationCount{ 0U };
+
+} // namespace
+
+void kb::tests::BeginAllocationTally() noexcept {
+    g_allocationCount.store(0U);
+    g_allocationBytes.store(0U);
+    g_largeAllocationCount.store(0U);
+    g_tallyAllocations.store(true);
+}
+
+kb::tests::AllocationTally kb::tests::EndAllocationTally() noexcept {
+    g_tallyAllocations.store(false);
+    return AllocationTally{ .count = g_allocationCount.load(), .bytes = g_allocationBytes.load(), .largeCount = g_largeAllocationCount.load() };
+}
+
+void* operator new(std::size_t size) {
+    if (g_tallyAllocations.load(std::memory_order_relaxed)) {
+        g_allocationCount.fetch_add(1U, std::memory_order_relaxed);
+        g_allocationBytes.fetch_add(size, std::memory_order_relaxed);
+        if (size >= 16U * 1024U) g_largeAllocationCount.fetch_add(1U, std::memory_order_relaxed);
+    }
+    if (void* memory = std::malloc(size == 0U ? 1U : size)) return memory;
+    throw std::bad_alloc{};
+}
+
+void operator delete(void* memory) noexcept { std::free(memory); }
 
 int main(int argc, char** argv) {
     if (argc <= 1) {

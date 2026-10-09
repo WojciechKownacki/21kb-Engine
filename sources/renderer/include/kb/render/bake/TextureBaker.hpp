@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -27,7 +28,17 @@ namespace kb::render::bake {
 inline constexpr std::string_view kTextureBakerId = "Texture";
 // 4 routes ETC2 RGB/RGBA through bimg's single encoder backend. Version 3 added the ETC2
 // family; version 4 preserves that contract while invalidating bytes produced by its old path.
-inline constexpr std::string_view kTextureBakerVersion = "4";
+// Version 5 stores every mip level whose larger edge is above kStreamedTextureTailEdge in a
+// streaming block of its own and keeps only the smaller levels, the tail, in the primary block.
+inline constexpr std::string_view kTextureBakerVersion = "5";
+
+// Mip levels whose larger edge is above this stream on demand; the levels at and below it are the
+// tail a texture is drawn with from the moment it loads.
+inline constexpr std::uint32_t kStreamedTextureTailEdge = 128U;
+
+// First bytes of the primary block of a texture with streamed mips, in front of the KTX container
+// that holds its tail.
+inline constexpr std::string_view kStreamedTextureMagic = "21KBTXST";
 
 // Runtime type of the artifact this baker publishes; a path component of the bake store.
 inline constexpr std::string_view kTextureBakedAssetTypeId = "Texture2D";
@@ -79,8 +90,11 @@ struct TextureBakeOutput {
     std::uint16_t height = 0U;
     std::uint8_t mipCount = 0U;
     // The bytes handed to the sink as the primary block: a KTX container holding the whole
-    // chain. Returned as well so a caller can verify a bake without going back to the store.
+    // chain, or -- with streamed mips -- the streaming header and a KTX container holding the
+    // tail. Returned as well so a caller can verify a bake without going back to the store.
     std::vector<std::uint8_t> primaryBlock;
+    // The streamed levels, level 0 first, as handed to the sink in blocks "mip0", "mip1", ...
+    std::vector<std::vector<std::uint8_t>> streamedMips;
     // The status the sink returned, when the failure was the sink's.
     kb::assets::bake::BakedAssetSinkStatus sinkStatus = kb::assets::bake::BakedAssetSinkStatus::Success;
 };
@@ -159,8 +173,20 @@ struct TextureBakeOutput {
 // blocks compressed. The counterpart of the bake, and the only way a baked texture becomes a
 // RenderTextureAssetData - the ordinary loader is untouched and still decodes what it always
 // decoded. Returns false for anything that is not a 2D block-compressed container this baker
-// could have produced.
+// could have produced. For a texture with streamed mips the result is the tail, with
+// `streaming` describing the full chain and the streamed levels.
 [[nodiscard]] bool ReadBakedTexture(std::span<const std::uint8_t> primaryBlock, RenderTextureAssetData& out);
+
+// Name of the streaming block that carries full-chain mip `level`.
+[[nodiscard]] std::string BakedTextureMipBlockName(std::uint32_t level);
+
+// The texture from full-chain level `firstLevel` down: `tail` as ReadBakedTexture returned it and
+// `levels` the streamed levels firstLevel..streamedMipCount-1, finest first, so `firstLevel` is
+// streamedMipCount - levels.size(). Every level must be exactly the size the layout records.
+[[nodiscard]] bool ComposeBakedTextureLevels(
+    const RenderTextureAssetData& tail,
+    std::span<const std::span<const std::uint8_t>> levels,
+    RenderTextureAssetData& out);
 
 // Keeps the manifest qualifier and the GPU payload format under one runtime-owned contract.
 // The package validator and the runtime loader both call this function so neither can accept

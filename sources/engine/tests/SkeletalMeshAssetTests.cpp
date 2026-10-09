@@ -17,8 +17,10 @@
 #include "engine/scene/SkeletalMeshGltfImportPlanner.hpp"
 #include "engine/scene/SkeletalMeshGltfImportPublisher.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/scene/SkeletalMeshFbxImporter.hpp"
 
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -174,6 +176,42 @@ void RunLegacyFbxInwardWindingMigrationTest(const std::filesystem::path& root) {
         "Legacy FBX load did not canonicalize inward triangle winding, normals, and tangent handedness");
 }
 
+// An FBX array states its length before its data, and ufbx allocates for the
+// statement first. This file, found by fuzzing (fuzz/corpus/fbx_ufbx), declares
+// 1.6 billion vertex coordinates and carries none; the import must stop at the
+// memory ceiling rather than ask for 13 GB.
+void RunSkeletalFbxImportStopsAtMemoryCeilingTest(const std::filesystem::path& root) {
+    static constexpr std::array<unsigned char, 139U> kFile{
+        0x4B, 0x61, 0x79, 0x64, 0x61, 0x72, 0x61, 0x20, 0x46, 0x42, 0x58, 0x20,
+        0x42, 0x69, 0x6E, 0x61, 0x72, 0x79, 0x20, 0x20, 0x00, 0x1A, 0x00, 0xE8,
+        0x1C, 0x00, 0x00, 0x8D, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x07, 0x4F, 0x62, 0x6A, 0x65, 0x63, 0x74, 0x73, 0xFA,
+        0x01, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x25, 0x00, 0x00, 0x00, 0x08,
+        0x47, 0x65, 0x6F, 0x6D, 0x65, 0x74, 0x72, 0x79, 0x4C, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x53, 0x0E, 0x00, 0x00, 0x00, 0x47, 0x65,
+        0x6F, 0x6D, 0x65, 0x74, 0x72, 0x79, 0x3A, 0x3A, 0x51, 0x75, 0x61, 0x64,
+        0x53, 0x04, 0x00, 0x00, 0x00, 0x4D, 0x65, 0x73, 0x68, 0xF8, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x00, 0x00, 0x6D, 0x00, 0x00, 0x00, 0x08, 0x56, 0x65,
+        0x72, 0x74, 0x69, 0x63, 0x65, 0x73, 0x64, 0x0C, 0x00, 0x00, 0x4B, 0x61,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+    const std::filesystem::path path = root / "Hostile/DeclaredVertices.fbx";
+    std::filesystem::create_directories(path.parent_path());
+    {
+        std::ofstream stream(path, std::ios::binary);
+        stream.write(reinterpret_cast<const char*>(kFile.data()), static_cast<std::streamsize>(kFile.size()));
+    }
+    std::string error;
+    const auto imported = kb::scene::SkeletalMeshFbxImporter::Import(path, 1U, {}, &error);
+    kb::tests::Require(!imported.has_value() && error.find("Memory limit exceeded") != std::string::npos,
+        "An FBX file's declared array length was allocated before its data was read");
+    constexpr std::size_t kMiB = 1024U * 1024U;
+    kb::tests::Require(kb::scene::FbxLoadMemoryLimit(0U) == 64U * kMiB &&
+            kb::scene::FbxLoadMemoryLimit(1024U * 1024U) == 128U * kMiB &&
+            kb::scene::FbxLoadMemoryLimit(std::numeric_limits<std::uintmax_t>::max()) == 4096U * kMiB,
+        "The FBX load memory ceiling no longer scales with the file and stops at 4 GiB");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -183,6 +221,7 @@ void RunSkeletalMeshAssetTests() {
     const auto root=std::filesystem::temp_directory_path()/"21kb-skeletal-mesh-asset-tests";
     std::filesystem::remove_all(root); const auto path=root/"Assets/Characters/Hero.kbskeletalmesh";
     RunLegacyFbxInwardWindingMigrationTest(root);
+    RunSkeletalFbxImportStopsAtMemoryCeilingTest(root);
     kb::scene::SkeletonAsset skeleton{};
     skeleton.bones = {
         { .id = 1U, .parentIndex = -1, .name = "Root", .referencePose = {}, .inverseBind = {} },
@@ -708,8 +747,9 @@ void RunSkeletalMeshAssetTests() {
         "SkeletalMeshAsset reimport silently loaded an incompatible dependent mesh");
     Require(scene.Assets().Manager().LoadAsync<kb::scene::SkeletalMeshAsset>(meshId),
         "SkeletalMeshAsset async reload request was rejected before validation");
-    for (unsigned spin = 0U; spin < 1000000U &&
-            scene.Assets().Manager().AsyncLoadStatus(meshId) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+         std::chrono::steady_clock::now() < deadline &&
+            scene.Assets().Manager().AsyncLoadStatus(meshId) == kb::assets::AsyncAssetLoadStatus::Pending;) {
         scene.Assets().Manager().PumpAsyncLoads();
         std::this_thread::yield();
     }

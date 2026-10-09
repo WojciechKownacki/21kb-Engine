@@ -188,11 +188,13 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
                 static_cast<std::uint32_t>(command.instances.size()));
             continue;
         }
-        const std::uint32_t instanceCount = static_cast<std::uint32_t>(command.instances.size());
-        const std::uint32_t availableInstances = bgfx::getAvailInstanceDataBuffer(instanceCount, RenderInstanceBuffer::Stride());
+        const bool gpuInstances = bgfx::isValid(command.gpuInstanceBuffer);
+        const std::uint32_t instanceCount = gpuInstances ? command.gpuInstanceCount : static_cast<std::uint32_t>(command.instances.size());
+        const std::uint32_t availableInstances = gpuInstances ? instanceCount
+            : bgfx::getAvailInstanceDataBuffer(instanceCount, RenderInstanceBuffer::Stride());
         const bool selectionPass = IsSelectionPass(desc.pass);
         bgfx::DynamicVertexBufferHandle overflowBuffer = BGFX_INVALID_HANDLE;
-        if ((availableInstances < instanceCount || command.instanceRevision != 0U) && desc.instanceBufferPool != nullptr) {
+        if (!gpuInstances && (availableInstances < instanceCount || command.instanceRevision != 0U) && desc.instanceBufferPool != nullptr) {
             overflowBuffer = desc.instanceBufferPool->Upload(
                 command.instances,
                 selectionPass ? nullptr : command.materialResource,
@@ -236,7 +238,9 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
                 instanceCount - submittedInstances);
         }
 
-        if (usesOverflowBuffer) {
+        if (gpuInstances) {
+            bgfx::setInstanceDataBuffer(command.gpuInstanceBuffer, 0U, submittedInstances);
+        } else if (usesOverflowBuffer) {
             bgfx::setInstanceDataBuffer(overflowBuffer, 0U, submittedInstances);
         } else {
             bgfx::InstanceDataBuffer instanceBuffer{};
@@ -269,6 +273,7 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             .sceneColorTexture = desc.sceneColorTexture,
             .motionVectorPreviousViewProjection = desc.motionVectorPreviousViewProjection,
             .skinningPaletteAllocator = desc.skinningPaletteAllocator,
+            .renderOriginOffset = desc.renderOriginOffset,
         });
         const SceneMeshPassProgramResolution resolution = desc.passResources.LastProgramResolution();
         if (command.materialResource != nullptr && command.materialResource->graphProgram.active) {

@@ -2,10 +2,15 @@
 
 #include "kb/render/resources/RenderResources.hpp"
 
+#include "engine/assets/ImportedAsset.hpp"
+#include "engine/assets/bake/AssetBakeKey.hpp"
+
+#include <array>
 #include <cstdint>
 #include <cstddef>
 #include <filesystem>
 #include <iosfwd>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -28,6 +33,10 @@ struct RenderMeshGltfImportDesc {
     const RenderMeshAssetMaterialBinding* materialBindings = nullptr;
     std::uint32_t materialBindingCount = 0;
     bool flipV = false;
+    // Buffer files an import carried with the document (ImportedAsset::resources); a buffer URI
+    // they do not hold is read relative to the source path, when there is one.
+    const kb::assets::ImportedAssetResource* externalResources = nullptr;
+    std::uint32_t externalResourceCount = 0;
 };
 
 struct RenderMeshFbxImportDesc {
@@ -66,6 +75,32 @@ struct RenderTerrainLayerWeightUpdateRegion {
     std::uint16_t height = 0U;
 };
 
+// The streaming fragment a pack declares for one geometry chunk of a baked mesh.
+struct RenderMeshChunkFragment {
+    std::array<float, 3> boundsMin{};
+    std::array<float, 3> boundsMax{};
+    std::uint32_t clusterCount = 0U;
+};
+
+// A baked mesh whose finer levels of detail stream. The loaded data's level 0 is the baked level
+// `firstLod`; the primary block and the encoded chunks of the loaded levels are kept, so content
+// streaming can rebuild the mesh with more levels as their chunks arrive
+// (AssembleStreamedMeshLevels).
+struct RenderMeshStreamingLayout {
+    kb::assets::bake::AssetBakeDigest artifact{};
+    std::uint32_t firstLod = 0U;
+    // Per baked level.
+    std::vector<std::uint32_t> lodFirstChunk;
+    std::vector<std::uint32_t> lodChunkCount;
+    std::vector<std::uint64_t> lodGeometryBytes;
+    std::vector<float> lodErrors;
+    std::shared_ptr<const std::vector<std::uint8_t>> primaryBlock;
+    // Per chunk of the whole mesh: the fragment the pack declares for it.
+    std::vector<RenderMeshChunkFragment> fragments;
+    // The encoded chunks of levels firstLod..end, in order.
+    std::vector<std::vector<std::uint8_t>> chunks;
+};
+
 struct RenderMeshAssetData {
     std::vector<RenderStaticMeshVertexP3N3UV2> vertices;
     std::vector<RenderStaticMeshVertexP3N3T4UV2> tangentVertices;
@@ -95,6 +130,8 @@ struct RenderMeshAssetData {
     std::uint16_t terrainLayerWeightHeight = 0U;
     std::uint8_t terrainLayerCount = 0U;
     bool dynamicVertexUpdates = false;
+    // Set for a packaged baked mesh whose finer levels of detail stream.
+    std::optional<RenderMeshStreamingLayout> streaming;
 
     RenderMeshDesc& RefreshDesc() noexcept;
 };

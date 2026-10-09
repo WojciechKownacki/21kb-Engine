@@ -23,6 +23,10 @@ class ProjectFilesAssetIconResolver {
 public:
     ProjectFilesAssetIconResolver() = delete;
 
+    // Prefab blue, shared with the Hierarchy so a prefab root and its asset read as the same thing.
+    static constexpr COLORREF kPrefabColor = RGB(68, 145, 236);
+    static constexpr COLORREF kPrefabSelectedColor = RGB(106, 177, 255);
+
     [[nodiscard]] static ProjectFilesAssetIcon Resolve(const kb::assets::AssetMetadata& metadata, bool selected) noexcept;
     [[nodiscard]] static bool IsMaterial(const kb::assets::AssetMetadata& metadata) noexcept;
     [[nodiscard]] static bool IsMaterialGraph(const kb::assets::AssetMetadata& metadata) noexcept;

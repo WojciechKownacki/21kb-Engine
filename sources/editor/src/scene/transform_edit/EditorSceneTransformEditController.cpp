@@ -5,6 +5,7 @@
 #include "scene/transform_edit/EditorTransformProperty.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace kb::editor {
 namespace {
@@ -19,6 +20,24 @@ namespace {
 
 [[nodiscard]] kb::scene::Vec3 RotationVector(kb::scene::Quat rotation) noexcept {
     return kb::scene::Vec3{ rotation.x, rotation.y, rotation.z };
+}
+
+// The change's transform with only `next` replacing it, at its starting translation.
+[[nodiscard]] EditorSceneTransformTarget Unmoved(const EditorSceneObjectTransformChange& change, const kb::scene::TransformComponent& next) noexcept {
+    return EditorSceneTransformTarget{ .transform = next, .translation = change.beforeTranslation };
+}
+
+// The change's transform at `translation`: below this distance from the origin a translation without a residual
+// stays a float, so edits near the origin never start keeping residuals.
+[[nodiscard]] EditorSceneTransformTarget MovedTo(const EditorSceneObjectTransformChange& change, const kb::math::DVec3& translation) noexcept {
+    constexpr double kFloatTranslationLimit = 2048.0;
+    const bool floatBefore = change.beforeTranslation == kb::math::ToDVec3(change.before.localPosition);
+    const bool near = std::abs(translation.x) < kFloatTranslationLimit && std::abs(translation.y) < kFloatTranslationLimit &&
+        std::abs(translation.z) < kFloatTranslationLimit;
+    EditorSceneTransformTarget target{ .transform = change.before, .translation = translation };
+    target.transform.localPosition = kb::math::ToVec3(translation);
+    if (floatBefore && near) target.translation = kb::math::ToDVec3(target.transform.localPosition);
+    return target;
 }
 
 } // namespace
@@ -36,9 +55,21 @@ EditorSceneTransformEditApplyResult EditorSceneTransformEditController::ApplyPri
 
     const kb::scene::Vec3 delta = Difference(position, session_.TargetStart());
     return EditorSceneTransformEditApplier::Apply(scene_, session_, [delta](const EditorSceneObjectTransformChange& change) {
-        kb::scene::TransformComponent next = change.before;
-        next.localPosition = change.before.localPosition + delta;
-        return next;
+        if (change.beforeTranslation == kb::math::ToDVec3(change.before.localPosition)) {
+            kb::scene::TransformComponent next = change.before;
+            next.localPosition = change.before.localPosition + delta;
+            return EditorSceneTransformTarget{ .transform = next, .translation = kb::math::ToDVec3(next.localPosition) };
+        }
+        return MovedTo(change, change.beforeTranslation + delta);
+    });
+}
+
+EditorSceneTransformEditApplyResult EditorSceneTransformEditController::ApplyPositionDelta(const kb::math::DVec3& delta) {
+    if (!session_.Active()) {
+        return {};
+    }
+    return EditorSceneTransformEditApplier::Apply(scene_, session_, [&delta](const EditorSceneObjectTransformChange& change) {
+        return MovedTo(change, change.beforeTranslation + delta);
     });
 }
 
@@ -58,7 +89,7 @@ EditorSceneTransformEditApplyResult EditorSceneTransformEditController::ApplyPri
         next.localRotation.x = change.before.localRotation.x + delta.x;
         next.localRotation.y = change.before.localRotation.y + delta.y;
         next.localRotation.z = change.before.localRotation.z + delta.z;
-        return next;
+        return Unmoved(change, next);
     });
 }
 
@@ -71,7 +102,7 @@ EditorSceneTransformEditApplyResult EditorSceneTransformEditController::ApplyRot
     return EditorSceneTransformEditApplier::Apply(scene_, session_, [normalizedDelta](const EditorSceneObjectTransformChange& change) {
         kb::scene::TransformComponent next = change.before;
         next.localRotation = EditorSceneTransformMath::Normalize(EditorSceneTransformMath::Multiply(normalizedDelta, change.before.localRotation));
-        return next;
+        return Unmoved(change, next);
     });
 }
 
@@ -91,7 +122,7 @@ EditorSceneTransformEditApplyResult EditorSceneTransformEditController::ApplyPri
         next.localScale.x = std::max(0.01F, change.before.localScale.x + delta.x);
         next.localScale.y = std::max(0.01F, change.before.localScale.y + delta.y);
         next.localScale.z = std::max(0.01F, change.before.localScale.z + delta.z);
-        return next;
+        return Unmoved(change, next);
     });
 }
 
@@ -131,7 +162,7 @@ EditorSceneTransformEditApplyResult EditorSceneTransformEditController::ApplyPro
     return EditorSceneTransformEditApplier::Apply(scene_, session_, [property, delta](const EditorSceneObjectTransformChange& change) {
         kb::scene::TransformComponent next = change.before;
         EditorTransformProperty::Write(next, property, EditorTransformProperty::Read(change.before, property) + delta);
-        return next;
+        return Unmoved(change, next);
     });
 }
 

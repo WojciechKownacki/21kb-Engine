@@ -1,5 +1,8 @@
 #include "engine/script/ScriptSaveApi.hpp"
 
+#include "engine/platform/UserStorage.hpp"
+#include "engine/platform/CrashReportConsent.hpp"
+#include "engine/platform/CrashReporting.hpp"
 #include "engine/save/SaveDomain.hpp"
 #include "engine/save/SaveGame.hpp"
 #include "engine/save/SaveGameService.hpp"
@@ -7,8 +10,10 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <algorithm>
 #include <cstdint>
-#include <filesystem>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -209,14 +214,43 @@ ScriptFunctionCallResult Clear(const ScriptFunctionCallContext& context, std::sp
     return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "cleared", ScriptValue{ true } } }, .errors = {} };
 }
 
+using StoragePtr = std::shared_ptr<kb::platform::UserStorage>;
+
+// Scripts never name a file: a slot is a bare name inside the host's per-game
+// user storage, and the domain picks the extension, so a save slot and a
+// settings slot of the same name are different files.
 template <kb::save::SaveDomain Domain>
-ScriptFunctionCallResult Write(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+[[nodiscard]] std::string SlotStorageKey(std::string_view slot) {
+    return std::string{ slot } + (Domain == kb::save::SaveDomain::SaveGame ? ".kbsave" : ".kbsettings");
+}
+
+// Returns the error that refuses this call, or nothing when `slot` may be used.
+[[nodiscard]] std::optional<ScriptFunctionCallResult> RefuseSlot(const StoragePtr& storage, std::span<const ScriptFunctionArgument> arguments, std::string& slot) {
+    const ScriptValue* slotValue = FindArg(arguments, "slot");
+    slot = slotValue == nullptr ? std::string{} : slotValue->AsString();
+    if (!kb::platform::IsUserStorageSlotName(slot)) {
+        return ScriptFunctionCallResult{ .executed = false, .outputs = {},
+            .errors = { "save slot '" + slot + "' is not a slot name: use 1-" + std::to_string(kb::platform::kMaxUserStorageSlotNameBytes) +
+                " letters, digits, '_' or '-' (paths, separators, drive letters and device names are refused)" } };
+    }
+    if (storage == nullptr) {
+        return ScriptFunctionCallResult{ .executed = false, .outputs = {}, .errors = { "persistent user storage is not configured for this script runtime" } };
+    }
+    return std::nullopt;
+}
+
+template <kb::save::SaveDomain Domain>
+ScriptFunctionCallResult Write(const StoragePtr& storage, const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
     }
-    const ScriptValue* pathValue = FindArg(arguments, "path");
-    const std::string path = pathValue == nullptr ? std::string{} : pathValue->AsString();
-    const bool written = !path.empty() && kb::save::SaveGameService::Save(std::filesystem::path{ path }, Buffer<Domain>(*context.scene), Domain);
+    std::string slot;
+    if (std::optional<ScriptFunctionCallResult> refused = RefuseSlot(storage, arguments, slot)) {
+        return *std::move(refused);
+    }
+    const std::optional<std::vector<std::uint8_t>> bytes = kb::save::SaveGameService::Serialize(Buffer<Domain>(*context.scene), Domain);
+    const bool written = bytes.has_value() &&
+        storage->Write(SlotStorageKey<Domain>(slot), std::string_view{ reinterpret_cast<const char*>(bytes->data()), bytes->size() });
     return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "written", ScriptValue{ written } } }, .errors = {} };
 }
 
@@ -240,26 +274,31 @@ ScriptFunctionCallResult Write(const ScriptFunctionCallContext& context, std::sp
         return "TooLarge";
     case kb::save::SaveGameLoadStatus::IntegrityMismatch:
         return "IntegrityMismatch";
+    case kb::save::SaveGameLoadStatus::Tampered:
+        return "Tampered";
     }
     return "FileNotFound";
 }
 
 template <kb::save::SaveDomain Domain>
-ScriptFunctionCallResult Read(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+ScriptFunctionCallResult Read(const StoragePtr& storage, const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
     }
-    const ScriptValue* pathValue = FindArg(arguments, "path");
-    const std::string path = pathValue == nullptr ? std::string{} : pathValue->AsString();
+    std::string slot;
+    if (std::optional<ScriptFunctionCallResult> refused = RefuseSlot(storage, arguments, slot)) {
+        return *std::move(refused);
+    }
 
     const char* status = "FileNotFound";
-    std::string diagnostic = path.empty() ? "save path is empty" : std::string{};
+    std::string diagnostic = "save slot '" + slot + "' has not been written";
     bool loaded = false;
-    if (!path.empty()) {
+    if (const std::optional<std::string> stored = storage->Read(SlotStorageKey<Domain>(slot))) {
         // Loading REQUIRES the matching domain — a Save.Read of a settings
         // file (or vice versa) reports WrongDomain, never silently loads the
         // wrong category of data into the wrong buffer.
-        kb::save::SaveGameLoadResult result = kb::save::SaveGameService::Load(std::filesystem::path{ path }, Domain);
+        kb::save::SaveGameLoadResult result = kb::save::SaveGameService::Deserialize(
+            std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(stored->data()), stored->size() }, Domain);
         loaded = result.Succeeded();
         status = StatusName(result.status);
         diagnostic = std::move(result.diagnostic);
@@ -289,11 +328,14 @@ bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<Scr
 
 // Registers the full scalar key/value surface (SetBool/Int/Float/String,
 // GetBool/Int/Float/String, Has, Remove, Clear, Write, Read) under `prefix`
-// (e.g. "Save" or "Settings"), all targeting the `Domain` buffer.
+// (e.g. "Save" or "Settings"), all targeting the `Domain` buffer. Write/Read
+// persist through the host's user storage, captured once here.
 template <kb::save::SaveDomain Domain>
 bool RegisterDomain(ScriptRuntimeHost& host, std::string_view prefix) {
     bool ok = true;
+    const StoragePtr storage = host.UserStorage();
     const ScriptFunctionPin keyPin{ "key", ScriptValueType::String, true };
+    const ScriptFunctionPin slotPin{ "slot", ScriptValueType::String, true };
     const auto name = [prefix](std::string_view fn) { return std::string{ prefix } + "." + std::string{ fn }; };
     ok = RegisterFunction(host, name("SetBool"), { keyPin, ScriptFunctionPin{ "value", ScriptValueType::Bool, true } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetBool<Domain>) && ok;
     ok = RegisterFunction(host, name("SetInt"), { keyPin, ScriptFunctionPin{ "value", ScriptValueType::Int, true } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } }, &SetInt<Domain>) && ok;
@@ -308,11 +350,83 @@ bool RegisterDomain(ScriptRuntimeHost& host, std::string_view prefix) {
     ok = RegisterFunction(host, name("Has"), { keyPin }, { ScriptFunctionPin{ "has", ScriptValueType::Bool, true } }, &Has<Domain>) && ok;
     ok = RegisterFunction(host, name("Remove"), { keyPin }, { ScriptFunctionPin{ "removed", ScriptValueType::Bool, true } }, &Remove<Domain>) && ok;
     ok = RegisterFunction(host, name("Clear"), {}, { ScriptFunctionPin{ "cleared", ScriptValueType::Bool, true } }, &Clear<Domain>) && ok;
-    ok = RegisterFunction(host, name("Write"), { ScriptFunctionPin{ "path", ScriptValueType::String, true } }, { ScriptFunctionPin{ "written", ScriptValueType::Bool, true } }, &Write<Domain>) && ok;
-    ok = RegisterFunction(host, name("Read"), { ScriptFunctionPin{ "path", ScriptValueType::String, true } },
+    ok = RegisterFunction(host, name("Write"), { slotPin }, { ScriptFunctionPin{ "written", ScriptValueType::Bool, true } },
+        [storage](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) { return Write<Domain>(storage, context, arguments); }) && ok;
+    ok = RegisterFunction(host, name("Read"), { slotPin },
         { ScriptFunctionPin{ "loaded", ScriptValueType::Bool, true }, ScriptFunctionPin{ "status", ScriptValueType::String, true },
             ScriptFunctionPin{ "diagnostic", ScriptValueType::String, true } },
-        &Read<Domain>) && ok;
+        [storage](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) { return Read<Domain>(storage, context, arguments); }) && ok;
+    return ok;
+}
+
+// Crash reports belong with the player's settings: whether they may leave the
+// machine, what they hold, and removing the ones already written. All of it acts
+// on the reporter the host installed; without one (a host that writes no
+// reports) consent reads as off and nothing is deleted. With user storage the
+// answer is kept there too, where the game's own consent prompt reads it, and
+// it counts only while both agree.
+ScriptFunctionCallResult CrashReportUploadConsent(const std::shared_ptr<kb::platform::UserStorage>& storage) {
+    bool consent = false;
+#if defined(_WIN32)
+    const std::filesystem::path directory = kb::platform::CrashReporter::ReportDirectory();
+    consent = !directory.empty() && kb::platform::HasCrashUploadConsent(directory) &&
+        (storage == nullptr ||
+            kb::platform::ReadCrashUploadConsentChoice(*storage) == kb::platform::CrashUploadConsentChoice::Granted);
+#else
+    static_cast<void>(storage);
+#endif
+    return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "consent", ScriptValue{ consent } } }, .errors = {} };
+}
+
+// The answer takes effect for reports sent from the next launch on; this call never sends anything.
+ScriptFunctionCallResult SetCrashReportUploadConsent(const std::shared_ptr<kb::platform::UserStorage>& storage,
+    std::span<const ScriptFunctionArgument> arguments) {
+    const ScriptValue* value = FindArg(arguments, "consent");
+    bool set = false;
+#if defined(_WIN32)
+    const std::filesystem::path directory = kb::platform::CrashReporter::ReportDirectory();
+    if (value != nullptr && !directory.empty()) {
+        const bool consent = value->AsBool();
+        set = (storage == nullptr || kb::platform::WriteCrashUploadConsentChoice(*storage, consent)) &&
+            kb::platform::SetCrashUploadConsent(directory, consent);
+    }
+#else
+    static_cast<void>(storage);
+    static_cast<void>(value);
+#endif
+    return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "set", ScriptValue{ set } } }, .errors = {} };
+}
+
+ScriptFunctionCallResult CrashReportPrivacyNotice(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) {
+    std::string text;
+#if defined(_WIN32)
+    text = kb::platform::ReadCrashReportPrivacyNotice();
+#endif
+    return ScriptFunctionCallResult{ .executed = true, .outputs = { ScriptFunctionArgument{ "text", ScriptValue{ std::move(text) } } }, .errors = {} };
+}
+
+ScriptFunctionCallResult DeleteCrashReports(const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) {
+    std::size_t deleted = 0U;
+#if defined(_WIN32)
+    const std::filesystem::path directory = kb::platform::CrashReporter::ReportDirectory();
+    deleted = directory.empty() ? 0U : kb::platform::DeleteCrashReports(directory);
+#endif
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "deleted", ScriptValue{ static_cast<int>(std::min<std::size_t>(deleted, 1'000'000U)) } } },
+        .errors = {},
+    };
+}
+
+bool RegisterCrashReportSettings(ScriptRuntimeHost& host) {
+    bool ok = true;
+    const std::shared_ptr<kb::platform::UserStorage> storage = host.UserStorage();
+    ok = RegisterFunction(host, "Settings.CrashReportUploadConsent", {}, { ScriptFunctionPin{ "consent", ScriptValueType::Bool, true } },
+        [storage](const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument>) { return CrashReportUploadConsent(storage); }) && ok;
+    ok = RegisterFunction(host, "Settings.SetCrashReportUploadConsent", { ScriptFunctionPin{ "consent", ScriptValueType::Bool, true } }, { ScriptFunctionPin{ "set", ScriptValueType::Bool, true } },
+        [storage](const ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) { return SetCrashReportUploadConsent(storage, arguments); }) && ok;
+    ok = RegisterFunction(host, "Settings.CrashReportPrivacyNotice", {}, { ScriptFunctionPin{ "text", ScriptValueType::String, true } }, &CrashReportPrivacyNotice) && ok;
+    ok = RegisterFunction(host, "Settings.DeleteCrashReports", {}, { ScriptFunctionPin{ "deleted", ScriptValueType::Int, true } }, &DeleteCrashReports) && ok;
     return ok;
 }
 
@@ -324,6 +438,7 @@ bool ScriptSaveApi::Register(ScriptRuntimeHost& host) {
     // separate save domains.
     bool ok = RegisterDomain<kb::save::SaveDomain::SaveGame>(host, "Save");
     ok = RegisterDomain<kb::save::SaveDomain::UserSettings>(host, "Settings") && ok;
+    ok = RegisterCrashReportSettings(host) && ok;
     return ok;
 }
 

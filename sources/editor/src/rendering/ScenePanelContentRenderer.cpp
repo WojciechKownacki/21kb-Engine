@@ -326,6 +326,13 @@ struct LightWireframeBasis {
     return transform.worldDirty ? transform.localPosition : transform.worldPosition;
 }
 
+// The entity's position in viewport space: relative to the editor camera's viewport origin.
+[[nodiscard]] kb::scene::Vec3 ResolveViewportPosition(
+    const kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::math::DVec3& origin) noexcept {
+    return kb::math::RelativeTo(transform.worldDirty ? scene.Transforms().LocalTranslation(entity, transform)
+                                                     : scene.Transforms().WorldTranslation(entity, transform), origin);
+}
+
 [[nodiscard]] kb::scene::Quat ResolveWorldRotation(const kb::scene::TransformComponent& transform) noexcept {
     return transform.worldDirty ? transform.localRotation : transform.worldRotation;
 }
@@ -342,12 +349,15 @@ struct LightWireframeBasis {
 }
 
 [[nodiscard]] std::vector<kb::render::EditorCameraWireframeDesc> BuildCameraWireframes(
-    const EditorSceneContext& sceneContext) {
+    const EditorSceneContext& sceneContext,
+    const kb::math::DVec3& origin) {
     struct Context {
         const EditorSceneContext* sceneContext = nullptr;
+        kb::math::DVec3 origin{};
         std::vector<kb::render::EditorCameraWireframeDesc> wireframes;
     } context{
         .sceneContext = &sceneContext,
+        .origin = origin,
     };
 
     sceneContext.Scene().Components().Visitors().ForEachCamera(
@@ -359,7 +369,7 @@ struct LightWireframeBasis {
             }
 
             const LightWireframeBasis basis = BasisFromQuat(ResolveWorldRotation(transform));
-            const kb::scene::Vec3 position = ResolveWorldPosition(transform);
+            const kb::scene::Vec3 position = ResolveViewportPosition(context.sceneContext->Scene(), entity, transform, context.origin);
             context.wireframes.push_back(kb::render::EditorCameraWireframeDesc{
                 .projection = camera.projection == kb::scene::CameraProjection::Orthographic
                     ? kb::render::EditorCameraWireframeProjection::Orthographic
@@ -413,7 +423,8 @@ struct LightWireframeBasis {
             }
 
             const LightWireframeBasis basis = BasisFromQuat(ResolveWorldRotation(transform));
-            const kb::scene::Vec3 position = ResolveWorldPosition(transform);
+            const kb::scene::Vec3 position = ResolveViewportPosition(
+                context.sceneContext->Scene(), entity, transform, context.viewportCamera->ViewportOrigin());
             context.wireframes.push_back(kb::render::EditorLightWireframeDesc{
                 .kind = ToEditorLightWireframeKind(light.kind),
                 .position = {position.x, position.y, position.z},
@@ -463,7 +474,8 @@ struct LightWireframeBasis {
             }
             const kb::scene::TransformComponent& transform =
                 context.sceneContext->Scene().Transforms().Get(entity);
-            const kb::scene::Vec3 position = ResolveWorldPosition(transform);
+            const kb::scene::Vec3 position = ResolveViewportPosition(
+                context.sceneContext->Scene(), entity, transform, context.viewportCamera->ViewportOrigin());
             context.icons.push_back(kb::render::EditorParticleIconDesc{
                 .position = ToArray(position),
                 .iconRight = ToArray(context.viewportAxes->right),
@@ -505,17 +517,21 @@ struct LightWireframeBasis {
     return std::lerp(top, bottom, sampleZ - static_cast<float>(z0));
 }
 
-[[nodiscard]] kb::scene::Vec3 TerrainPointToWorld(
+// A terrain-local point in viewport space (the terrain's translation is `translation`, relative to the viewport
+// origin).
+[[nodiscard]] kb::scene::Vec3 TerrainPointToViewport(
     const kb::scene::TransformComponent& transform,
+    kb::scene::Vec3 translation,
     kb::scene::Vec3 local) noexcept {
     local.x *= transform.worldScale.x;
     local.y *= transform.worldScale.y;
     local.z *= transform.worldScale.z;
-    return transform.worldPosition + kb::math::Rotate(transform.worldRotation, local);
+    return translation + kb::math::Rotate(transform.worldRotation, local);
 }
 
 void AppendTerrainBrushRing(
     const EditorSceneContext& sceneContext,
+    const kb::math::DVec3& origin,
     std::vector<kb::render::PhysicsDebugLine>& lines) {
     const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     const kb::scene::SceneEntity entity{ tool.hoverEntityId };
@@ -527,6 +543,7 @@ void AppendTerrainBrushRing(
     const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
     if (terrain == nullptr) return;
     const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
+    const kb::scene::Vec3 translation = kb::math::RelativeTo(sceneContext.Scene().Transforms().WorldTranslation(entity, transform), origin);
     constexpr std::size_t segmentCount = 64U;
     constexpr float twoPi = 6.28318530717958647692F;
     const std::array<float, 3U> color = tool.mode == EditorTerrainToolMode::Holes
@@ -542,8 +559,9 @@ void AppendTerrainBrushRing(
             std::abs(z) > terrain->worldSizeZ * 0.5F) {
             return std::nullopt;
         }
-        return TerrainPointToWorld(
+        return TerrainPointToViewport(
             transform,
+            translation,
             kb::scene::Vec3{ x, TerrainHeightAt(*terrain, x, z) + 0.04F, z });
     };
     std::optional<kb::scene::Vec3> from = point(0U);
@@ -561,11 +579,56 @@ void AppendTerrainBrushRing(
     }
 }
 
-[[nodiscard]] std::vector<kb::render::PhysicsDebugLine> BuildPhysicsDebugLines(const EditorSceneContext& sceneContext) {
+// Outlines the open world's cells around the camera: loaded cells in green,
+// cells holding unloaded objects in grey.
+void AppendWorldPartitionGrid(
+    const EditorSceneContext& sceneContext,
+    const kb::math::DVec3& origin,
+    std::vector<kb::render::PhysicsDebugLine>& lines) {
+    if (!sceneContext.IsWorldOpen()) {
+        return;
+    }
+    const kb::math::DVec3& camera = sceneContext.ViewportCamera().PrecisePosition();
+    for (const EditorWorldGridLine& line : sceneContext.WorldPartition().CachedGridLines(camera.x, 0.0, camera.z, origin)) {
+        lines.push_back(kb::render::PhysicsDebugLine{
+            .from = line.from,
+            .to = line.to,
+            .color = line.color,
+            .alpha = 0.9F,
+        });
+    }
+}
+
+// Outlines the polygons of the baked navigation mesh, relative to the viewport origin.
+void AppendNavigationMesh(
+    const EditorSceneContext& sceneContext,
+    const kb::math::DVec3& origin,
+    std::vector<kb::render::PhysicsDebugLine>& lines) {
+    if (!sceneContext.Navigation().Visible()) {
+        return;
+    }
+    const auto relative = [&origin](const std::array<float, 3U>& point) {
+        return std::array<float, 3U>{
+            static_cast<float>(static_cast<double>(point[0]) - origin.x),
+            static_cast<float>(static_cast<double>(point[1]) - origin.y),
+            static_cast<float>(static_cast<double>(point[2]) - origin.z),
+        };
+    };
+    for (const EditorWorldGridLine& line : sceneContext.Navigation().Lines()) {
+        lines.push_back(kb::render::PhysicsDebugLine{
+            .from = relative(line.from),
+            .to = relative(line.to),
+            .color = line.color,
+            .alpha = 0.9F,
+        });
+    }
+}
+
+[[nodiscard]] std::vector<kb::render::PhysicsDebugLine> BuildPhysicsDebugLines(const EditorSceneContext& sceneContext, const kb::math::DVec3& origin) {
     std::vector<kb::render::PhysicsDebugLine> lines;
     if (kb::scene::PhysicsDebugDraw::IsEnabled(sceneContext.Scene())) {
         const std::vector<kb::scene::PhysicsDebugLineDesc> shapes =
-            kb::scene::PhysicsDebugDraw::CollectLines(sceneContext.Scene());
+            kb::scene::PhysicsDebugDraw::CollectLines(sceneContext.Scene(), origin);
         lines.reserve(shapes.size() + 64U);
         for (const kb::scene::PhysicsDebugLineDesc& shape : shapes) {
             lines.push_back(kb::render::PhysicsDebugLine{
@@ -576,7 +639,9 @@ void AppendTerrainBrushRing(
             });
         }
     }
-    AppendTerrainBrushRing(sceneContext, lines);
+    AppendTerrainBrushRing(sceneContext, origin, lines);
+    AppendWorldPartitionGrid(sceneContext, origin, lines);
+    AppendNavigationMesh(sceneContext, origin, lines);
     return lines;
 }
 
@@ -683,8 +748,8 @@ void AppendTerrainBrushRing(
         terrainTool.mode != EditorTerrainToolMode::Select &&
         EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected);
     if (!terrainEditing && selected.IsValid() && sceneContext.Scene().Entities().IsAlive(selected)) {
-        if (const std::optional<kb::scene::Vec3> pivot = EditorSceneSelectionPivot::Resolve(sceneContext.Scene(), sceneContext.SelectedHierarchyEntities(), selected)) {
-            const kb::scene::Vec3 target = *pivot;
+        if (const std::optional<kb::math::DVec3> pivot = EditorSceneSelectionPivot::ResolvePrecise(sceneContext.Scene(), sceneContext.SelectedHierarchyEntities(), selected)) {
+            const kb::scene::Vec3 target = kb::math::RelativeTo(*pivot, viewportCamera.ViewportOrigin());
             gizmo.visible = true;
             gizmo.targetPosition = {target.x, target.y, target.z};
             gizmo.worldScale = GizmoScreenSpaceScale(viewportCamera, axes, target, renderHeight);
@@ -729,6 +794,12 @@ void AppendTerrainBrushRing(
                   renderWidth,
                   renderHeight) }
             : std::optional<kb::render::SceneRenderCamera>{ twoD ? BuildCamera(flatAxes, flatCamera, renderWidth, renderHeight) : BuildEditorCamera(viewportCamera, renderWidth, renderHeight) },
+        // The scene's camera is placed from its precise world translation, the editor camera from its own (its view
+        // is built in viewport space).
+        .cameraOverrideEye = presentPrimarySceneCamera
+            ? std::optional<kb::math::DVec3>{ sceneContext.Scene().Transforms().WorldTranslation(playCameraEntity) }
+            : (twoD ? std::nullopt : std::optional<kb::math::DVec3>{ viewportCamera.PrecisePosition() }),
+        .overlayOrigin = viewportCamera.ViewportOrigin(),
         .selectedEntityIds = editorOverlaysEnabled ? SelectedEntityIds(sceneContext) : std::vector<std::uint64_t>{},
         .viewportKey = panelId,
         .editorSceneOverlaysEnabled = editorOverlaysEnabled,
@@ -739,10 +810,10 @@ void AppendTerrainBrushRing(
             .visible = editorOverlaysEnabled && !twoD && viewportState.GridVisible(),
         },
         .editorGizmo = editorOverlaysEnabled && !twoD ? gizmo : kb::render::RenderSceneSubmitDesc::EditorGizmoDesc{},
-        .editorCameraWireframes = editorOverlaysEnabled ? BuildCameraWireframes(sceneContext) : std::vector<kb::render::EditorCameraWireframeDesc>{},
+        .editorCameraWireframes = editorOverlaysEnabled ? BuildCameraWireframes(sceneContext, viewportCamera.ViewportOrigin()) : std::vector<kb::render::EditorCameraWireframeDesc>{},
         .editorLightWireframes = editorOverlaysEnabled ? BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorLightWireframeDesc>{},
         .editorParticleIcons = editorOverlaysEnabled ? BuildParticleIcons(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorParticleIconDesc>{},
-        .physicsDebugLines = editorOverlaysEnabled ? BuildPhysicsDebugLines(sceneContext) : std::vector<kb::render::PhysicsDebugLine>{},
+        .physicsDebugLines = editorOverlaysEnabled ? BuildPhysicsDebugLines(sceneContext, viewportCamera.ViewportOrigin()) : std::vector<kb::render::PhysicsDebugLine>{},
         // Outline and handles belong exactly where the UI itself is shown, never on their own.
         .editorUIOverlays = editorOverlaysEnabled && screenUIVisible ? EditorUIRectInteraction::Overlays(sceneContext, static_cast<float>(renderWidth), static_cast<float>(renderHeight), twoD ? viewportState.UIZoom() : 1.0F) : std::vector<kb::scene::SceneUIFrameElement>{},
         .editorUIScale = twoD ? viewportState.UIZoom() : 1.0F,
@@ -809,6 +880,7 @@ void ScenePanelContentRenderer::Paint(
     const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
     SceneViewportToolbarRenderer::Paint(dc, content, theme, viewportState);
     SceneViewportToolbarRenderer::PaintTerrainTools(dc, content, theme, sceneContext);
+    SceneViewportToolbarRenderer::PaintPrefabEditBar(dc, content, theme, sceneContext);
 
     if (sceneViewport == nullptr) {
         return;

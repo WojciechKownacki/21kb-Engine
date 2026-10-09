@@ -18,6 +18,8 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
@@ -74,6 +76,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -93,6 +96,9 @@ namespace kb::editor {
 namespace {
 
 constexpr RECT kInspectorContent{ 0, 0, 900, 700 };
+// GPU readbacks complete on the driver's schedule, which stretches when other
+// processes load the machine, so captures wait on a clock deadline.
+constexpr std::chrono::seconds kCaptureDeadline{ 20 };
 constexpr std::uint64_t kParticlePickerAnimationTimerTicks = 2U;
 
 struct ScreenshotDimensions {
@@ -681,6 +687,19 @@ struct EditorHeadlessAutomation::Impl {
         return RenderScene(context, 1U, false);
     }
 
+    // The Scene panel's own present settings (ScenePanelContentRenderer::BuildSettings), so a
+    // capture shows what the panel shows; the readback consumes the offscreen scene target.
+    [[nodiscard]] bool RenderSceneViewport(EditorSceneContext& context, std::uint64_t viewportKey) {
+        if (window == nullptr) return false;
+        const DockPanel panel{ .id = static_cast<std::uint32_t>(viewportKey), .kind = DockPanelKind::Scene };
+        auto settings = ScenePanelContentRenderer::BuildSettings(RECT{ 0, -34, 640, 360 }, panel, context, backendSettings);
+        settings.presentToHost = false;
+        viewport.BeginPaintLayout(window);
+        viewport.Present(window, RECT{ 0, 0, 640, 360 }, context.Scene(), settings);
+        viewport.EndPaintLayout();
+        return std::string_view{ viewport.ActiveBackendLabel() } != "Not initialized";
+    }
+
     // Renders the scene viewport and, when an Animator Controller asset is
     // open, the Animator Editor preview in a single paint. The preview mirrors
     // AnimatorEditorPanelRenderer: animation editor previews share the
@@ -1106,6 +1125,68 @@ bool EditorHeadlessAutomation::SetUIComponentProperty(
     return succeeded;
 }
 
+// One prefab through the whole editor round - create, place, override, apply, save, reopen, play,
+// stop and undo - with both instances checked for their link to the asset after every step.
+bool EditorHeadlessAutomation::VerifyPrefabRoundTrip() {
+    const auto findNamed = [this](std::string_view name) {
+        for (const EditorHierarchyRow& row : context_.HierarchyRows()) {
+            if (row.name == name) {
+                return row.entity;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto linked = [this, &findNamed](std::string_view name) {
+        kb::scene::ScenePrefabs prefabs = context_.Scene().Prefabs();
+        const kb::scene::ScenePrefabInstanceHandle instance = prefabs.RootInstance(findNamed(name));
+        return instance.IsValid() && prefabs.SourcePath(prefabs.SourcePrefab(instance)).stem() == "RoundTripCrate";
+    };
+    const auto positionX = [this, &findNamed](std::string_view name) {
+        return context_.Scene().Transforms().Get(findNamed(name)).localPosition.x;
+    };
+    const auto step = [this, &linked](std::string_view name, bool succeeded) {
+        const bool passed = succeeded && linked("RoundTripCrate") && linked("RoundTripPlaced");
+        Trace("prefab_round_trip", passed, name);
+        return passed;
+    };
+
+    const kb::scene::SceneEntity source = context_.CreateHierarchyObject();
+    context_.Scene().Entities().SetName(source, "RoundTripCrate");
+    static_cast<void>(context_.Scene().Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "RoundTripLid", .parent = context_.Scene().Entities().Object(source) }));
+    const std::filesystem::path prefabPath = EditorProjectPaths::PrefabsRoot() / "RoundTripCrate.kbprefab";
+    if (!context_.CreatePrefabAsset(source, prefabPath) ||
+        !context_.InstantiatePrefabAsset(prefabPath, "/Game/Prefabs/RoundTripCrate.kbprefab", {})) {
+        Trace("prefab_round_trip", false, "create-and-place");
+        return false;
+    }
+    context_.Scene().Entities().SetName(context_.SelectedEntity(), "RoundTripPlaced");
+    if (!step("create-and-place", true)) {
+        return false;
+    }
+
+    kb::scene::TransformComponent transform = context_.Scene().Transforms().Get(findNamed("RoundTripCrate"));
+    transform.localPosition.x = 4.0F;
+    context_.Scene().Transforms().Set(findNamed("RoundTripCrate"), transform);
+    kb::scene::ScenePrefabs prefabs = context_.Scene().Prefabs();
+    if (!step("override", !prefabs.Overrides(prefabs.RootInstance(findNamed("RoundTripCrate"))).Empty()) ||
+        !step("apply", context_.ApplyPrefabInstance(findNamed("RoundTripCrate")) && positionX("RoundTripPlaced") == 4.0F)) {
+        return false;
+    }
+
+    const std::filesystem::path scenePath = EditorProjectPaths::ScenesRoot() / "PrefabRoundTrip.21kbscene";
+    if (!step("save", context_.SaveCurrentSceneAs(scenePath)) ||
+        !step("reopen", context_.OpenScene(scenePath) && positionX("RoundTripCrate") == 4.0F && positionX("RoundTripPlaced") == 4.0F) ||
+        !step("play", context_.BeginPlayModeSceneSession() && context_.TickPlayModeSceneSession(1.0F / 60.0F)) ||
+        !step("stop", context_.RestorePlayModeSceneSession())) {
+        return false;
+    }
+
+    // Stopping Play starts a fresh history, so the undo step undoes an edit made after it.
+    return step("edit", context_.ToggleEntityVisibility(findNamed("RoundTripPlaced"))) &&
+        step("undo", context_.UndoSceneCommand() &&
+            context_.Scene().Components().Visibility().Get(findNamed("RoundTripPlaced")).mode != kb::scene::VisibilityMode::Hidden);
+}
+
 bool EditorHeadlessAutomation::VerifyUI2DEditing() {
     constexpr float width = 640, height = 360;
     auto entity = context_.SelectedEntity();
@@ -1476,12 +1557,29 @@ bool EditorHeadlessAutomation::VerifyUICreationMenu() {
         if (!EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(command->second, context_))
             return fail(std::string{descriptor.displayName} + ": creation failed");
         auto entity = context_.SelectedEntity();
-        const auto components = InspectorUIComponentModel::Components(context_.Scene(), entity);
-        if (std::ranges::find(components, descriptor.type) == components.end() ||
-            context_.Scene().Entities().Name(entity) != descriptor.displayName ||
-            context_.SceneRenderRevision() == revision) return fail("component-name-or-refresh-missing");
+        const std::string name{ descriptor.displayName };
+        // A widget created as a hierarchy may keep its component on a part: a Scroll View scrolls from its Viewport.
+        auto holder = entity;
+        std::vector<kb::scene::SceneEntity> pending{ entity };
+        while (!pending.empty()) {
+            const auto candidate = pending.back();
+            pending.pop_back();
+            const auto candidateComponents = InspectorUIComponentModel::Components(context_.Scene(), candidate);
+            if (std::ranges::find(candidateComponents, descriptor.type) != candidateComponents.end()) {
+                holder = candidate;
+                break;
+            }
+            for (const auto& child : context_.Scene().Hierarchy().Children(context_.Scene().Entities().Object(candidate)))
+                pending.push_back(child.Entity());
+        }
+        const auto components = InspectorUIComponentModel::Components(context_.Scene(), holder);
+        if (std::ranges::find(components, descriptor.type) == components.end()) return fail(name + ": component missing");
+        if (context_.Scene().Entities().Name(entity) != descriptor.displayName)
+            return fail(name + ": entity named '" + std::string{ context_.Scene().Entities().Name(entity) } + "'");
+        if (context_.SceneRenderRevision() == revision) return fail(name + ": scene not refreshed");
+        // The flat preset's dependencies apply when the widget is one entity; a hierarchy spreads them over its parts.
         for (const auto& preset : kb::scene::UIComponentPresetCatalog()) {
-            if (preset.name != descriptor.displayName) continue;
+            if (preset.name != descriptor.displayName || holder != entity) continue;
             for (const auto dependency : preset.components)
                 if (std::ranges::find(components, dependency) == components.end()) return fail("missing-preset-dependency");
         }
@@ -2060,6 +2158,13 @@ bool EditorHeadlessAutomation::VerifyUIComponentCatalog(std::optional<kb::scene:
             if (descriptor.type == kb::scene::UIComponentType::Dropdown && property.name.starts_with("options.") &&
                 !kb::scene::ReadUIComponentProperty(values, descriptor.type, property.name, value))
                 continue;
+            // The Inspector hides a setting that does not apply to the current mode (a screen canvas has no
+            // pixels per unit), so there is no field to edit; its own rows test covers when it is shown.
+            {
+                const auto rows = InspectorUIComponentModel::Properties(context_.Scene(), entity, descriptor.type);
+                const auto row = std::ranges::find(rows, property.name, &InspectorUIPropertyRow::name);
+                if (row != rows.end() && row->fieldCount == 0) continue;
+            }
             if (!kb::scene::ReadUIComponentProperty(values, descriptor.type, property.name, value) ||
                 (property.writable && !SetUIComponentProperty(descriptor.type, property.name, value))) {
                 Trace("ui_catalog", false, std::string{descriptor.displayName} + "." + std::string{property.name});
@@ -3329,7 +3434,8 @@ bool EditorHeadlessAutomation::CaptureRuntime(
             Trace("capture_runtime", false, "presented-capture-rejected");
             return false;
         }
-        for (std::size_t poll = 0U; poll < 240U; ++poll) {
+        for (const auto deadline = std::chrono::steady_clock::now() + kCaptureDeadline;
+             std::chrono::steady_clock::now() < deadline;) {
             if (!impl_->viewport.AdvanceAsyncReadbacks()) break;
             if (std::filesystem::exists(output, error) && !error) {
                 const bool valid = ValidateCapturedImage(output, requireNonUniform, impl_->runtimeWidth, impl_->runtimeHeight);
@@ -3352,8 +3458,15 @@ bool EditorHeadlessAutomation::CaptureRuntime(
         Trace("capture_runtime", false, "render-backend-failed");
         return false;
     }
-    for (std::size_t poll = 0U; poll < 240U; ++poll) {
-        if (!impl_->viewport.AdvanceAsyncReadbacks()) {
+    for (const auto deadline = std::chrono::steady_clock::now() + kCaptureDeadline;
+         std::chrono::steady_clock::now() < deadline;) {
+        // A capture already in flight elsewhere defers this request to the
+        // scene's next submit (see CaptureEditorScene).
+        const bool awaitingSubmit =
+            kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(
+                context_.Scene()).id == capture;
+        if (!(awaitingSubmit ? impl_->Render(context_)
+                             : impl_->viewport.AdvanceAsyncReadbacks())) {
             Trace("capture_runtime", false, "render-backend-failed");
             return false;
         }
@@ -3393,6 +3506,20 @@ bool EditorHeadlessAutomation::VerifySceneRenderTargetAfterSecondary(
 
 bool EditorHeadlessAutomation::CaptureEditorScene(std::string_view checkpoint, bool editorOverlaysEnabled) {
     constexpr std::uint64_t sceneViewportKey = 1U;
+    return CaptureScene("capture_editor_scene", checkpoint, [this, editorOverlaysEnabled] {
+        return impl_->RenderScene(context_, sceneViewportKey, editorOverlaysEnabled);
+    });
+}
+
+bool EditorHeadlessAutomation::CaptureSceneViewport(std::string_view checkpoint) {
+    constexpr std::uint64_t sceneViewportKey = 1U;
+    return CaptureScene("capture_scene_viewport", checkpoint, [this] {
+        return impl_->RenderSceneViewport(context_, sceneViewportKey);
+    });
+}
+
+bool EditorHeadlessAutomation::CaptureScene(
+    std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render) {
 
     const std::filesystem::path output =
         artifactRoot_ / "screenshots" /
@@ -3402,21 +3529,31 @@ bool EditorHeadlessAutomation::CaptureEditorScene(std::string_view checkpoint, b
             context_.Scene(), output.string());
     if (capture == 0U) {
         Trace(
-            "capture_editor_scene", false,
+            operation, false,
             "request-rejected");
         return false;
     }
 
-    if (!impl_->RenderScene(context_, sceneViewportKey, editorOverlaysEnabled)) {
+    if (!render()) {
         Trace(
-            "capture_editor_scene", false,
+            operation, false,
             "scene-present-failed");
         return false;
     }
-    for (std::size_t poll = 0U; poll < 240U; ++poll) {
-        if (!impl_->viewport.AdvanceAsyncReadbacks()) {
+    for (const auto deadline = std::chrono::steady_clock::now() + kCaptureDeadline;
+         std::chrono::steady_clock::now() < deadline;) {
+        // The renderer keeps one capture in flight; while another scene's
+        // capture (e.g. a particle thumbnail) holds it, this request waits
+        // for the scene's next submit, so keep presenting until it starts.
+        const bool awaitingSubmit =
+            kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(
+                context_.Scene()).id == capture;
+        const bool advanced = awaitingSubmit
+            ? render()
+            : impl_->viewport.AdvanceAsyncReadbacks();
+        if (!advanced) {
             Trace(
-                "capture_editor_scene", false,
+                operation, false,
                 "scene-present-failed");
             return false;
         }
@@ -3426,20 +3563,20 @@ bool EditorHeadlessAutomation::CaptureEditorScene(std::string_view checkpoint, b
         if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
             const bool valid = ValidateCapturedImage(output, true);
             Trace(
-                "capture_editor_scene", valid,
+                operation, valid,
                 output.filename().string());
             return valid;
         }
         if (status == kb::scene::SceneScreenCaptureStatus::Failed) {
             Trace(
-                "capture_editor_scene", false,
+                operation, false,
                 "capture-failed");
             return false;
         }
         Sleep(5U);
     }
     Trace(
-        "capture_editor_scene", false,
+        operation, false,
         "capture-timeout");
     return false;
 }

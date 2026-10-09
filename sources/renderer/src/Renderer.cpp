@@ -13,9 +13,12 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAuxFrameComponents.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/ScenePortalVisibility.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
@@ -33,7 +36,10 @@
 #include "renderer/RendererDebugLog.hpp"
 #include "renderer/RendererMeshPassSubmitter.hpp"
 #include "renderer/RendererMatrixMath.hpp"
+#include "scene/lighting/SceneLightingPacker.hpp"
+#include "scene/pipeline/MeshPipelineVisibility.hpp"
 #include "renderer/RendererPostProcessSubmitter.hpp"
+#include "renderer/RendererRenderOrigin.hpp"
 #include "renderer/RendererRuntimeResourceStatsBuilder.hpp"
 #include "renderer/RendererSceneLightingConfigResolver.hpp"
 #include "renderer/RendererShadowSubmitter.hpp"
@@ -245,7 +251,7 @@ void ApplyPostProcessSettingsOverride(PostProcessOutput& output, const std::opti
         return true;
     }
 
-    {
+    if (RendererDebugLogEnabled("aa_trace")) {
         std::ostringstream message;
         message << "MSAA color resolve requested"
                 << " viewId=" << viewportPlan.viewIds.sceneOverlays
@@ -261,17 +267,19 @@ void ApplyPostProcessSettingsOverride(PostProcessOutput& output, const std::opti
         return false;
     }
     if (!bgfx::isValid(desc.target.colorTexture) || !bgfx::isValid(desc.target.resolvedColorTexture)) {
-        std::ostringstream message;
-        message << "MSAA color resolve failed invalid handles"
-                << " source=" << HandleValue(desc.target.colorTexture)
-                << " resolved=" << HandleValue(desc.target.resolvedColorTexture);
-        WriteRendererBreadcrumb("aa_trace", message.str());
+        if (RendererDebugLogEnabled("aa_trace")) {
+            std::ostringstream message;
+            message << "MSAA color resolve failed invalid handles"
+                    << " source=" << HandleValue(desc.target.colorTexture)
+                    << " resolved=" << HandleValue(desc.target.resolvedColorTexture);
+            WriteRendererBreadcrumb("aa_trace", message.str());
+        }
         return false;
     }
 
     bgfx::blit(viewportPlan.viewIds.sceneOverlays, desc.target.resolvedColorTexture, 0U, 0U, desc.target.colorTexture);
     sampledSceneColor = desc.target.resolvedColorTexture;
-    {
+    if (RendererDebugLogEnabled("aa_trace")) {
         std::ostringstream message;
         message << "MSAA color resolve submitted"
                 << " viewId=" << viewportPlan.viewIds.sceneOverlays
@@ -351,6 +359,9 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
+    // Optional: without its shader screen-space GI simply contributes nothing.
+    static_cast<void>(giResolvePass_.Initialize());
+    static_cast<void>(giVoxelGrid_.Initialize());
     if (displayConfig_.enableEditorRendering && !editorPassSubmitter_.Initialize()) {
         Shutdown();
         return false;
@@ -361,7 +372,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         return false;
     }
     SetDefaultPostProcessSettings(defaultPostProcessSettings_);
-    {
+    if (RendererDebugLogEnabled("renderer")) {
         std::ostringstream message;
         message << "Initialize end ok backend=" << CapabilityReport().selectedBackendName
                 << " rendererType=" << static_cast<int>(bgfx::getRendererType())
@@ -427,6 +438,8 @@ void Renderer::Shutdown() {
         finalCompositePass_->Shutdown();
         finalCompositePass_.reset();
     }
+    giVoxelGrid_.Shutdown();
+    giResolvePass_.Shutdown();
     if (deferredLightingPass_ != nullptr) {
         deferredLightingPass_->Shutdown();
         deferredLightingPass_.reset();
@@ -569,7 +582,7 @@ bool Renderer::SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmi
 }
 
 bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
-    {
+    if (RendererDebugLogEnabled("renderer")) {
         std::ostringstream message;
         message << "SubmitScenes begin submissions=" << submissions.size()
                 << " frameActive=" << BoolText(frameActive_)
@@ -603,14 +616,16 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     }
     frameReferences_.Clear();
     if (context_ == nullptr || !context_->IsInitialized() || !frameActive_ || sceneRenderer_ == nullptr || !sceneRenderer_->IsInitialized() || submissions.empty()) {
-        std::ostringstream message;
-        message << "SubmitScenes early_exit invalid_state context=" << BoolText(context_ != nullptr)
-                << " contextInitialized=" << BoolText(context_ != nullptr && context_->IsInitialized())
-                << " frameActive=" << BoolText(frameActive_)
-                << " sceneRenderer=" << BoolText(sceneRenderer_ != nullptr)
-                << " sceneRendererInitialized=" << BoolText(sceneRenderer_ != nullptr && sceneRenderer_->IsInitialized())
-                << " empty=" << BoolText(submissions.empty());
-        WriteRendererBreadcrumb("renderer", message.str());
+        if (RendererDebugLogEnabled("renderer")) {
+            std::ostringstream message;
+            message << "SubmitScenes early_exit invalid_state context=" << BoolText(context_ != nullptr)
+                    << " contextInitialized=" << BoolText(context_ != nullptr && context_->IsInitialized())
+                    << " frameActive=" << BoolText(frameActive_)
+                    << " sceneRenderer=" << BoolText(sceneRenderer_ != nullptr)
+                    << " sceneRendererInitialized=" << BoolText(sceneRenderer_ != nullptr && sceneRenderer_->IsInitialized())
+                    << " empty=" << BoolText(submissions.empty());
+            WriteRendererBreadcrumb("renderer", message.str());
+        }
         return false;
     }
 
@@ -700,38 +715,48 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     for (std::size_t index = 0; index < submitList.size(); ++index) {
         const SceneFrameSubmission& submission = submitList[index];
         if (!submission.IsValid()) {
-            std::ostringstream message;
-            message << "SubmitScenes invalid_submission index=" << index
-                    << " scene=" << BoolText(submission.scene != nullptr)
-                    << " descValid=" << BoolText(submission.desc.IsValid());
-            WriteRendererBreadcrumb("renderer", message.str());
+            if (RendererDebugLogEnabled("renderer")) {
+                std::ostringstream message;
+                message << "SubmitScenes invalid_submission index=" << index
+                        << " scene=" << BoolText(submission.scene != nullptr)
+                        << " descValid=" << BoolText(submission.desc.IsValid());
+                WriteRendererBreadcrumb("renderer", message.str());
+            }
             return false;
         }
-        std::ostringstream message;
-        message << "SubmitScenes viewport_desc index=" << index
-                << " viewportId=" << submission.desc.target.viewport.id.value
-                << " viewportIndex=" << submission.desc.target.viewport.viewportIndex
-                << " extent=" << submission.desc.target.viewport.extent.width << 'x' << submission.desc.target.viewport.extent.height
-                << " postProcess=" << BoolText(submission.desc.postProcessEnabled)
-                << " postTargets=" << BoolText(submission.desc.postProcess.enabled)
-                << " finalComposite=" << BoolText(submission.desc.finalComposite.enabled)
-                << " meshPassMode=" << MeshPassModeName(submission.desc.meshPassMode)
-                << " lightingPath=" << LightingPathName(RendererSceneLightingConfigResolver::Resolve(submission.desc.lightingConfig, defaultSceneLightingConfig_).lightingPath);
-        WriteRendererBreadcrumb("renderer", message.str());
+        if (RendererDebugLogEnabled("renderer")) {
+            std::ostringstream message;
+            message << "SubmitScenes viewport_desc index=" << index
+                    << " viewportId=" << submission.desc.target.viewport.id.value
+                    << " viewportIndex=" << submission.desc.target.viewport.viewportIndex
+                    << " extent=" << submission.desc.target.viewport.extent.width << 'x' << submission.desc.target.viewport.extent.height
+                    << " postProcess=" << BoolText(submission.desc.postProcessEnabled)
+                    << " postTargets=" << BoolText(submission.desc.postProcess.enabled)
+                    << " finalComposite=" << BoolText(submission.desc.finalComposite.enabled)
+                    << " meshPassMode=" << MeshPassModeName(submission.desc.meshPassMode)
+                    << " lightingPath=" << LightingPathName(RendererSceneLightingConfigResolver::Resolve(submission.desc.lightingConfig, defaultSceneLightingConfig_).lightingPath);
+            WriteRendererBreadcrumb("renderer", message.str());
+        }
         frameDesc.viewports.push_back(submission.desc.target.viewport);
     }
 
     WriteRendererBreadcrumb("renderer", "SubmitScenes BuildFramePlan begin");
-    const RenderFramePlan plan = framePipeline_.Build(frameDesc);
+    if (framePlan_.viewports.empty() || framePlanViewports_ != frameDesc.viewports) {
+        framePlan_ = framePipeline_.Build(frameDesc);
+        framePlanViewports_ = frameDesc.viewports;
+    }
+    const RenderFramePlan& plan = framePlan_;
     if (!plan.Succeeded() || plan.viewports.size() != submitList.size()) {
-        std::ostringstream message;
-        message << "SubmitScenes BuildFramePlan failed succeeded=" << BoolText(plan.Succeeded())
-                << " planViewports=" << plan.viewports.size()
-                << " submissions=" << submitList.size();
-        WriteRendererBreadcrumb("renderer", message.str());
+        if (RendererDebugLogEnabled("renderer")) {
+            std::ostringstream message;
+            message << "SubmitScenes BuildFramePlan failed succeeded=" << BoolText(plan.Succeeded())
+                    << " planViewports=" << plan.viewports.size()
+                    << " submissions=" << submitList.size();
+            WriteRendererBreadcrumb("renderer", message.str());
+        }
         return false;
     }
-    {
+    if (RendererDebugLogEnabled("renderer")) {
         std::ostringstream message;
         message << "SubmitScenes BuildFramePlan end viewports=" << plan.viewports.size();
         WriteRendererBreadcrumb("renderer", message.str());
@@ -741,10 +766,12 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     stagedFrameState.Begin(frameDesc.frameIndex);
     for (const RenderViewportPlan& viewportPlan : plan.viewports) {
         if (!stagedFrameState.RegisterViewportPlan(viewportPlan)) {
-            std::ostringstream message;
-            message << "SubmitScenes RegisterViewportPlan failed viewportId=" << viewportPlan.viewport.id.value
-                    << " viewportIndex=" << viewportPlan.viewport.viewportIndex;
-            WriteRendererBreadcrumb("renderer", message.str());
+            if (RendererDebugLogEnabled("renderer")) {
+                std::ostringstream message;
+                message << "SubmitScenes RegisterViewportPlan failed viewportId=" << viewportPlan.viewport.id.value
+                        << " viewportIndex=" << viewportPlan.viewport.viewportIndex;
+                WriteRendererBreadcrumb("renderer", message.str());
+            }
             return false;
         }
     }
@@ -752,7 +779,7 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     RendererViewConfigurator::ApplyViewOrder(frameState_.BgfxViewRemap());
 
     for (std::size_t index = 0; index < submitList.size(); ++index) {
-        {
+        if (RendererDebugLogEnabled("renderer")) {
             std::ostringstream message;
             message << "SubmitScenes SubmitSceneToViewport begin index=" << index
                     << " viewportId=" << submitList[index].desc.target.viewport.id.value
@@ -760,14 +787,16 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
             WriteRendererBreadcrumb("renderer", message.str());
         }
         if (!SubmitSceneToViewport(*submitList[index].scene, submitList[index].desc, plan.viewports[index])) {
-            std::ostringstream message;
-            message << "SubmitScenes SubmitSceneToViewport failed index=" << index
-                    << " viewportId=" << submitList[index].desc.target.viewport.id.value
-                    << " viewportIndex=" << submitList[index].desc.target.viewport.viewportIndex;
-            WriteRendererBreadcrumb("renderer", message.str());
+            if (RendererDebugLogEnabled("renderer")) {
+                std::ostringstream message;
+                message << "SubmitScenes SubmitSceneToViewport failed index=" << index
+                        << " viewportId=" << submitList[index].desc.target.viewport.id.value
+                        << " viewportIndex=" << submitList[index].desc.target.viewport.viewportIndex;
+                WriteRendererBreadcrumb("renderer", message.str());
+            }
             return false;
         }
-        {
+        if (RendererDebugLogEnabled("renderer")) {
             std::ostringstream message;
             message << "SubmitScenes SubmitSceneToViewport end index=" << index
                     << " viewportId=" << submitList[index].desc.target.viewport.id.value
@@ -801,12 +830,59 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     return true;
 }
 
+void Renderer::SetRenderOriginPolicy(const RenderOriginPolicy& policy) noexcept {
+    renderOriginPolicy_ = policy;
+}
+
+const RenderOriginPolicy& Renderer::CurrentRenderOriginPolicy() const noexcept {
+    return renderOriginPolicy_;
+}
+
+bool Renderer::UpdateRenderOrigin(const kb::scene::Scene& scene, RenderScene& renderScene, const RenderSceneSubmitDesc& desc) {
+    std::optional<kb::math::DVec3> eye = desc.cameraOverrideEye;
+    if (!eye.has_value() && desc.cameraOverride.has_value()) {
+        eye = RendererRenderOrigin::ViewEye(desc.cameraOverride->view);
+    }
+    if (!eye.has_value()) {
+        // The camera this viewport rendered with last time: its proxies are synchronized below.
+        if (const CameraRenderProxyDesc* camera = renderScene.FindPrimaryCameraProxy(desc.target.viewport.id.value); camera != nullptr) {
+            const kb::scene::SceneEntity entity{ camera->entityId };
+            if (scene.Entities().IsAlive(entity)) eye = scene.Transforms().WorldTranslation(entity);
+        }
+    }
+    return eye.has_value() && renderScene.SetRenderOrigin(renderScene.RenderOriginFor(*eye, renderOriginPolicy_));
+}
+
 bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan) {
+    RenderScene& renderScene = RenderSceneFor(scene);
+    const bool originMoved = UpdateRenderOrigin(scene, renderScene, desc);
+    const kb::math::DVec3 origin = renderScene.RenderOrigin();
+    // The motion vectors of the next frame compare against the previous view-projection: keep it in this origin's space.
+    TemporalViewportState& temporalState = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
+    if (temporalState.renderOrigin != origin) {
+        temporalState.previousViewProjection = RendererRenderOrigin::RebaseViewProjection(temporalState.previousViewProjection, origin - temporalState.renderOrigin);
+        temporalState.renderOrigin = origin;
+    }
+    if (origin == kb::math::DVec3{} && !originMoved && desc.overlayOrigin == kb::math::DVec3{}) {
+        return SubmitSceneToViewportInRenderSpace(scene, desc, viewportPlan);
+    }
+    RenderSceneSubmitDesc relative = desc;
+    // A moved origin changes every proxy: the full synchronization re-derives them all.
+    relative.synchronizeScene = desc.synchronizeScene || originMoved;
+    if (relative.cameraOverride.has_value()) {
+        relative.cameraOverride->view = RendererRenderOrigin::RelativeView(desc.cameraOverride->view, origin, desc.cameraOverrideEye);
+    }
+    if (relativeOverlays_ == nullptr) relativeOverlays_ = std::make_unique<RendererRelativeOverlays>();
+    relativeOverlays_->Apply(relative, origin);
+    return SubmitSceneToViewportInRenderSpace(scene, relative, viewportPlan);
+}
+
+bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan) {
     lastSceneSynchronizationMilliseconds_ = 0.0;
     lastSceneVisibilityBuildMilliseconds_ = 0.0;
     lastSceneVisibilitySortMilliseconds_ = 0.0;
     lastSceneVisibilityPublishMilliseconds_ = 0.0;
-    {
+    if (RendererDebugLogEnabled("renderer")) {
         std::ostringstream message;
         message << "SubmitSceneToViewport begin viewportId=" << desc.target.viewport.id.value
                 << " viewportIndex=" << desc.target.viewport.viewportIndex
@@ -852,7 +928,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     if (desc.screenUIEnabled) {
         PublishUIImageAlpha(const_cast<kb::scene::Scene&>(scene));
     }
-    kb::scene::SceneUIFrame screenUIFrame;
+    kb::scene::SceneUIFrame& screenUIFrame = screenUIFrameScratch_;
+    screenUIFrame.viewportSize = {};
+    screenUIFrame.elements.clear();
+    screenUIFrame.refusal = {};
     // An editor viewport laying out the world asks for no UI layer. Skipping the build, rather
     // than discarding its result, also skips the layout pass the frame would have cost.
     if (desc.screenUIEnabled &&
@@ -860,11 +939,13 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         // A widget the author can fix must not cost the whole frame. The UI layer is dropped,
         // the 3D scene still renders, and the refusal is published by name with the offending
         // entity so it is diagnosable instead of appearing as a dead renderer.
-        std::ostringstream message;
-        message << "SubmitSceneToViewport screen UI frame refused entity="
-                << screenUIFrame.refusal.entity.Id() << " reason="
-                << (screenUIFrame.refusal.reason != nullptr ? screenUIFrame.refusal.reason : "unknown");
-        WriteRendererBreadcrumb("renderer", message.str());
+        if (RendererDebugLogEnabled("renderer")) {
+            std::ostringstream message;
+            message << "SubmitSceneToViewport screen UI frame refused entity="
+                    << screenUIFrame.refusal.entity.Id() << " reason="
+                    << (screenUIFrame.refusal.reason != nullptr ? screenUIFrame.refusal.reason : "unknown");
+            WriteRendererBreadcrumb("renderer", message.str());
+        }
         lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
             .severity = SceneRenderDiagnosticSeverity::Error,
             .kind = SceneRenderDiagnosticKind::UIFrameRefused,
@@ -944,35 +1025,16 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             renderProxyUpdatesSynchronized = true;
         }
         if (desc.transformAffineSync) {
-            const std::span<const kb::scene::SceneEntity> affineEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
-            const std::span<const kb::scene::WorldTransformAffine3x4> affines = scene.Runtime().TransformRenderProxyWorldAffine3x4();
-            // The columnar worker path is amortized at the benchmark's
-            // 5k-instance scale; below it the serial path still wins.
-            constexpr std::size_t kParallelAffineSyncThreshold = 4U * 1024U;
-            if (affineEntities.size() >= kParallelAffineSyncThreshold) {
-                std::ostringstream message;
-                message << "SubmitSceneToViewport SyncMeshWorldAffinesParallel begin count=" << affineEntities.size();
-                WriteRendererBreadcrumb("renderer", message.str());
-                if (renderSyncWorkerPool_ == nullptr) {
-                    renderSyncWorkerPool_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
-                }
-                if (!renderSyncWorkerPool_->Running()) {
-                    renderSyncWorkerPool_->Start(kb::ecs::WorkerPoolConfig{});
-                }
-                renderSceneSynchronizer_->SyncMeshWorldAffinesParallel(renderScene, affineEntities, affines, *renderSyncWorkerPool_);
-                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshWorldAffinesParallel end");
-            } else {
-                std::ostringstream message;
-                message << "SubmitSceneToViewport SyncMeshWorldAffines begin count=" << affineEntities.size();
-                WriteRendererBreadcrumb("renderer", message.str());
-                renderSceneSynchronizer_->SyncMeshWorldAffines(renderScene, affineEntities, affines);
-                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshWorldAffines end");
-            }
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport PullTransforms begin");
+            renderSceneSynchronizer_->PullTransforms(scene, renderScene);
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport PullTransforms end");
         }
         if (!desc.dirtySceneEntityIds.empty()) {
-            std::ostringstream message;
-            message << "SubmitSceneToViewport SyncEntities begin count=" << desc.dirtySceneEntityIds.size();
-            WriteRendererBreadcrumb("renderer", message.str());
+            if (RendererDebugLogEnabled("renderer")) {
+                std::ostringstream message;
+                message << "SubmitSceneToViewport SyncEntities begin count=" << desc.dirtySceneEntityIds.size();
+                WriteRendererBreadcrumb("renderer", message.str());
+            }
             renderSceneSynchronizer_->SyncEntities(scene, renderScene, desc.dirtySceneEntityIds);
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncEntities end");
         }
@@ -982,18 +1044,19 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         if (!scene.Runtime().RenderProxyUpdateEntities().empty() &&
             (synchronizedRevision == renderProxySynchronizedRevisions_.end() ||
              synchronizedRevision->second != renderProxyUpdateRevision)) {
-            std::ostringstream message;
-            message << "SubmitSceneToViewport SyncRenderProxyUpdates begin count=" << scene.Runtime().RenderProxyUpdateEntities().size();
-            WriteRendererBreadcrumb("renderer", message.str());
+            if (RendererDebugLogEnabled("renderer")) {
+                std::ostringstream message;
+                message << "SubmitSceneToViewport SyncRenderProxyUpdates begin count=" << scene.Runtime().RenderProxyUpdateEntities().size();
+                WriteRendererBreadcrumb("renderer", message.str());
+            }
             renderSceneSynchronizer_->SyncRenderProxyUpdates(scene, renderScene);
             renderProxySynchronizedRevisions_[scene.Id()] = renderProxyUpdateRevision;
             renderProxyUpdatesSynchronized = true;
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncRenderProxyUpdates end");
         }
-        if (desc.transformAffineSync) {
-            const bool primaryCameraChanged = renderProxyUpdatesSynchronized ||
-                scene.Runtime().HotPathReport().transformRenderProxyCameraCount != 0U;
-            renderSceneSynchronizer_->SyncFacingPanelUpdates(scene, renderScene, primaryCameraChanged);
+        if (desc.transformAffineSync && renderProxyUpdatesSynchronized) {
+            // The pull oriented the facing panels; proxy updates may since have chosen another primary camera.
+            renderSceneSynchronizer_->SyncFacingPanelUpdates(scene, renderScene, true);
         }
         // Deformed proxies store frame-local palette handles. Even when the ECS scene and its
         // transforms are unchanged, a new renderer frame needs fresh palette uploads; retaining
@@ -1021,10 +1084,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
     particleRenderSynchronizer_->SetGpuVisualAvailability(sceneRenderer_->ParticleGpuVisualAvailability());
     particleRenderSynchronizer_->Sync(scene, renderScene);
-    sceneRenderer_->SyncGpuParticleEmitters(
-        const_cast<kb::scene::Scene&>(scene), frameDeltaSeconds_, static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL);
+    sceneRenderer_->SyncGpuParticleEmitters(const_cast<kb::scene::Scene&>(scene), frameDeltaSeconds_,
+        static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL, renderScene.RenderOrigin());
     if (const auto& particleSnapshot = renderScene.ParticleRenderSnapshot(); particleSnapshot != nullptr) {
-        {
+        if (RendererDebugLogEnabled("renderer")) {
             std::ostringstream message;
             message << "SubmitSceneToViewport particle snapshot revision=" << particleSnapshot->Revision()
                     << " fixedStep=" << particleSnapshot->FixedStepIndex()
@@ -1079,8 +1142,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
          worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap);
     const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath) ||
         effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal || backdropRequiresDeferredPass ||
-        // Screen-space GI reads the G-buffer, so it implies the deferred path.
-        effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi;
+        // Screen-space GI, ambient occlusion and reflections read the G-buffer, so they imply the deferred path.
+        UsesScreenSpaceEffects(effectiveLightingConfig);
     RenderMaterialGraphBuildContext runtimeGraphContext = desc.materialGraphContext;
     runtimeGraphContext.shadingPath = deferredLighting
         ? RenderMaterialGraphShadingPath::Deferred
@@ -1089,7 +1152,6 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             : RenderMaterialGraphShadingPath::Forward;
     sceneRenderer_->SetParticleVolumetricLowQuality(
         runtimeGraphContext.qualityLevel == RenderMaterialGraphQualityLevel::Low);
-    runtimeMaterialResolver_.SetGraphBuildContext(std::move(runtimeGraphContext));
     if (!lastRuntimeMaterialLightingPath_.has_value() ||
         *lastRuntimeMaterialLightingPath_ != effectiveLightingConfig.lightingPath ||
         !lastRuntimeMaterialDebugView_.has_value() ||
@@ -1111,6 +1173,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         lastRuntimeMaterialVariantUsage_ = runtimeGraphContext.variantUsage;
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport runtime material cache invalidated for lighting path/debug view change");
     }
+    runtimeMaterialResolver_.SetGraphBuildContext(std::move(runtimeGraphContext));
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport EnsureSceneResources begin");
     runtimeResourceCache_.EnsureSceneResources(RuntimeRenderResourceEnsureContext{
         .scene = const_cast<kb::scene::Scene&>(scene),
@@ -1130,14 +1193,14 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .materialResolverDiagnosticCount = lastMaterialResolverDiagnosticCount_,
         .currentFrame = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
     });
-    {
+    if (RendererDebugLogEnabled("renderer")) {
         std::ostringstream message;
         message << "SubmitSceneToViewport EnsureSceneResources end materialLoaded=" << lastMaterialLoadedCount_
                 << " materialFallback=" << lastMaterialFallbackCount_
                 << " diagnostics=" << lastSceneDiagnostics_.events.size();
         WriteRendererBreadcrumb("renderer", message.str());
     }
-    {
+    if (RendererDebugLogEnabled("renderer")) {
         std::ostringstream message;
         message << "SubmitSceneToViewport lighting resolved path=" << LightingPathName(effectiveLightingConfig.lightingPath)
                 << " deferred=" << BoolText(deferredLighting)
@@ -1161,23 +1224,25 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     }
     if (deferredLighting) {
         const SceneGBufferFormatSelection selection = sceneGBuffer.FormatSelection();
-        std::ostringstream message;
-        message << "SubmitSceneToViewport GBuffer Ensure end ok"
-                << " fb=" << HandleValue(sceneGBuffer.FrameBuffer())
-                << " albedoTex=" << HandleValue(sceneGBuffer.AlbedoTexture())
-                << " normalTex=" << HandleValue(sceneGBuffer.NormalTexture())
-                << " materialTex=" << HandleValue(sceneGBuffer.MaterialTexture())
-                << " surfaceTex=" << HandleValue(sceneGBuffer.SurfaceTexture())
-                << " depthTex=" << HandleValue(sceneGBuffer.DepthTexture())
-                << " extent=" << sceneGBuffer.Width() << 'x' << sceneGBuffer.Height()
-                << " formats=(" << SceneTextureFormatName(selection.albedoFormat)
-                << ',' << SceneTextureFormatName(selection.normalFormat)
-                << ',' << SceneTextureFormatName(selection.materialFormat)
-                << ',' << SceneTextureFormatName(selection.surfaceFormat)
-                << ',' << SceneTextureFormatName(selection.depth.format) << ')'
-                << " targetFb=" << HandleValue(desc.target.frameBuffer)
-                << " finalFb=" << HandleValue(desc.finalComposite.frameBuffer);
-        WriteRendererBreadcrumb("renderer", message.str());
+        if (RendererDebugLogEnabled("renderer")) {
+            std::ostringstream message;
+            message << "SubmitSceneToViewport GBuffer Ensure end ok"
+                    << " fb=" << HandleValue(sceneGBuffer.FrameBuffer())
+                    << " albedoTex=" << HandleValue(sceneGBuffer.AlbedoTexture())
+                    << " normalTex=" << HandleValue(sceneGBuffer.NormalTexture())
+                    << " materialTex=" << HandleValue(sceneGBuffer.MaterialTexture())
+                    << " surfaceTex=" << HandleValue(sceneGBuffer.SurfaceTexture())
+                    << " depthTex=" << HandleValue(sceneGBuffer.DepthTexture())
+                    << " extent=" << sceneGBuffer.Width() << 'x' << sceneGBuffer.Height()
+                    << " formats=(" << SceneTextureFormatName(selection.albedoFormat)
+                    << ',' << SceneTextureFormatName(selection.normalFormat)
+                    << ',' << SceneTextureFormatName(selection.materialFormat)
+                    << ',' << SceneTextureFormatName(selection.surfaceFormat)
+                    << ',' << SceneTextureFormatName(selection.depth.format) << ')'
+                    << " targetFb=" << HandleValue(desc.target.frameBuffer)
+                    << " finalFb=" << HandleValue(desc.finalComposite.frameBuffer);
+            WriteRendererBreadcrumb("renderer", message.str());
+        }
     }
     // Resolve the effective camera's clear settings before configuring the
     // opaque view. An explicit camera carries the same authored contract as a
@@ -1273,7 +1338,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .diagnostics = lastSceneDiagnostics_,
         .passSubmitStats = lastScenePassSubmitStats_,
     });
-    {
+    if (RendererDebugLogEnabled("renderer")) {
         std::ostringstream message;
         message << "SubmitSceneToViewport ShadowSubmit end valid=" << BoolText(shadowBinding.IsValid())
                 << " depthTex=" << HandleValue(shadowBinding.depthTexture);
@@ -1285,6 +1350,15 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
         ? &(*desc.cameraOverride)
         : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
+    // A playing scene with visibility cells culls what this camera cannot see through the portals; the
+    // mesh passes and the visibility feedback below read it from the render scene.
+    if (overlayCamera != nullptr && scene.Runtime().IsPlaying() && kb::scene::SceneHasVisibilityCells(scene)) {
+        kb::scene::ScenePortalCamera portalCamera = MeshPipelineVisibility::PortalCamera(*overlayCamera);
+        portalCamera.origin = renderScene.RenderOrigin();
+        renderScene.SetPortalVisibility(kb::scene::ComputeScenePortalVisibility(scene, portalCamera));
+    } else {
+        renderScene.SetPortalVisibility(std::nullopt);
+    }
     // LIB-144: publish the CPU-side per-entity visibility/bounds feedback frame
     // (Renderer.IsVisible/GetBounds/TestFrustum's backing data) into the scene, computed
     // unconditionally (mirrors lastResolvedPostProcessSettings_ above - observable even for
@@ -1358,7 +1432,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("aa_trace", message.str());
     }
     const std::array<float, 2> jitter = RendererTemporalJitter::Compute(frameIndex, desc.target.viewport.extent, temporalJitterEnabled);
-    {
+    if (RendererDebugLogEnabled("aa_trace")) {
         std::ostringstream message;
         message << "Temporal jitter resolve"
                 << " frameIndex=" << frameIndex
@@ -1373,13 +1447,23 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         RendererTemporalJitter::Apply(*jitteredCamera, jitter, desc.target.viewport.extent);
     }
     const SceneRenderCamera* sceneCamera = jitteredCamera.has_value() ? &(*jitteredCamera) : overlayCamera;
-    {
+    if (RendererDebugLogEnabled("renderer")) {
         std::ostringstream message;
         message << "SubmitSceneToViewport camera resolve end overlayCamera=" << BoolText(overlayCamera != nullptr)
                 << " sceneCamera=" << BoolText(sceneCamera != nullptr)
                 << " temporalJitter=" << BoolText(temporalJitterEnabled);
         WriteRendererBreadcrumb("renderer", message.str());
     }
+
+    // Content streaming sizes what this view sees and swaps in the levels that arrived, before
+    // the passes below draw with them.
+    runtimeResourceCache_.UpdateStreaming(RuntimeContentStreamingFrame{
+        .sceneId = scene.Id(),
+        .renderScene = &renderScene,
+        .camera = sceneCamera,
+        .viewportHeight = desc.target.viewport.extent.height,
+        .frame = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
+    }, *sceneRenderer_);
 
     const RendererMeshPassSubmitDesc meshPassSubmitDesc{
         .sceneRenderer = *sceneRenderer_,
@@ -1409,22 +1493,24 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             : &lastScenePassSubmitStats_.back();
         if (gbufferPassStats != nullptr) {
             const SceneRenderSubmitStats& stats = gbufferPassStats->stats;
-            std::ostringstream message;
-            message << "SubmitSceneToViewport GBuffer pass end"
-                    << " visibleMeshes=" << stats.visibleMeshCount
-                    << " visibleGroups=" << stats.visibleDrawGroupCount
-                    << " submittedMeshes=" << stats.submittedMeshCount
-                    << " submittedDrawCalls=" << stats.submittedDrawCallCount
-                    << " missingMeshBinding=" << stats.missingMeshBindingCount
-                    << " missingMeshResource=" << stats.missingMeshResourceCount
-                    << " unsupportedVertexFormat=" << stats.unsupportedMeshVertexFormatCount
-                    << " missingMaterialBinding=" << stats.missingMaterialBindingCount
-                    << " missingMaterialResource=" << stats.missingMaterialResourceCount
-                    << " missingTextureBinding=" << stats.missingTextureBindingCount
-                    << " missingTextureResource=" << stats.missingTextureResourceCount
-                    << " textureDimensionMismatch=" << stats.textureDimensionMismatchCount
-                    << " diagnostics=" << lastSceneDiagnostics_.events.size();
-            WriteRendererBreadcrumb("renderer", message.str());
+            if (RendererDebugLogEnabled("renderer")) {
+                std::ostringstream message;
+                message << "SubmitSceneToViewport GBuffer pass end"
+                        << " visibleMeshes=" << stats.visibleMeshCount
+                        << " visibleGroups=" << stats.visibleDrawGroupCount
+                        << " submittedMeshes=" << stats.submittedMeshCount
+                        << " submittedDrawCalls=" << stats.submittedDrawCallCount
+                        << " missingMeshBinding=" << stats.missingMeshBindingCount
+                        << " missingMeshResource=" << stats.missingMeshResourceCount
+                        << " unsupportedVertexFormat=" << stats.unsupportedMeshVertexFormatCount
+                        << " missingMaterialBinding=" << stats.missingMaterialBindingCount
+                        << " missingMaterialResource=" << stats.missingMaterialResourceCount
+                        << " missingTextureBinding=" << stats.missingTextureBindingCount
+                        << " missingTextureResource=" << stats.missingTextureResourceCount
+                        << " textureDimensionMismatch=" << stats.textureDimensionMismatchCount
+                        << " diagnostics=" << lastSceneDiagnostics_.events.size();
+                WriteRendererBreadcrumb("renderer", message.str());
+            }
 
         } else {
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport GBuffer pass end stats missing");
@@ -1439,7 +1525,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             return false;
         }
         SceneGiBinding giBinding{};
-        const bool giEnabled = effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi;
+        const bool giEnabled = UsesScreenSpaceEffects(effectiveLightingConfig);
         if (giEnabled && giHistories_[desc.target.viewport.viewportIndex].Ensure(desc.target.viewport.extent, desc.target.colorFormat)) {
             giBinding = giHistories_[desc.target.viewport.viewportIndex].Binding();
         }
@@ -1469,7 +1555,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport deferred lighting pass failed");
             return false;
         }
-        {
+        if (RendererDebugLogEnabled("renderer")) {
             std::ostringstream message;
             message << "SubmitSceneToViewport deferred lighting pass end drawCalls=" << deferredStats.submittedDrawCallCount
                     << " submittedMeshes=" << deferredStats.submittedMeshCount;
@@ -1501,6 +1587,11 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             sceneRenderer_->SetSceneColorTexture(desc.postProcess.pingTexture);
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit end");
         }
+        if (sceneCamera != nullptr) {
+            // The lighting view is unused by the forward path and binds no scene depth in the deferred one.
+            sceneRenderer_->DispatchGpuParticleEmitters(
+                viewportPlan.viewIds.deferredLighting, *sceneCamera, desc.target.viewport.extent.width, desc.target.viewport.extent.height);
+        }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass begin");
         RendererMeshPassSubmitter::SubmitViewportPass(
             meshPassSubmitDesc,
@@ -1519,18 +1610,34 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass end");
     }
 
-    if (deferredLighting && effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::SsGi &&
+    if (deferredLighting && UsesScreenSpaceEffects(effectiveLightingConfig) &&
         sceneCamera != nullptr && bgfx::isValid(desc.target.colorTexture)) {
-        // Next frame's bounce lookups read this frame's finished lit colour.
-        giHistories_[desc.target.viewport.viewportIndex].Capture(
-            viewportPlan.viewIds.sceneOverlays, desc.target.colorTexture, RendererMatrixMath::ViewProjection(*sceneCamera));
+        // The gather reads this frame's finished lit colour; its accumulated result lights the next frame.
+        SceneGiHistory& giHistory = giHistories_[desc.target.viewport.viewportIndex];
+        giHistory.Capture(viewportPlan.viewIds.sceneOverlays, desc.target.colorTexture);
+        if (effectiveLightingConfig.globalIllumination == SceneRenderGlobalIlluminationMode::VoxelGrid &&
+            sceneRenderer_ != nullptr) {
+            const std::array<float, 4> focus = SceneLightingPacker::CameraPosition(sceneCamera);
+            giVoxelGrid_.Update(renderScene, sceneRenderer_->Resources(), sceneRenderer_->ResourceMap(),
+                { focus[0], focus[1], focus[2] }, effectiveLightingConfig.giVoxelSize);
+        }
+        static_cast<void>(giResolvePass_.Submit(SceneGiResolvePassDesc{
+            .viewId = viewportPlan.viewIds.giResolve,
+            .history = &giHistory,
+            .gbuffer = &sceneGBuffer,
+            .camera = sceneCamera,
+            .lightingConfig = effectiveLightingConfig,
+            .extent = desc.target.viewport.extent,
+            .voxels = &giVoxelGrid_,
+            .renderScene = &renderScene,
+        }));
     }
 
     RenderSceneSubmitDesc editorOverlayDesc = desc;
     if (deferredLighting) {
         editorOverlayDesc.editorOverlayDepthTexture = sceneGBuffer.DepthTexture();
     }
-    {
+    if (RendererDebugLogEnabled("grid_trace")) {
         std::ostringstream message;
         message << "SubmitSceneToViewport scene grid submit"
                 << " deferred=" << BoolText(deferredLighting)
@@ -1608,7 +1715,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 .outputColor = desc.postProcess.finalTexture,
                 .extent = desc.target.viewport.extent,
             });
-            {
+            if (RendererDebugLogEnabled("aa_trace")) {
                 std::ostringstream message;
                 message << "PostProcess Evaluate raw"
                         << " valid=" << BoolText(postProcessOutput.IsValid())
@@ -1620,7 +1727,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 WriteRendererBreadcrumb("aa_trace", message.str());
             }
             ApplyPostProcessSettingsOverride(postProcessOutput, resolvedPostProcessSettings);
-            {
+            if (RendererDebugLogEnabled("aa_trace")) {
                 std::ostringstream message;
                 message << "PostProcess after override"
                         << " overridePresent=" << BoolText(resolvedPostProcessSettings.has_value())
@@ -1632,7 +1739,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                         << " tonemap=" << BoolText(postProcessOutput.tonemapEnabled);
                 WriteRendererBreadcrumb("aa_trace", message.str());
             }
-            {
+            if (RendererDebugLogEnabled("renderer")) {
                 std::ostringstream message;
                 message << "SubmitSceneToViewport postProcess Evaluate end valid=" << BoolText(postProcessOutput.IsValid())
                         << " gpuSubmitted=" << BoolText(postProcessOutput.gpuSubmitted)
@@ -1753,7 +1860,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                     MeshPassType::MotionVectors,
                     nullptr);
             }
-            {
+            if (RendererDebugLogEnabled("renderer")) {
                 std::ostringstream message;
                 message << "SubmitSceneToViewport postProcess Submit end outputTex=" << HandleValue(scenePostProcessOutput);
                 WriteRendererBreadcrumb("renderer", message.str());
@@ -2005,6 +2112,14 @@ MaterialProgramRegistryStats Renderer::MaterialProgramStats() const noexcept {
     return sceneRenderer_ != nullptr ? sceneRenderer_->MaterialProgramStats() : MaterialProgramRegistryStats{};
 }
 
+void Renderer::ConfigureContentStreaming(const RuntimeContentStreamingSettings& settings) {
+    runtimeResourceCache_.Streamer().Configure(settings);
+}
+
+RuntimeContentStreamingStats Renderer::ContentStreamingStats() const {
+    return runtimeResourceCache_.Streamer().Stats();
+}
+
 Renderer::RuntimeSceneResourceStats Renderer::RuntimeResourceStats() const noexcept {
     RenderResourceRegistryStats resourceStats{};
     SceneRenderResourceMapStats resourceMapStats{};
@@ -2119,7 +2234,7 @@ float Renderer::FrameDeltaSeconds() const noexcept {
 }
 
 void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) noexcept {
-    {
+    if (RendererDebugLogEnabled("aa_trace")) {
         std::ostringstream message;
         message << "SetDefaultPostProcessSettings input"
                 << " fxaa=" << BoolText(settings.fxaaEnabled)

@@ -2,6 +2,10 @@
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
+#include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
+#include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
 #include "app/EditorEditCommandPolicy.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "app/EditorPlayModeState.hpp"
@@ -34,6 +38,11 @@
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "app/scene_viewport/EditorSceneViewportGizmoDragSolver.hpp"
+#include "app/scene_viewport/gizmo/EditorSceneViewportGizmoDragState.hpp"
+#include "app/scene_viewport/gizmo/EditorSceneViewportGizmoDragUpdater.hpp"
+#include "app/scene_viewport/gizmo/EditorSceneViewportGizmoTargetResolver.hpp"
+#include "rendering/ScenePanelContentRenderer.hpp"
 #include "scene/EditorScriptAssetGateway.hpp"
 
 #include "engine/assets/AssetManager.hpp"
@@ -51,10 +60,12 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptAsset.hpp"
@@ -142,6 +153,11 @@ private:
 // docked panel). Clicks are computed from the real layout (below), not hardcoded,
 // so the test follows any future geometry change automatically.
 constexpr RECT kContent{ 0, 0, 900, 560 };
+
+// The Inspector given room for all of its content, so a scan also finds the rows below the fold.
+[[nodiscard]] RECT WholeInspector(const EditorSceneContext& context) {
+    return RECT{ kContent.left, kContent.top, kContent.right, kContent.top + InspectorPanelRenderer::ContentHeight(kContent, context) };
+}
 
 [[nodiscard]] std::string ReadFileTextForTest(const std::filesystem::path& path) {
     std::ifstream input{ path, std::ios::binary };
@@ -750,12 +766,16 @@ void RunHeadlessAutomationWorkflowSuite(Report& report) {
     report.Check(
         context.RestorePlayModeSceneSession(),
         "Automation stops Play and restores authoring scene");
+    // Restoring the authoring scene recreates its objects; the selection must follow the restored Player.
+    const kb::scene::SceneEntity restoredActor = context.SelectedEntity();
     report.Check(
-        context.SelectedEntity() == actor &&
-            context.IsHierarchyEntitySelected(actor),
+        context.Scene().Entities().IsAlive(restoredActor) &&
+            context.Scene().Entities().Name(restoredActor) == "Player" &&
+            context.IsHierarchyEntitySelected(restoredActor),
         "Stop transport preserves the selected hierarchy entity");
     report.Check(
-        std::abs(ActorX(context, actor, authoredStartX) -
+        context.Scene().Transforms().TryGet(restoredActor) != nullptr &&
+            std::abs(ActorX(context, restoredActor, authoredStartX + 1.0F) -
                  authoredStartX) <= 0.001F,
         "Play Mode mutation does not leak into authoring scene");
     report.Check(
@@ -783,6 +803,40 @@ void RunScriptEditorSuite(Report& report) {
                 "C++ script defines a class");
             const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
             report.Check(actor.IsValid() && context.AttachScriptToEntity(actor, nativeScript), "C++ script attaches to actor");
+
+            // The whole way a game developer goes: Play builds the script with the command written into its
+            // descriptor, loads the module, and the script's Ready logs to the Console.
+            report.Check(context.BeginPlayModeSceneSession(), "Enter Play with the C++ script attached");
+            for (int frame = 0; frame < 3; ++frame) {
+                static_cast<void>(context.Scene().Runtime().Update(0.016F));
+            }
+            const bool ready = std::ranges::any_of(context.Console().Entries(), [](const EditorConsoleEntry& entry) {
+                return entry.message.find("NewScript ready") != std::string::npos;
+            });
+            const std::filesystem::path module = EditorProjectPaths::ProjectRoot() / "Binaries/NativeScripts/NewScript.dll";
+            report.Check(ready && std::filesystem::is_regular_file(module), "Play builds the C++ script, loads it and runs its Ready");
+            if (!ready) {
+                for (const EditorConsoleEntry& entry : context.Console().Entries()) {
+                    if (entry.level != EditorConsoleLevel::Info) {
+                        report.Note(entry.category + ": " + entry.message);
+                    }
+                }
+            }
+            report.Check(context.RestorePlayModeSceneSession(), "Stop Play after the C++ script ran");
+
+            // An edited script is rebuilt and reloaded on the next Play.
+            std::string edited = EditorScriptAssetGateway::ReadSource(source);
+            const std::size_t message = edited.find(" ready\"");
+            report.Check(message != std::string::npos && EditorScriptAssetGateway::WriteSource(source, edited.replace(message, 6U, " ready again")),
+                "Edit the C++ script's Ready message");
+            report.Check(context.BeginPlayModeSceneSession(), "Enter Play with the edited C++ script");
+            for (int frame = 0; frame < 3; ++frame) {
+                static_cast<void>(context.Scene().Runtime().Update(0.016F));
+            }
+            report.Check(std::ranges::any_of(context.Console().Entries(), [](const EditorConsoleEntry& entry) {
+                    return entry.message.find("NewScript ready again") != std::string::npos;
+                }), "Play rebuilds and reloads the edited C++ script");
+            report.Check(context.RestorePlayModeSceneSession(), "Stop Play after the edited C++ script ran");
         }
     }
 
@@ -1375,7 +1429,16 @@ void RunSelectionTransformSuite(Report& report) {
     context.SelectHierarchyEntities(selected);
     context.Scene().Components().Colliders().Set(first, kb::scene::ColliderComponent{});
 
-    const InspectorPanelRenderer::Hit pivotXHit = InspectorPanelRenderer::HitTest(kContent, context, 360, 216);
+    InspectorPanelRenderer::Hit pivotXHit{};
+    for (int y = kContent.top; y < kContent.bottom && pivotXHit.kind == InspectorHitKind::None; y += 2) {
+        for (int x = kContent.left; x < kContent.right; x += 4) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+            if (hit.kind == InspectorHitKind::FloatField && hit.property == InspectorPropertyId::PositionX) {
+                pivotXHit = hit;
+                break;
+            }
+        }
+    }
     report.Check(
         pivotXHit.kind == InspectorHitKind::FloatField &&
             pivotXHit.section == InspectorSectionId::Transform &&
@@ -1420,6 +1483,86 @@ void RunSelectionTransformSuite(Report& report) {
     movedSecond = context.Scene().Transforms().Get(second);
     report.Check(std::abs(movedFirst.localPosition.x - 8.0F) < 0.001F, "Redo reapplies first entity transform");
     report.Check(std::abs(movedSecond.localPosition.x - 12.0F) < 0.001F, "Redo reapplies second entity transform");
+}
+
+// Ten thousand kilometres out a float holds whole metres only. The scene view renders from the editor camera's
+// precise eye with its overlays relative to the camera's viewport origin, and dragging the translate gizmo of an
+// entity there moves it by exactly the dragged distance, undoably (docs/large_worlds.md).
+void RunLargeWorldGizmoSuite(Report& report) {
+    constexpr double kFar = 1.0e7;
+    EditorSceneContext context;
+    kb::scene::Scene& scene = context.Scene();
+    const kb::math::DVec3 start{ kFar + 0.25, 1.0, kFar + 0.5 };
+    const kb::scene::SceneEntity crate = context.CreateHierarchyObject();
+    report.Check(crate.IsValid(), "Create a far entity");
+    scene.Transforms().SetLocalTranslation(crate, start);
+    scene.Runtime().SynchronizeTransforms();
+    context.SelectEntity(crate);
+    constexpr std::uint32_t kPanel = 1U;
+    EditorViewportCameraState& camera = context.ViewportCamera(kPanel);
+    camera.FocusOn(start, 1.0F, 0.0F);
+    const RECT renderArea{ 0, 0, 960, 540 };
+    const std::optional<kb::scene::Vec3> target =
+        EditorSceneViewportGizmoTargetResolver::SelectedTarget(context, camera.ViewportOrigin());
+    report.Check(target.has_value() && kb::math::Length((camera.ViewportOrigin() + *target) - start) <= 1.0e-4,
+        "The gizmo of a far entity stands exactly at the entity");
+    if (!target.has_value()) {
+        return;
+    }
+
+    const DockPanel panel{ .id = kPanel, .kind = DockPanelKind::Scene };
+    EditorRenderBackendSettings backendSettings;
+    const EditorSceneBgfxViewport::PresentSettings settings =
+        ScenePanelContentRenderer::BuildSettings(RECT{ 0, -34, 960, 540 }, panel, context, backendSettings);
+    report.Check(settings.cameraOverrideEye == std::optional<kb::math::DVec3>{ camera.PrecisePosition() } &&
+            settings.overlayOrigin == camera.ViewportOrigin() &&
+            std::abs(settings.editorGizmo.targetPosition[0] - target->x) <= 1.0e-4F &&
+            std::abs(settings.editorGizmo.targetPosition[2] - target->z) <= 1.0e-4F,
+        "A far scene view renders from the precise eye with overlays relative to the viewport origin");
+
+    const auto hitAt = [&](float x, float y) {
+        const EditorViewportCameraAxes axes = camera.Axes();
+        const float width = EditorSceneViewportMath::RectWidth(renderArea);
+        const float height = EditorSceneViewportMath::RectHeight(renderArea);
+        const float tanHalfFov = std::tan(EditorSceneViewportMath::DegreesToRadians(camera.VerticalFovDegrees()) * 0.5F);
+        const float ndcX = (x / width) * 2.0F - 1.0F;
+        const float ndcY = 1.0F - (y / height) * 2.0F;
+        const kb::scene::Vec3 direction = EditorSceneViewportMath::Normalize(EditorSceneViewportMath::Add(axes.forward,
+            EditorSceneViewportMath::Add(EditorSceneViewportMath::Mul(axes.right, ndcX * tanHalfFov * (width / height)),
+                EditorSceneViewportMath::Mul(axes.up, ndcY * tanHalfFov))));
+        return EditorSceneViewportHit{ .panelId = kPanel, .renderArea = renderArea,
+            .ray = EditorSceneViewportRay{ .origin = axes.position, .direction = direction }, .localX = x, .localY = y,
+            .origin = camera.ViewportOrigin() };
+    };
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    report.Check(EditorSceneViewportMath::WorldToScreen(camera, renderArea, *target, screenX, screenY),
+        "The far gizmo projects into the viewport");
+    EditorSceneGizmoAxisDrag drag{};
+    const bool begun = EditorSceneViewportGizmoDragSolver::BeginAxisDrag(hitAt(screenX, screenY), camera, *target, 0, drag) &&
+        context.BeginSelectedTransformEdit("Move Far Crate");
+    report.Check(begun, "A drag of the far gizmo's x axis starts");
+    if (!begun) {
+        return;
+    }
+    EditorSceneGizmoState& gizmo = context.Gizmo();
+    gizmo.toolMode = EditorTransformToolMode::Translate;
+    EditorSceneViewportGizmoDragState::StartAxisDrag(gizmo, *target, 0, drag, 0.0F);
+    gizmo.dragOrigin = camera.ViewportOrigin();
+    const EditorSceneViewportHit moved = hitAt(screenX + 37.0F, screenY);
+    kb::scene::Vec3 delta{};
+    report.Check(EditorSceneViewportGizmoDragSolver::AxisDragDelta(moved, *target, drag, delta) && std::abs(delta.x) > 0.05F,
+        "Dragging the far gizmo moves along its axis");
+    report.Check(EditorSceneViewportGizmoDragUpdater::Update(context, moved, *target), "The far drag updates");
+    EditorSceneViewportGizmoDragState::ClearActiveDrag(gizmo);
+    report.Check(context.CommitActiveTransformEdit(), "The far drag commits");
+    const kb::math::DVec3 after = scene.Transforms().LocalTranslation(crate);
+    report.Check(std::abs(after.x - (start.x + delta.x)) <= 1.0e-6 && after.y == start.y && after.z == start.z,
+        "Dragging a far entity's gizmo moves it by exactly the dragged distance");
+    report.Check(context.UndoSceneCommand() && scene.Transforms().LocalTranslation(crate) == start,
+        "Undoing a far drag restores the exact translation");
+    report.Check(context.RedoSceneCommand() && scene.Transforms().LocalTranslation(crate) == after,
+        "Redoing a far drag restores the exact dragged translation");
 }
 
 // The Inspector's material ball must be the live 3D preview surface, not a painted stand-in: the rect
@@ -1601,9 +1744,10 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
     InspectorPanelRenderer::Hit slotHit{};
     InspectorPanelRenderer::Hit castsShadowHit{};
     InspectorPanelRenderer::Hit receivesShadowHit{};
-    for (int y = kContent.top; y < kContent.bottom; ++y) {
-        for (int x = kContent.left; x < kContent.right; ++x) {
-            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+    const RECT meshInspector = WholeInspector(context);
+    for (int y = meshInspector.top; y < meshInspector.bottom; ++y) {
+        for (int x = meshInspector.left; x < meshInspector.right; ++x) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(meshInspector, context, x, y);
             if (hit.section != InspectorSectionId::MeshRenderer) {
                 continue;
             }
@@ -5191,9 +5335,10 @@ void RunInspectorLightComponentSuite(Report& report) {
     InspectorPanelRenderer::Hit typeHit{};
     InspectorPanelRenderer::Hit intensityHit{};
     InspectorPanelRenderer::Hit castsShadowHit{};
-    for (int y = kContent.top; y < kContent.bottom; ++y) {
-        for (int x = kContent.left; x < kContent.right; ++x) {
-            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+    const RECT lightInspector = WholeInspector(context);
+    for (int y = lightInspector.top; y < lightInspector.bottom; ++y) {
+        for (int x = lightInspector.left; x < lightInspector.right; ++x) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(lightInspector, context, x, y);
             if (hit.section != InspectorSectionId::Light) {
                 continue;
             }
@@ -5261,6 +5406,12 @@ void RunInspectorLightComponentSuite(Report& report) {
 
 void RunPrefabPlacementSuite(Report& report) {
     EditorSceneContext context;
+    const auto showsPrefabRoot = [&context](kb::scene::SceneEntity entity) {
+        const auto row = std::ranges::find_if(context.HierarchyRows(), [entity](const EditorHierarchyRow& candidate) {
+            return candidate.entity == entity;
+        });
+        return context.Scene().Prefabs().RootInstance(entity).IsValid() && row != context.HierarchyRows().end() && row->prefabRoot;
+    };
 
     const kb::scene::SceneEntity source = context.CreateHierarchyObject();
     report.Check(source.IsValid(), "Create source entity for prefab placement");
@@ -5275,6 +5426,16 @@ void RunPrefabPlacementSuite(Report& report) {
         return row.entity == source;
     });
     report.Check(sourcePrefabRow != context.HierarchyRows().end() && sourcePrefabRow->prefabRoot, "Source entity becomes a visible prefab root after prefab asset creation");
+    report.Check(context.SceneDocumentDirty(), "Creating a prefab asset marks the scene as changed");
+    const auto findSource = [&context]() {
+        const auto row = std::ranges::find_if(context.HierarchyRows(), [](const EditorHierarchyRow& candidate) {
+            return candidate.name == "PlacedPrefabSource";
+        });
+        return row == context.HierarchyRows().end() ? kb::scene::SceneEntity{} : row->entity;
+    };
+    report.Check(context.UndoSceneCommand() && findSource().IsValid() && !showsPrefabRoot(findSource()), "Undo prefab asset creation unlinks the source entity");
+    report.Check(std::filesystem::exists(prefabPath), "Undo prefab asset creation keeps the written asset file");
+    report.Check(context.RedoSceneCommand() && showsPrefabRoot(findSource()), "Redo prefab asset creation links the source entity again");
     report.Check(context.InstantiatePrefabAssetAt(prefabPath, "/Game/Prefabs/PlacedPrefab.kbprefab", kb::scene::Vec3{ 7.0F, 0.5F, -3.0F }), "Instantiate prefab asset at scene position");
 
     const kb::scene::SceneEntity placed = context.SelectedEntity();
@@ -5293,6 +5454,7 @@ void RunPrefabPlacementSuite(Report& report) {
     report.Check(std::abs(replacedTransform.localPosition.x - 7.0F) < 0.001F, "Redo restores prefab x position");
     report.Check(std::abs(replacedTransform.localPosition.y - 0.5F) < 0.001F, "Redo restores prefab y position");
     report.Check(std::abs(replacedTransform.localPosition.z + 3.0F) < 0.001F, "Redo restores prefab z position");
+    report.Check(showsPrefabRoot(replaced), "Redo keeps the placed prefab linked to its asset");
 
     const kb::scene::SceneEntity parent = context.CreateHierarchyObject();
     report.Check(parent.IsValid() && context.Scene().Entities().IsAlive(parent), "Create parent for prefab instantiation");
@@ -5310,6 +5472,428 @@ void RunPrefabPlacementSuite(Report& report) {
     const kb::scene::SceneEntity reparented = context.SelectedEntity();
     report.Check(reparented.IsValid() && context.Scene().Entities().IsAlive(reparented), "Redo selects recreated parented prefab root");
     report.Check(context.Scene().Hierarchy().Parent(reparented) == parent, "Redo restores parented prefab root parent");
+    report.Check(showsPrefabRoot(reparented), "Redo keeps the parented prefab linked to its asset");
+
+    // A prefab with a child, its root moved away from the asset: every flow below must keep the link,
+    // the child's node mapping and that override.
+    const kb::scene::SceneEntity crate = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(crate, "LinkedCrate");
+    static_cast<void>(context.Scene().Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "LinkedLid", .parent = context.Scene().Entities().Object(crate) }));
+    report.Check(context.CreatePrefabAsset(crate, EditorProjectPaths::PrefabsRoot() / "LinkedCrate.kbprefab"), "Create prefab asset with a child");
+    kb::scene::TransformComponent crateTransform = context.Scene().Transforms().Get(crate);
+    crateTransform.localPosition.x = 5.0F;
+    context.Scene().Transforms().Set(crate, crateTransform);
+    const auto findNamed = [&context](std::string_view name) {
+        for (const EditorHierarchyRow& row : context.HierarchyRows()) {
+            if (row.name == name) {
+                return row.entity;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto lidOf = [&context](kb::scene::SceneEntity root) {
+        for (const kb::scene::SceneEntity child : context.Scene().Hierarchy().ChildEntities(root)) {
+            if (context.Scene().Entities().Name(child) == "LinkedLid") {
+                return child;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto linkedCrate = [&](kb::scene::SceneEntity root) {
+        kb::scene::ScenePrefabs prefabs = context.Scene().Prefabs();
+        const kb::scene::ScenePrefabInstanceHandle instance = prefabs.RootInstance(root);
+        std::uint32_t lidNode = 0U;
+        const bool lidMapped = prefabs.ContainingInstance(lidOf(root), lidNode) == instance && lidNode == 1U;
+        const kb::scene::ScenePrefabOverrideReport overrides = prefabs.Overrides(instance);
+        const bool keepsOverride = std::ranges::any_of(overrides.nodes, [](const kb::scene::ScenePrefabNodeOverride& node) {
+            return node.nodeIndex == 0U && kb::scene::HasPrefabOverride(node.flags, kb::scene::ScenePrefabOverrideFlag::Transform);
+        });
+        return showsPrefabRoot(root) && lidMapped && keepsOverride;
+    };
+    report.Check(linkedCrate(crate), "Created prefab with a child is linked, mapped and overridden");
+
+    report.Check(context.ReparentEntity(crate, parent), "Reparent linked prefab instance");
+    report.Check(linkedCrate(findNamed("LinkedCrate")), "Reparent keeps the prefab link");
+    report.Check(context.UndoSceneCommand() && linkedCrate(findNamed("LinkedCrate")), "Undo reparent keeps the prefab link");
+    report.Check(context.RedoSceneCommand() && linkedCrate(findNamed("LinkedCrate")), "Redo reparent keeps the prefab link");
+
+    context.SelectEntity(lidOf(findNamed("LinkedCrate")));
+    report.Check(context.DeleteSelectedHierarchyEntity(), "Delete prefab instance child");
+    report.Check(!lidOf(findNamed("LinkedCrate")).IsValid() && showsPrefabRoot(findNamed("LinkedCrate")), "Deleting a child keeps the prefab root linked");
+    report.Check(context.UndoSceneCommand() && linkedCrate(findNamed("LinkedCrate")), "Undo child delete maps the child back to its prefab node");
+
+    context.SelectEntity(findNamed("LinkedCrate"));
+    report.Check(context.DeleteSelectedHierarchyEntity() && !findNamed("LinkedCrate").IsValid(), "Delete prefab instance");
+    report.Check(context.UndoSceneCommand() && linkedCrate(findNamed("LinkedCrate")), "Undo instance delete keeps the prefab link");
+
+    const kb::scene::SceneEntity original = findNamed("LinkedCrate");
+    context.SelectEntity(original);
+    report.Check(context.DuplicateSelectedHierarchyEntities(), "Duplicate prefab instance");
+    const kb::scene::SceneEntity duplicate = context.SelectedEntity();
+    report.Check(duplicate != original && linkedCrate(duplicate) && linkedCrate(original), "Duplicate is a separate linked prefab instance");
+    report.Check(context.Scene().Prefabs().RootInstance(duplicate) != context.Scene().Prefabs().RootInstance(original), "Duplicate gets its own prefab instance");
+    report.Check(context.UndoSceneCommand() && context.RedoSceneCommand() && linkedCrate(context.SelectedEntity()), "Redo duplicate keeps the prefab link");
+
+    const std::filesystem::path scenePath = EditorProjectPaths::ScenesRoot() / "LinkedPrefabs.21kbscene";
+    report.Check(context.SaveCurrentSceneAs(scenePath), "Save scene with linked prefab instances");
+    report.Check(context.OpenScene(scenePath), "Reopen scene with linked prefab instances");
+    report.Check(linkedCrate(findNamed("LinkedCrate")), "Reopened scene keeps the prefab link");
+
+    report.Check(context.BeginPlayModeSceneSession(), "Enter Play mode with linked prefab instances");
+    report.Check(context.RestorePlayModeSceneSession(), "Leave Play mode");
+    report.Check(linkedCrate(findNamed("LinkedCrate")), "Leaving Play mode keeps the prefab link");
+
+    const std::filesystem::path linkedPath = EditorProjectPaths::PrefabsRoot() / "LinkedCrate.kbprefab";
+    const kb::assets::AssetMetadata* linkedAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/LinkedCrate.kbprefab");
+    report.Check(linkedAsset != nullptr && !context.DeleteAssetBrowserItem(linkedAsset->id) && std::filesystem::exists(linkedPath), "Deleting a prefab asset with scene instances is blocked");
+    report.Check(linkedAsset != nullptr && !context.MoveAssetToFolder(linkedAsset->id, "/Game") && std::filesystem::exists(linkedPath), "Moving a prefab asset with scene instances is blocked");
+    const kb::scene::SceneEntity unused = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(unused, "UnusedPrefabSource");
+    report.Check(context.CreatePrefabAsset(unused, EditorProjectPaths::PrefabsRoot() / "UnusedPrefab.kbprefab"), "Create prefab asset to delete");
+    context.SelectEntity(findNamed("UnusedPrefabSource"));
+    report.Check(context.DeleteSelectedHierarchyEntity(), "Delete the only instance of a prefab asset");
+    const kb::assets::AssetMetadata* unusedAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/UnusedPrefab.kbprefab");
+    report.Check(unusedAsset != nullptr && context.DeleteAssetBrowserItem(unusedAsset->id), "Deleting a prefab asset without scene instances is allowed");
+
+    // A prefab is also in use when an instance in the scene is a variant of it or nests it.
+    const kb::scene::SceneEntity baseSource = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(baseSource, "VariantBaseSource");
+    report.Check(context.CreatePrefabAsset(baseSource, EditorProjectPaths::PrefabsRoot() / "VariantBase.kbprefab"), "Create prefab asset used as a variant base");
+    const kb::scene::ScenePrefabHandle variantBase = context.Scene().Prefabs().SourcePrefab(findNamed("VariantBaseSource"));
+    context.SelectEntity(findNamed("VariantBaseSource"));
+    report.Check(context.DeleteSelectedHierarchyEntity(), "Delete the direct instance of the variant base");
+    const kb::scene::ScenePrefabHandle variant = context.Scene().Prefabs().RegisterVariant("VariantOfBase", variantBase, {});
+    static_cast<void>(context.Scene().Prefabs().Instantiate(variant));
+    const kb::assets::AssetMetadata* baseAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/VariantBase.kbprefab");
+    report.Check(baseAsset != nullptr && !context.DeleteAssetBrowserItem(baseAsset->id), "Deleting the base of a variant used in the scene is blocked");
+
+    const kb::scene::SceneEntity innerSource = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(innerSource, "NestedInnerSource");
+    report.Check(context.CreatePrefabAsset(innerSource, EditorProjectPaths::PrefabsRoot() / "NestedInner.kbprefab"), "Create prefab asset to nest");
+    const kb::scene::SceneEntity outerSource = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(outerSource, "NestedOuterSource");
+    report.Check(context.ReparentEntity(findNamed("NestedInnerSource"), findNamed("NestedOuterSource")) &&
+        context.CreatePrefabAsset(findNamed("NestedOuterSource"), EditorProjectPaths::PrefabsRoot() / "NestedOuter.kbprefab"), "Create prefab asset that nests another");
+    const kb::assets::AssetMetadata* innerAsset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/NestedInner.kbprefab");
+    report.Check(innerAsset != nullptr && !context.DeleteAssetBrowserItem(innerAsset->id), "Deleting a prefab nested by an instance in the scene is blocked");
+
+    // A snapshot command recreates every object; the placement before it must still undo and redo.
+    const std::size_t entitiesBeforePlacement = context.Scene().Entities().Count();
+    report.Check(context.InstantiatePrefabAssetAt(prefabPath, "/Game/Prefabs/PlacedPrefab.kbprefab", kb::scene::Vec3{ 0.0F, 0.0F, 9.0F }), "Place prefab before a snapshot command");
+    report.Check(context.ToggleEntityVisibility(context.SelectedEntity()), "Run a snapshot command after placing a prefab");
+    report.Check(context.UndoSceneCommand(), "Undo the snapshot command");
+    report.Check(context.UndoSceneCommand() && context.Scene().Entities().Count() == entitiesBeforePlacement, "Undo the placement after a snapshot command removes the placed prefab");
+    report.Check(context.RedoSceneCommand() && showsPrefabRoot(context.SelectedEntity()), "Redo the placement after a snapshot command");
+    report.Check(context.RedoSceneCommand() && context.Scene().Entities().Count() == entitiesBeforePlacement + 1U, "Redo the snapshot command after redoing the placement");
+    const auto hiddenPlacement = std::ranges::find_if(context.HierarchyRows(), [](const EditorHierarchyRow& row) { return !row.visible; });
+    report.Check(hiddenPlacement != context.HierarchyRows().end() && showsPrefabRoot(hiddenPlacement->entity), "Redone snapshot command hides the linked placement");
+    report.Check(context.UndoSceneCommand() && context.UndoSceneCommand() && context.Scene().Entities().Count() == entitiesBeforePlacement,
+        "Undo both again removes the placed prefab");
+}
+
+void RunPrefabInspectorSuite(Report& report) {
+    EditorSceneContext context;
+    const auto findNamed = [&context](std::string_view name) {
+        for (const EditorHierarchyRow& row : context.HierarchyRows()) {
+            if (row.name == name) {
+                return row.entity;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto findPrefabHit = [&context](InspectorPropertyId property) {
+        const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(kContent, context);
+        for (int scroll = 0;; scroll = std::min(scroll + 400, maxScroll)) {
+            static_cast<void>(context.Inspector().SetScrollOffset(scroll, maxScroll));
+            for (int y = kContent.top; y < kContent.bottom; y += 4) {
+                for (int x = kContent.left + 8; x < kContent.right; x += 48) {
+                    const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+                    if (hit.section == InspectorSectionId::Prefab && hit.property == property && hit.kind == InspectorHitKind::TextField) {
+                        return hit;
+                    }
+                }
+            }
+            if (scroll >= maxScroll) {
+                return InspectorPanelRenderer::Hit{};
+            }
+        }
+    };
+    const auto click = [&context, &findPrefabHit](InspectorPropertyId property) {
+        const InspectorPanelRenderer::Hit hit = findPrefabHit(property);
+        const POINT point = Center(hit.rect);
+        return hit.kind != InspectorHitKind::None && InspectorPanelInteraction::HandlePointerDown(context, hit, point.x, point.y);
+    };
+    const auto positionX = [&context](kb::scene::SceneEntity entity) {
+        return context.Scene().Transforms().Get(entity).localPosition.x;
+    };
+    const auto overrideCount = [&context](kb::scene::SceneEntity entity) {
+        return context.Scene().Prefabs().Overrides(context.Scene().Prefabs().RootInstance(entity)).properties.size();
+    };
+
+    const kb::scene::SceneEntity crate = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(crate, "InspectedCrate");
+    static_cast<void>(context.Scene().Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "InspectedLid", .parent = context.Scene().Entities().Object(crate) }));
+    const std::filesystem::path prefabPath = EditorProjectPaths::PrefabsRoot() / "InspectedCrate.kbprefab";
+    report.Check(context.CreatePrefabAsset(crate, prefabPath), "Create prefab asset for the Inspector Prefab section");
+    report.Check(context.InstantiatePrefabAsset(prefabPath, "/Game/Prefabs/InspectedCrate.kbprefab", {}), "Place a second instance of the prefab");
+    const kb::scene::SceneEntity other = context.SelectedEntity();
+    context.Scene().Entities().SetName(other, "OtherCrate");
+
+    context.SelectEntity(crate);
+    const int heightWithoutOverrides = InspectorPanelRenderer::ContentHeight(kContent, context);
+    kb::scene::TransformComponent transform = context.Scene().Transforms().Get(crate);
+    transform.localPosition.x = 3.0F;
+    context.Scene().Transforms().Set(crate, transform);
+    const std::size_t overrides = overrideCount(crate);
+    // Each listed override is one 26 px row and its divider.
+    report.Check(overrides > 0U && InspectorPanelRenderer::ContentHeight(kContent, context) - heightWithoutOverrides == static_cast<int>(overrides) * 27,
+        "Prefab section lists every override of the selected instance");
+
+    const kb::assets::AssetMetadata* asset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/InspectedCrate.kbprefab");
+    report.Check(asset != nullptr && click(InspectorPropertyId::PrefabSource) && context.AssetBrowser().SelectedAsset() == asset->id,
+        "Prefab section source row selects the prefab asset in Project Files");
+    context.SelectEntity(crate);
+
+    report.Check(click(InspectorPropertyId::PrefabApply), "Apply prefab overrides from the Inspector");
+    kb::scene::Scene reader;
+    const kb::scene::ScenePrefabHandle written = reader.Prefabs().Load(prefabPath);
+    report.Check(written.IsValid() && reader.Prefabs().Get(written).Nodes()[0].transform.localPosition.x == 3.0F, "Apply writes the prefab asset");
+    report.Check(positionX(findNamed("OtherCrate")) == 3.0F && overrideCount(findNamed("InspectedCrate")) == 0U, "Apply refreshes the other instance and clears the overrides");
+    report.Check(context.UndoSceneCommand() && positionX(findNamed("OtherCrate")) == 0.0F && overrideCount(findNamed("InspectedCrate")) == overrides,
+        "Undo Apply restores the other instance and the overrides");
+    const auto assetRootX = [&prefabPath]() {
+        kb::scene::Scene check;
+        const kb::scene::ScenePrefabHandle loaded = check.Prefabs().Load(prefabPath);
+        return loaded.IsValid() ? check.Prefabs().Get(loaded).Nodes()[0].transform.localPosition.x : -1.0F;
+    };
+    report.Check(assetRootX() == 0.0F && context.Scene().Prefabs().Get(context.Scene().Prefabs().SourcePrefab(findNamed("InspectedCrate"))).Nodes()[0].transform.localPosition.x == 0.0F,
+        "Undo Apply restores the prefab asset");
+    report.Check(context.RedoSceneCommand() && assetRootX() == 3.0F && positionX(findNamed("OtherCrate")) == 3.0F, "Redo Apply writes the prefab asset again");
+    report.Check(context.UndoSceneCommand() && assetRootX() == 0.0F, "Undo Apply again");
+
+    context.SelectEntity(findNamed("InspectedCrate"));
+    report.Check(click(InspectorPropertyId::PrefabRevert) && overrideCount(findNamed("InspectedCrate")) == 0U && positionX(findNamed("InspectedCrate")) == 0.0F,
+        "Revert prefab overrides from the Inspector");
+    report.Check(context.UndoSceneCommand() && positionX(findNamed("InspectedCrate")) == 3.0F, "Undo Revert brings the override back");
+    const kb::scene::ScenePrefabInstanceHandle inspected = context.Scene().Prefabs().RootInstance(findNamed("InspectedCrate"));
+    const kb::scene::ScenePrefabOverrideReport* listed = &context.PrefabInstanceOverrides(inspected);
+    report.Check(listed->properties.size() == overrides && &context.PrefabInstanceOverrides(inspected) == listed,
+        "The Inspector keeps an instance's overrides until the scene changes");
+    report.Check(click(InspectorPropertyId::PrefabRevert) && context.PrefabInstanceOverrides(inspected).properties.empty() &&
+        context.UndoSceneCommand() && context.PrefabInstanceOverrides(inspected).properties.size() == overrides,
+        "The Inspector's overrides follow Revert and its undo");
+
+    context.SelectEntity(findNamed("InspectedCrate"));
+    report.Check(click(InspectorPropertyId::PrefabUnpack) && !context.Scene().Prefabs().RootInstance(findNamed("InspectedCrate")).IsValid(),
+        "Unpack the prefab instance from the Inspector");
+    report.Check(context.UndoSceneCommand() && context.Scene().Prefabs().RootInstance(findNamed("InspectedCrate")).IsValid(), "Undo Unpack restores the prefab link");
+
+    context.SelectEntity(findNamed("InspectedLid"));
+    report.Check(findPrefabHit(InspectorPropertyId::PrefabUnpack).kind == InspectorHitKind::None && findPrefabHit(InspectorPropertyId::PrefabSource).kind != InspectorHitKind::None,
+        "A node inside an instance names its prefab without the root actions");
+    const kb::scene::SceneEntity lidOwner = context.Scene().Hierarchy().Parent(context.SelectedEntity());
+    report.Check(click(InspectorPropertyId::PrefabSelectRoot) && context.SelectedEntity() == lidOwner, "Select Root selects the instance root");
+}
+
+// A scene and prefab written by the engine from before prefab node ids (scene file version 40, kept in
+// tests/fixtures/prefab): its instances link to the prefab by name, it asks to be saved once, and saving
+// it writes the current format, which then opens clean and linked by node id.
+void RunLegacyPrefabSceneSuite(Report& report) {
+#if !defined(KB_EDITOR_ENGINE_ROOT)
+    report.Check(false, "Legacy prefab scene fixtures are reachable");
+#else
+    // The fixture is both the scene the editor starts on (the project's Main scene) and one opened later.
+    const std::filesystem::path fixtures = std::filesystem::path{ KB_EDITOR_ENGINE_ROOT } / "sources/editor/tests/fixtures/prefab";
+    const std::filesystem::path scenePath = EditorProjectPaths::AssetsRoot() / "Scenes" / "LegacyPrefabs.21kbscene";
+    const std::filesystem::path startupPath = EditorProjectPaths::AssetsRoot() / "Scenes" / "Main.21kbscene";
+    std::error_code error;
+    std::filesystem::create_directories(EditorProjectPaths::AssetsRoot() / "Prefabs", error);
+    std::filesystem::create_directories(scenePath.parent_path(), error);
+    bool copied = !error;
+    for (const auto& [file, target] : {
+             std::pair{ "LegacyCrate.kbprefab", EditorProjectPaths::AssetsRoot() / "Prefabs" / "LegacyCrate.kbprefab" },
+             std::pair{ "LegacyPrefabs.21kbscene", scenePath },
+             std::pair{ "LegacyPrefabs.meta", scenePath.parent_path() / "LegacyPrefabs.meta" },
+             std::pair{ "LegacyPrefabs.21kbscene", startupPath } }) {
+        copied = std::filesystem::copy_file(fixtures / file, target, std::filesystem::copy_options::overwrite_existing, error) && copied;
+    }
+    report.Check(copied, "Copy the version 40 prefab scene fixture into the project");
+    const kb::scene::SceneDocumentLoadResult fixture = kb::scene::SceneDocumentService::Load(scenePath);
+    report.Check(fixture.succeeded && fixture.document.fileVersion == 40U && fixture.document.LinksPrefabInstancesByName(),
+        "The fixture is a version 40 scene that links its prefab instances by name");
+
+    // Main.21kbscene has no .meta yet, so it cannot be read: the editor must start without writing over it.
+    const auto readBytes = [](const std::filesystem::path& path) {
+        std::ifstream input{ path, std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    const std::string startupBytes = readBytes(startupPath);
+    {
+        EditorSceneContext unreadable;
+        const bool reported = std::ranges::any_of(unreadable.Console().Entries(), [](const EditorConsoleEntry& entry) {
+            return entry.level == EditorConsoleLevel::Error && entry.message.find("The file was left as it is") != std::string::npos;
+        });
+        report.Check(reported && unreadable.CurrentScenePath() != startupPath && unreadable.SceneDocumentDirty(),
+            "Starting on a scene that cannot be read reports it and starts on a new scene");
+        report.Check(unreadable.SaveCurrentScene() && unreadable.CurrentScenePath() != startupPath,
+            "Saving after starting on an unreadable scene writes a scene of its own");
+    }
+    report.Check(!startupBytes.empty() && readBytes(startupPath) == startupBytes, "The scene that could not be read is left byte for byte as it was");
+    copied = std::filesystem::copy_file(fixtures / "LegacyPrefabs.meta", startupPath.parent_path() / "Main.meta", std::filesystem::copy_options::overwrite_existing, error);
+    report.Check(copied, "Give the startup scene its .meta");
+    EditorSceneContext context;
+
+    const auto childNamed = [&context](kb::scene::SceneEntity parent, std::string_view name) {
+        const kb::scene::Scene& scene = context.Scene();
+        if (!parent.IsValid()) {
+            for (const kb::scene::SceneEntity root : scene.Hierarchy().RootEntities()) {
+                if (scene.Entities().Name(root) == name) {
+                    return root;
+                }
+            }
+            return kb::scene::SceneEntity{};
+        }
+        for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(parent); ++index) {
+            const kb::scene::SceneEntity child = scene.Hierarchy().ChildAt(parent, index);
+            if (scene.Entities().Name(child) == name) {
+                return child;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto nodeOf = [&context](kb::scene::SceneEntity entity, kb::scene::ScenePrefabInstanceHandle instance) {
+        std::uint32_t nodeIndex = 0U;
+        return context.Scene().Prefabs().ContainingInstance(entity, nodeIndex) == instance ? static_cast<int>(nodeIndex) : -1;
+    };
+    const auto legacyWarnings = [&context]() {
+        return std::ranges::count_if(context.Console().Entries(), [](const EditorConsoleEntry& entry) {
+            return entry.level == EditorConsoleLevel::Warning && entry.message.find("saved by an older version") != std::string::npos;
+        });
+    };
+    // Both instances are linked, each object to its own prefab node, including the renamed Lid.
+    const auto requireLinked = [&](std::string_view when) {
+        const kb::scene::SceneEntity crateA = childNamed({}, "CrateA");
+        const kb::scene::SceneEntity crateB = childNamed({}, "CrateB");
+        const kb::scene::ScenePrefabInstanceHandle instanceA = context.Scene().Prefabs().RootInstance(crateA);
+        const kb::scene::ScenePrefabInstanceHandle instanceB = context.Scene().Prefabs().RootInstance(crateB);
+        report.Check(instanceA.IsValid() && instanceB.IsValid() &&
+                context.Scene().Prefabs().SourcePath(context.Scene().Prefabs().SourcePrefab(instanceB)).stem() == "LegacyCrate",
+            std::string{ when } + ": both crates are instances of LegacyCrate");
+        const kb::scene::SceneEntity lidB = childNamed(crateB, "BigLid");
+        report.Check(nodeOf(lidB, instanceB) == 1 && nodeOf(childNamed(lidB, "Hinge"), instanceB) == 2 && nodeOf(childNamed(crateB, "Handle"), instanceB) == 3,
+            std::string{ when } + ": the renamed BigLid and the other objects of CrateB link to their prefab nodes");
+        report.Check(nodeOf(childNamed(crateB, "Sticker"), instanceB) == -1, std::string{ when } + ": the child added to CrateB is not taken for a prefab node");
+        const kb::scene::ScenePrefabOverrideReport overridesB = context.Scene().Prefabs().Overrides(instanceB);
+        const bool renamed = std::ranges::any_of(overridesB.properties, [](const kb::scene::ScenePrefabPropertyOverride& property) {
+            return property.nodeIndex == 1U && property.propertyPath == "name" && property.value == "BigLid";
+        });
+        report.Check(renamed && context.Scene().Transforms().Get(lidB).localPosition.x == 2.0F,
+            std::string{ when } + ": CrateB keeps its rename and its moved Lid as overrides");
+        // CrateA differs from its prefab only by the name of its root.
+        report.Check(instanceA.IsValid() && std::ranges::all_of(context.Scene().Prefabs().Overrides(instanceA).properties, [](const kb::scene::ScenePrefabPropertyOverride& property) {
+                return property.nodeIndex == 0U && property.propertyPath == "name" && property.value == "CrateA";
+            }), std::string{ when } + ": CrateA has none of CrateB's changes");
+    };
+
+    // The editor starts on the version 40 scene, and reloading it unsaved (as a plugin change does) asks again.
+    requireLinked("Started on version 40 scene");
+    report.Check(context.CurrentScenePath() == startupPath && context.SceneDocumentDirty() && legacyWarnings() == 1,
+        "Starting on a version 40 prefab scene asks to save it and says why");
+    context.DiscardDirtySceneDocument("reloading the scene");
+    report.Check(context.ReloadSceneFromProject(), "Reload the unsaved version 40 scene");
+    requireLinked("Reloaded version 40 scene");
+    report.Check(context.SceneDocumentDirty() && legacyWarnings() == 2, "Reloading a version 40 prefab scene asks to save it again");
+    context.DiscardDirtySceneDocument("opening another scene");
+
+    report.Check(context.OpenScene(scenePath), "Open the version 40 prefab scene");
+    requireLinked("Opened version 40 scene");
+    report.Check(context.SceneDocumentDirty() && legacyWarnings() == 3, "A version 40 prefab scene asks to be saved once and says why");
+
+    report.Check(context.SaveCurrentScene() && !context.SceneDocumentDirty(), "Save the version 40 prefab scene");
+    const kb::scene::SceneDocumentLoadResult saved = kb::scene::SceneDocumentService::Load(scenePath);
+    const bool recordsNodeIds = saved.succeeded && std::ranges::any_of(saved.document.worldPrefab.Nodes(), [](const kb::scene::ScenePrefabNodeDesc& node) {
+        return node.name == "CrateB" && node.nestedPrefabNodeIds.size() == 5U;
+    });
+    report.Check(saved.succeeded && saved.document.fileVersion == kb::scene::SceneDocument::CurrentFileVersion &&
+            !saved.document.LinksPrefabInstancesByName() && recordsNodeIds,
+        "Saving writes the current format with each object's prefab node");
+
+    report.Check(context.OpenScene(scenePath), "Reopen the saved scene");
+    requireLinked("Reopened saved scene");
+    report.Check(!context.SceneDocumentDirty() && legacyWarnings() == 3, "The saved scene opens clean without asking again");
+#endif
+}
+
+void RunPrefabEditModeSuite(Report& report) {
+    EditorSceneContext context;
+    const auto findNamed = [&context](std::string_view name) {
+        for (const EditorHierarchyRow& row : context.HierarchyRows()) {
+            if (row.name == name) {
+                return row.entity;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+    const auto positionX = [&context](kb::scene::SceneEntity entity) {
+        return context.Scene().Transforms().Get(entity).localPosition.x;
+    };
+
+    const kb::scene::SceneEntity crate = context.CreateHierarchyObject();
+    context.Scene().Entities().SetName(crate, "EditedCrate");
+    static_cast<void>(context.Scene().Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "EditedLid", .parent = context.Scene().Entities().Object(crate) }));
+    const std::filesystem::path prefabPath = EditorProjectPaths::PrefabsRoot() / "EditedCrate.kbprefab";
+    report.Check(context.CreatePrefabAsset(crate, prefabPath), "Create prefab asset to edit");
+    report.Check(context.InstantiatePrefabAsset(prefabPath, "/Game/Prefabs/EditedCrate.kbprefab", {}), "Place a second instance of the edited prefab");
+    context.Scene().Entities().SetName(context.SelectedEntity(), "OtherEditedCrate");
+    report.Check(context.ToggleEntityVisibility(findNamed("OtherEditedCrate")), "Record a scene command before editing the prefab");
+    const std::size_t documentRows = context.HierarchyRows().size();
+
+    const kb::assets::AssetMetadata* asset = context.Scene().Assets().Manager().Registry().FindByPath("/Game/Prefabs/EditedCrate.kbprefab");
+    report.Check(asset != nullptr && EditorAssetBrowserDoubleClickHandler::OpenAsset(nullptr, *asset, context) == EditorAssetBrowserDoubleClickResult::PrefabEditorOpened && context.InPrefabEditMode(),
+        "Double-clicking a prefab asset opens prefab edit mode");
+    report.Check(context.HierarchyRows().size() == 2U && context.HierarchyRows().front().name == "EditedCrate" && findNamed("EditedLid").IsValid() && !findNamed("OtherEditedCrate").IsValid(),
+        "Hierarchy shows only the prefab contents in prefab edit mode");
+    report.Check(context.Scene().Hierarchy().RootObjects().size() == 1U && context.Scene().Prefabs().RootInstance(context.Scene().Hierarchy().RootEntities().front()).IsValid(),
+        "Scene View scene is the prefab's own scene");
+    report.Check(!context.SaveCurrentScene(), "Saving the scene document is refused while a prefab is edited");
+    report.Check(!context.HasUnsavedPrefabEdit(), "A prefab opens without unsaved prefab edits");
+    context.SelectEntity({});
+    const kb::scene::SceneEntity stray = context.CreateHierarchyObject();
+    report.Check(context.Scene().Hierarchy().Parent(stray) == kb::scene::SceneEntity{} && context.HasUnsavedPrefabEdit() && !context.SavePrefabEditMode(),
+        "Saving a prefab with an object beside its root is refused instead of dropping the object");
+    context.SelectEntity(stray);
+    report.Check(context.DeleteSelectedHierarchyEntity() && context.SaveOpenDocuments() && !context.HasUnsavedPrefabEdit(),
+        "Ctrl+S saves the prefab being edited");
+    bool prefabSectionShown = false;
+    for (int y = kContent.top; y < kContent.bottom; y += 4) {
+        prefabSectionShown = prefabSectionShown || InspectorPanelRenderer::HitTest(kContent, context, kContent.left + 40, y).section == InspectorSectionId::Prefab;
+    }
+    report.Check(!prefabSectionShown, "The edited prefab is not shown as an instance in the Inspector");
+
+    const EditorResolvedPanelContent panel{ .content = { 0, 0, 1200, 394 }, .panelId = 1U };
+    const SceneViewportToolbarRects toolbar = SceneViewportToolbarRenderer::Resolve(panel.content, context.ViewportPreview(1U));
+    report.Check(toolbar.prefabName.left > toolbar.twoDButton.right && toolbar.prefabSaveButton.left >= toolbar.prefabName.right && toolbar.prefabCloseButton.left >= toolbar.prefabSaveButton.right
+            && toolbar.prefabCloseButton.bottom <= toolbar.toolbar.bottom && context.PrefabEditModeName() == "EditedCrate",
+        "Prefab bar with the prefab name, Save and Close sits in the Scene View toolbar row");
+
+    kb::scene::TransformComponent transform = context.Scene().Transforms().Get(findNamed("EditedCrate"));
+    transform.localPosition.x = 2.0F;
+    context.Scene().Transforms().Set(findNamed("EditedCrate"), transform);
+    EditorSceneBgfxViewport viewport;
+    EditorSceneViewportToolbarPointerController pointer{ context, viewport };
+    const POINT save = Center(toolbar.prefabSaveButton);
+    report.Check(pointer.HandlePointerDown(panel, save.x, save.y), "Click Save in the prefab bar");
+    kb::scene::Scene reader;
+    const kb::scene::ScenePrefabHandle written = reader.Prefabs().Load(prefabPath);
+    report.Check(written.IsValid() && reader.Prefabs().Get(written).Nodes()[0].transform.localPosition.x == 2.0F, "Prefab edit mode Save writes the asset");
+
+    const POINT close = Center(toolbar.prefabCloseButton);
+    report.Check(pointer.HandlePointerDown(panel, close.x, close.y) && !context.InPrefabEditMode() && context.HierarchyRows().size() == documentRows,
+        "Click Close in the prefab bar returns to the scene");
+    report.Check(positionX(findNamed("EditedCrate")) == 2.0F && positionX(findNamed("OtherEditedCrate")) == 2.0F, "Saving the prefab refreshed its instances in the scene");
+    const auto otherRow = std::ranges::find_if(context.HierarchyRows(), [](const EditorHierarchyRow& row) { return row.name == "OtherEditedCrate"; });
+    report.Check(otherRow != context.HierarchyRows().end() && !otherRow->visible && context.UndoSceneCommand() && context.Scene().Components().Visibility().Get(findNamed("OtherEditedCrate")).mode != kb::scene::VisibilityMode::Hidden,
+        "Closing prefab edit mode keeps the scene's undo history");
 }
 
 void RunHierarchyCommandSuite(Report& report) {
@@ -5947,6 +6531,11 @@ void RunSuiteInScratch(Report& report, const std::string& leaf, void (*suite)(Re
         gCurrentSuiteArtifactRoot / "screenshots", artifactError);
     const std::size_t firstLine = report.Size();
     const std::filesystem::path scratch = PrepareScratchProjectDir(leaf);
+    // The engine refuses a project whose path is too long, which would fail the suite for an unrelated reason.
+    if (const std::string pathError = kb::project::ProjectManager::PathBudgetError(scratch / "Project.21kbproject"); !pathError.empty()) {
+        report.Check(false, "Scratch project for " + leaf + " fits the project path limit: " + pathError);
+        return;
+    }
     const std::filesystem::path previous = std::filesystem::current_path();
     std::error_code error;
     std::filesystem::current_path(scratch, error);
@@ -6049,6 +6638,7 @@ int EditorSelfTest::Run(
     RunSuiteInScratch(report, "camera_inspector", &RunCameraInspectorSuite);
     RunSuiteInScratch(report, "hierarchy_commands", &RunHierarchyCommandSuite);
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
+    RunSuiteInScratch(report, "large_world_gizmo", &RunLargeWorldGizmoSuite);
     RunSuiteInScratch(report, "material_graph_context_menu", &RunMaterialGraphContextMenuSuite);
     RunSuiteInScratch(report, "material_graph_panel_canvas_hit_test", &RunMaterialGraphPanelCanvasHitTestSuite);
     RunSuiteInScratch(report, "material_graph_color_watcher", &RunMaterialGraphColorWatcherSuite);
@@ -6082,6 +6672,9 @@ int EditorSelfTest::Run(
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
+    RunSuiteInScratch(report, "prefab_inspector", &RunPrefabInspectorSuite);
+    RunSuiteInScratch(report, "legacy_prefab_scene", &RunLegacyPrefabSceneSuite);
+    RunSuiteInScratch(report, "prefab_edit_mode", &RunPrefabEditModeSuite);
     RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
     RunSuiteInScratch(report, "plugins", &RunPluginsPanelSuite);
     gCurrentSuiteArtifactRoot.clear();

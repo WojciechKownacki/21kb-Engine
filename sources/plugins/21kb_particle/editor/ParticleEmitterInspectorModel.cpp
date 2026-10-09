@@ -385,6 +385,15 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
             FormatColor(spawn.startColor)), spawn.startColor);
         AddSlider(addProperty(ParticleEditorProperty::SpawnStartSize, "Start size", ScalarText(spawn.startSize)),
             spawn.startSize, 0.01F, 8.0F);
+        // X, Y, Z in degrees; Z turns a billboard, a mesh is turned by all three (Euler: X, then Y, then Z).
+        AddVector(addProperty(ParticleEditorProperty::SpawnRotationMin, "Rotation min XYZ (deg)", VecText(spawn.initialRotationMinDegrees)),
+            spawn.initialRotationMinDegrees);
+        AddVector(addProperty(ParticleEditorProperty::SpawnRotationMax, "Rotation max XYZ (deg)", VecText(spawn.initialRotationMaxDegrees)),
+            spawn.initialRotationMaxDegrees);
+        AddVector(addProperty(ParticleEditorProperty::SpawnAngularVelocityMin, "Spin min XYZ (deg/s)", VecText(spawn.angularVelocityMinDegrees)),
+            spawn.angularVelocityMinDegrees);
+        AddVector(addProperty(ParticleEditorProperty::SpawnAngularVelocityMax, "Spin max XYZ (deg/s)", VecText(spawn.angularVelocityMaxDegrees)),
+            spawn.angularVelocityMaxDegrees);
         AddSlider(addProperty(ParticleEditorProperty::SpawnSpeedMin, "Speed min", ScalarText(spawn.speedMin)),
             spawn.speedMin, 0.0F, 40.0F);
         AddSlider(addProperty(ParticleEditorProperty::SpawnSpeedMax, "Speed max", ScalarText(spawn.speedMax)),

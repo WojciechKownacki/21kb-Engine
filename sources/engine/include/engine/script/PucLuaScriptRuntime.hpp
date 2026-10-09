@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -21,6 +22,8 @@
 struct lua_State;
 
 namespace kb::script {
+
+struct PucLuaMemoryBudget;
 
 using PucLuaLoadResult = LuaScriptLoadResult;
 
@@ -63,6 +66,10 @@ struct PucLuaDebugPauseSnapshot {
     std::string chunkName;
     int line = 0;
     std::vector<PucLuaDebugFrameSnapshot> callStack;
+    // True when the script is suspended at this line until Continue or a step releases it. False when the pause
+    // was only recorded: the line ran where Lua cannot yield (a chunk's top-level code, or Lua called back from C
+    // such as a sort comparator), so execution went on without stopping and without an error.
+    bool suspended = false;
 };
 
 struct PucLuaExposedVariableInstance {
@@ -120,10 +127,26 @@ public:
     [[nodiscard]] kb::core::BudgetExceededPolicy ExecutionBudgetPolicy() const noexcept;
     [[nodiscard]] bool IsExecutionBudgetEnabled() const noexcept;
     [[nodiscard]] bool HasActiveExecutionBudget() const noexcept;
+    // Bytes the Lua state currently holds, counted by its bounded allocator.
+    [[nodiscard]] std::size_t LuaMemoryUsedBytes() const noexcept;
     [[nodiscard]] const PucLuaDebugSettings& DebugSettings() const noexcept;
     void RequestBreakOnNextLine() noexcept;
     void RequestStepInto() noexcept;
     void ResumeDebugExecution() noexcept;
+    // While a script is suspended these release it; it resumes on the next invocation of its entry and pauses
+    // again at the next line of the same or a calling function (over), or of a calling function (out). Without a
+    // suspended script they break on the next line, like RequestStepInto.
+    void RequestStepOver() noexcept;
+    void RequestStepOut() noexcept;
+    // True while a script is suspended at a pause that no Continue or step has released yet.
+    [[nodiscard]] bool IsDebugPaused() const noexcept;
+    // The suspended script's call stack and locals as they are now; invalid when no script is suspended.
+    [[nodiscard]] PucLuaDebugPauseSnapshot InspectDebugPause() const;
+    // Line hook side: the requested pause that applies to `thread` on the current line, if any.
+    [[nodiscard]] std::optional<PucLuaDebugPauseReason> ConsumeRequestedDebugPause(lua_State* thread) noexcept;
+    // Line hook side: whether `thread` may yield from the hook to stay suspended at a pause; true marks it as
+    // suspending. False while a Destroyed entry runs, which is never invoked again to resume.
+    [[nodiscard]] bool BeginDebugSuspend(lua_State* thread) noexcept;
     void RecordDebugPause(PucLuaDebugPauseSnapshot snapshot);
     [[nodiscard]] std::optional<PucLuaDebugPauseReason> ConsumeRequestedDebugPause() noexcept;
     [[nodiscard]] bool NeedsDebugLineHook() const noexcept;
@@ -182,6 +205,8 @@ private:
         Run,
         BreakOnNextLine,
         StepInto,
+        StepOver,
+        StepOut,
     };
 
     struct InstanceKey {
@@ -201,12 +226,24 @@ private:
         }
     };
 
+    // The entry a debugger pause suspended; its coroutine stays in coroutineRefs_ like a yielded one.
+    struct DebugPause {
+        lua_State* thread = nullptr;
+        InstanceKey instance{};
+        std::string functionName;
+        int depth = 0;
+    };
+
+    void ReleaseDebugPause(DebugStepMode mode) noexcept;
     void ClearCoroutines(const InstanceKey& instanceKey) noexcept;
     void ClearCoroutinesForAsset(kb::assets::AssetId assetId) noexcept;
     void TrackEventSubscription(const InstanceKey& instanceKey, EventSubscriptionHandle handle);
     void ClearEventSubscriptions(const InstanceKey& instanceKey, ScriptEventBus& events) noexcept;
     void ClearEventSubscriptionsForAsset(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept;
 
+    // Declared before state_: the state's allocator writes into it from the
+    // first allocation lua_newstate makes until lua_close frees the last one.
+    std::unique_ptr<PucLuaMemoryBudget> memoryBudget_;
     lua_State* state_ = nullptr;
     std::unordered_map<std::uint64_t, ScriptRecord> scripts_;
     std::unordered_map<std::string, ModuleRecord> modules_;
@@ -220,6 +257,14 @@ private:
     PucLuaDebugSettings debugSettings_;
     PucLuaDebugPauseSnapshot lastDebugPause_;
     DebugStepMode debugStepMode_ = DebugStepMode::Run;
+    // The coroutine a step is bound to (null: the next line of any script) and its call depth when it paused.
+    lua_State* debugStepThread_ = nullptr;
+    int debugStepDepth_ = 0;
+    std::optional<DebugPause> debugPause_;
+    // Set by the line hook right before it yields a coroutine for a pause, read when lua_resume returns.
+    lua_State* debugSuspendThread_ = nullptr;
+    int debugSuspendDepth_ = 0;
+    bool debugSuspendAllowed_ = false;
     ScriptExecutionBudgetSettings executionBudgetSettings_;
     std::size_t remainingLuaInstructions_ = 0U;
     bool executionBudgetActive_ = false;

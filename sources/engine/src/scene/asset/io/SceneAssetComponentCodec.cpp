@@ -55,6 +55,8 @@ enum SceneNodeComponentBits : std::uint64_t {
       MotionSkeletonRuleBit = 1ULL << 35U,
       ParticleEffectBit = 1ULL << 36U,
       UIBit = 1ULL << 37U,
+      // Read from version 42 on; written after every other component.
+      NavLinkBit = 1ULL << 38U,
 };
 
 constexpr std::uint64_t KnownComponentBits = CameraBit |
@@ -74,7 +76,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -118,6 +120,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.motionSkeletonRule.has_value(), MotionSkeletonRuleBit);
     include(components.deformedGeometry.has_value(), DeformedGeometryBit);
     include(!components.ui.Empty(), UIBit);
+    include(components.navLink.has_value(), NavLinkBit);
     return componentBits;
 }
 
@@ -346,7 +349,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         std::uint32_t kind = 0U;
         std::uint32_t lifetime = 0U;
         if (!input.ReadUInt64(content.assetId) || !input.ReadUInt32(kind) || !input.ReadUInt32(lifetime) || !input.ReadBool(content.active) ||
-            kind > static_cast<std::uint32_t>(ContentInstanceKind::WorldFragment) || lifetime > static_cast<std::uint32_t>(ContentInstanceLifetime::Persistent)) return false;
+            kind > static_cast<std::uint32_t>(ContentInstanceKind::NavigationMesh) || lifetime > static_cast<std::uint32_t>(ContentInstanceLifetime::Persistent)) return false;
         content.kind = static_cast<ContentInstanceKind>(kind);
         content.lifetime = static_cast<ContentInstanceLifetime>(lifetime);
         output.contentInstance = content;
@@ -524,6 +527,20 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
     }
     if ((componentBits & UIBit) != 0U) {
         if (fileVersion < 34U || !SceneAssetUIComponentCodec::Read(input, fileVersion, output.ui) || output.ui.Empty()) return false;
+    }
+    if ((componentBits & NavLinkBit) != 0U) {
+        if (fileVersion < 42U) return false;
+        NavLink link{};
+        std::uint32_t kind = 0U;
+        std::uint32_t area = 0U;
+        if (!SceneAssetPrimitiveCodec::ReadVec3(input, link.start) || !SceneAssetPrimitiveCodec::ReadVec3(input, link.end) ||
+            !input.ReadFloat(link.radius) || !input.ReadUInt32(kind) || !input.ReadUInt32(area) || !input.ReadBool(link.bidirectional) ||
+            !input.ReadBool(link.enabled) || kind > static_cast<std::uint32_t>(NavLinkKind::Walk) || area >= kNavAreaCount ||
+            !(link.radius > 0.0F) || !std::isfinite(link.radius) || !std::isfinite(link.start.x) || !std::isfinite(link.start.y) ||
+            !std::isfinite(link.start.z) || !std::isfinite(link.end.x) || !std::isfinite(link.end.y) || !std::isfinite(link.end.z)) return false;
+        link.kind = static_cast<NavLinkKind>(kind);
+        link.area = static_cast<NavAreaId>(area);
+        output.navLink = link;
     }
     return true;
 }
@@ -815,6 +832,16 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
     }
     if (!components.ui.Empty()) {
         SceneAssetUIComponentCodec::Write(output, components.ui);
+    }
+    if (components.navLink.has_value()) {
+        const NavLink& link = *components.navLink;
+        SceneAssetPrimitiveCodec::WriteVec3(output, link.start);
+        SceneAssetPrimitiveCodec::WriteVec3(output, link.end);
+        SceneAssetBinaryIO::WriteFloat(output, link.radius);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(link.kind));
+        SceneAssetBinaryIO::WriteUInt32(output, link.area);
+        SceneAssetBinaryIO::WriteBool(output, link.bidirectional);
+        SceneAssetBinaryIO::WriteBool(output, link.enabled);
     }
 }
 

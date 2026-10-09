@@ -160,6 +160,14 @@ struct NativeComponentDirtyRange {
     std::size_t dirtyCount = 0;
 };
 
+// A run of rows of one chunk of an archetype.
+struct NativeComponentRows {
+    std::size_t archetypeIndex = 0;
+    std::size_t chunkIndex = 0;
+    std::size_t firstRow = 0;
+    std::size_t count = 0;
+};
+
 struct NativeEcsMaintenanceBudget {
     std::size_t maxFreeChunksToKeep = std::numeric_limits<std::size_t>::max();
     std::size_t maxChunksToRelease = std::numeric_limits<std::size_t>::max();
@@ -221,6 +229,12 @@ public:
         std::size_t firstRow,
         std::size_t count,
         std::span<const ComponentId> componentIds);
+    // Like TryGetMutableComponentData, and moves the component's version for the write without flagging the row.
+    [[nodiscard]] void* TryGetMutableComponentDataNoteWritten(Entity entity, ComponentId componentId);
+    // Moves the archetype's version of the component once for rows written in place without flagging them.
+    void NoteComponentWritten(std::size_t archetypeIndex, ComponentId componentId);
+    // An upper bound of the rows of the archetype flagged for the component (0 when none is).
+    [[nodiscard]] std::size_t ArchetypeComponentDirtyCount(std::size_t archetypeIndex, ComponentId componentId) const;
     [[nodiscard]] std::size_t ComponentDirtyCount(std::size_t archetypeIndex, std::size_t chunkIndex, ComponentId componentId) const;
     [[nodiscard]] std::size_t CollectComponentDirtyRanges(
         std::size_t archetypeIndex,
@@ -239,6 +253,14 @@ public:
     // Missing columns and invalid/stale entity handles return null.
     [[nodiscard]] void* TryGetMutableComponentData(Entity entity, ComponentId componentId);
     [[nodiscard]] const void* TryGetComponentData(Entity entity, ComponentId componentId) const;
+    // Like TryGetMutableComponentData, and flags the row as modified in the same lookup: the caller writes
+    // through the returned pointer.
+    [[nodiscard]] void* TryGetMutableComponentDataMarkModified(Entity entity, ComponentId componentId);
+    // Like TryGetMutableComponentData, and reports the entity's row (a run of one) so that a writer on several
+    // threads can flag what it wrote afterwards with MarkComponentRowsModified. Only reads the storage.
+    [[nodiscard]] void* TryGetMutableComponentRow(Entity entity, ComponentId componentId, NativeComponentRows& row);
+    // Flags runs of rows as modified; the component's version moves once per archetype run of the list.
+    void MarkComponentRowsModified(ComponentId componentId, std::span<const NativeComponentRows> runs);
     [[nodiscard]] bool HasComponent(Entity entity, ComponentId componentId) const;
     [[nodiscard]] std::size_t CountWithComponent(ComponentId componentId) const noexcept;
     [[nodiscard]] bool EntityArchetypeMatches(Entity entity, std::span<const ComponentId> requiredComponentIds) const;
@@ -255,6 +277,17 @@ public:
         std::span<const ComponentId> excludedComponentIds,
         std::vector<MutableQueryTableDispatchRecord>& records);
     void CaptureChunkedSnapshot(std::span<const ComponentTypeInfo> componentTypes, ChunkedWorldSnapshot& snapshot) const;
+    // False after removals or migrations (including adding components to existing entities).
+    [[nodiscard]] bool IsAppendOnlySince(std::uint64_t structuralVersion) const noexcept;
+    // Extend an earlier collection for the same query and report the first changed record.
+    // Existing full chunks retain their metadata snapshots; dirty queries read live counts from storage.
+    [[nodiscard]] bool RefreshMutableQueryRecordsAfterAppends(
+        std::span<const ComponentId> componentIds,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds,
+        std::uint64_t structuralVersion,
+        std::vector<MutableQueryTableDispatchRecord>& records,
+        std::size_t& firstChangedRecord);
     void CaptureChunkedDeltaSnapshot(
         std::span<const ComponentTypeInfo> componentTypes,
         const ChunkedWorldSnapshot& baseline,
@@ -276,6 +309,11 @@ public:
     [[nodiscard]] NativeEcsMaintenanceStats MaintainChunks(NativeEcsMaintenanceBudget budget);
 
 private:
+    friend class World;
+    // Serial allocation/adoption only. Null keeps standalone native ID policy.
+    using EntityIndexAvailabilityPolicy = bool (*)(Entity::IdType strippedId, void* context) noexcept;
+    void SetEntityIndexAvailabilityPolicy(EntityIndexAvailabilityPolicy policy, void* context) noexcept;
+
     class Impl;
 
     Impl* impl_ = nullptr;

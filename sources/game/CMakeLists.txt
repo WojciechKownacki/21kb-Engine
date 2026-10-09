@@ -211,6 +211,7 @@ add_executable(kb_game WIN32
 target_link_libraries(kb_game
     PRIVATE
         kb_game_core
+        kb_crash_reporting
         user32
         gdi32
         shell32
@@ -252,7 +253,7 @@ if(BUILD_TESTING)
         tests/KbGameCoreTests.cpp
     )
 
-    target_link_libraries(kb_game_core_tests PRIVATE kb_game_core kb_cooker_core)
+    target_link_libraries(kb_game_core_tests PRIVATE kb_game_core kb_cooker_core kb_cli_core)
     add_dependencies(kb_game_core_tests
         kb_windows_runtime_module_test_plugin
         kb_physics_jolt_plugin
@@ -267,6 +268,14 @@ if(BUILD_TESTING)
     add_test(NAME kb_windows_runtime_module_package
         COMMAND $<TARGET_FILE:kb_game_core_tests> --windows-runtime-modules
     )
+    add_test(NAME kb_game_packaged_trust
+        COMMAND $<TARGET_FILE:kb_game_core_tests> --packaged-trust
+    )
+    # Partitioned worlds: one build for kb_cli and kb_cooker, single-pack and region-chunk
+    # packaging, streaming from the packages. Three cooks; kept out of kb_game_core's budget.
+    add_test(NAME kb_game_partitioned_world
+        COMMAND $<TARGET_FILE:kb_game_core_tests> --partitioned-world
+    )
     set_tests_properties(kb_game_core PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         LABELS "game;runtime"
@@ -276,6 +285,16 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         LABELS "game;runtime;packaging"
         TIMEOUT 120
+    )
+    set_tests_properties(kb_game_packaged_trust PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "game;runtime;packaging"
+        TIMEOUT 300
+    )
+    set_tests_properties(kb_game_partitioned_world PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "game;runtime;packaging;world"
+        TIMEOUT 300
     )
 
     kb_apply_quality_gates(kb_game_core_tests)

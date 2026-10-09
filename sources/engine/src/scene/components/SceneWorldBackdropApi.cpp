@@ -4,6 +4,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
@@ -12,9 +13,9 @@ namespace kb::scene {
 
 bool SceneComponentQueryService::HasWorldBackdrop(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.WorldBackdrops().Has(entity); }
 const WorldBackdropComponent* SceneComponentQueryService::TryGetWorldBackdrop(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.WorldBackdrops().TryGet(entity) : nullptr; }
-WorldBackdropComponent* SceneComponentMutationService::TryGetWorldBackdrop(Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.WorldBackdrops().TryGet(entity) : nullptr; }
-void SceneComponentMutationService::SetWorldBackdrop(Scene& scene, SceneEntity entity, const WorldBackdropComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state=SceneAccess::State(scene); state.componentStorage.WorldBackdrops().Set(entity, component); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::RemoveWorldBackdrop(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state=SceneAccess::State(scene); state.componentStorage.WorldBackdrops().Remove(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
+WorldBackdropComponent* SceneComponentMutationService::TryGetWorldBackdrop(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.WorldBackdrops().TryGet(entity) : nullptr; }
+void SceneComponentMutationService::SetWorldBackdrop(Scene& scene, SceneEntity entity, const WorldBackdropComponent& component) { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state=SceneAccess::State(scene); state.componentStorage.WorldBackdrops().Set(entity, component); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::RemoveWorldBackdrop(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state=SceneAccess::State(scene); state.componentStorage.WorldBackdrops().Remove(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
 void SceneComponentMutationService::MarkWorldBackdropModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state=SceneAccess::State(scene); state.componentStorage.WorldBackdrops().MarkModified(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
 
 SceneWorldBackdropComponentQueries::SceneWorldBackdropComponentQueries(const Scene& scene) noexcept : scene_(scene) {}

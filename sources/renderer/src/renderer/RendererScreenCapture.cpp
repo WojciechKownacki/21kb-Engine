@@ -83,11 +83,7 @@ void ConvertToRgba8(bgfx::TextureFormat::Enum format, const std::vector<std::uin
 
 } // namespace
 
-RendererScreenCapture::RendererScreenCapture()
-#if !defined(__EMSCRIPTEN__)
-    : worker_{[this] { WorkerLoop(); }}
-#endif
-{}
+RendererScreenCapture::RendererScreenCapture() = default;
 
 RendererScreenCapture::~RendererScreenCapture() { StopWorker(); }
 
@@ -224,28 +220,21 @@ bool RendererScreenCapture::EncodeAndWritePng(const EncodeJob& job) {
     return writeError.isOk();
 }
 
-void RendererScreenCapture::WorkerLoop() {
-    while (true) {
-        EncodeJob job;
-        {
-            std::unique_lock lock{workerMutex_};
-            workerWake_.wait(lock, [this] {
-                return stopWorker_ || pendingEncode_.has_value();
-            });
-            if (stopWorker_) return;
-            job = std::move(*pendingEncode_);
-            pendingEncode_.reset();
-        }
-        const EncodeCompletion completion{
-            .generation = job.generation,
-            .succeeded = EncodeAndWritePng(job),
-        };
-        {
-            std::scoped_lock lock{workerMutex_};
-            if (stopWorker_) return;
-            completedEncode_ = completion;
-        }
+void RendererScreenCapture::EncodePending() {
+    EncodeJob job;
+    {
+        std::scoped_lock lock{workerMutex_};
+        if (stopWorker_ || !pendingEncode_.has_value()) return;
+        job = std::move(*pendingEncode_);
+        pendingEncode_.reset();
     }
+    const EncodeCompletion completion{
+        .generation = job.generation,
+        .succeeded = EncodeAndWritePng(job),
+    };
+    std::scoped_lock lock{workerMutex_};
+    if (stopWorker_) return;
+    completedEncode_ = completion;
 }
 
 [[nodiscard]] kb::scene::SceneScreenCapturePixelFormat PixelFormat(
@@ -269,8 +258,8 @@ void RendererScreenCapture::StopWorker() noexcept {
         stopWorker_ = true;
         pendingEncode_.reset();
     }
-    workerWake_.notify_all();
-    if (worker_.joinable()) worker_.join();
+    // Drops an encode that has not started and waits for a running one.
+    encodeLane_.reset();
     {
         std::scoped_lock lock{workerMutex_};
         completedEncode_.reset();
@@ -294,12 +283,19 @@ void RendererScreenCapture::QueueEncoding() {
         .succeeded = EncodeAndWritePng(job),
     };
 #else
+    if (encodeLane_ == nullptr) {
+        encodeLane_ = std::make_unique<kb::assets::streaming::BackgroundLane>(
+            kb::assets::streaming::BackgroundLoadService::Shared(), kb::assets::streaming::BackgroundJobClass::Long);
+    }
     {
         std::scoped_lock lock{workerMutex_};
         pendingEncode_ = std::move(job);
         encoding_ = true;
     }
-    workerWake_.notify_one();
+    static_cast<void>(encodeLane_->Run([this](std::string&) {
+        EncodePending();
+        return true;
+    }));
 #endif
 }
 

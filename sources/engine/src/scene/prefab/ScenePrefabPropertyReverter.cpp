@@ -123,7 +123,8 @@ bool ScenePrefabPropertyReverter::Revert(Scene& scene, const ScenePrefabInstance
     if (ScenePrefabPropertyPath::IsTransform(propertyPath)) {
         TransformComponent transform = scene.Transforms().Get(object);
         if (propertyPath == "transform.localPosition") {
-            transform.localPosition = node.transform.localPosition;
+            scene.Transforms().SetLocalTranslation(object.Entity(), node.LocalTranslation());
+            return true;
         } else if (propertyPath == "transform.localRotation") {
             transform.localRotation = node.transform.localRotation;
         } else if (propertyPath == "transform.localScale") {

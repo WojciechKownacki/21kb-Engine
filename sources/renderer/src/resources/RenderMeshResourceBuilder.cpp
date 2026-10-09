@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace kb::render {
 namespace {
@@ -119,6 +120,35 @@ namespace {
     return lods;
 }
 
+// Meshes up to this many triangles keep a CPU copy for voxelisation (about 2.5 MB at the limit).
+constexpr std::uint32_t kMaxProxyGeometryTriangles = 200'000U;
+
+[[nodiscard]] std::shared_ptr<const RenderMeshProxyGeometry> CopyProxyGeometry(const RenderMeshDesc& desc) {
+    const bool unusable = desc.dynamicVertexBuffer || desc.vertexFormat == RenderVertexFormat::SkinnedP3N3T4UV2J4W4 ||
+        desc.vertexCount == 0U || desc.indexCount < 3U || desc.indexCount / 3U > kMaxProxyGeometryTriangles;
+    const auto* vertexBytes = static_cast<const std::byte*>(RenderMeshDescGeometry::VertexData(desc));
+    const bool wide = desc.indexFormat != RenderIndexFormat::Uint16;
+    if (unusable || vertexBytes == nullptr || (wide ? desc.indices32 == nullptr : desc.indices == nullptr)) {
+        return nullptr;
+    }
+    auto geometry = std::make_shared<RenderMeshProxyGeometry>();
+    const std::size_t stride = RenderStaticMeshVertexStride(desc.vertexFormat);
+    geometry->positions.resize(static_cast<std::size_t>(desc.vertexCount) * 3U);
+    for (std::uint32_t vertex = 0U; vertex < desc.vertexCount; ++vertex) {
+        std::memcpy(&geometry->positions[static_cast<std::size_t>(vertex) * 3U], vertexBytes + vertex * stride, 3U * sizeof(float));
+    }
+    const std::uint32_t usable = desc.indexCount - desc.indexCount % 3U;
+    geometry->indices.resize(usable);
+    for (std::uint32_t index = 0U; index < usable; ++index) {
+        const std::uint32_t value = wide ? desc.indices32[index] : desc.indices[index];
+        if (value >= desc.vertexCount) {
+            return nullptr;
+        }
+        geometry->indices[index] = value;
+    }
+    return geometry;
+}
+
 } // namespace
 
 bool RenderMeshResourceBuilder::IsValidDesc(const RenderMeshDesc& desc) noexcept {
@@ -169,6 +199,7 @@ RenderMeshResource RenderMeshResourceBuilder::Build(
         .terrainLayerWeightWidth = desc.terrainLayerWeightWidth,
         .terrainLayerWeightHeight = desc.terrainLayerWeightHeight,
         .terrainLayerCount = desc.terrainLayerCount,
+        .proxyGeometry = CopyProxyGeometry(desc),
     };
 }
 

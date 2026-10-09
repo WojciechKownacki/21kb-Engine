@@ -1,10 +1,15 @@
 #pragma once
 
 #include "engine/assets/AssetImportTypes.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/assets/TerrainAsset.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 
+#include "commands/EditorSceneHistoryCommand.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneDocument.hpp"
+#include "engine/scene/SceneHistory.hpp"
+#include "engine/scene/ScenePrefabPrivateScene.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -34,6 +39,8 @@
 #include "scene/EditorPlayModeSelectionSnapshot.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/EditorUIRectDragState.hpp"
+#include "scene/EditorNavigation.hpp"
+#include "scene/EditorWorldPartition.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
@@ -294,6 +301,42 @@ public:
     [[nodiscard]] bool OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool SaveCurrentScene();
     [[nodiscard]] bool SaveCurrentSceneAs(const std::filesystem::path& path);
+    // Partitioned worlds (.21kbworld): the open world is edited one region of cells
+    // at a time and saved one file per object. OpenScene routes world files here.
+    [[nodiscard]] bool OpenWorld(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
+    [[nodiscard]] bool IsWorldOpen() const noexcept;
+    [[nodiscard]] EditorWorldPartition& WorldPartition() noexcept;
+    [[nodiscard]] const EditorWorldPartition& WorldPartition() const noexcept;
+    [[nodiscard]] bool LoadWorldCellsNearCamera();
+    [[nodiscard]] bool LoadWorldRegion(kb::world::WorldCellCoord min, kb::world::WorldCellCoord max);
+    [[nodiscard]] bool UnloadWorldRegion(kb::world::WorldCellCoord min, kb::world::WorldCellCoord max);
+    [[nodiscard]] bool LoadAllWorldCells();
+    [[nodiscard]] bool UnloadAllWorldCells();
+    // Saves pending edits, then builds the cells and HLOD proxies of the open world.
+    [[nodiscard]] bool BuildOpenWorld();
+    // Bakes the navigation mesh: for a scene, saves it, writes <scene>.21kbnavmesh and places it
+    // with a Navigation Mesh ContentInstance; for a world, enables navigation in the world file
+    // and builds the world, which bakes one navigation mesh per cell.
+    [[nodiscard]] bool BakeNavigation();
+    [[nodiscard]] EditorNavigation& Navigation() noexcept;
+    [[nodiscard]] const EditorNavigation& Navigation() const noexcept;
+    // Shows or hides the outline of the baked navigation mesh in the scene view.
+    void SetNavigationMeshVisible(bool visible);
+    // Reloads the outline from the open scene's or world's baked navigation meshes.
+    void RefreshNavigationView();
+    // Converts the saved scene being edited into <scene>.21kbworld next to it and opens it.
+    [[nodiscard]] bool ConvertCurrentSceneToWorld(
+        double cellSize = 128.0, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
+    [[nodiscard]] bool DeclareWorldDataLayer(std::string_view name, bool initiallyActive = true);
+    [[nodiscard]] bool CycleSelectedObjectDataLayer();
+    [[nodiscard]] bool ToggleSelectedObjectAlwaysLoaded();
+    // Prefab edit mode: Scene View and Hierarchy show a .kbprefab in a scene of its own until it is closed.
+    [[nodiscard]] bool OpenPrefabEditMode(const std::filesystem::path& prefabPath);
+    [[nodiscard]] bool SavePrefabEditMode();
+    [[nodiscard]] bool ClosePrefabEditMode();
+    [[nodiscard]] bool InPrefabEditMode() const noexcept;
+    [[nodiscard]] bool HasUnsavedPrefabEdit() const noexcept;
+    [[nodiscard]] std::string PrefabEditModeName() const;
     [[nodiscard]] bool CanUndoSceneCommand() const noexcept;
     [[nodiscard]] bool CanRedoSceneCommand() const noexcept;
     [[nodiscard]] bool UndoSceneCommand();
@@ -393,6 +436,7 @@ public:
     [[nodiscard]] std::string_view BuildGameEditBuffer() const noexcept;
     [[nodiscard]] bool HasBuildGameStorePassword() const noexcept;
     [[nodiscard]] bool HasBuildGameKeyPassword() const noexcept;
+    [[nodiscard]] bool HasBuildGameSecret(BuildGameField field) const noexcept;
     void ClearBuildGameSigningPasswords() noexcept;
     [[nodiscard]] bool BeginBuildGameTextEdit(BuildGameField field);
     [[nodiscard]] bool AppendBuildGameText(wchar_t character);
@@ -455,6 +499,16 @@ public:
     [[nodiscard]] bool DeleteSelectedAssetBrowserItem();
     [[nodiscard]] bool DeleteSelectedHierarchyEntity() noexcept;
     [[nodiscard]] bool DuplicateSelectedHierarchyEntities();
+    [[nodiscard]] bool SelectPrefabSourceAsset(kb::scene::SceneEntity entity);
+    // The Inspector asks for a selected instance's overrides on every paint, size and hit test; they
+    // change only with the scene, so they are worked out once per scene revision.
+    [[nodiscard]] const kb::scene::ScenePrefabOverrideReport& PrefabInstanceOverrides(kb::scene::ScenePrefabInstanceHandle instance) const;
+    [[nodiscard]] bool SelectPrefabInstanceRoot(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ApplyPrefabInstance(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool RevertPrefabInstance(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool UnpackPrefabInstance(kb::scene::SceneEntity entity);
+    // Objects a scene command recreated keep their identity in the scene history and the other commands.
+    void RemapRecreatedEntities(std::span<const kb::scene::SceneEntityRemap> recreated);
     [[nodiscard]] bool AdoptCreatedHierarchyEntities(std::string label, std::span<const kb::scene::SceneEntity> entities);
     [[nodiscard]] bool DeleteAssetBrowserItem(kb::assets::AssetId id);
     [[nodiscard]] bool DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder);
@@ -1132,6 +1186,18 @@ public:
     [[nodiscard]] kb::scene::SceneEntity CreateParticleEffectEntity(kb::assets::AssetId assetId);
     [[nodiscard]] kb::scene::SceneEntity CreateParticleEffectEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
+    // The same placements at world positions given in double precision (docs/large_worlds.md).
+    [[nodiscard]] bool InstantiatePrefabAssetAt(
+        const std::filesystem::path& path,
+        const std::filesystem::path& virtualPath,
+        const kb::math::DVec3& position);
+    [[nodiscard]] kb::scene::SceneEntity CreatePrefabAssetEntity(
+        const std::filesystem::path& path,
+        const std::filesystem::path& virtualPath,
+        const kb::math::DVec3& position,
+        bool logCreation);
+    [[nodiscard]] kb::scene::SceneEntity CreateParticleEffectEntity(kb::assets::AssetId assetId, const kb::math::DVec3& position, bool logCreation);
+    [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, const kb::math::DVec3& position, bool logCreation);
     [[nodiscard]] bool SetMeshRendererMeshAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
     [[nodiscard]] bool SetMeshRendererMaterialAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
@@ -1247,6 +1313,10 @@ public:
     [[nodiscard]] bool RemoveAnimatorFromEntity(kb::scene::SceneEntity entity);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
+    // Moves the edited entities by `delta` from where the edit started, in double precision.
+    [[nodiscard]] bool ApplyActiveTransformEditPositionDelta(const kb::math::DVec3& delta);
+    // The pivot the active edit started from, in double precision.
+    [[nodiscard]] const kb::math::DVec3& ActiveTransformEditTargetStart() const noexcept;
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryRotation(kb::scene::Vec3 rotation);
     [[nodiscard]] bool ApplyActiveTransformEditRotationDelta(kb::scene::Quat delta);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryScale(kb::scene::Vec3 scale);
@@ -1259,6 +1329,8 @@ public:
 private:
     [[nodiscard]] bool CompleteUIComponentDependencies(kb::scene::SceneEntity entity);
     void CompleteLoadedUIComponents();
+    // Marks a loaded scene that links its prefab instances by object name for saving, which records node ids.
+    void UpgradePrefabLinksOnSave(const kb::scene::SceneDocument& document);
     std::optional<EditorUIRectDragState> uiRectDrag_;
     mutable kb::math::Vec2 uiAuthoringViewportSize_{1920.0F, 1080.0F};
     [[nodiscard]] bool SpawnEditRequiresPreviewRestart(const kb::scene::ParticleSpawnAsset& spawn) const;
@@ -1283,7 +1355,7 @@ private:
     [[nodiscard]] bool FinalizeActiveTransformEditApply(
         bool changed,
         std::span<const kb::scene::SceneEntity> touched);
-    [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation);
+    [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation, EditorSceneHistoryCommand::AssetFile assetFile = {});
     [[nodiscard]] bool ExecuteMaterialAssetEdit(kb::assets::AssetId id, std::unique_ptr<IEditorMaterialAssetPropertyEdit> edit);
     [[nodiscard]] bool RecordMaterialGraphWorkingCopyEdit(
         kb::assets::AssetId id,
@@ -1334,11 +1406,13 @@ private:
     void ClearSceneDocumentDirty() noexcept;
     void ReleaseRenderedSceneResources();
     void InvalidateHierarchyRows() noexcept;
+    [[nodiscard]] bool PrefabAssetHasSceneInstances(kb::assets::AssetId id, std::string_view action);
     void RebuildHierarchyRowsIfNeeded() const;
     void ResetSceneEditState();
     void AdvanceSceneDocumentGeneration() noexcept;
     void SelectFirstSceneEntityOrClear() noexcept;
     [[nodiscard]] bool SaveSceneToPath(const std::filesystem::path& path);
+    [[nodiscard]] bool RejectWhilePrefabEditing();
     [[nodiscard]] std::filesystem::path ResolveProjectVirtualPath(const std::filesystem::path& virtualPath) const;
     [[nodiscard]] std::filesystem::path ResolveDefaultScenePath() const;
 
@@ -1349,14 +1423,30 @@ private:
     kb::project::ProjectDescriptor project_;
     kb::project::ProjectSettings projectConfig_;
     std::filesystem::path projectFile_;
-    std::unique_ptr<kb::scene::Scene> scene_;
+    // The open scene document, and the scene being edited: that document, or the private scene of
+    // a prefab in prefab edit mode.
+    std::unique_ptr<kb::scene::Scene> documentScene_;
+    kb::scene::Scene* scene_ = nullptr;
+    kb::scene::ScenePrefabPrivateScene prefabEdit_;
+    struct PrefabOverridesCache {
+        const kb::scene::Scene* scene = nullptr;
+        kb::scene::ScenePrefabInstanceHandle instance{};
+        std::uint64_t revision = 0U;
+        std::uint64_t instanceRevision = 0U;
+        kb::scene::ScenePrefabOverrideReport report;
+    };
+    mutable PrefabOverridesCache prefabOverridesCache_;
+    std::filesystem::path prefabEditPath_;
     std::function<void(const kb::scene::Scene&)> renderSceneReleaseHandler_;
     std::filesystem::path currentScenePath_;
     EditorSceneDocumentIdentity sceneDocumentIdentity_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
     std::mutex assetImportMutex_;
-    std::thread assetImportWorker_;
+    // Imports run as long jobs of the engine's background service; the job stays set until its
+    // result is pumped.
+    std::unique_ptr<kb::assets::streaming::BackgroundLane> assetImportLane_;
+    kb::assets::streaming::BackgroundRequestHandle assetImportJob_;
     std::optional<kb::assets::AssetImportResult> completedAssetImport_;
     std::atomic_bool assetImportRunning_{ false };
     EditorSceneViewportStateStore viewportState_;
@@ -1414,6 +1504,10 @@ private:
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
     bool sceneGraphCookPending_ = true;
     EditorCommandStack commandStack_;
+    // The scene document's undo history, selection and unsaved state, kept aside while a prefab is edited.
+    EditorCommandStack documentCommands_;
+    std::vector<kb::scene::SceneEntity> documentSelection_;
+    bool documentDirty_ = false;
     std::optional<TerrainStrokeState> terrainStroke_;
     mutable std::optional<TerrainReadCache> terrainReadCache_;
     EditorHierarchySelectionState hierarchySelection_;
@@ -1470,6 +1564,8 @@ private:
     bool sceneDocumentDirty_ = false;
     EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;
+    EditorWorldPartition worldPartition_;
+    EditorNavigation navigation_;
     std::uint64_t playModeRenderTopologyVersion_ = 0U;
     std::size_t playModeRootCount_ = 0U;
     std::uint64_t playModeRootAppendEpoch_ = 0U;
@@ -1493,6 +1589,7 @@ private:
     bool buildGameEditSelectAll_ = false;
     std::string buildGameStorePassword_;
     std::string buildGameKeyPassword_;
+    std::string buildGameCertificatePassword_;
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;
     bool hierarchyScrollbarDragging_ = false;

@@ -1,6 +1,8 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/particles/ParticleRenderSnapshot.hpp"
+#include "engine/scene/ScenePortalVisibility.hpp"
 
 #include "kb/render/scene/RenderProxyId.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
@@ -9,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -211,33 +214,39 @@ struct MeshRenderProxy {
     mutable std::uint32_t instanceGroupIndex = 0;
     mutable std::uint32_t instanceIndexInGroup = 0;
     mutable std::uint64_t instanceLocationVersion = 0;
+    // The entity's world transform version the transform pull last applied (EcsRenderSceneSynchronizer::PullTransforms).
+    mutable std::uint64_t pulledWorldVersion = 0;
 };
 
 struct CameraRenderProxy {
     RenderProxyId id{};
     CameraRenderProxyDesc desc{};
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+    mutable std::uint64_t pulledWorldVersion = 0;
 };
 
 struct LightRenderProxy {
     RenderProxyId id{};
     LightRenderProxyDesc desc{};
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+    mutable std::uint64_t pulledWorldVersion = 0;
 };
 
 struct VisibilityBlockerRenderProxy {
     RenderProxyId id{};
     VisibilityBlockerRenderProxyDesc desc{};
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+    mutable std::uint64_t pulledWorldVersion = 0;
 };
 
 struct GeometrySwarmRenderProxy {
     RenderProxyId id{};
     GeometrySwarmRenderProxyDesc desc{};
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+    mutable std::uint64_t pulledWorldVersion = 0;
 };
-struct SurfaceCastRenderProxy { RenderProxyId id{}; SurfaceCastRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; };
-struct SpaceStrokeRenderProxy { RenderProxyId id{}; SpaceStrokeRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; };
+struct SurfaceCastRenderProxy { RenderProxyId id{}; SurfaceCastRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; mutable std::uint64_t pulledWorldVersion = 0; };
+struct SpaceStrokeRenderProxy { RenderProxyId id{}; SpaceStrokeRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; mutable std::uint64_t pulledWorldVersion = 0; };
 
 struct RenderSceneReserveDesc {
     std::uint32_t meshProxies = 0;
@@ -269,6 +278,17 @@ struct RenderSceneStats {
     std::uint64_t transformFallbackUpdateCount = 0;
 };
 
+// Camera-relative rendering (docs/large_worlds.md): the render origin follows the viewing camera once the camera is
+// further than rebaseDistance from it along any axis, and moves to the camera position rounded to gridStep.
+struct RenderOriginPolicy {
+    double rebaseDistance = 1024.0;
+    double gridStep = 1024.0;
+};
+
+// Told about every render origin move, with the origin before and after it: systems that keep float positions
+// relative to the origin (GPU particle state, history samples) shift them by previous - current.
+using RenderOriginListener = std::function<void(const kb::math::DVec3& previous, const kb::math::DVec3& current)>;
+
 class RenderScene {
 public:
     struct ResourceGroupCoverage {
@@ -287,6 +307,8 @@ public:
     void Reserve(const RenderSceneReserveDesc& desc);
     [[nodiscard]] RenderSceneStats Stats() const noexcept;
     [[nodiscard]] std::uint64_t MeshContentRevision() const noexcept { return meshContentRevision_; }
+    // Changes when a mesh proxy is added or removed: a pointer to a proxy stays valid while it is unchanged.
+    [[nodiscard]] std::uint64_t MeshSetVersion() const noexcept { return meshSetVersion_; }
     [[nodiscard]] std::uint64_t LightContentRevision() const noexcept { return lightContentRevision_; }
     [[nodiscard]] RenderProxyId UpsertMesh(const MeshRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertCamera(const CameraRenderProxyDesc& desc);
@@ -295,6 +317,18 @@ public:
     [[nodiscard]] RenderProxyId UpsertGeometrySwarm(const GeometrySwarmRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertSurfaceCast(const SurfaceCastRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertSpaceStroke(const SpaceStrokeRenderProxyDesc& desc);
+    // Every position the proxies hold (model matrices, camera and light positions) is the entity's double-precision
+    // world translation minus this origin, rounded to float. It starts at (0, 0, 0).
+    [[nodiscard]] const kb::math::DVec3& RenderOrigin() const noexcept { return renderOrigin_; }
+    // Changes whenever the origin moves.
+    [[nodiscard]] std::uint64_t RenderOriginRevision() const noexcept { return renderOriginRevision_; }
+    // The origin a viewer at `eye` renders with under `policy`: the current one while the eye is close enough to it.
+    [[nodiscard]] kb::math::DVec3 RenderOriginFor(const kb::math::DVec3& eye, const RenderOriginPolicy& policy) const noexcept;
+    // Moves the origin. Every proxy transform is stale afterwards: the next transform pull re-derives all of them
+    // (EcsRenderSceneSynchronizer), and the draw groups are rebuilt. False when the origin is unchanged.
+    bool SetRenderOrigin(const kb::math::DVec3& origin);
+    [[nodiscard]] std::uint64_t AddRenderOriginListener(RenderOriginListener listener);
+    void RemoveRenderOriginListener(std::uint64_t listenerId) noexcept;
     void SetWorldBackdrop(std::optional<SceneRenderWorldBackdrop> backdrop) noexcept;
     [[nodiscard]] const std::optional<SceneRenderWorldBackdrop>& WorldBackdrop() const noexcept;
     void SetAmbientRadiance(std::optional<SceneRenderAmbientRadiance> ambientRadiance) noexcept;
@@ -311,6 +345,8 @@ public:
     // rebuild); otherwise it updates the proxy and invalidates so the next
     // rebuild picks it up. Returns false only when the entity has no mesh proxy.
     [[nodiscard]] bool UpdateMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model);
+    // UpdateMeshTransform for the proxy FindMeshByEntity found: no second lookup.
+    void UpdateMeshTransform(std::uint64_t entityId, const MeshRenderProxy& proxy, const std::array<float, 16>& model);
     [[nodiscard]] bool UpdateVisibilityBlockerTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool UpdateGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool UpdateSurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
@@ -324,6 +360,10 @@ private:
     // call concurrently for distinct entity ids (each owns a distinct proxy and
     // instance slot). The caller applies invalidation/telemetry once per batch.
     [[nodiscard]] TransformUpdateOutcome ApplyMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model);
+    // With markGroupChanged false the draw group's content revision is left to MarkDrawGroupContentChanged, so that
+    // workers refreshing instances of one group do not all write its revision.
+    [[nodiscard]] TransformUpdateOutcome ApplyMeshTransform(std::uint64_t entityId, MeshRenderProxy& proxy, const std::array<float, 16>& model, bool markGroupChanged = true);
+    void MarkDrawGroupContentChanged(std::uint32_t groupIndex) noexcept;
     [[nodiscard]] bool ApplyGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool ApplySurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool ApplySpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
@@ -364,6 +404,10 @@ public:
     [[nodiscard]] const CameraProxyMap& CameraProxies() const noexcept;
     [[nodiscard]] const LightProxyMap& LightProxies() const noexcept;
     [[nodiscard]] const VisibilityBlockerProxyMap& VisibilityBlockerProxies() const noexcept;
+    // Which visibility cells the camera of the current viewport submit sees. The renderer sets it before
+    // building the mesh passes; nothing (the default) culls nothing by cell.
+    void SetPortalVisibility(std::optional<kb::scene::ScenePortalVisibility> visibility);
+    [[nodiscard]] const kb::scene::ScenePortalVisibility* PortalVisibility() const noexcept;
     [[nodiscard]] const GeometrySwarmProxyMap& GeometrySwarmProxies() const noexcept;
     [[nodiscard]] const SurfaceCastProxyMap& SurfaceCastProxies() const noexcept;
     [[nodiscard]] const SpaceStrokeProxyMap& SpaceStrokeProxies() const noexcept;
@@ -443,11 +487,13 @@ private:
 
     MeshProxyMap meshes_;
     std::uint64_t meshContentRevision_ = NextContentRevision();
+    std::uint64_t meshSetVersion_ = NextContentRevision();
     std::uint64_t lightContentRevision_ = NextContentRevision();
     mutable SortedMeshProxyIndex sortedMeshProxies_;
     CameraProxyMap cameras_;
     LightProxyMap lights_;
     VisibilityBlockerProxyMap visibilityBlockers_;
+    std::optional<kb::scene::ScenePortalVisibility> portalVisibility_;
     GeometrySwarmProxyMap geometrySwarms_;
     SurfaceCastProxyMap surfaceCasts_;
     SpaceStrokeProxyMap spaceStrokes_;
@@ -461,6 +507,10 @@ private:
     mutable std::uint64_t drawGroupBuildVersion_ = 1U;
     std::uint64_t transformInPlaceUpdateCount_ = 0;
     std::uint64_t transformFallbackUpdateCount_ = 0;
+    kb::math::DVec3 renderOrigin_{};
+    std::uint64_t renderOriginRevision_ = 0U;
+    std::vector<std::pair<std::uint64_t, RenderOriginListener>> renderOriginListeners_;
+    std::uint64_t nextRenderOriginListenerId_ = 1U;
 };
 
 } // namespace kb::render

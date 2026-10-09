@@ -2,6 +2,7 @@
 
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneHierarchyService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
@@ -23,6 +24,7 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
         return;
     }
 
+    SceneHistoryService::NoteSubtreeDestroying(scene, entity);
     SceneState& state = SceneAccess::State(scene);
     const SceneEntity root = entity;
     for (;;) {
@@ -49,6 +51,7 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
             state.inactiveEntities.erase(entity.Id());
             state.persistentEntities.erase(entity.Id());
             state.behaviourVariableOverrides.erase(entity.Id());
+            state.prefabInstances.ForgetDestroyedObject(entity);
             const auto beforeRemoval = state.world.NativeStorage().RemovalVersion();
             state.world.DestroyEntity(entity);
             state.transformTopology.LeafRemovalHandled(beforeRemoval, state.world.NativeStorage().RemovalVersion());

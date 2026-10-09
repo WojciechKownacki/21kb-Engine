@@ -68,7 +68,7 @@ struct EditorMetrics {
         .textPrimary = EditorColor{ 235, 238, 247 },
         .textSecondary = EditorColor{ 184, 192, 211 },
         .textDisabled = EditorColor{ 105, 115, 137 },
-        .accent = EditorColor{ 117, 92, 255 },
+        .accent = EditorColor{ 119, 119, 119 },
     };
 }
 

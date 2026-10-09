@@ -45,6 +45,7 @@ SceneTransformBatchEntry SceneTransformLeafBatchUpdater::Update(SceneEntity enti
     SceneTransformBatchEntry entry{
         .entity = entity, .transform = &transform,
         .parentTransform = parentTransform_ == nullptr ? TransformComponent{} : *parentTransform_,
+        .state = &state_, .parentEntity = parent_,
         .hasParent = parent_.IsValid(), .parentWorldVersion = parentTransform_ == nullptr ? 0U : parentTransform_->worldVersion,
     };
     UpdateSceneTransformBatchEntry(entry);

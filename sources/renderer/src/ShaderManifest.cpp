@@ -25,6 +25,14 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuVisual)},
     // Optional: without it (no Metal variant is generated on Windows hosts) emitters fall back to the CPU path.
     ShaderManifestEntry{.name = "cs_particle_gpu_emit.sc", .stage = ShaderStage::Compute, .required = false},
+    // Optional likewise: emitters with collisions then simulate without them.
+    ShaderManifestEntry{.name = "cs_particle_gpu_collide.sc", .stage = ShaderStage::Compute, .required = false},
+    // Optional likewise: the live particles of world-space emitters are then cleared when the render origin moves.
+    ShaderManifestEntry{.name = "cs_particle_gpu_rebase.sc", .stage = ShaderStage::Compute, .required = false},
+    // Optional likewise: alpha-blended emitters are then drawn in ring order instead of back to front.
+    ShaderManifestEntry{.name = "cs_particle_gpu_sort_keys.sc", .stage = ShaderStage::Compute, .required = false},
+    ShaderManifestEntry{.name = "cs_particle_gpu_sort_step.sc", .stage = ShaderStage::Compute, .required = false},
+    ShaderManifestEntry{.name = "cs_particle_gpu_sort_gather.sc", .stage = ShaderStage::Compute, .required = false},
     ShaderManifestEntry{.name = "fs_editor_gizmo.sc", .stage = ShaderStage::Fragment,
         .requiredFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::Editor)},
     ShaderManifestEntry{.name = "fs_editor_gizmo_resolve.sc", .stage = ShaderStage::Fragment,
@@ -40,14 +48,12 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_leui_rect.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_lit.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_deferred_lighting.sc", .stage = ShaderStage::Fragment},
+    // Optional: without it (no Metal variant is generated on Windows hosts) screen-space GI stays off.
+    ShaderManifestEntry{.name = "fs_ssgi_resolve.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_mesh.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_gbuffer_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_instanced.sc", .stage = ShaderStage::Fragment},
-    // Legacy developer prebuilt bundles contain these permutations only in DXBC, so they stay
-    // individually optional for ValidateShaderManifestProfile. Production packages compile
-    // them per target and RequiredPackagedShaderNames promotes every stage referenced by a
-    // required runtime program; the cooker/validator therefore cannot omit them.
-    ShaderManifestEntry{.name = "fs_mesh_motion_vectors.sc", .stage = ShaderStage::Fragment, .required = false},
+    ShaderManifestEntry{.name = "fs_mesh_motion_vectors.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_selection_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_shadow_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_post_bloom_blur.sc", .stage = ShaderStage::Fragment},
@@ -74,11 +80,11 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "vs_lit_trs_gpu_cull.sc", .stage = ShaderStage::Vertex, .required = false},
     ShaderManifestEntry{.name = "vs_mesh.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_mesh_instanced.sc", .stage = ShaderStage::Vertex},
-    ShaderManifestEntry{.name = "vs_mesh_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
+    ShaderManifestEntry{.name = "vs_mesh_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_mesh_shadow_instanced.sc", .stage = ShaderStage::Vertex},
-    ShaderManifestEntry{.name = "vs_mesh_shadow_skinned_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
-    ShaderManifestEntry{.name = "vs_mesh_skinned_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
-    ShaderManifestEntry{.name = "vs_mesh_skinned_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
+    ShaderManifestEntry{.name = "vs_mesh_shadow_skinned_instanced.sc", .stage = ShaderStage::Vertex},
+    ShaderManifestEntry{.name = "vs_mesh_skinned_instanced.sc", .stage = ShaderStage::Vertex},
+    ShaderManifestEntry{.name = "vs_mesh_skinned_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_present.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_particle_instanced.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_screen_ui.sc", .stage = ShaderStage::Vertex},

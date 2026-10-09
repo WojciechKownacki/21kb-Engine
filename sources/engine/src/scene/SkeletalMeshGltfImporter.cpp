@@ -1,5 +1,7 @@
 #include "engine/scene/SkeletalMeshGltfImporter.hpp"
 
+#include "engine/assets/GltfExternalResources.hpp"
+
 #define CGLTF_IMPLEMENTATION
 #include <cgltf/cgltf.h>
 
@@ -333,9 +335,7 @@ struct CoordinateConversion {
     if (materialIndex < 0 || static_cast<cgltf_size>(materialIndex) >= data.materials_count) {
         return Fail<std::uint64_t>(error, "Skeletal glTF primitive references an invalid material.");
     }
-    const std::string materialName = primitive.material->name == nullptr || primitive.material->name[0] == '\0'
-        ? "Material_" + std::to_string(materialIndex)
-        : std::string{ primitive.material->name };
+    const std::string materialName = kb::assets::GltfMaterialSlotName(data, static_cast<std::size_t>(materialIndex));
     const std::uint64_t materialAssetId = options.materialResolver(materialName, options.materialResolverUserData);
     if (materialAssetId == 0U) {
         return Fail<std::uint64_t>(error,
@@ -372,9 +372,11 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
             "Skeletal glTF import could not parse the source file.");
     }
     GltfData data{ rawData };
-    if (cgltf_load_buffers(&options, data.get(), path.string().c_str()) != cgltf_result_success) {
+    std::string bufferError;
+    if (!kb::assets::LoadGltfBuffers(options, *data, path.has_parent_path() ? path.parent_path() : std::filesystem::path{ "." },
+            {}, &bufferError)) {
         return Fail<SkeletalMeshGltfImportResult>(error,
-            "Skeletal glTF import could not load source buffers.");
+            "Skeletal glTF import could not load source buffers: " + bufferError);
     }
     if (data->skins_count != 1U || data->skins[0].joints_count == 0U) {
         return Fail<SkeletalMeshGltfImportResult>(error,

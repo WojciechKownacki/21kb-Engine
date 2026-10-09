@@ -14,6 +14,7 @@ enum class EditorMenuCommand : std::uint8_t {
     Layout,
     Options,
     Help,
+    World,
 };
 
 enum class EditorTransportCommand : std::uint8_t {

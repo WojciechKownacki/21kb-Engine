@@ -34,6 +34,7 @@ NativeScriptPluginLoadResult NativeScriptPluginManager::LoadOrReload(NativeScrip
         .shadowCopyDirectoryName = "21kb_native_script_plugins",
         .diagnosticLabel = "native script plugin",
     });
+    result.warnings = std::move(loadedModule.warnings);
     if (!loadedModule.Succeeded()) {
         result.errors = std::move(loadedModule.errors);
         return result;

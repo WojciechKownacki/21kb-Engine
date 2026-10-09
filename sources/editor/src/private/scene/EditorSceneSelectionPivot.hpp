@@ -20,6 +20,11 @@ public:
         const kb::scene::Scene& scene,
         std::span<const kb::scene::SceneEntity> selected,
         kb::scene::SceneEntity fallback) noexcept;
+    // The same pivot from the entities' double-precision translations.
+    [[nodiscard]] static std::optional<kb::math::DVec3> ResolvePrecise(
+        const kb::scene::Scene& scene,
+        std::span<const kb::scene::SceneEntity> selected,
+        kb::scene::SceneEntity fallback) noexcept;
 };
 
 } // namespace kb::editor

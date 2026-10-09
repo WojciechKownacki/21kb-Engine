@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/ecs/Query.hpp"
+#include "engine/ecs/UnsafeHotQuery.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
@@ -13,10 +15,50 @@
 #include "engine/scene/VisibilityComponent.hpp"
 
 #include <cstdint>
+#include <mutex>
 
 struct ecs_query_t;
 
 namespace kb::scene {
+
+// A component query kept across iterations, rebuilt after a structural change of the world.
+template <typename... Components>
+struct SceneComponentQueryCache {
+    std::mutex mutex;
+    kb::ecs::Query<Components...> query;
+    kb::ecs::UnsafeHotReadQuery<Components...> hotQuery;
+};
+
+// The queries of the scene's camera, light and mesh-renderer iterators.
+struct SceneComponentIterationQueries {
+    SceneComponentQueryCache<CameraComponent, TransformComponent> cameras;
+    SceneComponentQueryCache<LightComponent, TransformComponent> lights;
+    SceneComponentQueryCache<MeshRendererComponent, TransformComponent> meshRenderers;
+};
+
+// Visits the chunks of the query of `Components` with the cached query. A nested or concurrent iteration, which
+// finds the cache in use, builds its own query.
+template <typename... Components, typename Kernel>
+void ForEachCachedQueryRange(const kb::ecs::World& world, SceneComponentQueryCache<Components...>& cache, Kernel&& kernel) {
+    kb::ecs::QueryExecutionSettings settings;
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    const std::unique_lock lock{ cache.mutex, std::try_to_lock };
+    if (lock.owns_lock()) {
+        if (!cache.query.IsValid()) {
+            cache.query = const_cast<kb::ecs::World&>(world).CreateQuery<Components...>();
+        }
+        if (!cache.query.IsValid() || (cache.hotQuery.IsStale(cache.query) && !cache.hotQuery.Rebuild(cache.query, settings))) {
+            return;
+        }
+        static_cast<void>(cache.hotQuery.ForEachRange(0U, kernel));
+        return;
+    }
+    const kb::ecs::Query<Components...> query = const_cast<kb::ecs::World&>(world).CreateQuery<Components...>();
+    kb::ecs::UnsafeHotReadQuery<Components...> hotQuery;
+    if (query.IsValid() && hotQuery.Rebuild(query, settings)) {
+        static_cast<void>(hotQuery.ForEachRange(0U, kernel));
+    }
+}
 
 class SceneComponentIteration {
 public:
@@ -29,23 +71,23 @@ public:
         const kb::ecs::World& world,
         std::uint64_t transformComponentId,
         std::uint64_t cameraComponentId,
-        ecs_query_t*& cachedQuery,
+        SceneComponentIterationQueries& cachedQueries,
         CameraVisitor visitor,
         void* context);
-    static void ForEachMeshRenderer(const kb::ecs::World& world, std::uint64_t transformComponentId, std::uint64_t meshRendererComponentId, ecs_query_t*& cachedQuery, MeshRendererVisitor visitor, void* context);
+    static void ForEachMeshRenderer(const kb::ecs::World& world, std::uint64_t transformComponentId, std::uint64_t meshRendererComponentId, SceneComponentIterationQueries& cachedQueries, MeshRendererVisitor visitor, void* context);
     static void ForEachVisibleMeshRenderer(
         const kb::ecs::World& world,
         std::uint64_t transformComponentId,
         std::uint64_t visibilityComponentId,
         std::uint64_t meshRendererComponentId,
-        ecs_query_t*& cachedQuery,
+        SceneComponentIterationQueries& cachedQueries,
         MeshRendererVisitor visitor,
         void* context);
     static void ForEachLight(
         const kb::ecs::World& world,
         std::uint64_t transformComponentId,
         std::uint64_t lightComponentId,
-        ecs_query_t*& cachedQuery,
+        SceneComponentIterationQueries& cachedQueries,
         LightVisitor visitor,
         void* context);
     static void ForEachPhysicsBody(

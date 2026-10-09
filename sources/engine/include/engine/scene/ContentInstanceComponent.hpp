@@ -12,6 +12,13 @@ enum class ContentInstanceKind : std::uint8_t {
     Prefab = 0U,
     Subscene = 1U,
     WorldFragment = 2U,
+    // The asset is a partitioned world (.21kbworld): its built cells stream around
+    // the scene's streaming sources instead of the whole asset loading at once.
+    PartitionedWorld = 3U,
+    // The asset is a baked navigation mesh (.21kbnavmesh): its tiles are added to the scene's
+    // navigation while the scene plays (docs/navigation.md). Tiles are in world coordinates; the
+    // owner's transform does not move them.
+    NavigationMesh = 4U,
 };
 
 // Owner content is attached to and released with the component owner.
@@ -33,7 +40,8 @@ struct ContentInstanceComponent {
 };
 
 [[nodiscard]] constexpr bool IsContentInstanceKindValid(ContentInstanceKind kind) noexcept {
-    return kind == ContentInstanceKind::Prefab || kind == ContentInstanceKind::Subscene || kind == ContentInstanceKind::WorldFragment;
+    return kind == ContentInstanceKind::Prefab || kind == ContentInstanceKind::Subscene || kind == ContentInstanceKind::WorldFragment ||
+        kind == ContentInstanceKind::PartitionedWorld || kind == ContentInstanceKind::NavigationMesh;
 }
 
 [[nodiscard]] constexpr bool IsContentInstanceLifetimeValid(ContentInstanceLifetime lifetime) noexcept {

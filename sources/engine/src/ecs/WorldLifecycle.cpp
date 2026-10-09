@@ -11,6 +11,13 @@
 #include <utility>
 
 namespace kb::ecs {
+namespace {
+
+[[nodiscard]] bool BackendEntityIndexAvailable(Entity::IdType strippedId, void* context) noexcept {
+    return ecs_get_alive(static_cast<const ecs_world_t*>(context), strippedId) == 0U;
+}
+
+} // namespace
 
 World::World(WorldConfig config)
     : world_(ecs_init())
@@ -23,7 +30,17 @@ World::World(WorldConfig config)
     if (world_ == nullptr) {
         throw std::runtime_error("Failed to initialize ECS world");
     }
-    queryPlanIndex_.reserve(config_.reserveQueryCache);
+    nativeStorage_->SetEntityIndexAvailabilityPolicy(&BackendEntityIndexAvailable, world_);
+    try {
+        registries_->InitializeMirroredEntityCleanup(world_, nativeStorage_.get());
+        queryPlanIndex_.reserve(config_.reserveQueryCache);
+    } catch (...) {
+        // Members still own their registries/native storage while backend
+        // initialization cleanup runs; contexts cannot outlive those owners.
+        ecs_fini(world_);
+        world_ = nullptr;
+        throw;
+    }
 }
 
 World::~World() {
@@ -38,6 +55,7 @@ World::World(World&& other) noexcept
     , mutableComponentBorrowLocks_(std::move(other.mutableComponentBorrowLocks_))
     , structuralChangeValidator_(std::move(other.structuralChangeValidator_))
     , telemetryState_(other.telemetryState_)
+    , observedComponentIds_(std::move(other.observedComponentIds_))
     , queryPlanCache_(std::move(other.queryPlanCache_))
     , queryPlanIndex_(std::move(other.queryPlanIndex_)) {}
 
@@ -51,6 +69,7 @@ World& World::operator=(World&& other) noexcept {
         mutableComponentBorrowLocks_ = std::move(other.mutableComponentBorrowLocks_);
         structuralChangeValidator_ = std::move(other.structuralChangeValidator_);
         telemetryState_ = other.telemetryState_;
+        observedComponentIds_ = std::move(other.observedComponentIds_);
         queryPlanCache_ = std::move(other.queryPlanCache_);
         queryPlanIndex_ = std::move(other.queryPlanIndex_);
     }
@@ -68,6 +87,7 @@ void World::Reset() noexcept {
     if (mutableComponentBorrowLocks_ != nullptr) {
         mutableComponentBorrowLocks_->Clear();
     }
+    observedComponentIds_.clear();
     queryPlanIndex_.clear();
     queryPlanCache_.clear();
     structuralChangeValidator_.reset();

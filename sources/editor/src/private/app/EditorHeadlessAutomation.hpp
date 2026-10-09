@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/EditorKeyState.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputTouchPoint.hpp"
@@ -9,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -123,6 +125,7 @@ public:
     [[nodiscard]] bool VerifyUIWidgetFeatures();
     [[nodiscard]] bool VerifyPickerCloseButtons();
     [[nodiscard]] bool VerifyUI2DEditing();
+    [[nodiscard]] bool VerifyPrefabRoundTrip();
     [[nodiscard]] bool SelectUIAnchorPreset(int preset);
     [[nodiscard]] bool SetUIRectLayoutField(int field, float value);
     [[nodiscard]] bool SetGameplayKey(
@@ -169,6 +172,9 @@ public:
         std::string_view panel, std::string_view checkpoint);
     [[nodiscard]] bool VerifyViewportHostLifecycle();
     [[nodiscard]] bool CaptureEditorScene(std::string_view checkpoint, bool editorOverlaysEnabled = true);
+    // The Scene panel's viewport exactly as the editor presents it: its own camera and the
+    // production present settings, editor overlays included (grid lines, the world cell grid).
+    [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
     [[nodiscard]] bool VerifySceneRenderTargetAfterSecondary(
         std::string_view checkpoint);
     [[nodiscard]] bool CaptureRuntime(
@@ -185,8 +191,12 @@ public:
         const noexcept;
 
 private:
+    // Requests a screen capture, renders with `render` until it completes, validates the PNG.
+    [[nodiscard]] bool CaptureScene(std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render);
+
     struct Impl;
 
+    EditorScriptedInputScope scriptedInput_;
     EditorSceneContext& context_;
     std::filesystem::path artifactRoot_;
     std::filesystem::path tracePath_;

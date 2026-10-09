@@ -3,6 +3,11 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
+#include "engine/project/ProjectDescriptor.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/scene/ParticleEffectAssetLoader.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
+#include <functional>
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -30,6 +35,7 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
+#include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
@@ -2871,6 +2877,52 @@ void RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest() {
     submit();
     Require(kb::scene::SceneRenderFeedback::IsVisible(scene, fixture.entity),
         "Runtime scene reset did not perform its initial full synchronization");
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+// A spawning crowd appends roots every frame; the frame sync reconciles just them, and their meshes still arrive.
+void RunRuntimeFrameSyncAppendsRootsTest() {
+    const auto root = std::filesystem::temp_directory_path() / "21kb_runtime_append_sync";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+    auto& scene = fixture.scene;
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Root append test could not initialize headless renderer");
+    kb::game::RuntimeSceneFrameSync sync;
+    const auto frame = [&] {
+        sync.BeforeUpdate(scene);
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        Require(renderer.BeginFrame() && sync.Submit(scene, renderer), "Root append frame did not submit");
+        renderer.EndFrame();
+    };
+    frame();
+    std::vector<kb::scene::SceneEntity> meshes;
+    for (std::uint32_t step = 1U; step <= 6U; ++step) {
+        for (std::uint32_t index = 0U; index < 3U; ++index) {
+            const auto entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+                .transform = TransformAt(0.1F * static_cast<float>(meshes.size()), 0.0F, 0.0F)});
+            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{.meshAssetId = fixture.meshAssetId});
+            meshes.push_back(entity);
+        }
+        static_cast<void>(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{}));
+        frame();
+        for (const auto mesh : meshes) {
+            Require(kb::scene::SceneRenderFeedback::IsVisible(scene, mesh), "An appended root mesh did not reach the renderer");
+        }
+        Require(renderer.RuntimeResourceStats().renderSceneMeshProxyCount == meshes.size() + 1U,
+            "Appending roots changed the renderer's mesh proxies");
+    }
+    scene.Entities().Destroy(meshes.back());
+    frame();
+    Require(renderer.RuntimeResourceStats().renderSceneMeshProxyCount == meshes.size(),
+        "A destroyed root after appended roots kept its mesh proxy");
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }
@@ -6495,7 +6547,10 @@ void RunRendererDrawsPublishedRuntimeTexturePixelsTest() {
 // renderer into a hidden offscreen target, so the comparison needs no reference image.
 struct ShadowFloorScene {
     bool point = true;
+    bool spot = false;
     bool lightCastsShadow = true;
+    int extraPointLights = 0; // more shadow-casting point lights just beside the main one
+    float pointIntensity = 3.0F;
     bx::Vec3 cameraPosition{ 0.0F, 2.0F, -14.0F };
     float fovDegrees = 40.0F;
 };
@@ -6503,7 +6558,7 @@ struct ShadowFloorScene {
 [[nodiscard]] int RenderShadowFloorBrightness(const ShadowFloorScene& setup) {
     const bool lightCastsShadow = setup.lightCastsShadow;
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
-        ("21kb_shadow_floor_" + std::to_string(GetCurrentProcessId()) + (setup.point ? "_p" : "_d") + (lightCastsShadow ? "_on" : "_off"));
+        ("21kb_shadow_floor_" + std::to_string(GetCurrentProcessId()) + (setup.point ? "_p" : setup.spot ? "_s" : "_d") + (lightCastsShadow ? "_on" : "_off"));
     std::error_code error;
     std::filesystem::create_directories(root, error);
     Require(!error, "Point shadow test could not create its asset directory");
@@ -6539,8 +6594,16 @@ struct ShadowFloorScene {
     const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Shadow Light", .transform = lightTransform });
     scene.Components().Lights().Set(light, kb::scene::LightComponent{
-        .kind = setup.point ? kb::scene::LightKind::Point : kb::scene::LightKind::Directional,
-        .intensity = setup.point ? 3.0F : 1.0F, .range = 30.0F, .castsShadow = lightCastsShadow });
+        .kind = setup.point ? kb::scene::LightKind::Point
+              : setup.spot ? kb::scene::LightKind::Spot : kb::scene::LightKind::Directional,
+        .intensity = setup.point ? setup.pointIntensity : setup.spot ? 3.0F : 1.0F, .range = 30.0F, .castsShadow = lightCastsShadow });
+    for (int extra = 0; extra < setup.extraPointLights; ++extra) {
+        const float angle = static_cast<float>(extra) * 1.3F;
+        const kb::scene::SceneEntity other = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Extra Shadow Light", .transform = TransformAt(0.4F * std::cos(angle), 6.0F, 0.4F * std::sin(angle)) });
+        scene.Components().Lights().Set(other, kb::scene::LightComponent{
+            .kind = kb::scene::LightKind::Point, .intensity = setup.pointIntensity, .range = 30.0F, .castsShadow = lightCastsShadow });
+    }
 
     NativeTestSurface surface;
     Require(surface.IsValid(), "Point shadow test could not create a hidden D3D11 surface");
@@ -6550,6 +6613,13 @@ struct ShadowFloorScene {
     Renderer renderer;
     Require(renderer.Initialize(surface, &config), "Point shadow test could not initialize the renderer");
     renderer.SetRuntimeAssetDiscoveryEnabled(false);
+    if (setup.extraPointLights > 0) {
+        // The default lighting path lights four lights; many lights need the clustered one.
+        SceneRenderLightingConfig lighting{};
+        lighting.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;
+        lighting.maxForwardLights = kMaxSceneForwardPlusLights;
+        renderer.SetDefaultSceneLightingConfig(lighting);
+    }
 
     SceneRenderCamera camera{};
     bx::mtxLookAt(camera.view.data(), setup.cameraPosition, bx::Vec3{ 0.0F, 0.0F, 0.0F });
@@ -6584,6 +6654,111 @@ struct ShadowFloorScene {
     return brightness;
 }
 
+// A thin plate high above the floor casts a stripe of shadow that runs away from the camera across
+// several cascades. The stripe is thin enough that its darkness depends on the shadow map resolution,
+// so a cascade switch shows as a step in the stripe's contrast between neighbouring image rows. The
+// largest such step measures the seam.
+[[nodiscard]] double RenderCascadeSeamJump(float cascadeBlend) {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_cascade_seam_" + std::to_string(GetCurrentProcessId()));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Cascade seam test could not create its asset directory");
+    WriteStressCubeObj(root / "cube.obj");
+
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "Cascade seam test could not register render asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "Cascade seam test could not discover its mesh");
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/cube.obj");
+    Require(mesh != nullptr, "Cascade seam test lost its cube mesh");
+    const auto addBox = [&](kb::scene::Vec3 position, kb::scene::Vec3 scale) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Box",
+            .transform = kb::scene::TransformComponent{ .localPosition = position, .localScale = scale },
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = mesh->id.value, .castsShadow = true });
+    };
+    addBox({ 0.0F, -0.5F, 20.0F }, { 60.0F, 1.0F, 90.0F });  // floor, top face at y = 0
+    addBox({ 0.0F, 10.0F, 25.0F }, { 0.15F, 0.2F, 70.0F });   // long plate above the camera, along the view direction
+    kb::scene::TransformComponent lightTransform = TransformAt(0.0F, 20.0F, 0.0F);
+    // A turn of 50 degrees about X tilts the light's forward axis down and away from the camera.
+    lightTransform.localRotation = kb::scene::Quat{ 0.42261826F, 0.0F, 0.0F, 0.90630779F };
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Sun", .transform = lightTransform });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Directional, .intensity = 1.0F, .range = 30.0F, .castsShadow = true });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Cascade seam test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Cascade seam test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 4.0F, -4.0F }, bx::Vec3{ 0.0F, 0.0F, 20.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 40.0F, 1.0F, 0.1F, 200.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    double maxJump = 0.0;
+    {
+        constexpr std::uint16_t kSize = 256U;
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(kSize, kSize), "Cascade seam test could not create its readback target");
+        SceneRenderLightingConfig lighting{};
+        lighting.shadowCascadeBlend = cascadeBlend;
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .lightingConfig = lighting,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = true,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        SubmitLifecycleFrame(renderer, scene, desc, "Cascade seam test did not submit its first frame");
+        SubmitLifecycleFrame(renderer, scene, desc, "Cascade seam test did not submit its second frame");
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        // Contrast of the stripe against a lit floor pixel of the same row: the floor gradient cancels out.
+        const auto brightness = [&](std::size_t row, std::size_t x) {
+            const std::size_t offset = (row * kSize + x) * 4U;
+            return static_cast<double>(pixels[offset] + pixels[offset + 1U] + pixels[offset + 2U]);
+        };
+        std::vector<double> contrast;
+        for (std::size_t row = 100U; row < kSize; ++row) {
+            double darkest = brightness(row, 96U);
+            for (std::size_t x = 96U; x < 160U; ++x) darkest = std::min(darkest, brightness(row, x));
+            const double lit = brightness(row, 40U);
+            contrast.push_back((lit - darkest) / std::max(lit, 1.0));
+        }
+        for (std::size_t i = 1U; i < contrast.size(); ++i) {
+            maxJump = std::max(maxJump, std::abs(contrast[i] - contrast[i - 1U]));
+        }
+    }
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+    return maxJump;
+}
+
+void RunRendererBlendsShadowCascadesTest() {
+    const double hard = RenderCascadeSeamJump(0.0F);
+    const double blended = RenderCascadeSeamJump(0.1F);
+    std::fprintf(stderr, "cascade_seam_jump hard=%.3f blended=%.3f%c", hard, blended, 10);
+    Require(hard > 0.08, "Cascade blend test: the hard switch must show a visible seam for the comparison to mean anything");
+    Require(blended * 2.0 < hard, "Cascade blend test: blending must clearly reduce the step at the cascade boundary");
+}
+
 void RunRendererRendersDirectionalCascadeShadowTest() {
     // The occluder is 40 m from the camera: outside the two nearest cascades, inside the widest one.
     ShadowFloorScene farScene{ .point = false, .cameraPosition = bx::Vec3{ 0.0F, 2.0F, -40.0F }, .fovDegrees = 8.0F };
@@ -6599,7 +6774,13 @@ void RunRendererRendersDirectionalCascadeShadowTest() {
 
 // Screen-space GI: a lit red wall must tint the nearby white floor, but only when GI is enabled.
 // Several frames are rendered so the pass can read the previous frame's lit colour.
-[[nodiscard]] int RenderGiFloorRedExcess(bool globalIllumination) {
+struct GiFloorStats {
+    int redExcess = 0;
+    // Mean absolute brightness difference between horizontally adjacent floor pixels: ray noise raises it.
+    double noise = 0.0;
+};
+
+[[nodiscard]] GiFloorStats RenderGiFloorStats(bool globalIllumination, float historyWeight, int frames) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_gi_bounce_" + std::to_string(GetCurrentProcessId()) + (globalIllumination ? "_on" : "_off"));
     std::error_code error;
@@ -6661,13 +6842,14 @@ void RunRendererRendersDirectionalCascadeShadowTest() {
     bx::mtxLookAt(camera.view.data(), bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.0F, 0.0F, 0.0F });
     SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
 
-    int redExcess = 0;
+    GiFloorStats stats;
     {
         ParticleMeshReadbackTarget target;
         Require(target.Initialize(), "GI test could not create its readback target");
         SceneRenderLightingConfig lighting{};
         lighting.globalIllumination = globalIllumination ? SceneRenderGlobalIlluminationMode::SsGi
                                                          : SceneRenderGlobalIlluminationMode::Disabled;
+        lighting.giHistoryWeight = historyWeight;
         lighting.shadowsEnabled = false;
         const RenderSceneSubmitDesc desc{
             .target = target.Binding(),
@@ -6681,7 +6863,7 @@ void RunRendererRendersDirectionalCascadeShadowTest() {
             .selectionMaskEnabled = false,
             .selectionOutlineEnabled = false,
         };
-        for (int frame = 0; frame < 6; ++frame) {
+        for (int frame = 0; frame < frames; ++frame) {
             SubmitLifecycleFrame(renderer, scene, desc, "GI test did not submit a frame");
         }
         const std::vector<std::uint8_t> pixels = target.ReadPixels();
@@ -6695,18 +6877,1089 @@ void RunRendererRendersDirectionalCascadeShadowTest() {
                 blue += pixels[offset + 2U];
             }
         }
-        redExcess = (red - blue) / 25;
+        stats.redExcess = (red - blue) / 25;
+        int differenceSum = 0;
+        int differenceCount = 0;
+        for (int y = 36; y < 48; ++y) {
+            for (int x = 24; x < 40; ++x) {
+                const auto brightness = [&](int px) {
+                    const std::size_t offset = (static_cast<std::size_t>(y) * 64U + static_cast<std::size_t>(px)) * 4U;
+                    return static_cast<int>(pixels[offset]) + pixels[offset + 1U] + pixels[offset + 2U];
+                };
+                differenceSum += std::abs(brightness(x + 1) - brightness(x));
+                ++differenceCount;
+            }
+        }
+        stats.noise = static_cast<double>(differenceSum) / differenceCount;
     }
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
-    return redExcess;
+    return stats;
+}
+
+// A small scene for the screen-space effects: boxes (white matte, red matte or glossy white) lit by
+// point lights, rendered for several frames into a square readback target.
+enum class SsMaterial : std::uint8_t { White, Red, Glossy, Blend };
+
+struct SsBox {
+    kb::scene::Vec3 position;
+    kb::scene::Vec3 scale;
+    SsMaterial material = SsMaterial::White;
+};
+
+[[nodiscard]] std::vector<std::uint8_t> RenderScreenSpaceScene(
+    const std::vector<SsBox>& boxes, const std::vector<kb::scene::Vec3>& pointLights, bx::Vec3 eye, bx::Vec3 target,
+    float fovDegrees, const SceneRenderLightingConfig& lighting, int frames, std::uint16_t size,
+    SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+    const std::function<void(kb::scene::Scene&, int)>& beforeFrame = {}, bool lightsCastShadow = false,
+    float lightIntensity = 4.0F, float lightRange = 40.0F) {
+    static int counter = 0;
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_ss_scene_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(counter++));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Screen-space test could not create its asset directory");
+    WriteStressCubeObj(root / "cube.obj");
+
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()) &&
+            manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()),
+        "Screen-space test could not register render asset loaders");
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "Screen-space test could not discover its mesh");
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/cube.obj");
+    Require(mesh != nullptr, "Screen-space test lost its cube mesh");
+    const auto publishMaterial = [&](const char* name, std::array<float, 3> color, float roughness,
+                                     RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque) {
+        const kb::assets::AssetId id = kb::assets::MakeAssetId(name);
+        Require(manager.RegisterAsset(kb::assets::AssetMetadata{
+                    .id = id, .type = "RenderMaterial", .name = name, .virtualPath = std::string{ "/Game/" } + name,
+                    .physicalPath = root / (std::string{ "runtime_" } + name), .contentHash = 1U, .runtimeLoadable = true }),
+            "Screen-space test could not register a material");
+        auto data = std::make_shared<RenderMaterialAssetData>();
+        data->desc.baseColor[0] = color[0];
+        data->desc.baseColor[1] = color[1];
+        data->desc.baseColor[2] = color[2];
+        data->desc.roughnessFactor = roughness;
+        data->desc.alphaMode = alphaMode;
+        data->graph = MakeDefaultRenderMaterialGraphDocument();
+        if (alphaMode == RenderMaterialAlphaMode::Blend) data->graph.blendMode = "translucent";
+        Require(manager.PublishRuntimeAsset(id, std::move(data)), "Screen-space test could not publish a material");
+        return id.value;
+    };
+    const std::uint64_t blend = publishMaterial("SsBlend", { 1.0F, 1.0F, 1.0F }, 0.9F, RenderMaterialAlphaMode::Blend);
+    const std::uint64_t red = publishMaterial("SsRed", { 0.8F, 0.05F, 0.05F }, 0.9F);
+    const std::uint64_t glossy = publishMaterial("SsGlossy", { 0.9F, 0.9F, 0.9F }, 0.05F);
+    for (const SsBox& box : boxes) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Box",
+            .transform = kb::scene::TransformComponent{ .localPosition = box.position, .localScale = box.scale },
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = mesh->id.value,
+            .materialAssetId = box.material == SsMaterial::Red ? red : box.material == SsMaterial::Glossy ? glossy
+                : box.material == SsMaterial::Blend ? blend : 0U,
+            .castsShadow = false });
+    }
+    for (const kb::scene::Vec3& position : pointLights) {
+        const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Point Light", .transform = TransformAt(position.x, position.y, position.z) });
+        scene.Components().Lights().Set(light, kb::scene::LightComponent{
+            .kind = kb::scene::LightKind::Point, .intensity = lightIntensity, .range = lightRange, .castsShadow = lightsCastShadow });
+    }
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Screen-space test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Screen-space test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), eye, target);
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), fovDegrees, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+    std::vector<std::uint8_t> pixels;
+    {
+        ParticleMeshReadbackTarget readback;
+        Require(readback.Initialize(size, size), "Screen-space test could not create its readback target");
+        SceneRenderLightingConfig frameLighting = lighting;
+        frameLighting.shadowsEnabled = false;
+        const RenderSceneSubmitDesc desc{
+            .target = readback.Binding(),
+            .cameraOverride = camera,
+            .lightingConfig = frameLighting,
+            .meshPassMode = meshPassMode,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        for (int frame = 0; frame < frames; ++frame) {
+            if (beforeFrame) beforeFrame(scene, frame);
+            SubmitLifecycleFrame(renderer, scene, desc, "Screen-space test did not submit a frame");
+        }
+        pixels = readback.ReadPixels();
+    }
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+    return pixels;
+}
+
+[[nodiscard]] double MeanBrightness(const std::vector<std::uint8_t>& pixels, std::uint16_t size, int x0, int y0, int x1, int y1) {
+    double sum = 0.0;
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            const std::size_t offset = (static_cast<std::size_t>(y) * size + static_cast<std::size_t>(x)) * 4U;
+            sum += pixels[offset] + pixels[offset + 1U] + pixels[offset + 2U];
+        }
+    }
+    return sum / (static_cast<double>(x1 - x0) * (y1 - y0));
+}
+
+void RunRendererRendersScreenSpaceAmbientOcclusionTest() {
+    constexpr std::uint16_t kSize = 64U;
+    // Ambient light only (no lights): a white floor next to a tall wall, seen from above and the side.
+    const std::vector<SsBox> boxes{
+        { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } },
+        { { 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F } },
+    };
+    SceneRenderLightingConfig lighting{};
+    lighting.ambientOcclusionEnabled = false;
+    const auto off = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.55F, 0.0F, 0.0F }, 30.0F, lighting, 30, kSize);
+    lighting.ambientOcclusionEnabled = true;
+    lighting.aoRadius = 1.0F;
+    const auto on = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.55F, 0.0F, 0.0F }, 30.0F, lighting, 30, kSize);
+    // Cells of 8x8 pixels: near the wall base (centre) and on open floor (left).
+    const double nearOff = MeanBrightness(off, kSize, 28, 30, 36, 38);
+    const double nearOn = MeanBrightness(on, kSize, 28, 30, 36, 38);
+    const double farOff = MeanBrightness(off, kSize, 4, 44, 12, 52);
+    const double farOn = MeanBrightness(on, kSize, 4, 44, 12, 52);
+    std::fprintf(stderr, "ao_pixels near off=%.1f on=%.1f far off=%.1f on=%.1f%c", nearOff, nearOn, farOff, farOn, 10);
+    Require(nearOn < nearOff * 0.9, "AO test: the floor at the wall base must be darker with ambient occlusion");
+    Require(farOn > farOff * 0.98, "AO test: open floor must stay unoccluded");
+}
+
+// A glossy floor in front of a lit red wall must show the wall's reflection once screen-space
+// reflections are on: the floor region where the mirror image of the wall appears turns red.
+void RunRendererRendersScreenSpaceReflectionsTest() {
+    constexpr std::uint16_t kSize = 128U;
+    const std::vector<SsBox> boxes{
+        { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F }, SsMaterial::Glossy },
+        { { 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, SsMaterial::Red },
+    };
+    const std::vector<kb::scene::Vec3> lights{ { -1.0F, 5.0F, 0.0F } };
+    SceneRenderLightingConfig lighting{};
+    const bx::Vec3 eye{ -6.0F, 1.0F, -3.0F };
+    const bx::Vec3 target{ 2.0F, 0.0F, 0.0F };
+    const auto off = RenderScreenSpaceScene(boxes, lights, eye, target, 40.0F, lighting, 8, kSize);
+    lighting.screenSpaceReflectionsEnabled = true;
+    const auto on = RenderScreenSpaceScene(boxes, lights, eye, target, 40.0F, lighting, 8, kSize);
+    // The mirror image of the wall lies on the floor below the wall's base line in the image.
+    const auto redExcess = [&](const std::vector<std::uint8_t>& pixels) {
+        double sum = 0.0;
+        for (int y = 72; y < 108; ++y) {
+            for (int x = 24; x < 104; ++x) {
+                const std::size_t offset = (static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x)) * 4U;
+                sum += static_cast<double>(pixels[offset]) - pixels[offset + 2U];
+            }
+        }
+        return sum / (36.0 * 80.0);
+    };
+    const double without = redExcess(off);
+    const double with = redExcess(on);
+    std::fprintf(stderr, "ssr_pixels red_minus_blue without=%.1f with=%.1f%c", without, with, 10);
+    Require(with > without + 15.0, "SSR test: the glossy floor must reflect the red wall when screen-space reflections are on");
+}
+
+// A red wall that is outside the camera's view must tint the floor in view only when the bounce light is
+// traced through the world-space voxel grid: screen-space GI cannot see what is not on screen.
+void RunRendererRendersVoxelGiFromOffscreenObjectsTest() {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<SsBox> boxes{
+        { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } },
+        { { -4.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, SsMaterial::Red },
+    };
+    const std::vector<kb::scene::Vec3> lights{ { -1.0F, 5.0F, 0.0F } };
+    const auto redExcess = [&](SceneRenderGlobalIlluminationMode mode) {
+        SceneRenderLightingConfig lighting{};
+        lighting.globalIllumination = mode;
+        const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 3.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 2.0F }, 30.0F, lighting, 30, kSize);
+        double sum = 0.0;
+        for (int y = 28; y < 36; ++y) {
+            for (int x = 28; x < 36; ++x) {
+                const std::size_t offset = (static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x)) * 4U;
+                sum += static_cast<double>(pixels[offset]) - pixels[offset + 2U];
+            }
+        }
+        return sum / 64.0;
+    };
+    const double none = redExcess(SceneRenderGlobalIlluminationMode::Disabled);
+    const double screenSpace = redExcess(SceneRenderGlobalIlluminationMode::SsGi);
+    const double voxel = redExcess(SceneRenderGlobalIlluminationMode::VoxelGrid);
+    std::fprintf(stderr, "voxel_gi_pixels red_minus_blue none=%.1f screen_space=%.1f voxel=%.1f%c", none, screenSpace, voxel, 10);
+    Require(voxel > none + 8.0, "Voxel GI test: a red wall outside the view must tint the floor through the voxel grid");
+    Require(screenSpace < none + 3.0, "Voxel GI test: screen-space GI must not see the off-screen wall");
+}
+
+// The same red wall, with a plate that hides it from the light but not from the floor: the bounce off the
+// wall must vanish when the light casts shadows (the voxel grid traces a ray towards the light) and stay when
+// the light does not.
+void RunRendererShadowsVoxelGiBounceTest() {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<SsBox> boxes{
+        { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } },
+        { { -4.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, SsMaterial::Red },
+        { { -2.5F, 4.2F, 0.0F }, { 2.6F, 0.2F, 20.0F } }, // above the wall's lower part, below the light
+    };
+    const std::vector<kb::scene::Vec3> lights{ { -1.0F, 5.0F, 0.0F } };
+    const auto redExcess = [&](bool lightCastsShadow) {
+        SceneRenderLightingConfig lighting{};
+        lighting.globalIllumination = SceneRenderGlobalIlluminationMode::VoxelGrid;
+        const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 3.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 2.0F }, 30.0F,
+            lighting, 30, kSize, SceneRenderMeshPassMode::OpaqueOnly, {}, lightCastsShadow);
+        double sum = 0.0;
+        for (int y = 28; y < 36; ++y) {
+            for (int x = 28; x < 36; ++x) {
+                const std::size_t offset = (static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x)) * 4U;
+                sum += static_cast<double>(pixels[offset]) - pixels[offset + 2U];
+            }
+        }
+        return sum / 64.0;
+    };
+    const double unshadowed = redExcess(false);
+    const double shadowed = redExcess(true);
+    std::fprintf(stderr, "voxel_gi_shadow red_minus_blue unshadowed=%.1f shadowed=%.1f%c", unshadowed, shadowed, 10);
+    // -12.2 is the floor with no bounce at all (see the voxel GI test): the shadowed wall must add nothing.
+    Require(unshadowed > shadowed + 8.0, "Voxel GI shadow test: the lit red wall must tint the floor");
+    Require(shadowed < -10.0, "Voxel GI shadow test: a wall in shadow must bounce (almost) no light");
+}
+
+// A hollow sphere must fill the voxels its surface passes through, not its whole bounding box.
+void RunVoxelGridFollowsMeshGeometryTest() {
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Voxel mesh test could not initialize bgfx");
+    {
+        constexpr int kRings = 16;
+        constexpr int kSegments = 24;
+        std::vector<RenderStaticMeshVertexP3N3UV2> vertices;
+        std::vector<std::uint16_t> indices;
+        for (int ring = 0; ring <= kRings; ++ring) {
+            const float theta = 3.14159265F * static_cast<float>(ring) / static_cast<float>(kRings);
+            for (int segment = 0; segment <= kSegments; ++segment) {
+                const float phi = 6.2831853F * static_cast<float>(segment) / static_cast<float>(kSegments);
+                const float x = std::sin(theta) * std::cos(phi);
+                const float y = std::cos(theta);
+                const float z = std::sin(theta) * std::sin(phi);
+                vertices.push_back({ x, y, z, x, y, z });
+            }
+        }
+        for (int ring = 0; ring < kRings; ++ring) {
+            for (int segment = 0; segment < kSegments; ++segment) {
+                const auto a = static_cast<std::uint16_t>(ring * (kSegments + 1) + segment);
+                const auto b = static_cast<std::uint16_t>(a + kSegments + 1);
+                indices.insert(indices.end(), { a, b, static_cast<std::uint16_t>(a + 1), static_cast<std::uint16_t>(a + 1), b, static_cast<std::uint16_t>(b + 1) });
+            }
+        }
+        RenderResourceRegistry resources;
+        const auto registerSphere = [&](bool dynamic) {
+            return resources.RegisterMesh(RenderMeshDesc{ .vertexData = vertices.data(),
+                .vertexCount = static_cast<std::uint32_t>(vertices.size()), .indices = indices.data(),
+                .indexCount = static_cast<std::uint32_t>(indices.size()), .vertexFormat = RenderVertexFormat::P3N3UV2,
+                .bounds = { .radius = 1.0F }, .boundsBox = { .center = { 0.0F, 0.0F, 0.0F }, .halfExtents = { 1.0F, 1.0F, 1.0F } },
+                .dynamicVertexBuffer = dynamic });
+        };
+        SceneRenderResourceMap bindings;
+        bindings.BindMesh(7U, registerSphere(false)); // keeps its triangles: filled by geometry
+        bindings.BindMesh(8U, registerSphere(true));  // dynamic: no triangles kept, filled as its bounding box
+        Require(resources.FindMesh(bindings.ResolveMesh(7U)) != nullptr && resources.FindMesh(bindings.ResolveMesh(8U)) != nullptr,
+            "Voxel mesh test could not register its spheres");
+        const auto occupied = [&](std::uint64_t meshAssetId) {
+            RenderScene scene;
+            MeshRenderProxyDesc desc{ .entityId = 1U, .meshAssetId = meshAssetId };
+            desc.model[0] = desc.model[5] = desc.model[10] = desc.model[15] = 1.0F;
+            static_cast<void>(scene.UpsertMesh(desc));
+            SceneGiVoxelGrid grid;
+            Require(grid.Initialize(), "Voxel mesh test could not create the voxel grid");
+            grid.Update(scene, resources, bindings, { 0.0F, 0.0F, 0.0F }, 0.25F);
+            return grid.OccupiedVoxelCount();
+        };
+        const std::uint32_t shell = occupied(7U);
+        const std::uint32_t box = occupied(8U);
+        std::fprintf(stderr, "voxel_mesh_proxy shell=%u box=%u%c", shell, box, 10);
+        Require(shell > 100U, "Voxel mesh test: the sphere must fill the voxels its surface passes through");
+        Require(shell * 10U < box * 7U, "Voxel mesh test: a hollow sphere must fill clearly fewer voxels than its bounding box");
+    }
+    renderer.Shutdown();
+}
+
+// A GPU-simulated particle dropped from 2 m above the origin falls through the floor unless it collides.
+// Collision can come from a plane (exact) or from the surface the scene depth buffer shows; with either
+// the particle is still near the floor 1.5 s later, without it it is far below the camera's view.
+[[nodiscard]] double CollidingParticleBrightness(bool floor, bool plane, bool sceneDepth, SceneRenderLightingPath path) {
+    constexpr std::uint16_t kSize = 64U;
+    std::vector<SsBox> boxes;
+    if (floor) {
+        boxes.push_back({ { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } });
+    }
+    SceneRenderLightingConfig lighting{};
+    lighting.lightingPath = path;
+    const auto spawnAndStep = [&](kb::scene::Scene& scene, int frame) {
+        // Frame 0 registers the renderer as GPU emitter consumer; frame 1 creates the emitter and its particle;
+        // every later frame advances the simulation clock by one fixed step, as the particle backend does.
+        if (frame == 0) return;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = static_cast<double>(frame - 1) / 60.0;
+        if (frame == 1) {
+            command.hasParams = true;
+            command.params.capacity = 64U;
+            command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+            command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+            command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+            command.params.size.fill(0.8F);
+            command.params.acceleration = { 0.0F, -9.8F, 0.0F };
+            if (plane) {
+                command.params.plane = { .normal = { 0.0F, 1.0F, 0.0F }, .distance = 0.0F, .restitution = 0.5F, .friction = 0.0F };
+                command.params.hasPlane = true;
+            }
+            command.params.sceneDepthCollision = sceneDepth;
+            command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+                .position = { 0.0F, 2.0F, 0.0F }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        }
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const auto pixels = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ 0.0F, 3.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F }, 30.0F, lighting,
+        100, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, spawnAndStep);
+    double best = 0.0;
+    for (int y = 20; y < 44; ++y) {
+        for (int x = 24; x < 40; ++x) {
+            best = std::max(best, MeanBrightness(pixels, kSize, x, y, x + 1, y + 1));
+        }
+    }
+    return best;
+}
+
+// Two overlapping alpha-blended particles of one GPU emitter: the older one is blue, the younger red (the
+// colour curve turns blue at half the life). Whichever is nearer to the camera must end up on top,
+// whatever the order of their ring slots.
+[[nodiscard]] std::array<int, 3> OverlappingAlphaParticlesCentre(bool olderIsNearer) {
+    constexpr std::uint16_t kSize = 64U;
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 10.0;
+        command.hasParams = true;
+        command.params.capacity = 16U;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+        for (std::size_t sample = 0U; sample < command.params.color.size(); ++sample) {
+            command.params.color[sample] = sample < 3U ? std::array<float, 4>{ 1.0F, 0.0F, 0.0F, 0.9F }
+                                                       : std::array<float, 4>{ 0.0F, 0.0F, 1.0F, 0.9F };
+        }
+        command.params.size.fill(2.0F);
+        const float olderZ = olderIsNearer ? -1.0F : 3.0F;
+        const float youngerZ = olderIsNearer ? 3.0F : -1.0F;
+        // The older particle takes ring slot 0, the younger slot 1: drawn in slot order, the younger would win.
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, olderZ }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, youngerZ }, .birthTime = 8.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F }, 30.0F, lighting, 4,
+        kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    // The particle core is drawn white whatever its colour; its soft edge, a few pixels out, keeps the tint.
+    const std::size_t offset = (32U * kSize + 42U) * 4U;
+    return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
+}
+
+// A particle born at x = 2 in the owner's frame must appear at the owner's current position: with the owner
+// moved by -2 m along x it is at the screen centre if the emitter is local-space, and still 2 m to the
+// side if the emitter is world-space (the same record then means a world position).
+[[nodiscard]] double LocalSpaceParticleCentreBrightness(bool localSpace) {
+    constexpr std::uint16_t kSize = 64U;
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame == 0) return;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = static_cast<double>(frame - 1) / 60.0;
+        if (localSpace) {
+            command.hasWorldMatrix = true;
+            command.worldMatrix[12] = -2.0F; // the owner stands 2 m to the left of the origin
+        }
+        if (frame == 1) {
+            command.hasParams = true;
+            command.params.capacity = 16U;
+            command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+            command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+            command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+            command.params.size.fill(1.2F);
+            command.params.localSpace = localSpace;
+            command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+                .position = { 2.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        }
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F, lighting, 6,
+        kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    return MeanBrightness(pixels, kSize, 28, 28, 36, 36);
+}
+
+// A GPU particle born at (0, 0, 5) is drawn by a camera that backs away from it a metre per frame. With a render
+// origin that follows the camera metre by metre, every frame moves the origin under the live particle, whose
+// records are then moved on the GPU (cs_particle_gpu_rebase): it must be drawn exactly as with an origin that
+// never moves, not cleared and not displaced. A colliding emitter keeps per-particle state, which moves too.
+[[nodiscard]] std::array<double, 2> GpuParticleCentreAfterOriginMoves(bool movingOrigin, bool colliding) {
+    constexpr std::uint16_t kSize = 64U;
+    kb::scene::Scene scene;
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Origin-move particle test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Origin-move particle test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+    if (movingOrigin) renderer.SetRenderOriginPolicy(RenderOriginPolicy{ .rebaseDistance = 0.5, .gridStep = 1.0 });
+    std::array<double, 2> brightness{};
+    {
+        ParticleMeshReadbackTarget readback;
+        Require(readback.Initialize(kSize, kSize), "Origin-move particle test could not create its readback target");
+        for (int frame = 0; frame < 8; ++frame) {
+            if (frame >= 1) {
+                kb::particles::ParticleGpuEmitterCommand command{};
+                command.key = { 1U, 1U };
+                command.simTime = static_cast<double>(frame - 1) / 60.0;
+                if (frame == 1) {
+                    command.hasParams = true;
+                    command.params.capacity = 16U;
+                    command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+                    command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+                    command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+                    command.params.size.fill(1.2F);
+                    if (colliding) {
+                        command.params.plane = { .normal = { 0.0F, 1.0F, 0.0F }, .distance = -20.0F, .restitution = 0.5F, .friction = 0.0F };
+                        command.params.hasPlane = true;
+                    }
+                    command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+                        .position = { 0.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+                }
+                kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+            }
+            SceneRenderCamera camera{};
+            bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F - static_cast<float>(frame) }, bx::Vec3{ 0.0F, 0.0F, 5.0F });
+            SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+            const RenderSceneSubmitDesc desc{
+                .target = readback.Binding(),
+                .cameraOverride = camera,
+                .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+                .clearRgba = 0x000000FFU,
+                .editorSceneOverlaysEnabled = false,
+                .shadowPassEnabled = false,
+                .postProcessEnabled = false,
+                .selectionMaskEnabled = false,
+                .selectionOutlineEnabled = false,
+            };
+            SubmitLifecycleFrame(renderer, scene, desc, "Origin-move particle test did not submit a frame");
+        }
+        const std::vector<std::uint8_t> pixels = readback.ReadPixels();
+        brightness = { MeanBrightness(pixels, kSize, 30, 30, 34, 34), MeanBrightness(pixels, kSize, 20, 20, 44, 44) };
+    }
+    renderer.Shutdown();
+    return brightness;
+}
+
+void RunRendererKeepsGpuParticlesAcrossRenderOriginMovesTest() {
+    for (const bool colliding : { false, true }) {
+        const std::array<double, 2> fixed = GpuParticleCentreAfterOriginMoves(false, colliding);
+        const std::array<double, 2> moving = GpuParticleCentreAfterOriginMoves(true, colliding);
+        std::fprintf(stderr, "gpu_particle_origin_moves colliding=%d fixed=%.1f/%.1f moving=%.1f/%.1f%c", colliding ? 1 : 0,
+            fixed[0], fixed[1], moving[0], moving[1], 10);
+        Require(fixed[0] > 150.0, "Origin-move particle test: the particle must be drawn at the screen centre");
+        Require(std::abs(moving[0] - fixed[0]) <= 2.0 && std::abs(moving[1] - fixed[1]) <= 2.0,
+            "Origin-move particle test: moving the render origin under a live GPU particle must not clear or move it");
+    }
+}
+
+void RunRendererFollowsLocalSpaceGpuParticlesTest() {
+    const double local = LocalSpaceParticleCentreBrightness(true);
+    const double world = LocalSpaceParticleCentreBrightness(false);
+    std::fprintf(stderr, "gpu_particle_local_space local=%.1f world=%.1f%c", local, world, 10);
+    Require(local > 150.0, "Local-space test: the particle must follow the owner matrix to the screen centre");
+    Require(world < 30.0, "Local-space test: a world-space particle must not move with the owner matrix");
+}
+
+// A GPU emitter whose particles are red cubes drawn through the mesh pipeline: lit by the scene light and
+// coloured by the material (red minus blue is positive), nothing there without the particle.
+[[nodiscard]] std::array<int, 3> GpuMeshParticleCentre(bool spawn) {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<kb::scene::Vec3> lights{ { 0.0F, 3.0F, -4.0F } };
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1 || !spawn) return;
+        const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+        Require(mesh != nullptr, "GPU mesh particle test lost its cube mesh");
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 0.5;
+        command.hasParams = true;
+        command.params.capacity = 16U;
+        command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+        command.params.meshAssetId = mesh->id.value;
+        command.params.materialAssetId = kb::assets::MakeAssetId("SsRed").value;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::ReadWrite;
+        command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+        command.params.size.fill(2.0F);
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    // SsRed is published by the helper only when a box uses it; a far-away red box makes it exist.
+    const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red } };
+    const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    const std::size_t offset = (32U * kSize + 32U) * 4U;
+    return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
+}
+
+void RunRendererDrawsGpuMeshParticlesTest() {
+    const std::array<int, 3> with = GpuMeshParticleCentre(true);
+    const std::array<int, 3> without = GpuMeshParticleCentre(false);
+    std::fprintf(stderr, "gpu_mesh_particle with=%d,%d,%d without=%d,%d,%d%c", with[0], with[1], with[2], without[0], without[1], without[2], 10);
+    Require(with[0] > 60 && with[0] > with[2] + 40, "GPU mesh particle test: the cube must be drawn lit and red through the mesh pipeline");
+    Require(without[0] < 20, "GPU mesh particle test: the pixel must be empty without the particle");
+}
+
+// Red cubes of a GPU mesh emitter turn by their spin: a cube of side 2 turned 45 degrees about the view axis
+// reaches 1.41 m to the side, which an unturned one (1 m) does not.
+[[nodiscard]] std::array<int, 2> GpuMeshSpinReach(kb::math::Vec3 spinRadians, kb::math::Vec3 spinRateRadians) {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<kb::scene::Vec3> lights{ { 0.0F, 3.0F, -4.0F } };
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+        Require(mesh != nullptr, "GPU mesh spin test lost its cube mesh");
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 0.5;
+        command.hasParams = true;
+        command.params.capacity = 16U;
+        command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+        command.params.meshAssetId = mesh->id.value;
+        command.params.materialAssetId = kb::assets::MakeAssetId("SsRed").value;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::ReadWrite;
+        command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+        command.params.size.fill(2.0F);
+        command.params.spinMin = command.params.spinMax = spinRadians;
+        command.params.spinRateMin = command.params.spinRateMax = spinRateRadians;
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red } };
+    const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    // 10 px = 1.25 m to the right of and above the centre
+    return { pixels[(32U * kSize + 42U) * 4U], pixels[(42U * kSize + 32U) * 4U] };
+}
+
+void RunRendererSpinsGpuMeshParticlesTest() {
+    constexpr float kQuarterTurn = 0.7853982F;
+    const auto still = GpuMeshSpinReach({}, {});
+    const auto aboutZ = GpuMeshSpinReach({ 0.0F, 0.0F, kQuarterTurn }, {});
+    const auto aboutY = GpuMeshSpinReach({ 0.0F, kQuarterTurn, 0.0F }, {});
+    const auto aboutX = GpuMeshSpinReach({ kQuarterTurn, 0.0F, 0.0F }, {});
+    // The clock stands at about 0.48 s, so 1.5708 rad/s has turned the cube by about 43 degrees.
+    const auto spinningZ = GpuMeshSpinReach({}, { 0.0F, 0.0F, 1.5707964F });
+    const auto spinningY = GpuMeshSpinReach({}, { 0.0F, 1.5707964F, 0.0F });
+    std::fprintf(stderr, "gpu_mesh_spin still=%d,%d z=%d,%d y=%d,%d x=%d,%d rate_z=%d,%d rate_y=%d,%d%c", still[0], still[1],
+        aboutZ[0], aboutZ[1], aboutY[0], aboutY[1], aboutX[0], aboutX[1], spinningZ[0], spinningZ[1], spinningY[0], spinningY[1], 10);
+    Require(still[0] < 20 && still[1] < 20, "GPU mesh spin test: an unturned cube must not reach 1.25 m to the side or above");
+    Require(aboutZ[0] > 60 && aboutZ[1] > 60, "GPU mesh spin test: a cube turned about the view axis must reach its corners both ways");
+    Require(aboutY[0] > 60 && aboutY[1] < 20, "GPU mesh spin test: a cube turned about Y must widen to the side only");
+    Require(aboutX[1] > 60 && aboutX[0] < 20, "GPU mesh spin test: a cube turned about X must grow upward only");
+    Require(spinningZ[0] > 60 && spinningY[0] > 60, "GPU mesh spin test: a cube with an angular velocity must have turned by its age");
+}
+
+// A mesh particle flying along +x that follows its velocity has its Y axis along x, so a quarter turn about its own
+// Z axis (which then points along the world's Y) widens the cube to the side only; without the alignment the same
+// turn is about the view axis and widens it both ways.
+[[nodiscard]] std::array<int, 2> GpuMeshFlyingReach(bool followVelocity) {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<kb::scene::Vec3> lights{ { 0.0F, 3.0F, -4.0F } };
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+        Require(mesh != nullptr, "GPU mesh alignment test lost its cube mesh");
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 0.5;
+        command.hasParams = true;
+        command.params.capacity = 16U;
+        command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+        command.params.alignment = followVelocity ? kb::particles::ParticleRenderAlignment::Velocity
+                                                  : kb::particles::ParticleRenderAlignment::CameraFacing;
+        command.params.meshAssetId = mesh->id.value;
+        command.params.materialAssetId = kb::assets::MakeAssetId("SsRed").value;
+        command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+        command.params.size.fill(2.0F);
+        command.params.spinMin = command.params.spinMax = { 0.0F, 0.0F, 0.7853982F };
+        // The clock stands at about 0.4833 s, so the particle born at x = -1.9333 with 4 m/s is at the centre.
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { -1.9333F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 4.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red } };
+    const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    return { pixels[(32U * kSize + 42U) * 4U], pixels[(42U * kSize + 32U) * 4U] };
+}
+
+void RunRendererAlignsGpuMeshParticlesToVelocityTest() {
+    const auto followed = GpuMeshFlyingReach(true);
+    const auto free = GpuMeshFlyingReach(false);
+    std::fprintf(stderr, "gpu_mesh_align followed=%d,%d free=%d,%d%c", followed[0], followed[1], free[0], free[1], 10);
+    Require(followed[0] > 60 && followed[1] < 20, "GPU mesh alignment test: a mesh following its velocity must turn about the world Y axis");
+    Require(free[0] > 60 && free[1] > 60, "GPU mesh alignment test: without the alignment the turn is about the view axis");
+}
+
+// Two overlapping translucent mesh particles, the older one blue and the younger one red: whichever is nearer
+// to the camera must be drawn last and so dominate, whatever the order of their ring slots.
+[[nodiscard]] std::array<int, 3> GpuTranslucentMeshCentre(bool olderIsNearer, bool translucent) {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<kb::scene::Vec3> lights{ { 0.0F, 3.0F, -4.0F } };
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+        Require(mesh != nullptr, "GPU translucent mesh test lost its cube mesh");
+        // SsBlend is the translucent white material the helper publishes; SsRed stands in for an opaque one.
+        const kb::assets::AssetId materialId = kb::assets::MakeAssetId(translucent ? "SsBlend" : "SsRed");
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 10.0;
+        command.hasParams = true;
+        command.params.capacity = 16U;
+        command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+        command.params.meshAssetId = mesh->id.value;
+        command.params.materialAssetId = materialId.value;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::ReadOnly;
+        for (std::size_t sample = 0U; sample < command.params.color.size(); ++sample) {
+            command.params.color[sample] = sample < 3U ? std::array<float, 4>{ 1.0F, 0.0F, 0.0F, 0.9F }
+                                                       : std::array<float, 4>{ 0.0F, 0.0F, 1.0F, 0.9F };
+        }
+        command.params.size.fill(2.0F);
+        const float olderZ = olderIsNearer ? 3.0F : 6.0F;
+        const float youngerZ = olderIsNearer ? 6.0F : 3.0F;
+        // The older particle takes ring slot 0, the younger slot 1: drawn in slot order, the younger would win.
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, olderZ }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, youngerZ }, .birthTime = 8.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    // The renderer makes the GPU resource of a mesh only for meshes the scene uses: a far box uses the cube.
+    // (The same holds for materials: SsBlend is created because a far box uses it.)
+    const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red },
+        { { 5.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Blend } };
+    const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    const std::size_t offset = (32U * kSize + 32U) * 4U;
+    return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
+}
+
+void RunRendererSortsTranslucentGpuMeshParticlesTest() {
+    const std::array<int, 3> olderNearer = GpuTranslucentMeshCentre(true, true);
+    const std::array<int, 3> youngerNearer = GpuTranslucentMeshCentre(false, true);
+    std::fprintf(stderr, "gpu_mesh_sort older_nearer=%d,%d,%d younger_nearer=%d,%d,%d%c",
+        olderNearer[0], olderNearer[1], olderNearer[2], youngerNearer[0], youngerNearer[1], youngerNearer[2], 10);
+    Require(olderNearer[2] > olderNearer[0] + 15, "GPU mesh sort test: the nearer, older (blue) cube must be drawn over the farther one");
+    Require(youngerNearer[0] > youngerNearer[2] + 15, "GPU mesh sort test: the nearer, younger (red) cube must be drawn over the farther one");
+}
+
+// A translucent red mesh particle and a translucent white box of the scene overlap: whichever is nearer to the
+// camera must be drawn last, so the GPU emitter is placed among the scene's translucent draws by its depth.
+[[nodiscard]] std::array<int, 3> GpuMeshParticleAmongTranslucentBoxes(bool particleIsNearer) {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<kb::scene::Vec3> lights{ { 0.0F, 3.0F, -4.0F } };
+    SceneRenderLightingConfig lighting{};
+    const float particleZ = particleIsNearer ? 2.0F : 6.0F;
+    const float boxZ = particleIsNearer ? 6.0F : 2.0F;
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+        Require(mesh != nullptr, "GPU translucent ordering test lost its cube mesh");
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 0.5;
+        command.hasParams = true;
+        command.hasOrientation = true;
+        command.origin = { 0.0F, 0.0F, particleZ };
+        command.params.capacity = 16U;
+        command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+        command.params.meshAssetId = mesh->id.value;
+        command.params.materialAssetId = kb::assets::MakeAssetId("SsBlend").value;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.color.fill({ 1.0F, 0.0F, 0.0F, 1.0F });
+        command.params.size.fill(2.0F);
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { 0.0F, 0.0F, particleZ }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const std::vector<SsBox> boxes{ { { 0.0F, 0.0F, boxZ }, { 2.0F, 2.0F, 2.0F }, SsMaterial::Blend } };
+    const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    const std::size_t offset = (32U * kSize + 32U) * 4U;
+    return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
+}
+
+void RunRendererOrdersGpuMeshParticlesAmongSceneMeshesTest() {
+    const std::array<int, 3> particleFar = GpuMeshParticleAmongTranslucentBoxes(false);
+    const std::array<int, 3> particleNear = GpuMeshParticleAmongTranslucentBoxes(true);
+    std::fprintf(stderr, "gpu_mesh_among_scene particle_far=%d,%d,%d particle_near=%d,%d,%d%c",
+        particleFar[0], particleFar[1], particleFar[2], particleNear[0], particleNear[1], particleNear[2], 10);
+    Require(particleFar[0] - particleFar[2] < 25, "GPU mesh order test: a translucent box nearer than the particle must be drawn over it");
+    Require(particleNear[0] - particleNear[2] > 60, "GPU mesh order test: a particle nearer than the translucent box must be drawn over it");
+}
+
+// One GPU particle flying along +x draws a trail of camera-facing quads along the path it has travelled:
+// the middle of the path is covered, the space beyond the oldest segment is not.
+[[nodiscard]] std::array<int, 3> GpuTrailCoverage(bool trail) {
+    constexpr std::uint16_t kSize = 64U;
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = { 1U, 1U };
+        command.simTime = 1.0;
+        command.hasParams = true;
+        command.params.capacity = 4U;
+        command.params.output = trail ? kb::particles::ParticleRenderOutput::Trail : kb::particles::ParticleRenderOutput::Billboard;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+        command.params.color.fill({ 1.0F, 1.0F, 1.0F, 1.0F });
+        command.params.size.fill(0.2F);
+        command.params.trailSegments = 8U;
+        command.params.trailSegmentSeconds = 0.1F;
+        command.params.trailWidth = 0.4F;
+        // At t = 1 the head is at x = 2 and the trail reaches back 8 x 0.1 s x 4 m/s = 3.2 m, to about x = -1.2.
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = { -2.0F, 0.0F, 5.0F }, .birthTime = 0.0F, .velocity = { 4.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    const auto at = [&](std::size_t x) { return static_cast<int>(pixels[(32U * kSize + x) * 4U]); };
+    return { at(32U), at(24U), at(6U) }; // path middle (x = 0), near the trail's oldest end (x = -1), beyond it
+}
+
+void RunRendererDrawsGpuTrailParticlesTest() {
+    const std::array<int, 3> trail = GpuTrailCoverage(true);
+    const std::array<int, 3> head = GpuTrailCoverage(false);
+    std::fprintf(stderr, "gpu_trail_particle trail=%d,%d,%d head_only=%d,%d,%d%c", trail[0], trail[1], trail[2], head[0], head[1], head[2], 10);
+    Require(trail[0] > 150 && trail[1] > 150, "GPU trail test: the path the particle travelled must be covered by trail segments");
+    Require(trail[2] < 30, "GPU trail test: nothing may be drawn beyond the oldest trail segment");
+    Require(head[0] < 30, "GPU trail test: without the trail the middle of the path stays empty");
+}
+
+void RunRendererSortsAlphaGpuParticlesTest() {
+    const std::array<int, 3> olderNearer = OverlappingAlphaParticlesCentre(true);
+    const std::array<int, 3> youngerNearer = OverlappingAlphaParticlesCentre(false);
+    std::fprintf(stderr, "gpu_particle_sort older_nearer=%d,%d,%d younger_nearer=%d,%d,%d%c",
+        olderNearer[0], olderNearer[1], olderNearer[2], youngerNearer[0], youngerNearer[1], youngerNearer[2], 10);
+    Require(olderNearer[2] > olderNearer[0] + 20, "GPU sort test: the nearer, older (blue) particle must be drawn over the farther one");
+    Require(youngerNearer[0] > youngerNearer[2] + 20, "GPU sort test: the nearer, younger (red) particle must be drawn over the farther one");
+}
+
+#if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+// The whole particle chain in one process: an effect authored as a .kbvfx file is discovered and loaded by the
+// asset manager, the real particle provider (loaded as a module) simulates it in the scene runtime and routes
+// its emitter to the GPU queue, the renderer drains the queue, simulates and draws on a hidden D3D11 device,
+// and the pixels are read back. Particles leave the origin along +x at 4 m/s, so after one second the
+// right half of the image holds a bright line and the left half stays dark.
+void RunRendererDrawsAuthoredParticleFileTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_particle_file_to_pixel_" + std::to_string(GetCurrentProcessId()));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "File-to-pixel test could not create its asset directory");
+
+    kb::scene::ParticleEffectAsset effect;
+    effect.effectId = 9001U;
+    effect.displayName = "File To Pixel";
+    effect.recipeCategory = "Simple";
+    effect.determinismSeed = 0x5EEDF11EULL;
+    effect.durationSeconds = 5.0F;
+    effect.looping = true;
+    effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    kb::scene::ParticleEmitterAsset emitter;
+    emitter.emitterId = 1U;
+    emitter.name = "Sparks";
+    emitter.maxParticles = 4096U;
+    emitter.spawn.rateOverTime.keyframes = { { .time = 0.0F, .value = 120.0F } };
+    emitter.spawn.lifetimeMin = 2.0F;
+    emitter.spawn.lifetimeMax = 2.0F;
+    emitter.spawn.speedMin = 4.0F;
+    emitter.spawn.speedMax = 4.0F;
+    emitter.spawn.direction = { 1.0F, 0.0F, 0.0F };
+    emitter.spawn.spreadDegrees = 0.0F;
+    emitter.spawn.randomization = 0.0F;
+    emitter.spawn.startSize = 0.5F;
+    emitter.output.material.virtualPath = "/Game/Materials/Spark.21kb";
+    emitter.output.blend = kb::scene::ParticleBlendMode::Add;
+    emitter.output.depthTest = false;
+    effect.emitters.push_back(std::move(emitter));
+    Require(kb::scene::ParticleEffectAssetIO::Save(root / "spark.kbvfx", effect), "File-to-pixel test could not write its effect file");
+
+    kb::project::ProjectDescriptor project;
+    project.disableEnginePluginsByDefault = true;
+    project.plugins.push_back({ .name = "Rendering.21kbParticle", .binaryPath = KB_21KB_PARTICLE_PLUGIN_PATH, .enabled = true });
+    kb::scene::Scene scene(project, kb::scene::SceneMode::Runtime);
+    Require(scene.IsModuleActive("Rendering.21kbParticle") && kb::particles::ParticlePlayback::HasBackend(scene),
+        "File-to-pixel test could not load the particle provider module");
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::scene::ParticleEffectAssetLoader>()));
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "File-to-pixel test could not discover its effect file");
+    // The effect names its material by path; the material itself is only a registry entry here.
+    Require(manager.Registry().Upsert(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ 72U }, .type = "RenderMaterial", .name = "Spark",
+                .virtualPath = "/Game/Materials/Spark.21kb", .physicalPath = "Spark.21kb", .contentHash = 1U }),
+        "File-to-pixel test could not register the particle material");
+    const kb::assets::AssetMetadata* effectAsset = manager.Registry().FindByPath("/Game/spark.kbvfx");
+    Require(effectAsset != nullptr, "File-to-pixel test did not find its effect asset");
+    const kb::scene::SceneEntity owner = scene.Entities().CreateEntity();
+    scene.Transforms().Set(owner, {});
+    scene.Components().ParticleEffects().Set(owner, {
+        .effectAssetId = effectAsset->id.value, .deterministicSeed = effect.determinismSeed, .enabled = true, .autoPlay = true,
+        .followTransform = true, .restartOnActivate = true });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "File-to-pixel test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "File-to-pixel test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 1.2F, 0.0F, 0.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    std::vector<std::uint8_t> pixels;
+    bool consumer = false;
+    std::size_t cpuParticles = 0U;
+    std::uint32_t gpuDrawCalls = 0U;
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "File-to-pixel test could not create its readback target");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        for (int frame = 0; frame < 60; ++frame) {
+            Require(scene.Runtime().Update(1.0F / 60.0F), "File-to-pixel test scene update failed");
+            SubmitLifecycleFrame(renderer, scene, desc, "File-to-pixel test did not submit a frame");
+        }
+        pixels = target.ReadPixels();
+        consumer = kb::particles::ParticlePlayback::HasGpuEmitterConsumer(scene);
+        gpuDrawCalls = renderer.LastSceneSubmitStats().submittedParticleDrawCallCount;
+        const auto ids = kb::particles::ParticlePlayback::LiveInstanceIds(scene);
+        for (const std::uint64_t instance : ids) {
+            cpuParticles += kb::particles::ParticlePlayback::Query(scene, instance).liveParticleCount;
+        }
+    }
+    renderer.ReleaseScene(scene);
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+
+    const double right = MeanBrightness(pixels, NativeTestSurface::kExtent, 20, 28, 60, 36);
+    const double left = MeanBrightness(pixels, NativeTestSurface::kExtent, 0, 28, 8, 36);
+    std::fprintf(stderr, "file_to_pixel right=%.1f left=%.1f gpu_consumer=%d gpu_draws=%u cpu_particles=%zu%c",
+        right, left, consumer ? 1 : 0, gpuDrawCalls, cpuParticles, 10);
+    // Only the particles born before the renderer registered as consumer (the first frames) live on the CPU.
+    Require(consumer && gpuDrawCalls >= 1U && cpuParticles <= 4U,
+        "File-to-pixel test: the effect must be simulated and drawn on the GPU, not on the CPU");
+    Require(right > 40.0, "File-to-pixel test: the particles from the authored file must be visible along +x");
+    Require(left < 5.0, "File-to-pixel test: nothing may be drawn to the left of the emitter");
+}
+void RunRendererMillionParticleFileTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("21kb_particle_million_file_" + std::to_string(GetCurrentProcessId()));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "File-to-pixel test could not create its asset directory");
+
+    kb::scene::ParticleEffectAsset effect;
+    effect.effectId = 9002U;
+    effect.displayName = "Million";
+    effect.recipeCategory = "Simple";
+    effect.determinismSeed = 0x5EEDF11EULL;
+    effect.durationSeconds = 5.0F;
+    effect.looping = true;
+    effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    // One million live particles in one emitter: a GPU emitter holds up to 1,048,576 of them.
+    constexpr int kEmitters = 1;
+    for (int index = 0; index < kEmitters; ++index) {
+        kb::scene::ParticleEmitterAsset emitter;
+        emitter.emitterId = static_cast<std::uint64_t>(index + 1);
+        emitter.authoringOrder = static_cast<std::uint32_t>(index);
+        emitter.name = "Simple" + std::to_string(index);
+        emitter.maxParticles = 1'040'000U;
+        emitter.spawn.rateOverTime.keyframes = { { .time = 0.0F, .value = 1'000'000.0F / 2.0F / static_cast<float>(kEmitters) } };
+        emitter.spawn.lifetimeMin = 2.0F;
+        emitter.spawn.lifetimeMax = 2.0F;
+        emitter.spawn.speedMin = 4.0F;
+        emitter.spawn.speedMax = 6.0F;
+        emitter.spawn.direction = { 1.0F, 0.0F, 0.0F };
+        emitter.spawn.spreadDegrees = 30.0F;
+        emitter.spawn.startSize = 0.05F;
+        emitter.output.material.virtualPath = "/Game/Materials/Spark.21kb";
+        emitter.output.blend = kb::scene::ParticleBlendMode::Add;
+        emitter.output.depthTest = false;
+        effect.emitters.push_back(std::move(emitter));
+    }
+    Require(kb::scene::ParticleEffectAssetIO::Save(root / "million.kbvfx", effect), "Million particle file test could not write its effect file");
+
+    kb::project::ProjectDescriptor project;
+    project.disableEnginePluginsByDefault = true;
+    project.plugins.push_back({ .name = "Rendering.21kbParticle", .binaryPath = KB_21KB_PARTICLE_PLUGIN_PATH, .enabled = true });
+    kb::scene::Scene scene(project, kb::scene::SceneMode::Runtime);
+    Require(scene.IsModuleActive("Rendering.21kbParticle") && kb::particles::ParticlePlayback::HasBackend(scene),
+        "File-to-pixel test could not load the particle provider module");
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::scene::ParticleEffectAssetLoader>()));
+    Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
+        "File-to-pixel test could not discover its effect file");
+    // The effect names its material by path; the material itself is only a registry entry here.
+    Require(manager.Registry().Upsert(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ 72U }, .type = "RenderMaterial", .name = "Spark",
+                .virtualPath = "/Game/Materials/Spark.21kb", .physicalPath = "Spark.21kb", .contentHash = 1U }),
+        "File-to-pixel test could not register the particle material");
+    const kb::assets::AssetMetadata* effectAsset = manager.Registry().FindByPath("/Game/million.kbvfx");
+    Require(effectAsset != nullptr, "File-to-pixel test did not find its effect asset");
+    const kb::scene::SceneEntity owner = scene.Entities().CreateEntity();
+    scene.Transforms().Set(owner, {});
+    scene.Components().ParticleEffects().Set(owner, {
+        .effectAssetId = effectAsset->id.value, .deterministicSeed = effect.determinismSeed, .enabled = true, .autoPlay = true,
+        .followTransform = true, .restartOnActivate = true });
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "File-to-pixel test could not create a hidden D3D11 surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "File-to-pixel test could not initialize the renderer");
+    renderer.SetRuntimeAssetDiscoveryEnabled(false);
+    SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 1.2F, 0.0F, 0.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 30.0F, 1.0F, 0.1F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+
+    std::vector<std::uint8_t> pixels;
+    bool consumer = false;
+    std::size_t cpuParticles = 0U;
+    std::uint32_t gpuDrawCalls = 0U;
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "File-to-pixel test could not create its readback target");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = camera,
+            .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = false,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        for (int frame = 0; frame < 240; ++frame) {
+            Require(scene.Runtime().Update(1.0F / 60.0F), "File-to-pixel test scene update failed");
+            SubmitLifecycleFrame(renderer, scene, desc, "File-to-pixel test did not submit a frame");
+        }
+        pixels = target.ReadPixels();
+        consumer = kb::particles::ParticlePlayback::HasGpuEmitterConsumer(scene);
+        gpuDrawCalls = renderer.LastSceneSubmitStats().submittedParticleDrawCallCount;
+        const auto ids = kb::particles::ParticlePlayback::LiveInstanceIds(scene);
+        for (const std::uint64_t instance : ids) {
+            cpuParticles += kb::particles::ParticlePlayback::Query(scene, instance).liveParticleCount;
+        }
+    }
+    renderer.ReleaseScene(scene);
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+
+    std::size_t litPixels = 0U;
+    for (std::size_t offset = 0U; offset < pixels.size(); offset += 4U) litPixels += pixels[offset] > 10U ? 1U : 0U;
+    std::fprintf(stderr, "million_particle_file lit_pixels=%zu gpu_consumer=%d gpu_draws=%u cpu_particles=%zu%c", litPixels, consumer ? 1 : 0, gpuDrawCalls, cpuParticles, 10);
+    Require(consumer && gpuDrawCalls >= 1U && cpuParticles <= 4096U, "Million particle file test: the effect must be simulated and drawn on the GPU");
+    Require(litPixels > 50U, "Million particle file test: the particles must be visible");
+}
+#endif
+
+void RunRendererCollidesGpuParticlesTest() {
+    const SceneRenderLightingPath forward = SceneRenderLightingPath::Forward;
+    const SceneRenderLightingPath deferred = SceneRenderLightingPath::Deferred;
+    const double freeFall = CollidingParticleBrightness(false, false, false, forward);
+    const double plane = CollidingParticleBrightness(false, true, false, forward);
+    const double floorOnly = CollidingParticleBrightness(true, false, false, forward);
+    // The depth buffer is a render target of the forward path and a G-buffer texture of the deferred one.
+    const double sceneDepthForward = CollidingParticleBrightness(true, false, true, forward);
+    const double sceneDepthDeferred = CollidingParticleBrightness(true, false, true, deferred);
+    std::fprintf(stderr, "gpu_particle_collision free_fall=%.1f plane=%.1f floor_only=%.1f scene_depth forward=%.1f deferred=%.1f%c",
+        freeFall, plane, floorOnly, sceneDepthForward, sceneDepthDeferred, 10);
+    Require(freeFall < 50.0, "GPU collision test: without collisions the particle must have fallen out of view");
+    Require(plane > 400.0, "GPU collision test: a collision plane must keep the particle near the floor level");
+    Require(floorOnly < 300.0, "GPU collision test: the bare floor must be darker than the particle");
+    Require(sceneDepthForward > 400.0, "GPU collision test: the particle must bounce off the floor shown in the forward depth buffer");
+    Require(sceneDepthDeferred > 400.0, "GPU collision test: the particle must bounce off the floor shown in the G-buffer depth");
 }
 
 void RunRendererRendersScreenSpaceGiBounceTest() {
-    const int without = RenderGiFloorRedExcess(false);
-    const int with = RenderGiFloorRedExcess(true);
+    const int without = RenderGiFloorStats(false, 0.9F, 6).redExcess;
+    const int with = RenderGiFloorStats(true, 0.9F, 6).redExcess;
     std::fprintf(stderr, "gi_bounce_pixels red_minus_blue without=%d with=%d%c", without, with, 10);
     Require(with >= without + 6, "GI test: the red wall must tint the nearby floor when screen-space GI is enabled");
+}
+
+// Temporal accumulation: the same scene with the history weight at zero (the raw 6-ray gather) and at
+// its default must differ in floor noise, while the bounce itself stays visible.
+void RunRendererSmoothsScreenSpaceGiOverTimeTest() {
+    const GiFloorStats raw = RenderGiFloorStats(true, 0.0F, 40);
+    const GiFloorStats smoothed = RenderGiFloorStats(true, 0.9F, 40);
+    const int without = RenderGiFloorStats(false, 0.9F, 40).redExcess;
+    std::fprintf(stderr, "gi_temporal_noise raw=%.2f smoothed=%.2f red_excess raw=%d smoothed=%d off=%d%c",
+        raw.noise, smoothed.noise, raw.redExcess, smoothed.redExcess, without, 10);
+    Require(raw.noise > 0.5, "GI temporal test: the raw gather must be visibly noisy for the comparison to mean anything");
+    Require(smoothed.noise * 2.0 < raw.noise, "GI temporal test: accumulation must clearly reduce the floor noise");
+    Require(smoothed.redExcess >= without + 6, "GI temporal test: accumulation must keep the red bounce");
 }
 
 
@@ -6842,6 +8095,38 @@ void RunRendererDrawsMillionGpuParticlesTest() {
     renderer.Shutdown();
 }
 
+// A spot light shining straight down must be darkened under the plate only when it casts a shadow.
+void RunRendererRendersSpotLightShadowTest() {
+    ShadowFloorScene scene{ .point = false, .spot = true };
+    scene.lightCastsShadow = false;
+    const int unshadowed = RenderShadowFloorBrightness(scene);
+    scene.lightCastsShadow = true;
+    const int shadowed = RenderShadowFloorBrightness(scene);
+    std::fprintf(stderr, "spot_shadow_pixels unshadowed=%d shadowed=%d%c", unshadowed, shadowed, 10);
+    Require(unshadowed > 60, "Spot shadow test: the unshadowed floor under the plate must be visibly lit");
+    Require(shadowed * 10 < unshadowed * 8, "Spot shadow test: the plate must darken the floor beneath a spot light");
+}
+
+// More shadow-casting point lights than the old limit of four: the fifth and sixth must shadow the floor too.
+// The share of light that survives the plate is measured for four lights (the old limit) and for six; it must
+// not grow when lights are added.
+[[nodiscard]] double PointShadowSurvivingShare(int extraPointLights) {
+    ShadowFloorScene scene{ .extraPointLights = extraPointLights, .pointIntensity = 0.5F };
+    scene.lightCastsShadow = false;
+    const int unshadowed = RenderShadowFloorBrightness(scene);
+    scene.lightCastsShadow = true;
+    const int shadowed = RenderShadowFloorBrightness(scene);
+    Require(unshadowed > 100 && unshadowed < 700, "Multi point light test: the unshadowed floor must be lit but not saturated");
+    return static_cast<double>(shadowed) / static_cast<double>(unshadowed);
+}
+
+void RunRendererRendersSixPointLightShadowsTest() {
+    const double four = PointShadowSurvivingShare(3);
+    const double six = PointShadowSurvivingShare(5);
+    std::fprintf(stderr, "multi_point_shadow_share four=%.3f six=%.3f%c", four, six, 10);
+    Require(six < four + 0.05, "Six point light test: the fifth and sixth light must be shadowed by the plate like the first four");
+}
+
 void RunRendererRendersPointLightShadowTest() {
     ShadowFloorScene scene{};
     scene.lightCastsShadow = false;
@@ -6860,8 +8145,31 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererDrawsParticleMeshSnapshotPixelsTest();
     RunRendererDrawsPublishedRuntimeTexturePixelsTest();
     RunRendererRendersPointLightShadowTest();
+    RunRendererRendersSpotLightShadowTest();
+    RunRendererRendersSixPointLightShadowsTest();
     RunRendererRendersDirectionalCascadeShadowTest();
+    RunRendererBlendsShadowCascadesTest();
     RunRendererRendersScreenSpaceGiBounceTest();
+    RunRendererSmoothsScreenSpaceGiOverTimeTest();
+    RunRendererRendersScreenSpaceAmbientOcclusionTest();
+    RunRendererRendersScreenSpaceReflectionsTest();
+    RunRendererRendersVoxelGiFromOffscreenObjectsTest();
+    RunRendererShadowsVoxelGiBounceTest();
+    RunVoxelGridFollowsMeshGeometryTest();
+    RunRendererCollidesGpuParticlesTest();
+    RunRendererSortsAlphaGpuParticlesTest();
+    RunRendererDrawsGpuMeshParticlesTest();
+    RunRendererSpinsGpuMeshParticlesTest();
+    RunRendererAlignsGpuMeshParticlesToVelocityTest();
+    RunRendererSortsTranslucentGpuMeshParticlesTest();
+    RunRendererOrdersGpuMeshParticlesAmongSceneMeshesTest();
+    RunRendererDrawsGpuTrailParticlesTest();
+    RunRendererFollowsLocalSpaceGpuParticlesTest();
+    RunRendererKeepsGpuParticlesAcrossRenderOriginMovesTest();
+#if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    RunRendererDrawsAuthoredParticleFileTest();
+    RunRendererMillionParticleFileTest();
+#endif
     RunRendererDrawsGpuSimulatedParticlesTest();
     RunRendererDrawsMillionGpuParticlesTest();
 #endif
@@ -7871,6 +9179,7 @@ void RunRendererVisibilityFeedbackTest() {
 void RunRendererRuntimeSubmitTests() {
     RunGeneratedClusterMissingResourceDiagnosticsTest();
     RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest();
+    RunRuntimeFrameSyncAppendsRootsTest();
     RunRendererResourceGroupEnsureFallbacksTest();
     RunEditorUIViewTransformValidationTests();
     RunEditorCameraWireframesSubmitInHeadlessNoopTest();

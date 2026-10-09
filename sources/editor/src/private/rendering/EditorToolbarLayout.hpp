@@ -17,7 +17,7 @@ struct EditorMenuDescriptor {
 class EditorToolbarLayout {
 public:
 #if defined(_WIN32)
-    [[nodiscard]] static const std::array<EditorMenuDescriptor, 5>& MenuDescriptors() noexcept;
+    [[nodiscard]] static const std::array<EditorMenuDescriptor, 6>& MenuDescriptors() noexcept;
     [[nodiscard]] static EditorMenuRects ResolveMenu(
         const RECT& rect, EditorMenuCommand openMenu, int rowCount) noexcept;
     [[nodiscard]] static EditorToolbarRects ResolveToolbar(const RECT& rect) noexcept;

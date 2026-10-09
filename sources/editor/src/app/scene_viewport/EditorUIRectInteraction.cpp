@@ -44,7 +44,7 @@ std::vector<SceneUIFrameElement> EditorUIRectInteraction::Overlays(const EditorS
         outline.clipRect = {0, 0, width, height};
         outline.border = kb::scene::UIBorder{};
         outline.border->borderColor =
-            selected ? kb::math::Color{0.55F, 0.4F, 1, 1} : kb::math::Color{0.5F, 0.6F, 0.7F, 0.8F};
+            selected ? kb::math::Color{0.85F, 0.85F, 0.85F, 1} : kb::math::Color{0.5F, 0.6F, 0.7F, 0.8F};
         outline.border->borderWidth = {stroke, stroke, stroke, stroke};
         result.push_back(outline);
         if (!selected || canvas)
@@ -59,8 +59,8 @@ std::vector<SceneUIFrameElement> EditorUIRectInteraction::Overlays(const EditorS
                                {p.x - radius, p.y + radius}}};
             handle.clipRect = {0, 0, width, height};
             handle.border = kb::scene::UIBorder{};
-            handle.border->backgroundColor = {0.85F, 0.8F, 1, 1};
-            handle.border->borderColor = {0.45F, 0.25F, 0.9F, 1};
+            handle.border->backgroundColor = {0.95F, 0.95F, 0.95F, 1};
+            handle.border->borderColor = {0.45F, 0.45F, 0.45F, 1};
             handle.border->borderWidth = {stroke, stroke, stroke, stroke};
             result.push_back(handle);
         }

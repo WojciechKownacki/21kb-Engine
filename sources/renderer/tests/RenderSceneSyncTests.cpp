@@ -31,6 +31,11 @@
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
@@ -52,6 +57,7 @@
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/SceneLightColor.hpp"
 #include "scene/SceneRenderVisibilityPublisher.hpp"
+#include "scene/SceneTransformMatrices.hpp"
 #include "shadow/ShadowCasterBoundsCollector.hpp"
 
 #include <algorithm>
@@ -3547,6 +3553,447 @@ void RunSharedPoseMeshBoundsTest() {
         "A shared pose mesh must derive animated bounds from its pose source");
 }
 
+struct ProxyGoldenHash {
+    std::uint64_t value = 1469598103934665603ULL;
+
+    void Bytes(const void* data, std::size_t size) noexcept {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t index = 0U; index < size; ++index) {
+            value ^= bytes[index];
+            value *= 1099511628211ULL;
+        }
+    }
+    void U64(std::uint64_t number) noexcept { Bytes(&number, sizeof(number)); }
+    template <std::size_t Count>
+    void Floats(const std::array<float, Count>& values) noexcept { Bytes(values.data(), sizeof(float) * Count); }
+    void Transform(const kb::scene::TransformComponent& transform) noexcept {
+        const std::array<float, 20> values{
+            transform.localPosition.x, transform.localPosition.y, transform.localPosition.z,
+            transform.localRotation.x, transform.localRotation.y, transform.localRotation.z, transform.localRotation.w,
+            transform.localScale.x, transform.localScale.y, transform.localScale.z,
+            transform.worldPosition.x, transform.worldPosition.y, transform.worldPosition.z,
+            transform.worldRotation.x, transform.worldRotation.y, transform.worldRotation.z, transform.worldRotation.w,
+            transform.worldScale.x, transform.worldScale.y, transform.worldScale.z };
+        Floats(values);
+        U64(transform.localVersion); U64(transform.parentVersion); U64(transform.worldVersion); U64(transform.worldDirty ? 1U : 0U);
+    }
+};
+
+// The renderer's incremental runtime path (Renderer::SubmitSceneToViewport without a full sync, fed the way
+// RuntimeSceneFrameSync feeds it) on a local RenderScene, so the proxies can be read back after each frame.
+struct RuntimeTransformFrameDriver {
+    EcsRenderSceneSynchronizer synchronizer;
+    RenderScene renderScene;
+    bool initialized = false;
+    std::uint64_t topology = 0U;
+    std::uint64_t frameSyncRevision = 0U;
+    std::uint64_t rendererRevision = 0U;
+    std::vector<std::uint64_t> preUpdateChanges;
+
+    void BeforeUpdate(const kb::scene::Scene& scene) {
+        preUpdateChanges.clear();
+        if (initialized && scene.Runtime().RenderProxyUpdateRevision() != frameSyncRevision) {
+            for (const kb::scene::SceneEntity entity : scene.Runtime().RenderProxyUpdateEntities()) preUpdateChanges.push_back(entity.Id());
+        }
+    }
+
+    void Submit(const kb::scene::Scene& scene) {
+        const std::uint64_t currentTopology = scene.Runtime().RenderTopologyVersion();
+        const std::uint64_t revision = scene.Runtime().RenderProxyUpdateRevision();
+        if (!initialized) {
+            synchronizer.Sync(scene, renderScene);
+            rendererRevision = revision;
+        } else {
+            bool renderProxyUpdatesSynchronized = false;
+            if (currentTopology != topology) {
+                synchronizer.SyncStructural(scene, renderScene);
+                renderProxyUpdatesSynchronized = true;
+            }
+            synchronizer.PullTransforms(scene, renderScene);
+            if (!preUpdateChanges.empty()) synchronizer.SyncEntities(scene, renderScene, preUpdateChanges);
+            if (!scene.Runtime().RenderProxyUpdateEntities().empty() && rendererRevision != revision) {
+                synchronizer.SyncRenderProxyUpdates(scene, renderScene);
+                rendererRevision = revision;
+                renderProxyUpdatesSynchronized = true;
+            }
+            if (renderProxyUpdatesSynchronized) synchronizer.SyncFacingPanelUpdates(scene, renderScene, true);
+        }
+        synchronizer.AdvanceHistoryRibbons(scene, renderScene);
+        static_cast<void>(renderScene.DrawGroups());
+        initialized = true;
+        topology = currentTopology;
+        frameSyncRevision = revision;
+    }
+};
+
+// Golden render proxies of a fixed-dt run: every proxy kind that takes an entity's world transform, moving among
+// plain movers next to a parented overlay, hashed with the transform state of every object after each frame.
+// The expected value was recorded from the push path (render-proxy lists and affine array) of the transform sync.
+void RunRenderProxyTransformGoldenHashTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    std::vector<kb::scene::SceneEntity> objects;
+    std::vector<kb::scene::SceneEntity> movers;
+    const auto create = [&](float x, float y, float z) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .transform = LocalOnlyTransformAt(x, y, z) }).Entity();
+        objects.push_back(entity);
+        return entity;
+    };
+    const auto createMovers = [&](std::size_t count, std::size_t rendered) {
+        std::vector<kb::scene::SceneObjectDesc> descs(count);
+        for (std::size_t index = 0U; index < count; ++index) descs[index].transform = LocalOnlyTransformAt(static_cast<float>(movers.size() + index), 0.5F, 1.0F);
+        for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) {
+            if (rendered > 0U) {
+                scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{ .meshAssetId = 41U, .materialAssetId = 5U });
+                --rendered;
+            }
+            objects.push_back(object.Entity());
+            movers.push_back(object.Entity());
+        }
+    };
+    const kb::scene::SceneEntity camera = create(0.0F, 2.0F, -10.0F);
+    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{ .primary = true });
+    const kb::scene::SceneEntity light = create(0.0F, 5.0F, 0.0F);
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{});
+    const kb::scene::SceneEntity canvas = create(0.0F, 0.0F, 0.0F);
+    for (int child = 0; child < 8; ++child) {
+        Require(scene.Hierarchy().SetParent(create(static_cast<float>(child), 1.0F, 0.0F), canvas), "Golden proxy overlay could not be parented");
+    }
+    createMovers(5000U, 1000U);
+    const kb::scene::SceneEntity blocker = create(1.0F, 0.0F, 3.0F);
+    scene.Components().VisibilityBlockers().Set(blocker, kb::scene::SceneVisibilityBlockerComponent{});
+    const kb::scene::SceneEntity swarmEntity = create(2.0F, 0.0F, 3.0F);
+    kb::scene::GeometrySwarmComponent swarm{};
+    swarm.meshAssetId = 42U;
+    swarm.instanceCount = 4U;
+    swarm.columns = 2U;
+    swarm.rows = 2U;
+    swarm.enabled = true;
+    scene.Components().GeometrySwarms().Set(swarmEntity, swarm);
+    const kb::scene::SceneEntity cast = create(3.0F, 0.0F, 3.0F);
+    scene.Components().RegionShapes().Set(cast, kb::scene::RegionShapeComponent{});
+    scene.Components().SurfaceCasts().Set(cast, kb::scene::SurfaceCastComponent{ .materialAssetId = 9U, .enabled = true });
+    const kb::scene::SceneEntity stroke = create(4.0F, 0.0F, 3.0F);
+    kb::scene::GuideCurveComponent curve{};
+    curve.controlPointCount = 3U;
+    curve.controlPoints[0] = kb::scene::Vec3{ -2.0F, 0.0F, 0.0F };
+    curve.controlPoints[1] = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F };
+    curve.controlPoints[2] = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F };
+    scene.Components().GuideCurves().Set(stroke, curve);
+    scene.Components().SpaceStrokes().Set(stroke, kb::scene::SpaceStrokeComponent{
+        .meshAssetId = 11U, .materialAssetId = 19U, .mode = kb::scene::SpaceStrokeMode::Spline, .width = 0.2F, .splineSegments = 6U, .enabled = true });
+    const kb::scene::SceneEntity viewPanel = create(5.0F, 0.0F, 3.0F);
+    scene.Components().MeshRenderers().Set(viewPanel, kb::scene::MeshRendererComponent{ .meshAssetId = 7U, .materialAssetId = 9U });
+    scene.Components().FacingPanels().Set(viewPanel, kb::scene::FacingPanelComponent{ .mode = kb::scene::FacingPanelMode::View, .enabled = true });
+    const kb::scene::SceneEntity axisPanel = create(6.0F, 0.0F, 3.0F);
+    scene.Components().MeshRenderers().Set(axisPanel, kb::scene::MeshRendererComponent{ .meshAssetId = 7U, .materialAssetId = 9U });
+    scene.Components().FacingPanels().Set(axisPanel, kb::scene::FacingPanelComponent{
+        .mode = kb::scene::FacingPanelMode::Axis, .axis = kb::scene::Vec3{ -1.0F, 0.0F, 0.0F }, .enabled = true });
+    const kb::scene::SceneEntity parentRoot = create(7.0F, 0.0F, 3.0F);
+    const kb::scene::SceneEntity parentedMesh = create(0.0F, 1.0F, 0.0F);
+    scene.Components().MeshRenderers().Set(parentedMesh, kb::scene::MeshRendererComponent{ .meshAssetId = 41U, .materialAssetId = 5U });
+    Require(scene.Hierarchy().SetParent(parentedMesh, parentRoot), "Golden proxy renderable could not be parented");
+    const std::array<kb::scene::SceneEntity, 10U> special{ camera, light, blocker, swarmEntity, cast, stroke, viewPanel, axisPanel, parentRoot, parentedMesh };
+
+    RuntimeTransformFrameDriver driver;
+    ProxyGoldenHash hash;
+    std::vector<kb::scene::TransformComponent> batch;
+    for (int frame = 0; frame < 8; ++frame) {
+        if (frame == 2) createMovers(40U, 5U);
+        if (frame == 3) scene.Components().MeshRenderers().Set(movers[1500], kb::scene::MeshRendererComponent{ .meshAssetId = 41U, .materialAssetId = 5U });
+        if (frame == 4) scene.Entities().Destroy(movers[10]);
+        if (frame == 5) scene.Components().MeshRenderers().Remove(movers[1500]);
+        batch.resize(movers.size());
+        for (std::size_t index = 0U; index < movers.size(); ++index) {
+            const float phase = static_cast<float>(frame) * 0.25F + static_cast<float>(index) * 0.001F;
+            batch[index] = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(index % 97) + std::sin(phase), 0.5F, static_cast<float>(index / 97) + std::cos(phase) },
+                .localRotation = kb::scene::Quat{ 0.0F, std::sin(phase * 0.5F), 0.0F, std::cos(phase * 0.5F) } };
+        }
+        scene.Transforms().SetMany(movers, batch);
+        for (std::size_t index = 0U; index < special.size(); ++index) {
+            const float phase = static_cast<float>(frame) * 0.3F + static_cast<float>(index);
+            scene.Transforms().Set(special[index], kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ static_cast<float>(index) + std::sin(phase), 1.0F + (index == 0U ? 1.0F : 0.0F), (index == 0U ? -10.0F : 3.0F) + std::cos(phase) },
+                .localRotation = kb::scene::Quat{ 0.0F, std::sin(phase * 0.2F), 0.0F, std::cos(phase * 0.2F) } });
+        }
+        driver.BeforeUpdate(scene);
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        driver.Submit(scene);
+
+        const RenderScene& renderScene = driver.renderScene;
+        for (const kb::scene::SceneEntity entity : objects) {
+            const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(entity);
+            hash.U64(transform == nullptr ? 0U : 1U);
+            if (transform != nullptr) hash.Transform(*transform);
+            const std::uint64_t id = entity.Id();
+            const MeshRenderProxy* mesh = renderScene.FindMeshByEntity(id);
+            hash.U64(mesh == nullptr ? 0U : (mesh->desc.visible ? 2U : 1U));
+            if (mesh != nullptr) hash.Floats(mesh->desc.model);
+            const CameraRenderProxy* cameraProxy = renderScene.FindCameraByEntity(id);
+            hash.U64(cameraProxy == nullptr ? 0U : 1U);
+            if (cameraProxy != nullptr) { hash.Floats(cameraProxy->desc.position); hash.Floats(cameraProxy->desc.rotation); }
+            const LightRenderProxy* lightProxy = renderScene.FindLightByEntity(id);
+            hash.U64(lightProxy == nullptr ? 0U : 1U);
+            if (lightProxy != nullptr) { hash.Floats(lightProxy->desc.position); hash.Floats(lightProxy->desc.rotation); }
+            const auto blockerProxy = renderScene.VisibilityBlockerProxies().find(id);
+            hash.U64(blockerProxy == renderScene.VisibilityBlockerProxies().end() ? 0U : 1U);
+            if (blockerProxy != renderScene.VisibilityBlockerProxies().end()) hash.Floats(blockerProxy->second.desc.model);
+            const auto swarmProxy = renderScene.GeometrySwarmProxies().find(id);
+            hash.U64(swarmProxy == renderScene.GeometrySwarmProxies().end() ? 0U : 1U);
+            if (swarmProxy != renderScene.GeometrySwarmProxies().end()) hash.Floats(swarmProxy->second.desc.model);
+            const auto castProxy = renderScene.SurfaceCastProxies().find(id);
+            hash.U64(castProxy == renderScene.SurfaceCastProxies().end() ? 0U : 1U);
+            if (castProxy != renderScene.SurfaceCastProxies().end()) hash.Floats(castProxy->second.desc.model);
+            const auto strokeProxy = renderScene.SpaceStrokeProxies().find(id);
+            hash.U64(strokeProxy == renderScene.SpaceStrokeProxies().end() ? 0U : 1U);
+            if (strokeProxy != renderScene.SpaceStrokeProxies().end()) hash.Floats(strokeProxy->second.desc.model);
+        }
+        // the instances that reach the GPU, folded order-independently (their order follows the proxy maps)
+        std::uint64_t instanceSum = 0U;
+        std::uint64_t instanceCount = 0U;
+        for (const SceneRenderDrawGroup& group : renderScene.DrawGroups()) {
+            for (const SceneRenderMeshInstance& instance : group.instances) {
+                ProxyGoldenHash entry;
+                entry.Floats(instance.model);
+                instanceSum += entry.value;
+                ++instanceCount;
+            }
+        }
+        hash.U64(instanceSum);
+        hash.U64(instanceCount);
+    }
+    const RenderScene& finalScene = driver.renderScene;
+    Require(finalScene.CameraProxyCount() == 1U && finalScene.LightProxyCount() == 1U && finalScene.VisibilityBlockerProxyCount() == 1U &&
+            finalScene.GeometrySwarmProxyCount() == 1U && finalScene.SurfaceCastProxyCount() == 1U && finalScene.SpaceStrokeProxyCount() == 1U,
+        "Golden proxy scene lost a proxy kind");
+    constexpr std::uint64_t expected = 0xa3de516236e323c9ULL;
+    if (hash.value != expected) std::fprintf(stderr, "render proxy golden hash 0x%llx\n", static_cast<unsigned long long>(hash.value));
+    Require(hash.value == expected, "Render proxies of a fixed-dt run differ from the recorded golden hash");
+}
+
+[[nodiscard]] std::array<float, 16> ExpectedPulledModel(const kb::scene::TransformComponent& transform) {
+    const kb::scene::WorldTransformAffine3x4 affine = kb::scene::BuildWorldAffine3x4(transform);
+    return { affine.values[0], affine.values[1], affine.values[2], 0.0F, affine.values[3], affine.values[4], affine.values[5], 0.0F,
+        affine.values[6], affine.values[7], affine.values[8], 0.0F, affine.values[9], affine.values[10], affine.values[11], 1.0F };
+}
+
+// Every proxy kind the renderer pulls, moving among 100k plain movers, shows the transform the frame composed in that
+// same frame; so does a mesh under a moving parent, and a facing panel in view and axis mode.
+void RunPulledProxyKindsFollowMovementAmongPlainMoversTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    std::vector<kb::scene::SceneObjectDesc> descs(100000U);
+    std::vector<kb::scene::SceneEntity> movers;
+    for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) movers.push_back(object.Entity());
+    const auto create = [&scene](float x) {
+        return scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .transform = LocalOnlyTransformAt(x, 0.0F, 3.0F) }).Entity();
+    };
+    std::vector<std::pair<RenderTransformProxyKind, kb::scene::SceneEntity>> moving;
+    kb::scene::SceneEntity camera{};
+    kb::scene::SceneEntity viewPanel{};
+    kb::scene::SceneEntity axisPanel{};
+    kb::scene::SceneEntity parentedMesh{};
+    for (const RenderTransformProxyKind kind : kRenderTransformProxyKinds) {
+        const kb::scene::SceneEntity entity = create(static_cast<float>(moving.size()));
+        switch (kind) {
+        case RenderTransformProxyKind::Camera:
+            scene.Components().Cameras().Set(entity, kb::scene::CameraComponent{ .primary = true });
+            camera = entity;
+            break;
+        case RenderTransformProxyKind::Light:
+            scene.Components().Lights().Set(entity, kb::scene::LightComponent{});
+            break;
+        case RenderTransformProxyKind::FacingPanel:
+            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 7U, .materialAssetId = 9U });
+            scene.Components().FacingPanels().Set(entity, kb::scene::FacingPanelComponent{ .mode = kb::scene::FacingPanelMode::View, .enabled = true });
+            viewPanel = entity;
+            axisPanel = create(20.0F);
+            scene.Components().MeshRenderers().Set(axisPanel, kb::scene::MeshRendererComponent{ .meshAssetId = 7U, .materialAssetId = 9U });
+            scene.Components().FacingPanels().Set(axisPanel, kb::scene::FacingPanelComponent{
+                .mode = kb::scene::FacingPanelMode::Axis, .axis = kb::scene::Vec3{ -1.0F, 0.0F, 0.0F }, .enabled = true });
+            moving.emplace_back(kind, axisPanel);
+            break;
+        case RenderTransformProxyKind::Mesh: {
+            scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 41U, .materialAssetId = 5U });
+            parentedMesh = create(0.0F);
+            scene.Components().MeshRenderers().Set(parentedMesh, kb::scene::MeshRendererComponent{ .meshAssetId = 41U, .materialAssetId = 5U });
+            Require(scene.Hierarchy().SetParent(parentedMesh, entity), "Pulled proxy test could not parent a mesh");
+            break;
+        }
+        case RenderTransformProxyKind::VisibilityBlocker:
+            scene.Components().VisibilityBlockers().Set(entity, kb::scene::SceneVisibilityBlockerComponent{});
+            break;
+        case RenderTransformProxyKind::GeometrySwarm: {
+            kb::scene::GeometrySwarmComponent swarm{};
+            swarm.meshAssetId = 42U;
+            swarm.enabled = true;
+            scene.Components().GeometrySwarms().Set(entity, swarm);
+            break;
+        }
+        case RenderTransformProxyKind::SurfaceCast:
+            scene.Components().RegionShapes().Set(entity, kb::scene::RegionShapeComponent{});
+            scene.Components().SurfaceCasts().Set(entity, kb::scene::SurfaceCastComponent{ .materialAssetId = 9U, .enabled = true });
+            break;
+        case RenderTransformProxyKind::SpaceStroke: {
+            kb::scene::GuideCurveComponent curve{};
+            curve.controlPointCount = 2U;
+            curve.controlPoints[1] = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F };
+            scene.Components().GuideCurves().Set(entity, curve);
+            scene.Components().SpaceStrokes().Set(entity, kb::scene::SpaceStrokeComponent{ .meshAssetId = 11U, .materialAssetId = 19U, .width = 0.2F, .enabled = true });
+            break;
+        }
+        }
+        moving.emplace_back(kind, entity);
+    }
+
+    RuntimeTransformFrameDriver driver;
+    std::vector<kb::scene::TransformComponent> batch(movers.size());
+    for (int frame = 0; frame < 4; ++frame) {
+        for (std::size_t index = 0U; index < movers.size(); ++index) {
+            batch[index] = LocalOnlyTransformAt(static_cast<float>(index % 300U), 0.0F, static_cast<float>(frame));
+        }
+        scene.Transforms().SetMany(movers, batch);
+        for (std::size_t index = 0U; index < moving.size(); ++index) {
+            const float phase = static_cast<float>(frame) + static_cast<float>(index) * 0.5F;
+            scene.Transforms().Set(moving[index].second, kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ static_cast<float>(index) + std::sin(phase), 1.0F, (moving[index].second == camera ? -10.0F : 3.0F) + std::cos(phase) },
+                .localRotation = kb::scene::Quat{ 0.0F, std::sin(phase * 0.3F), 0.0F, std::cos(phase * 0.3F) } });
+        }
+        driver.BeforeUpdate(scene);
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        driver.Submit(scene);
+
+        const RenderScene& renderScene = driver.renderScene;
+        const CameraRenderProxy* cameraProxy = renderScene.FindCameraByEntity(camera.Id());
+        for (const auto& [kind, entity] : moving) {
+            const kb::scene::TransformComponent& transform = *scene.Transforms().TryGet(entity);
+            const std::array<float, 16> model = ExpectedPulledModel(transform);
+            bool current = false;
+            switch (kind) {
+            case RenderTransformProxyKind::Camera:
+                current = cameraProxy != nullptr && cameraProxy->desc.position == std::array<float, 3>{ transform.worldPosition.x, transform.worldPosition.y, transform.worldPosition.z };
+                break;
+            case RenderTransformProxyKind::Light: {
+                const LightRenderProxy* proxy = renderScene.FindLightByEntity(entity.Id());
+                current = proxy != nullptr && proxy->desc.position == std::array<float, 3>{ transform.worldPosition.x, transform.worldPosition.y, transform.worldPosition.z };
+                break;
+            }
+            case RenderTransformProxyKind::FacingPanel: {
+                const kb::scene::FacingPanelComponent* panel = scene.Components().FacingPanels().TryGet(entity);
+                const kb::math::Vec3 direction = panel->mode == kb::scene::FacingPanelMode::Axis ? panel->axis
+                    : kb::math::Vec3{ cameraProxy->desc.position[0], cameraProxy->desc.position[1], cameraProxy->desc.position[2] } - transform.worldPosition;
+                kb::scene::TransformComponent oriented = transform;
+                oriented.worldRotation = kb::math::LookRotation(direction, panel->up);
+                const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(entity.Id());
+                current = proxy != nullptr && proxy->desc.model == SceneTransformMatrices::Model(oriented);
+                break;
+            }
+            case RenderTransformProxyKind::Mesh: {
+                const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(entity.Id());
+                const MeshRenderProxy* child = renderScene.FindMeshByEntity(parentedMesh.Id());
+                current = proxy != nullptr && proxy->desc.model == model &&
+                    child != nullptr && child->desc.model == ExpectedPulledModel(*scene.Transforms().TryGet(parentedMesh));
+                break;
+            }
+            case RenderTransformProxyKind::VisibilityBlocker: {
+                const auto proxy = renderScene.VisibilityBlockerProxies().find(entity.Id());
+                current = proxy != renderScene.VisibilityBlockerProxies().end() && proxy->second.desc.model == model;
+                break;
+            }
+            case RenderTransformProxyKind::GeometrySwarm: {
+                const auto proxy = renderScene.GeometrySwarmProxies().find(entity.Id());
+                current = proxy != renderScene.GeometrySwarmProxies().end() && proxy->second.desc.model == model;
+                break;
+            }
+            case RenderTransformProxyKind::SurfaceCast: {
+                const auto proxy = renderScene.SurfaceCastProxies().find(entity.Id());
+                current = proxy != renderScene.SurfaceCastProxies().end() && proxy->second.desc.model == model;
+                break;
+            }
+            case RenderTransformProxyKind::SpaceStroke: {
+                const auto proxy = renderScene.SpaceStrokeProxies().find(entity.Id());
+                current = proxy != renderScene.SpaceStrokeProxies().end() && proxy->second.desc.model == model;
+                break;
+            }
+            }
+            Require(current, "A moving proxy among plain movers did not show the transform of its frame");
+        }
+    }
+}
+
+// A mover that gains a MeshRenderer is drawn where it is from then on, loses its proxy with the component, and a
+// destroyed renderable leaves none behind.
+void RunPulledMeshFollowsComponentChangesAndDestructionTest() {
+    kb::scene::Scene scene;
+    std::vector<kb::scene::SceneObjectDesc> descs(2000U);
+    std::vector<kb::scene::SceneEntity> movers;
+    for (const kb::scene::SceneObject& object : scene.Entities().CreateObjects(descs)) movers.push_back(object.Entity());
+    const kb::scene::SceneEntity toggled = movers[700];
+    const kb::scene::SceneEntity destroyed = movers[900];
+    scene.Components().MeshRenderers().Set(destroyed, kb::scene::MeshRendererComponent{ .meshAssetId = 41U });
+    RuntimeTransformFrameDriver driver;
+    std::vector<kb::scene::TransformComponent> batch(movers.size());
+    for (int frame = 0; frame < 8; ++frame) {
+        if (frame == 2) scene.Components().MeshRenderers().Set(toggled, kb::scene::MeshRendererComponent{ .meshAssetId = 41U });
+        if (frame == 4) scene.Components().MeshRenderers().Remove(toggled);
+        if (frame == 5) scene.Entities().Destroy(destroyed);
+        for (std::size_t index = 0U; index < movers.size(); ++index) {
+            batch[index] = LocalOnlyTransformAt(static_cast<float>(index), static_cast<float>(frame), 0.0F);
+        }
+        scene.Transforms().SetMany(movers, batch);
+        driver.BeforeUpdate(scene);
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        driver.Submit(scene);
+        const MeshRenderProxy* toggledProxy = driver.renderScene.FindMeshByEntity(toggled.Id());
+        if (frame >= 2 && frame < 4) {
+            Require(toggledProxy != nullptr && toggledProxy->desc.model == ExpectedPulledModel(*scene.Transforms().TryGet(toggled)),
+                "A mover that gained a MeshRenderer was not drawn where it moved");
+        } else {
+            Require(toggledProxy == nullptr, "A mover without a MeshRenderer had a mesh proxy");
+        }
+        const MeshRenderProxy* destroyedProxy = driver.renderScene.FindMeshByEntity(destroyed.Id());
+        Require(frame >= 5 ? destroyedProxy == nullptr
+                           : destroyedProxy != nullptr && destroyedProxy->desc.model == ExpectedPulledModel(*scene.Transforms().TryGet(destroyed)),
+            "A renderable mover was not drawn where it moved, or kept its proxy after it was destroyed");
+    }
+}
+
+void RunPulledMeshCacheSurvivesAppendAndMigrationTest() {
+    kb::scene::Scene scene;
+    const auto mesh = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{}).Entity();
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 41U });
+    EcsRenderSceneSynchronizer synchronizer;
+    RenderScene renderScene;
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    synchronizer.Sync(scene, renderScene);
+    // Initialize the cached pointers, then append only plain transforms for several frames.
+    synchronizer.PullTransforms(scene, renderScene);
+    for (int frame = 1; frame <= 5; ++frame) {
+        const std::vector<kb::scene::SceneObjectDesc> descs(333U);
+        static_cast<void>(scene.Entities().CreateObjects(descs));
+        scene.Transforms().Set(mesh, LocalOnlyTransformAt(static_cast<float>(frame), 2.0F, 3.0F));
+        synchronizer.PullTransforms(scene, renderScene);
+        const auto* proxy = renderScene.FindMeshByEntity(mesh.Id());
+        Require(proxy != nullptr && proxy->desc.model == ExpectedPulledModel(*scene.Transforms().TryGet(mesh)),
+            "Appending plain transforms broke cached mesh transform reads");
+    }
+    // A component addition relocates the mesh's transform without changing the mesh count or proxy set.
+    struct MeshPullMarker { std::uint32_t value = 1U; };
+    auto& world = scene.Runtime().EcsWorld();
+    world.Set(mesh, MeshPullMarker{});
+    scene.Transforms().Set(mesh, LocalOnlyTransformAt(7.0F, 2.0F, 3.0F));
+    synchronizer.PullTransforms(scene, renderScene);
+    const auto* proxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(proxy != nullptr && proxy->desc.model == ExpectedPulledModel(*scene.Transforms().TryGet(mesh)),
+        "Adding an unrelated component left a cached transform pointer in the old archetype");
+    world.Remove<MeshPullMarker>(mesh);
+    scene.Transforms().Set(mesh, LocalOnlyTransformAt(9.0F, 2.0F, 3.0F));
+    synchronizer.PullTransforms(scene, renderScene);
+    proxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(proxy != nullptr && proxy->desc.model == ExpectedPulledModel(*scene.Transforms().TryGet(mesh)),
+        "Removing an unrelated component left a stale mesh transform pointer");
+}
+
 } // namespace
 
 void RunRenderSceneSyncTests() {
@@ -3638,6 +4085,10 @@ void RunRenderSceneSyncTests() {
     RunParticleReleaseBeforeSyncIsOwnershipNeutralTest();
     RunSceneRenderVisibilityPublisherBuildsFrameTest();
     RunSceneRenderVisibilityPublisherParallelParityTest();
+    RunRenderProxyTransformGoldenHashTest();
+    RunPulledProxyKindsFollowMovementAmongPlainMoversTest();
+    RunPulledMeshFollowsComponentChangesAndDestructionTest();
+    RunPulledMeshCacheSurvivesAppendAndMigrationTest();
 }
 
 } // namespace kb::render::tests

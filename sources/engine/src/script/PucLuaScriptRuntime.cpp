@@ -13,6 +13,8 @@ extern "C" {
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -25,11 +27,42 @@ namespace {
 
 constexpr int kNoReference = LUA_NOREF;
 
+// Number of active call frames of a Lua thread.
+[[nodiscard]] int CallDepth(lua_State* thread) noexcept {
+    lua_Debug frame{};
+    int depth = 0;
+    while (lua_getstack(thread, depth, &frame) != 0) {
+        ++depth;
+    }
+    return depth;
+}
+
+// A coroutine the line or count hook suspended stopped inside a Lua function, not inside coroutine.yield. Lua
+// resumes it by running that function on and discards whatever lua_resume passes, so it gets no arguments and
+// its stack must not be touched.
+[[nodiscard]] bool SuspendedInsideHook(lua_State* thread) noexcept {
+    lua_Debug frame{};
+    if (lua_getstack(thread, 0, &frame) == 0 || lua_getinfo(thread, "S", &frame) == 0) {
+        return false;
+    }
+    return frame.what != nullptr && std::string_view{ frame.what } != "C";
+}
+
+// The message luaL_newstate's panic handler prints before Lua aborts.
+int Panic(lua_State* state) {
+    const char* message = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : "error object is not a string";
+    std::fprintf(stderr, "PANIC: unprotected error in call to Lua API (%s)\n", message);
+    std::fflush(stderr);
+    return 0;
+}
+
 } // namespace
 
 PucLuaScriptRuntime::PucLuaScriptRuntime()
-    : state_(luaL_newstate()) {
+    : memoryBudget_(std::make_unique<PucLuaMemoryBudget>(PucLuaMemoryBudget{ .limitBytes = ScriptExecutionBudgetSettings{}.luaMemoryBytes }))
+    , state_(lua_newstate(&PucLuaMemoryBudget::Allocate, memoryBudget_.get())) {
     if (state_ != nullptr) {
+        lua_atpanic(state_, &Panic);
         *static_cast<PucLuaScriptRuntime**>(lua_getextraspace(state_)) = this;
         PucLuaSandboxEnvironment::OpenSafeLibraries(state_);
     }
@@ -76,7 +109,10 @@ PucLuaLoadResult PucLuaScriptRuntime::ReloadScript(kb::assets::AssetId assetId, 
     const int errorHandlerIndex = lua_gettop(state_) - 1;
     lua_insert(state_, errorHandlerIndex);
     PucLuaDebugHook::Install(state_, *this);
-    const int status = lua_pcall(state_, 0, 0, errorHandlerIndex);
+    const int status = [&] {
+        const PucLuaMemoryLimitScope memoryLimit{ state_ };
+        return lua_pcall(state_, 0, 0, errorHandlerIndex);
+    }();
     PucLuaDebugHook::Clear(state_);
     if (status != LUA_OK) {
         return PucLuaLoadResult{ .error = PucLuaErrorReporter::ErrorFromTop(state_) };
@@ -144,6 +180,9 @@ void PucLuaScriptRuntime::Clear() noexcept {
     eventSubscriptionHandles_.clear();
     lastDebugPause_ = {};
     debugStepMode_ = DebugStepMode::Run;
+    debugStepThread_ = nullptr;
+    debugPause_.reset();
+    debugSuspendThread_ = nullptr;
 }
 
 bool PucLuaScriptRuntime::HasScript(kb::assets::AssetId assetId) const noexcept {
@@ -321,6 +360,7 @@ void PucLuaScriptRuntime::SetDebugSettings(PucLuaDebugSettings settings) {
 
 void PucLuaScriptRuntime::SetExecutionBudgetSettings(ScriptExecutionBudgetSettings settings) noexcept {
     executionBudgetSettings_ = settings;
+    memoryBudget_->limitBytes = settings.luaMemoryBytes;
 }
 
 void PucLuaScriptRuntime::BeginExecutionBudget() noexcept {
@@ -348,6 +388,10 @@ bool PucLuaScriptRuntime::IsExecutionBudgetEnabled() const noexcept {
     return executionBudgetSettings_.luaInstructionsPerBehaviour != 0U;
 }
 
+std::size_t PucLuaScriptRuntime::LuaMemoryUsedBytes() const noexcept {
+    return memoryBudget_->usedBytes;
+}
+
 bool PucLuaScriptRuntime::HasActiveExecutionBudget() const noexcept {
     return executionBudgetActive_ && IsExecutionBudgetEnabled();
 }
@@ -358,14 +402,51 @@ const PucLuaDebugSettings& PucLuaScriptRuntime::DebugSettings() const noexcept {
 
 void PucLuaScriptRuntime::RequestBreakOnNextLine() noexcept {
     debugStepMode_ = DebugStepMode::BreakOnNextLine;
+    debugStepThread_ = nullptr;
 }
 
 void PucLuaScriptRuntime::RequestStepInto() noexcept {
-    debugStepMode_ = DebugStepMode::StepInto;
+    ReleaseDebugPause(DebugStepMode::StepInto);
+}
+
+void PucLuaScriptRuntime::RequestStepOver() noexcept {
+    ReleaseDebugPause(debugPause_.has_value() ? DebugStepMode::StepOver : DebugStepMode::StepInto);
+}
+
+void PucLuaScriptRuntime::RequestStepOut() noexcept {
+    ReleaseDebugPause(debugPause_.has_value() ? DebugStepMode::StepOut : DebugStepMode::StepInto);
 }
 
 void PucLuaScriptRuntime::ResumeDebugExecution() noexcept {
-    debugStepMode_ = DebugStepMode::Run;
+    ReleaseDebugPause(DebugStepMode::Run);
+}
+
+// A step from a pause stays on the suspended coroutine; other scripts keep running without stopping on it.
+void PucLuaScriptRuntime::ReleaseDebugPause(DebugStepMode mode) noexcept {
+    debugStepMode_ = mode;
+    debugStepThread_ = nullptr;
+    debugStepDepth_ = 0;
+    if (debugPause_.has_value()) {
+        if (mode != DebugStepMode::Run) {
+            debugStepThread_ = debugPause_->thread;
+            debugStepDepth_ = debugPause_->depth;
+        }
+        debugPause_.reset();
+    }
+}
+
+bool PucLuaScriptRuntime::IsDebugPaused() const noexcept {
+    return debugPause_.has_value();
+}
+
+PucLuaDebugPauseSnapshot PucLuaScriptRuntime::InspectDebugPause() const {
+    PucLuaDebugPauseSnapshot snapshot;
+    if (!debugPause_.has_value()) {
+        return snapshot;
+    }
+    snapshot = lastDebugPause_;
+    snapshot.callStack = PucLuaDebugHook::CaptureCallStack(debugPause_->thread, true);
+    return snapshot;
 }
 
 void PucLuaScriptRuntime::RecordDebugPause(PucLuaDebugPauseSnapshot snapshot) {
@@ -379,16 +460,56 @@ std::optional<PucLuaDebugPauseReason> PucLuaScriptRuntime::ConsumeRequestedDebug
         return PucLuaDebugPauseReason::ManualBreak;
     case DebugStepMode::StepInto:
         debugStepMode_ = DebugStepMode::Run;
+        debugStepThread_ = nullptr;
         return PucLuaDebugPauseReason::Step;
+    case DebugStepMode::StepOver:
+    case DebugStepMode::StepOut:
     case DebugStepMode::Run:
         break;
     }
     return std::nullopt;
 }
 
+std::optional<PucLuaDebugPauseReason> PucLuaScriptRuntime::ConsumeRequestedDebugPause(lua_State* thread) noexcept {
+    switch (debugStepMode_) {
+    case DebugStepMode::BreakOnNextLine:
+        debugStepMode_ = DebugStepMode::Run;
+        return PucLuaDebugPauseReason::ManualBreak;
+    case DebugStepMode::StepInto:
+        if (debugStepThread_ != nullptr && debugStepThread_ != thread) {
+            return std::nullopt;
+        }
+        break;
+    case DebugStepMode::StepOver:
+    case DebugStepMode::StepOut: {
+        if (debugStepThread_ != thread) {
+            return std::nullopt;
+        }
+        const int depth = CallDepth(thread);
+        if (debugStepMode_ == DebugStepMode::StepOver ? depth > debugStepDepth_ : depth >= debugStepDepth_) {
+            return std::nullopt;
+        }
+        break;
+    }
+    case DebugStepMode::Run:
+        return std::nullopt;
+    }
+    debugStepMode_ = DebugStepMode::Run;
+    debugStepThread_ = nullptr;
+    return PucLuaDebugPauseReason::Step;
+}
+
+bool PucLuaScriptRuntime::BeginDebugSuspend(lua_State* thread) noexcept {
+    if (!debugSuspendAllowed_) {
+        return false;
+    }
+    debugSuspendThread_ = thread;
+    debugSuspendDepth_ = CallDepth(thread);
+    return true;
+}
+
 bool PucLuaScriptRuntime::NeedsDebugLineHook() const noexcept {
-    return debugStepMode_ == DebugStepMode::BreakOnNextLine ||
-           debugStepMode_ == DebugStepMode::StepInto ||
+    return debugStepMode_ != DebugStepMode::Run ||
            (debugSettings_.enableBreakpoints && !debugSettings_.breakpoints.empty());
 }
 
@@ -442,7 +563,10 @@ bool PucLuaScriptRuntime::PushModuleForImport(std::string_view name, std::string
     const int errorHandlerIndex = lua_gettop(state_) - 1;
     lua_insert(state_, errorHandlerIndex);
     PucLuaDebugHook::Install(state_, *this);
-    const int status = lua_pcall(state_, 0, 1, errorHandlerIndex);
+    const int status = [&] {
+        const PucLuaMemoryLimitScope memoryLimit{ state_ };
+        return lua_pcall(state_, 0, 1, errorHandlerIndex);
+    }();
     PucLuaDebugHook::Clear(state_);
     if (status != LUA_OK) {
         error = PucLuaErrorReporter::ErrorFromTop(state_);
@@ -501,6 +625,12 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
             .message = "lua script is not loaded",
         });
         eraseDestroyedInstanceState();
+        return result;
+    }
+    if (debugPause_.has_value() && debugPause_->instance == instanceKey && debugPause_->functionName == functionName &&
+        context.Lifecycle() != ScriptLifecycleEvent::Destroyed) {
+        // Suspended at a debugger pause: the entry stays on its line until Continue or a step releases it, while
+        // the rest of the game and the other scripts keep running.
         return result;
     }
 
@@ -580,6 +710,7 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     }
 
     int argumentCount = 0;
+    bool resumingInsideHook = false;
     if (coroutine == nullptr) {
         lua_getfield(state_, environmentIndex, std::string{ functionName }.c_str());
         if (lua_isnil(state_, -1) != 0) {
@@ -605,18 +736,23 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         // function to the owned generator thread before its first resume.
         lua_xmove(state_, coroutine, 1);
     } else if (resuming) {
-        lua_settop(coroutine, 0);
+        resumingInsideHook = SuspendedInsideHook(coroutine);
+        if (!resumingInsideHook) {
+            lua_settop(coroutine, 0);
+        }
     }
 
-    PucLuaRuntimeApi::PushSelf(state_, context);
-    ++argumentCount;
-    if (event == nullptr) {
-        lua_pushnumber(state_, static_cast<lua_Number>(context.DeltaSeconds()));
-    } else {
-        PucLuaRuntimeApi::PushEvent(state_, *event);
+    if (!resumingInsideHook) {
+        PucLuaRuntimeApi::PushSelf(state_, context);
+        ++argumentCount;
+        if (event == nullptr) {
+            lua_pushnumber(state_, static_cast<lua_Number>(context.DeltaSeconds()));
+        } else {
+            PucLuaRuntimeApi::PushEvent(state_, *event);
+        }
+        ++argumentCount;
+        lua_xmove(state_, coroutine, argumentCount);
     }
-    ++argumentCount;
-    lua_xmove(state_, coroutine, argumentCount);
 
     int resultCount = 0;
     const bool executionBudgetEnabled = IsExecutionBudgetEnabled();
@@ -624,7 +760,12 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         BeginExecutionBudget();
     }
     PucLuaDebugHook::Install(coroutine, *this);
-    const int status = lua_resume(coroutine, state_, argumentCount, &resultCount);
+    debugSuspendAllowed_ = context.Lifecycle() != ScriptLifecycleEvent::Destroyed;
+    const int status = [&] {
+        const PucLuaMemoryLimitScope memoryLimit{ coroutine };
+        return lua_resume(coroutine, state_, argumentCount, &resultCount);
+    }();
+    debugSuspendAllowed_ = false;
     std::string coroutineError =
         status == LUA_OK ? std::string{} : PucLuaErrorReporter::ErrorWithTracebackFromTop(coroutine);
     if (status != LUA_OK && coroutineError.find("stack traceback") == std::string::npos) {
@@ -636,8 +777,25 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     if (executionBudgetEnabled) {
         EndExecutionBudget();
     }
+    const bool debugSuspended = status == LUA_YIELD && debugSuspendThread_ == coroutine;
+    if (debugSuspendThread_ == coroutine) {
+        debugSuspendThread_ = nullptr;
+    }
+    if (status != LUA_YIELD && debugStepThread_ == coroutine) {
+        // The stepped entry returned or failed: there is no next line of it left to stop on.
+        debugStepMode_ = DebugStepMode::Run;
+        debugStepThread_ = nullptr;
+    }
     if (status == LUA_YIELD) {
         coroutineRefs_[instanceKey][std::string{functionName}] = coroutineRef;
+        if (debugSuspended) {
+            debugPause_ = DebugPause{
+                .thread = coroutine,
+                .instance = instanceKey,
+                .functionName = std::string{ functionName },
+                .depth = debugSuspendDepth_,
+            };
+        }
         result.executed = true;
         if (context.Lifecycle() == ScriptLifecycleEvent::Destroyed) {
             // Destroyed is terminal: there is no future lifecycle invocation
@@ -692,6 +850,9 @@ int PucLuaScriptRuntime::FindScriptEnvironment(kb::assets::AssetId assetId) cons
 }
 
 void PucLuaScriptRuntime::ClearCoroutines(const InstanceKey& instanceKey) noexcept {
+    if (debugPause_.has_value() && debugPause_->instance == instanceKey) {
+        debugPause_.reset();
+    }
     const auto iter = coroutineRefs_.find(instanceKey);
     if (iter == coroutineRefs_.end()) {
         return;
@@ -699,6 +860,12 @@ void PucLuaScriptRuntime::ClearCoroutines(const InstanceKey& instanceKey) noexce
     if (state_ != nullptr) {
         for (const auto& [functionName, reference] : iter->second) {
             static_cast<void>(functionName);
+            lua_rawgeti(state_, LUA_REGISTRYINDEX, reference);
+            if (lua_tothread(state_, -1) == debugStepThread_) {
+                debugStepMode_ = DebugStepMode::Run;
+                debugStepThread_ = nullptr;
+            }
+            lua_pop(state_, 1);
             luaL_unref(state_, LUA_REGISTRYINDEX, reference);
         }
     }

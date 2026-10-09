@@ -1,6 +1,7 @@
 #include "PointShadowPassPlanner.hpp"
 
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "scene/lighting/SceneLightShaderData.hpp"
 
 #include <bx/math.h>
 
@@ -27,7 +28,8 @@ constexpr std::array<FaceBasis, ScenePointShadowBinding::kFaceCount> kFaces{{
 }};
 
 [[nodiscard]] bool CastsPointShadow(const LightRenderProxyDesc& light) noexcept {
-    return light.visible && light.castsShadow && light.kind == RenderLightKind::Point &&
+    return light.visible && light.castsShadow &&
+        (light.kind == RenderLightKind::Point || light.kind == RenderLightKind::Spot) &&
         light.intensity > 0.0F && light.range > 0.0F && std::isfinite(light.range);
 }
 
@@ -37,6 +39,9 @@ constexpr std::array<FaceBasis, ScenePointShadowBinding::kFaceCount> kFaces{{
     const float dz = a[2] - b[2];
     return dx * dx + dy * dy + dz * dz;
 }
+
+// Up to this many lights get full-size tiles; more share a smaller-tile atlas of the same memory.
+constexpr std::uint32_t kFullQualityLights = 4U;
 
 } // namespace
 
@@ -86,9 +91,11 @@ PointShadowLightSelection PointShadowPassPlanner::Select(
     return selection;
 }
 
-std::uint32_t PointShadowPassPlanner::TileSizeFor(const SceneRenderLightingConfig& lightingConfig) noexcept {
-    // One tile per face: half the directional map size keeps the atlas near 3072 x 2048 at the default.
-    return std::clamp(lightingConfig.shadowMapSize / 2U, 128U, 1024U);
+std::uint32_t PointShadowPassPlanner::TileSizeFor(const SceneRenderLightingConfig& lightingConfig, std::uint32_t lightCount) noexcept {
+    // One tile per face: half the directional map size keeps the atlas near 6144 x 4096 at the default. Beyond
+    // kFullQualityLights lights the tiles halve, so eight lights cost half the memory of four at full size.
+    const std::uint32_t tile = std::clamp(lightingConfig.shadowMapSize / 2U, 128U, 1024U);
+    return lightCount > kFullQualityLights ? std::max(tile / 2U, 128U) : tile;
 }
 
 PointShadowSetup PointShadowPassPlanner::Build(
@@ -107,9 +114,9 @@ PointShadowSetup PointShadowPassPlanner::Build(
     }
 
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
-    setup.tileSize = TileSizeFor(lightingConfig);
+    setup.tileSize = TileSizeFor(lightingConfig, selection.count);
     setup.atlasWidth = setup.tileSize * ScenePointShadowBinding::kFaceCount;
-    setup.atlasHeight = setup.tileSize * ScenePointShadowBinding::kMaxLights;
+    setup.atlasHeight = setup.tileSize * (selection.count > kFullQualityLights ? ScenePointShadowBinding::kMaxLights : kFullQualityLights);
     setup.lightCount = selection.count;
 
     ScenePointShadowBinding& binding = setup.binding;
@@ -135,6 +142,25 @@ PointShadowSetup PointShadowPassPlanner::Build(
         binding.depthParams[slot * 4U + 0U] = near;
         binding.depthParams[slot * 4U + 1U] = std::max(lightingConfig.shadowDepthBias * 10.0F, 0.01F);
         const bx::Vec3 eye{ light.position[0], light.position[1], light.position[2] };
+        if (light.kind == RenderLightKind::Spot) {
+            const auto& axis = SceneLightShaderData::Pack(light).texels[0];
+            // The up vector must match the spot branch of KbPointShadowFactor in point_shadow.sh.
+            const bx::Vec3 up = std::abs(axis[1]) < 0.99F ? bx::Vec3{ 0.0F, 1.0F, 0.0F } : bx::Vec3{ 0.0F, 0.0F, 1.0F };
+            const float fov = std::clamp(light.outerConeDegrees * 2.0F + PointShadowPassPlanner::kSpotMarginDegrees, 20.0F, 150.0F);
+            PointShadowFace& output = setup.faces[slot][0];
+            bx::mtxLookAt(output.camera.view.data(), eye, bx::Vec3{ eye.x + axis[0], eye.y + axis[1], eye.z + axis[2] }, up);
+            SceneDepthPolicy::MakePerspective(output.camera.projection.data(), fov, 1.0F, near, far, homogeneousDepth);
+            output.camera.cullingMask = cameraCullingMask;
+            output.tileColumn = 0U;
+            output.tileRow = slot;
+            setup.faceCount[slot] = 1U;
+            binding.spot[slot * 4U + 0U] = axis[0];
+            binding.spot[slot * 4U + 1U] = axis[1];
+            binding.spot[slot * 4U + 2U] = axis[2];
+            binding.spot[slot * 4U + 3U] = std::tan(bx::toRad(fov * 0.5F));
+            continue;
+        }
+        setup.faceCount[slot] = ScenePointShadowBinding::kFaceCount;
         for (std::uint32_t face = 0U; face < ScenePointShadowBinding::kFaceCount; ++face) {
             PointShadowFace& output = setup.faces[slot][face];
             const bx::Vec3 at{ eye.x + kFaces[face].direction.x, eye.y + kFaces[face].direction.y, eye.z + kFaces[face].direction.z };

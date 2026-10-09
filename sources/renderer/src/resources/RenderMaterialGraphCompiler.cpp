@@ -1695,17 +1695,19 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         spaceStream >> fromSpace >> toSpace;
         if (fromSpace.empty()) fromSpace = "tangent";
         if (toSpace.empty()) toSpace = "world";
-        const std::string w = isPosition ? "1.0" : "0.0";
         const std::string tbn = "mat3(ctx.tangent, ctx.bitangent, ctx.normal)";
         const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
         const auto toWorld = [&](const std::string& e, const std::string& space) -> std::string {
             if (EqualsIgnoreCase(space, "tangent")) return "mul(" + tbn + ", (" + e + "))";
-            if (EqualsIgnoreCase(space, "view")) return "(mul(u_invView, vec4((" + e + "), " + w + ")).xyz)";
+            // Graph world positions are render-space positions plus u_renderOriginOffset (camera-relative rendering).
+            if (EqualsIgnoreCase(space, "view")) return isPosition ? "(mul(u_invView, vec4((" + e + "), 1.0)).xyz + u_renderOriginOffset.xyz)"
+                : "(mul(u_invView, vec4((" + e + "), 0.0)).xyz)";
             return e;  // world (or unknown) is the canonical space
         };
         const auto fromWorld = [&](const std::string& e, const std::string& space) -> std::string {
             if (EqualsIgnoreCase(space, "tangent")) return "mul((" + e + "), " + tbn + ")";
-            if (EqualsIgnoreCase(space, "view")) return "(mul(u_view, vec4((" + e + "), " + w + ")).xyz)";
+            if (EqualsIgnoreCase(space, "view")) return isPosition ? "(mul(u_view, vec4((" + e + ") - u_renderOriginOffset.xyz, 1.0)).xyz)"
+                : "(mul(u_view, vec4((" + e + "), 0.0)).xyz)";
             return e;
         };
         return "vec4(" + fromWorld(toWorld(v, fromSpace), toSpace) + ", 1.0)";

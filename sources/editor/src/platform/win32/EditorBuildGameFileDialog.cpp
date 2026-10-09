@@ -72,6 +72,11 @@ std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectKeystore(H
     return SelectFile(owner, filter, L"Select Android keystore");
 }
 
+std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectCertificate(HWND owner) {
+    constexpr wchar_t filter[] = L"Code signing certificate (*.pfx;*.p12)\0*.pfx;*.p12\0All files (*.*)\0*.*\0";
+    return SelectFile(owner, filter, L"Select code signing certificate");
+}
+
 std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectIdentity(HWND owner) {
     constexpr wchar_t filter[] = L"SSH private key (id_*)\0id_*\0All files (*.*)\0*.*\0";
     return SelectFile(owner, filter, L"Select SSH identity file");

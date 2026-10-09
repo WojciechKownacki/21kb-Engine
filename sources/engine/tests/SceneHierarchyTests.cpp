@@ -7,23 +7,32 @@
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
+#include <iostream>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
 
 void RunEntityCreationBudgetRollbackTest() {
     kb::ecs::WorldConfig config;
-    config.maxNativeStorageCommittedPayloadBytes = kb::ecs::ChunkPayloadBytes(config.chunkSizeProfile);
+    // An object is born in its final archetype and needs one chunk: a budget below one chunk rejects it.
+    config.maxNativeStorageCommittedPayloadBytes = kb::ecs::ChunkPayloadBytes(config.chunkSizeProfile) / 2U;
     kb::scene::Scene scene{ config };
     const auto originalCount = scene.Entities().Count();
     const auto originalRoots = scene.Hierarchy().RootEntities();
@@ -322,12 +331,13 @@ void RunTransformRootFastPathReportTest() {
             .localScale = kb::scene::Vec3{ 0.5F, 0.25F, 2.0F },
         },
     });
-    scene.Transforms().Set(firstRoot, scene.Transforms().Get(firstRoot));
-    scene.Transforms().Set(secondRoot, scene.Transforms().Get(secondRoot));
-    scene.Transforms().Set(scaledRoot, scene.Transforms().Get(scaledRoot));
-    scene.Transforms().Set(unitScaleRotatedRoot, scene.Transforms().Get(unitScaleRotatedRoot));
-    scene.Transforms().Set(uniformScaleRotatedRoot, scene.Transforms().Get(uniformScaleRotatedRoot));
-    scene.Transforms().Set(staticRotationParent, scene.Transforms().Get(staticRotationParent));
+    // writes compose a plain root at once; MarkModified leaves the roots to the sync whose lanes this test counts
+    scene.Transforms().MarkModified(firstRoot.Entity());
+    scene.Transforms().MarkModified(secondRoot.Entity());
+    scene.Transforms().MarkModified(scaledRoot.Entity());
+    scene.Transforms().MarkModified(unitScaleRotatedRoot.Entity());
+    scene.Transforms().MarkModified(uniformScaleRotatedRoot.Entity());
+    scene.Transforms().MarkModified(staticRotationParent.Entity());
 
     scene.Runtime().SynchronizeTransforms();
     const kb::scene::SceneRuntimeHotPathReport firstReport = scene.Runtime().HotPathReport();
@@ -907,6 +917,8 @@ void RunTransformSparseFlushReportTest() {
     kb::scene::TransformComponent moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 42.0F;
     scene.Transforms().Set(roots.front(), moved);
+    // the write composed the plain root; flag it for the sync whose flush this test reports
+    scene.Transforms().MarkModified(roots.front().Entity());
     scene.Runtime().SynchronizeTransforms();
 
     const kb::scene::SceneRuntimeHotPathReport report = scene.Runtime().HotPathReport();
@@ -923,6 +935,7 @@ void RunTransformSparseFlushReportTest() {
     moved = scene.Transforms().Get(roots.front());
     moved.localPosition.x = 43.0F;
     scene.Transforms().Set(roots.front(), moved);
+    scene.Transforms().MarkModified(roots.front().Entity());
     scene.Runtime().SynchronizeTransforms();
     const kb::scene::SceneRuntimeHotPathReport warmReport = scene.Runtime().HotPathReport();
     kb::tests::Require(warmReport.transformHierarchyDirtyFrontierCount == 1U &&
@@ -1391,6 +1404,211 @@ void RunSceneHistoryUndoRedoTest() {
     kb::tests::Require(!scene.History().CanRedo(), "Scene history did not clear redo stack after branch record");
 }
 
+// Folders of 99 props each, the shape of a large streamed map; the light on `target` is what the edits change.
+void BuildHistoryScaleScene(kb::scene::Scene& scene, std::size_t folderCount, kb::scene::SceneObject& target, kb::scene::SceneObject& doomed) {
+    std::vector<kb::scene::SceneObjectDesc> folderDescs(folderCount);
+    for (kb::scene::SceneObjectDesc& desc : folderDescs) {
+        desc.name = "Folder";
+    }
+    const std::vector<kb::scene::SceneObject> folders = scene.Entities().CreateObjects(folderDescs);
+    std::vector<kb::scene::SceneObjectDesc> propDescs;
+    propDescs.reserve(folderCount * 99U);
+    for (const kb::scene::SceneObject folder : folders) {
+        for (std::size_t index = 0U; index < 99U; ++index) {
+            propDescs.push_back(kb::scene::SceneObjectDesc{ .name = "Prop", .parent = folder });
+        }
+    }
+    const std::vector<kb::scene::SceneObject> props = scene.Entities().CreateObjects(propDescs);
+    target = props[props.size() / 2U];
+    doomed = props[props.size() / 2U + 1U];
+    scene.Components().Lights().Set(target.Entity(), kb::scene::LightComponent{ .intensity = 1.0F });
+}
+
+// One property edit and one delete; returns the bytes history holds afterwards.
+[[nodiscard]] std::size_t RecordHistoryScaleEdits(kb::scene::Scene& scene, kb::scene::SceneObject target, kb::scene::SceneObject doomed) {
+    kb::tests::Require(scene.History().Record("Edit light"), "History scale test could not record the property edit");
+    kb::scene::LightComponent* light = scene.Components().Lights().TryGet(target.Entity());
+    kb::tests::Require(light != nullptr, "History scale test lost its light");
+    light->intensity = 3.0F;
+    scene.Components().Lights().MarkModified(target.Entity());
+    scene.History().Commit();
+    kb::tests::Require(scene.History().Record("Delete prop"), "History scale test could not record the delete");
+    scene.Entities().Destroy(doomed);
+    scene.History().Commit();
+    return scene.History().RecordedBytes();
+}
+
+// A command keeps only the objects it changed, so its cost follows the edit and not the scene: the same two edits
+// record the same bytes in a 200-object scene and in a 100k-object scene, and undo/redo restore them exactly
+// without recreating the untouched objects.
+void RunSceneHistoryRecordsOnlyEditedObjectsTest() {
+    kb::scene::Scene small;
+    kb::scene::SceneObject smallTarget;
+    kb::scene::SceneObject smallDoomed;
+    BuildHistoryScaleScene(small, 2U, smallTarget, smallDoomed);
+    const std::size_t smallBytes = RecordHistoryScaleEdits(small, smallTarget, smallDoomed);
+
+    kb::scene::Scene large;
+    kb::scene::SceneObject target;
+    kb::scene::SceneObject doomed;
+    BuildHistoryScaleScene(large, 1010U, target, doomed);
+    kb::tests::Require(large.Entities().Count() >= 100000U, "History scale test did not build a 100k-object scene");
+    const kb::scene::SceneEntity folder = large.Hierarchy().Parent(doomed.Entity());
+    const std::vector<kb::scene::SceneEntity> siblingsBefore = large.Hierarchy().ChildEntities(folder);
+    const std::size_t largeBytes = RecordHistoryScaleEdits(large, target, doomed);
+
+    const std::string bytesReport = std::to_string(smallBytes) + " bytes for 200 objects, " + std::to_string(largeBytes) + " for 100k";
+    kb::tests::Require(largeBytes == smallBytes, ("Scene history bytes grew with the scene: " + bytesReport).c_str());
+    kb::tests::Require(largeBytes < 64U * 1024U, ("Scene history kept too much for one property edit and one delete: " + bytesReport).c_str());
+
+    kb::tests::Require(large.History().Undo(), "History scale test could not undo the delete");
+    const std::vector<kb::scene::SceneEntityRemap> recreated = large.History().TakeRecreatedEntities();
+    kb::tests::Require(recreated.size() == 1U && recreated.front().from == doomed.Entity() && large.Entities().IsAlive(recreated.front().to),
+        "Scene history undo of a delete recreated more than the deleted object");
+    std::vector<kb::scene::SceneEntity> siblingsRestored = large.Hierarchy().ChildEntities(folder);
+    std::ranges::replace(siblingsRestored, recreated.front().to, doomed.Entity());
+    kb::tests::Require(siblingsRestored == siblingsBefore && large.Entities().Name(recreated.front().to) == "Prop",
+        "Scene history undo did not put the deleted object back at its place among its siblings");
+    kb::tests::Require(large.History().Undo() && large.Entities().IsAlive(target) && large.Components().Lights().TryGet(target.Entity())->intensity == 1.0F &&
+            large.History().TakeRecreatedEntities().empty(),
+        "Scene history undo of a property edit did not restore the value in place");
+    kb::tests::Require(large.History().Redo() && large.Components().Lights().TryGet(target.Entity())->intensity == 3.0F,
+        "Scene history redo of a property edit did not apply the value again");
+    kb::tests::Require(large.History().Redo() && !large.Entities().IsAlive(recreated.front().to) &&
+            large.Hierarchy().ChildEntities(folder).size() == siblingsBefore.size() - 1U,
+        "Scene history redo of a delete did not delete the object again");
+}
+
+[[nodiscard]] std::vector<std::string> HistoryNames(kb::scene::Scene& scene, std::span<const kb::scene::SceneEntity> entities) {
+    std::vector<std::string> names;
+    for (const kb::scene::SceneEntity entity : entities) {
+        names.push_back(scene.Entities().Name(entity));
+    }
+    return names;
+}
+
+[[nodiscard]] kb::scene::SceneEntity HistoryFind(kb::scene::Scene& scene, kb::scene::SceneEntity parent, std::string_view name) {
+    const std::vector<kb::scene::SceneEntity> entities = parent.IsValid() ? scene.Hierarchy().ChildEntities(parent) : scene.Hierarchy().RootEntities();
+    for (const kb::scene::SceneEntity entity : entities) {
+        if (scene.Entities().Name(entity) == name) {
+            return entity;
+        }
+    }
+    return {};
+}
+
+// Every kind of edit undoes and redoes exactly: property, component add and remove, flags, reparent, create and
+// delete (with sibling order, subtrees and references to recreated objects), and a command ends at Commit.
+void RunSceneHistoryUndoRedoEachEditKindTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject a = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A" });
+    const kb::scene::SceneObject b = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "B" });
+    const kb::scene::SceneObject c = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "C" });
+    const kb::scene::SceneObject a1 = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A1", .parent = a });
+    const kb::scene::SceneObject a2 = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A2", .parent = a });
+    const kb::scene::SceneObject a3 = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A3", .parent = a });
+    const kb::scene::SceneObject a2a = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A2a", .parent = a2 });
+    scene.Components().Lights().Set(b.Entity(), kb::scene::LightComponent{ .intensity = 7.0F });
+    scene.Components().Joints().Set(c.Entity(), kb::scene::JointComponent{ .connectedEntity = a1.Entity() });
+    kb::scene::TransformComponent a1Transform = scene.Transforms().Get(a1);
+    a1Transform.localPosition = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F };
+    scene.Transforms().Set(a1, a1Transform);
+    const std::vector<std::string> rootNames{ "A", "B", "C" };
+    const std::vector<std::string> childNames{ "A1", "A2", "A3" };
+
+    // Property edit.
+    kb::tests::Require(scene.History().Record("Move"), "History edit-kind test could not record a property edit");
+    kb::scene::TransformComponent moved = scene.Transforms().Get(a1);
+    moved.localPosition.x = 10.0F;
+    scene.Transforms().Set(a1, moved);
+    scene.History().Commit();
+    kb::tests::Require(scene.History().Undo() && kb::tests::NearlyEqual(scene.Transforms().Get(a1).localPosition.x, 1.0F) &&
+            scene.History().TakeRecreatedEntities().empty(),
+        "Scene history undo did not restore a property in place");
+    kb::tests::Require(scene.History().Redo() && kb::tests::NearlyEqual(scene.Transforms().Get(a1).localPosition.x, 10.0F),
+        "Scene history redo did not apply a property again");
+
+    // Component add and remove.
+    kb::tests::Require(scene.History().Record("Add camera"), "History edit-kind test could not record a component add");
+    scene.Components().Cameras().Set(b.Entity(), kb::scene::CameraComponent{ .primary = true });
+    scene.History().Commit();
+    kb::tests::Require(scene.History().Undo() && !scene.Components().Cameras().Has(b.Entity()), "Scene history undo did not remove an added component");
+    kb::tests::Require(scene.History().Redo() && scene.Components().Cameras().Has(b.Entity()) && scene.Components().Cameras().TryGet(b.Entity())->primary,
+        "Scene history redo did not add the component again");
+    kb::tests::Require(scene.History().Record("Remove light"), "History edit-kind test could not record a component remove");
+    scene.Components().Lights().Remove(b.Entity());
+    scene.History().Commit();
+    kb::tests::Require(scene.History().Undo() && scene.Components().Lights().Has(b.Entity()) && scene.Components().Lights().TryGet(b.Entity())->intensity == 7.0F,
+        "Scene history undo did not bring a removed component back with its values");
+    kb::tests::Require(scene.History().Redo() && !scene.Components().Lights().Has(b.Entity()), "Scene history redo did not remove the component again");
+
+    // Flags and the end of a command: the edit after Commit is not part of it.
+    kb::tests::Require(scene.History().Record("Deactivate"), "History edit-kind test could not record a flag edit");
+    scene.Entities().SetActive(b, false);
+    scene.History().Commit();
+    scene.Entities().SetName(c, "C renamed outside the command");
+    kb::tests::Require(scene.History().Undo() && scene.Entities().IsActive(b) && scene.Entities().Name(c) == "C renamed outside the command",
+        "Scene history undo did not restore the flag, or reverted an edit made after the command was committed");
+    scene.Entities().SetName(c, "C");
+    kb::tests::Require(scene.History().Redo() && !scene.Entities().IsActive(b), "Scene history redo did not apply the flag again");
+    scene.Entities().SetActive(b, true);
+
+    // Reparent a subtree.
+    kb::tests::Require(scene.History().Record("Reparent"), "History edit-kind test could not record a reparent");
+    kb::tests::Require(scene.Hierarchy().SetParent(a2, c), "History edit-kind test could not reparent");
+    scene.History().Commit();
+    kb::tests::Require(scene.History().Undo() && scene.Hierarchy().Parent(a2.Entity()) == a.Entity() &&
+            HistoryNames(scene, scene.Hierarchy().ChildEntities(a.Entity())) == childNames && scene.Hierarchy().Parent(a2a.Entity()) == a2.Entity() &&
+            scene.History().TakeRecreatedEntities().empty(),
+        "Scene history undo did not move the subtree back to its place among its siblings");
+    kb::tests::Require(scene.History().Redo() && scene.Hierarchy().Parent(a2.Entity()) == c.Entity() && scene.Hierarchy().Parent(a2a.Entity()) == a2.Entity(),
+        "Scene history redo did not reparent the subtree again");
+    kb::tests::Require(scene.History().Undo(), "History edit-kind test could not undo the reparent again");
+
+    // Create.
+    kb::tests::Require(scene.History().Record("Create"), "History edit-kind test could not record a create");
+    const kb::scene::SceneObject created = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Created", .parent = b });
+    scene.Components().Lights().Set(created.Entity(), kb::scene::LightComponent{ .intensity = 2.0F });
+    scene.History().Commit();
+    kb::tests::Require(scene.History().Undo() && !scene.Entities().IsAlive(created) && scene.Hierarchy().ChildCount(b.Entity()) == 0U,
+        "Scene history undo did not delete a created object");
+    kb::tests::Require(scene.History().Redo(), "Scene history redo of a create failed");
+    const std::vector<kb::scene::SceneEntityRemap> recreatedCreate = scene.History().TakeRecreatedEntities();
+    const kb::scene::SceneEntity createdAgain = HistoryFind(scene, b.Entity(), "Created");
+    kb::tests::Require(recreatedCreate.size() == 1U && recreatedCreate.front().to == createdAgain && createdAgain.IsValid() &&
+            scene.Components().Lights().TryGet(createdAgain)->intensity == 2.0F,
+        "Scene history redo did not create the object again with its components");
+    kb::tests::Require(scene.History().Undo(), "History edit-kind test could not undo the create again");
+
+    // Delete a subtree that another object references.
+    const std::size_t undoCount = scene.History().UndoCount();
+    kb::tests::Require(scene.History().Record("Delete"), "History edit-kind test could not record a delete");
+    scene.Entities().Destroy(a);
+    scene.History().Commit();
+    kb::tests::Require(!scene.Entities().IsAlive(a1) && HistoryNames(scene, scene.Hierarchy().RootEntities()) == std::vector<std::string>{ "B", "C" },
+        "History edit-kind test did not delete the subtree");
+    kb::tests::Require(scene.History().Undo() && scene.History().UndoCount() == undoCount, "Scene history undo of a delete failed");
+    const std::vector<kb::scene::SceneEntityRemap> recreated = scene.History().TakeRecreatedEntities();
+    kb::tests::Require(recreated.size() == 5U && HistoryNames(scene, scene.Hierarchy().RootEntities()) == rootNames,
+        "Scene history undo did not recreate the deleted subtree at its place among the roots");
+    const kb::scene::SceneEntity restoredA = HistoryFind(scene, {}, "A");
+    const kb::scene::SceneEntity restoredA1 = HistoryFind(scene, restoredA, "A1");
+    const kb::scene::SceneEntity restoredA2 = HistoryFind(scene, restoredA, "A2");
+    kb::tests::Require(HistoryNames(scene, scene.Hierarchy().ChildEntities(restoredA)) == childNames && HistoryFind(scene, restoredA2, "A2a").IsValid() &&
+            kb::tests::NearlyEqual(scene.Transforms().Get(restoredA1).localPosition.x, 10.0F) &&
+            kb::tests::NearlyEqual(scene.Transforms().Get(restoredA1).localPosition.y, 2.0F),
+        "Scene history undo did not restore the deleted subtree's order, children and values");
+    const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(c.Entity());
+    kb::tests::Require(joint != nullptr && joint->connectedEntity == restoredA1, "Scene history undo did not relink a reference to a recreated object");
+    kb::tests::Require(scene.History().Redo() && !scene.Entities().IsAlive(restoredA) && HistoryNames(scene, scene.Hierarchy().RootEntities()) == std::vector<std::string>{ "B", "C" },
+        "Scene history redo did not delete the subtree again");
+    kb::tests::Require(scene.History().Undo() && HistoryNames(scene, scene.Hierarchy().RootEntities()) == rootNames,
+        "Scene history undo after redo did not restore the subtree again");
+    const kb::scene::SceneEntity finalA1 = HistoryFind(scene, HistoryFind(scene, {}, "A"), "A1");
+    kb::tests::Require(scene.Components().Joints().TryGet(c.Entity())->connectedEntity == finalA1,
+        "Scene history lost a reference across repeated undo and redo of a delete");
+}
+
 void RunDestroyedEntityHandleDoesNotAffectNewEntityTest() {
     kb::scene::Scene scene;
 
@@ -1414,6 +1632,68 @@ void RunDestroyedEntityHandleDoesNotAffectNewEntityTest() {
     scene.Components().Tags().Set(destroyedEntity, staleTags);
     kb::tests::Require(!scene.Components().Tags().Has(destroyedEntity), "Destroyed entity accepted a stale component write");
     kb::tests::Require(!scene.Components().Tags().Has(replacement.Entity()), "Stale destroyed component write affected the replacement object");
+}
+
+// The transform link bit is a cache of the hierarchy tables; it must equal "has a parent or children" everywhere.
+void RequireTransformLinksMatchHierarchy(kb::scene::Scene& scene, const char* message) {
+    const kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    std::vector<kb::scene::SceneEntity> pending = scene.Hierarchy().RootEntities();
+    std::size_t checked = 0U;
+    bool matches = true;
+    while (!pending.empty()) {
+        const kb::scene::SceneEntity entity = pending.back();
+        pending.pop_back();
+        ++checked;
+        const bool linked = scene.Hierarchy().Parent(entity).IsValid() || scene.Hierarchy().ChildCount(entity) != 0U;
+        matches = matches && kb::scene::SceneHierarchyCache::HasTransformLink(state, entity) == linked;
+        for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) pending.push_back(child);
+    }
+    kb::tests::Require(matches && checked != 0U, message);
+}
+
+void RunTransformLinkBitsFollowHierarchyTest() {
+    kb::scene::Scene scene;
+    std::vector<kb::scene::SceneObjectDesc> descs(40U);
+    const std::vector<kb::scene::SceneObject> plain = scene.Entities().CreateObjects(descs);
+    const kb::scene::SceneObject rootA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A" });
+    const kb::scene::SceneObject middleA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A1", .parent = rootA });
+    const kb::scene::SceneObject leafA = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A2", .parent = middleA });
+    const kb::scene::SceneObject rootB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "B" });
+    const kb::scene::SceneObject middleB = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "B1" });
+    kb::tests::Require(scene.Hierarchy().SetParent(middleB, rootB), "Transform link test could not parent");
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after creation");
+
+    kb::tests::Require(scene.Hierarchy().SetParent(leafA, middleB) && scene.Hierarchy().SetParent(middleA, kb::scene::SceneObject{}) &&
+            scene.Hierarchy().SetParent(plain[3], plain[4]), "Transform link test could not move");
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after moves");
+    kb::tests::Require(scene.Hierarchy().SetParent(plain[3], kb::scene::SceneObject{}), "Transform link test could not unparent");
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after unparenting");
+
+    scene.Entities().Destroy(rootB);
+    descs.resize(8U);
+    static_cast<void>(scene.Entities().CreateObjects(descs));
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after a subtree was destroyed and its slots reused");
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Link Root" });
+    static_cast<void>(prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Link Child", .parentNode = rootNode }));
+    kb::scene::ScenePrefab single;
+    static_cast<void>(single.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Link Single" }));
+    kb::tests::Require(scene.Prefabs().InstantiateMany(prefab, 3U).size() == 3U &&
+            scene.Prefabs().InstantiateMany(single, 3U).size() == 3U &&
+            scene.Prefabs().InstantiateMany(single, 2U, kb::scene::ScenePrefabInstantiationSettings{ .parent = plain[7] }).size() == 2U,
+        "Transform link test could not instantiate its prefabs");
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after prefab instantiation");
+
+    kb::tests::Require(scene.History().Record("before reparent"), "Transform link test could not record history");
+    kb::tests::Require(scene.Hierarchy().SetParent(plain[9], plain[10]), "Transform link test could not parent before undo");
+    kb::tests::Require(scene.History().Undo(), "Transform link test could not undo");
+    RequireTransformLinksMatchHierarchy(scene, "Transform link bits differ from the hierarchy after undo");
+
+    kb::scene::Scene loaded;
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(loaded, kb::scene::SceneDocumentService::Capture(scene, "Links")),
+        "Transform link test could not load its captured scene");
+    RequireTransformLinksMatchHierarchy(loaded, "Transform link bits differ from the hierarchy of a loaded scene");
 }
 
 void RunSceneCameraLightVisitorBatchPathTest() {
@@ -1548,6 +1828,62 @@ void RunSceneBehaviourIterationUsesUnsafeHotQueryTest() {
 
 namespace kb::tests {
 
+// The write path of a busy scene: every frame a script moves 30000 objects with Transforms().Set, then the
+// hierarchy is synchronized. Flat objects and objects under a few parents are timed separately (median of the
+// frames after a warm-up); the time of the Set loop and of the synchronization is reported.
+void RunTransformWriteBenchmark() {
+    using Clock = std::chrono::steady_clock;
+    constexpr std::size_t kObjects = 30000U;
+    constexpr int kFrames = 40;
+    constexpr int kWarmupFrames = 8;
+    for (const bool parented : {false, true}) {
+        kb::scene::Scene scene;
+        std::vector<kb::scene::SceneObject> parents;
+        for (int index = 0; index < 8 && parented; ++index) {
+            parents.push_back(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Parent" }));
+        }
+        std::vector<kb::scene::SceneObject> objects;
+        objects.reserve(kObjects);
+        for (std::size_t index = 0U; index < kObjects; ++index) {
+            kb::scene::SceneObjectDesc desc{ .name = "Object" };
+            if (parented) desc.parent = parents[index % parents.size()];
+            objects.push_back(scene.Entities().CreateObject(desc));
+        }
+        scene.Runtime().SynchronizeTransforms();
+        std::vector<double> setMilliseconds;
+        std::vector<double> syncMilliseconds;
+        for (int frame = 0; frame < kFrames + kWarmupFrames; ++frame) {
+            const auto setStart = Clock::now();
+            for (std::size_t index = 0U; index < kObjects; ++index) {
+                kb::scene::TransformComponent transform;
+                transform.localPosition = kb::scene::Vec3{ static_cast<float>(index % 100U), static_cast<float>(frame), static_cast<float>(index / 100U) };
+                scene.Transforms().Set(objects[index], transform);
+            }
+            const auto syncStart = Clock::now();
+            scene.Runtime().SynchronizeTransforms();
+            const auto end = Clock::now();
+            if (frame >= kWarmupFrames) {
+                setMilliseconds.push_back(std::chrono::duration<double, std::milli>(syncStart - setStart).count());
+                syncMilliseconds.push_back(std::chrono::duration<double, std::milli>(end - syncStart).count());
+            }
+        }
+        std::ranges::sort(setMilliseconds);
+        std::ranges::sort(syncMilliseconds);
+        const kb::scene::TransformComponent& last = scene.Transforms().Get(objects[kObjects - 1U]);
+        kb::tests::Require(last.localPosition.y == static_cast<float>(kFrames + kWarmupFrames - 1), "Transform write benchmark lost its last write");
+        std::cout << "transform_write objects=" << kObjects << " parented=" << parented
+                  << " set_ms=" << setMilliseconds[setMilliseconds.size() / 2U] << " sync_ms=" << syncMilliseconds[syncMilliseconds.size() / 2U] << '\n';
+        // The Set loop writes each transform in place (one lookup per object). A plain object's world transform is
+        // composed by the write, so the synchronization after it has nothing left and costs a fraction of the loop;
+        // children of the few parents are composed by the synchronization, which then costs more than the loop. A
+        // ratio keeps the check independent of the machine.
+        const double setMedian = setMilliseconds[setMilliseconds.size() / 2U];
+        const double syncMedian = syncMilliseconds[syncMilliseconds.size() / 2U];
+        kb::tests::Require(parented ? setMedian < syncMedian * 7.0 : syncMedian < setMedian * 0.5,
+            "Setting the transforms of 30000 objects must not cost much more than synchronizing them (in-place write path)");
+    }
+}
+
 void RunSceneHierarchyTests() {
     RunEntityCreationBudgetRollbackTest();
     RunDeepHierarchyDestructionTest();
@@ -1581,8 +1917,11 @@ void RunSceneHierarchyTests() {
     RunSceneBehaviourIterationUsesUnsafeHotQueryTest();
     RunSceneBatchDuplicateTest();
     RunSceneHistoryUndoRedoTest();
+    RunSceneHistoryRecordsOnlyEditedObjectsTest();
+    RunSceneHistoryUndoRedoEachEditKindTest();
     RunDestroyedEntityHandleDoesNotAffectNewEntityTest();
     RunSceneCameraLightVisitorBatchPathTest();
+    RunTransformLinkBitsFollowHierarchyTest();
 }
 
 } // namespace kb::tests

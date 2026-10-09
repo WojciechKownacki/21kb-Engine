@@ -38,6 +38,8 @@ inline void EnqueueSceneTransformDirtyFrontierUnchecked(SceneState& state, Scene
         const std::size_t requiredSize = static_cast<std::size_t>(denseIndex) + 1U;
         if (state.transformDirtyFrontierDenseMarkEpochs.size() < requiredSize) {
             state.transformDirtyFrontierDenseMarkEpochs.resize(requiredSize, 0U);
+        }
+        if (state.transformDirtyFrontierDenseMarkedEntities.size() < requiredSize) {
             state.transformDirtyFrontierDenseMarkedEntities.resize(requiredSize);
         }
         if (IsSceneTransformDirtyFrontierMarked(state, entity)) {

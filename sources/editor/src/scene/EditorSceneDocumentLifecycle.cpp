@@ -12,7 +12,9 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/script/ScriptModule.hpp"
+#include "engine/world/WorldDescriptor.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
@@ -193,6 +195,9 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     if (playModeSceneSession_.Active()) {
         return true;
     }
+    if (RejectWhilePrefabEditing()) {
+        return false;
+    }
     auto phaseStarted = std::chrono::steady_clock::now();
     if (plugins_.HasPendingReload() && !ReloadSceneFromProject()) {
         return false;
@@ -218,6 +223,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     playModeSelectionSnapshot_.CaptureAuthoredHierarchy(*scene_);
     playModeRenderTopologyVersion_ = 0U;
     playModeRenderTopologyVersionInitialized_ = false;
+    worldPartition_.PrepareSceneReload();
     if (!playModeSceneSession_.Begin(*scene_, name)) {
         playModeSelectionSnapshot_.Clear();
         console_.Error("Play Mode", "Scene snapshot could not be captured.");
@@ -272,6 +278,8 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
         console_.Error("Play Mode", "Editor scene snapshot could not be restored.");
         return false;
     }
+    // The restore recreated every root in order; keep each one bound to its world object.
+    worldPartition_.CompleteSceneReload();
     trace.Phase(phaseStarted, "transition=restore phase=restore-snapshot");
     phaseStarted = std::chrono::steady_clock::now();
     ReleaseRenderedSceneResources();
@@ -307,7 +315,7 @@ kb::scene::SceneEntity EditorSceneContext::PlayCameraEntity() const noexcept {
 }
 
 bool EditorSceneContext::ReloadSceneFromProject() {
-    if (!RestorePlayModeSceneSession()) {
+    if (RejectWhilePrefabEditing() || !RestorePlayModeSceneSession()) {
         return false;
     }
     if (!SaveDirtySceneDocument("reloading project plugins")) {
@@ -339,31 +347,50 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         return false;
     }
 
-    if (!currentScenePath_.empty() && !kb::scene::SceneDocumentService::LoadFileIntoScene(*nextScene, currentScenePath_)) {
-        console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string());
-        return false;
+    kb::scene::SceneDocumentLoadResult loaded;
+    if (worldPartition_.IsOpen()) {
+        // The world was saved above; reopen it in the new scene with the same cells loaded.
+        const std::vector<kb::world::WorldCellCoord> cells = worldPartition_.Session().LoadedCells();
+        std::string error;
+        worldPartition_.Close();
+        if (!worldPartition_.Open(*nextScene, currentScenePath_, error)) {
+            console_.Error("World", "World could not be reopened: " + error);
+            return false;
+        }
+        for (const kb::world::WorldCellCoord& cell : cells) {
+            static_cast<void>(worldPartition_.Session().LoadRegion(cell, cell, error));
+        }
+    } else if (!currentScenePath_.empty()) {
+        loaded = kb::scene::SceneDocumentService::Load(currentScenePath_);
+        if (!loaded.succeeded || !kb::scene::SceneDocumentService::LoadIntoScene(*nextScene, loaded.document)) {
+            console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string());
+            return false;
+        }
     }
     EditorSceneAudioSettingsService::PrepareDocument(*nextScene);
 
     ReleaseRenderedSceneResources();
-    scene_ = std::move(nextScene);
+    documentScene_ = std::move(nextScene);
+    scene_ = documentScene_.get();
     AdvanceSceneDocumentGeneration();
     plugins_.ClearPendingReload();
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
     ClearSceneDocumentDirty();
     console_.Info("Project", "Reloaded scene with current project plugin settings.");
+    UpgradePrefabLinksOnSave(loaded.document);
     CompleteLoadedUIComponents();
     return true;
 }
 
 bool EditorSceneContext::NewScene(EditorDirtySceneResolution dirtyResolution) {
-    if (!RestorePlayModeSceneSession()) {
+    if (RejectWhilePrefabEditing() || !RestorePlayModeSceneSession()) {
         return false;
     }
     if (!PrepareDirtySceneTransition("creating a new scene", dirtyResolution)) {
         return false;
     }
+    worldPartition_.Close();
 
     const std::vector<kb::scene::SceneEntity> roots = scene_->Hierarchy().RootEntities();
     for (const kb::scene::SceneEntity root : roots) {
@@ -386,7 +413,10 @@ bool EditorSceneContext::OpenDefaultScene() {
 }
 
 bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution) {
-    if (!RestorePlayModeSceneSession()) {
+    if (path.extension() == kb::world::WorldDescriptor::Extension) {
+        return OpenWorld(path, dirtyResolution);
+    }
+    if (RejectWhilePrefabEditing() || !RestorePlayModeSceneSession()) {
         return false;
     }
     if (!PrepareDirtySceneTransition("opening a scene", dirtyResolution)) {
@@ -400,6 +430,7 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
         console_.Error("Project", "Scene could not be opened: " + scenePath.generic_string() + ": " + loaded.error);
         return false;
     }
+    worldPartition_.Close();
     if (!kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
         console_.Error("Project", "Scene could not be instantiated: " + scenePath.generic_string());
         return false;
@@ -414,7 +445,107 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
     ResetSceneEditState();
     ClearSceneDocumentDirty();
     console_.Info("Project", "Opened scene: " + currentScenePath_.generic_string());
+    UpgradePrefabLinksOnSave(loaded.document);
     CompleteLoadedUIComponents();
+    return true;
+}
+
+bool EditorSceneContext::RejectWhilePrefabEditing() {
+    if (!InPrefabEditMode()) {
+        return false;
+    }
+    console_.Warning("Prefabs", "Save or close the prefab being edited first.");
+    return true;
+}
+
+bool EditorSceneContext::InPrefabEditMode() const noexcept {
+    return prefabEdit_.IsValid();
+}
+
+// While a prefab is edited the dirty flag tracks the prefab; the scene document's is kept aside.
+bool EditorSceneContext::HasUnsavedPrefabEdit() const noexcept {
+    return InPrefabEditMode() && sceneDocumentDirty_;
+}
+
+std::string EditorSceneContext::PrefabEditModeName() const {
+    return prefabEditPath_.stem().string();
+}
+
+bool EditorSceneContext::OpenPrefabEditMode(const std::filesystem::path& prefabPath) {
+    if (playModeSceneSession_.Active() || RejectWhilePrefabEditing()) {
+        return false;
+    }
+    const kb::scene::ScenePrefabHandle prefab = documentScene_->Prefabs().Load(prefabPath);
+    kb::scene::ScenePrefabPrivateScene edit = prefab.IsValid() ? documentScene_->Prefabs().OpenPrivateScene(prefab) : kb::scene::ScenePrefabPrivateScene{};
+    if (!edit.IsValid()) {
+        console_.Error("Prefabs", "Prefab could not be opened: " + prefabPath.generic_string());
+        return false;
+    }
+    // The prefab's meshes and materials resolve through the project assets, like the scene's.
+    kb::scene::Scene& editScene = edit.EditScene();
+    static_cast<void>(editScene.Assets().MountProject(EditorProjectPaths::ProjectRoot()));
+    RegisterEditorSceneDocumentAssetLoaders(editScene);
+    static_cast<void>(editScene.Assets().Discover());
+
+    ReleaseRenderedSceneResources();
+    documentSelection_ = hierarchySelection_.SelectedEntities();
+    documentDirty_ = sceneDocumentDirty_;
+    sceneDocumentDirty_ = false;
+    std::swap(commandStack_, documentCommands_);
+    prefabEdit_ = std::move(edit);
+    prefabEditPath_ = prefabPath;
+    scene_ = &prefabEdit_.EditScene();
+    ResetSceneEditState();
+    InvalidateHierarchyRows();
+    hierarchySelection_.SelectEntity(prefabEdit_.RootObject().Entity());
+    console_.Info("Prefabs", "Editing prefab: " + prefabPath.generic_string());
+    return true;
+}
+
+// Writes the edited prefab to its asset and brings the scene document's instances to it.
+bool EditorSceneContext::SavePrefabEditMode() {
+    if (!InPrefabEditMode()) {
+        return false;
+    }
+    // Only what is under the prefab root is the prefab; an object beside it would be dropped unseen.
+    const kb::scene::SceneEntity prefabRoot = prefabEdit_.RootObject().Entity();
+    for (const kb::scene::SceneEntity root : scene_->Hierarchy().RootEntities()) {
+        if (root != prefabRoot) {
+            console_.Warning("Prefabs", "Prefab not saved: move " + scene_->Entities().Name(root) + " under " +
+                scene_->Entities().Name(prefabRoot) + " or delete it.");
+            return false;
+        }
+    }
+    if (!prefabEdit_.Apply() || !documentScene_->Prefabs().Save(prefabEdit_.SourcePrefab(), prefabEditPath_)) {
+        console_.Error("Prefabs", "Prefab could not be saved: " + prefabEditPath_.generic_string());
+        return false;
+    }
+    sceneDocumentDirty_ = false;
+    documentDirty_ = true;
+    console_.Info("Prefabs", "Prefab saved: " + prefabEditPath_.generic_string());
+    return true;
+}
+
+bool EditorSceneContext::ClosePrefabEditMode() {
+    if (!InPrefabEditMode()) {
+        return false;
+    }
+    ReleaseRenderedSceneResources();
+    ResetSceneEditState();
+    scene_ = documentScene_.get();
+    prefabEdit_ = {};
+    prefabEditPath_.clear();
+    std::swap(commandStack_, documentCommands_);
+    sceneDocumentDirty_ = documentDirty_;
+    // Project Files worked through the prefab's scene meanwhile; catch the scene's asset registry up.
+    static_cast<void>(scene_->Assets().Discover());
+    InvalidateHierarchyRows();
+    MarkSceneRenderDirty();
+    std::erase_if(documentSelection_, [this](kb::scene::SceneEntity entity) {
+        return !scene_->Entities().IsAlive(entity);
+    });
+    hierarchySelection_.SelectEntities(documentSelection_);
+    documentSelection_.clear();
     return true;
 }
 
@@ -443,6 +574,32 @@ bool EditorSceneContext::SaveCurrentSceneAs(const std::filesystem::path& path) {
 }
 
 bool EditorSceneContext::SaveSceneToPath(const std::filesystem::path& path) {
+    if (RejectWhilePrefabEditing()) {
+        return false;
+    }
+    if (worldPartition_.IsOpen()) {
+        if (!path.empty() && path != currentScenePath_) {
+            console_.Warning("World", "A world is saved as its object files; Save As is not available while a world is open.");
+            return false;
+        }
+        std::string error;
+        if (!worldPartition_.Session().Save(error)) {
+            console_.Error("World", "World could not be saved: " + error);
+            return false;
+        }
+        kb::assets::AssetManager& assets = scene_->Assets().Manager();
+        const std::optional<std::filesystem::path> virtualPath = assets.Mounts().ToVirtual(currentScenePath_);
+        if (const kb::assets::AssetMetadata* descriptor = virtualPath.has_value() ? assets.Registry().FindByPath(*virtualPath) : nullptr) {
+            static_cast<void>(assets.RefreshAsset(descriptor->id));
+        }
+        const kb::world::WorldSaveStats stats = worldPartition_.Session().LastSaveStats();
+        worldPartition_.InvalidateGrid();
+        ClearSceneDocumentDirty();
+        autosave_.ResetInterval();
+        console_.Info("World", "Saved world " + currentScenePath_.generic_string() + ": " + std::to_string(stats.written) + " object file(s) written, " +
+            std::to_string(stats.deleted) + " deleted, " + std::to_string(stats.unchanged) + " unchanged.");
+        return true;
+    }
     const std::filesystem::path scenePath = EnsureSceneDocumentExtension(path.empty() ? EditorProjectPaths::DefaultScenePath() : path);
     ScopedSceneSaveTrace trace{
         "phase=total path=" + scenePath.generic_string() };

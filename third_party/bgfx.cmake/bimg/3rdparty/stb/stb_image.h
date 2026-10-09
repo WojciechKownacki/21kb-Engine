@@ -5931,7 +5931,11 @@ static void *stbi__tga_load(stbi__context *s, int *x, int *y, int *comp, int req
       for (i=0; i < tga_height; ++i) {
          int row = tga_inverted ? tga_height -i - 1 : i;
          stbi_uc *tga_row = tga_data + row*tga_width*tga_comp;
-         stbi__getn(s, tga_row, tga_width * tga_comp);
+         // 21kb: pixel data that ends before the image does is corrupt, not black.
+         if (!stbi__getn(s, tga_row, tga_width * tga_comp)) {
+            STBI_FREE(tga_data);
+            return stbi__errpuc("bad file", "Corrupt TGA");
+         }
       }
    } else  {
       //   do I need to load a palette?
@@ -5971,6 +5975,13 @@ static void *stbi__tga_load(stbi__context *s, int *x, int *y, int *comp, int req
          {
             if ( RLE_count == 0 )
             {
+               // 21kb: a few bytes declaring a large image must not be read as zeros for
+               // every remaining pixel.
+               if ( stbi__at_eof(s) ) {
+                  STBI_FREE(tga_data);
+                  STBI_FREE(tga_palette);
+                  return stbi__errpuc("bad file", "Corrupt TGA");
+               }
                //   yep, get the next byte as a RLE command
                int RLE_cmd = stbi__get8(s);
                RLE_count = 1 + (RLE_cmd & 127);
@@ -5987,6 +5998,11 @@ static void *stbi__tga_load(stbi__context *s, int *x, int *y, int *comp, int req
          //   OK, if I need to read a pixel, do it now
          if ( read_next_pixel )
          {
+            if ( stbi__at_eof(s) ) {
+               STBI_FREE(tga_data);
+               STBI_FREE(tga_palette);
+               return stbi__errpuc("bad file", "Corrupt TGA");
+            }
             //   load however much data we did have
             if ( tga_indexed )
             {

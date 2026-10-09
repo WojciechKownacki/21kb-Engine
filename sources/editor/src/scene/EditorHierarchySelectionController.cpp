@@ -1,4 +1,5 @@
 #include "scene/EditorHierarchySelectionController.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 #include "scene/EditorHierarchyContentResolver.hpp"
@@ -20,8 +21,8 @@ bool EditorHierarchySelectionController::HandlePointerDown(
         return false;
     }
 
-    const bool additive = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    const bool range = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    const bool additive = EditorKeyDown(VK_CONTROL);
+    const bool range = EditorKeyDown(VK_SHIFT);
     const bool handled = EditorHierarchyRowPicker::SelectAtContentPoint(*content, x, y, additive, range, sceneContext);
     if (handled) {
         SetFocus(sourceWindow);

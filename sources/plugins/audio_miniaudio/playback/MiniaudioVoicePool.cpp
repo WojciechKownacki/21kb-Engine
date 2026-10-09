@@ -6,6 +6,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "runtime/MiniaudioSound.hpp"
+#include "scene/MiniaudioAudioSpace.hpp"
 #include "scene/MiniaudioOcclusionSampler.hpp"
 
 #include <algorithm>
@@ -34,7 +35,7 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
     if (validation != kb::audio::AudioPlayDescValidationStatus::Valid) {
         return kb::audio::AudioPlayDescValidationResult(validation);
     }
-    kb::scene::Vec3 initialPosition = desc.position;
+    kb::scene::Vec3 initialPosition = audioSpace_ != nullptr ? audioSpace_->ToAudio(kb::math::ToDVec3(desc.position)) : desc.position;
     bool attached = false;
     if (desc.ownerEntityId != 0U) {
         const kb::scene::SceneEntity owner{ desc.ownerEntityId };
@@ -42,7 +43,7 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         if (!scene.Entities().IsAlive(owner) || !scene.Entities().IsActive(owner) || ownerTransform == nullptr) {
             return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio voice owner is unavailable" };
         }
-        initialPosition = FiniteOrZero(ownerTransform->worldPosition);
+        initialPosition = FiniteOrZero(AudioSpacePosition(audioSpace_, scene, owner, *ownerTransform));
         attached = true;
     }
     const MiniaudioClipResolver::Resolution resolution = clipResolver.Resolve(scene, desc.clipAssetId);
@@ -104,6 +105,7 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         .spatial = desc.spatial,
         .previousOwnerPosition = initialPosition,
         .hasPreviousOwnerPosition = false,
+        .position = initialPosition,
         .sound = std::move(sound),
     });
     if (admission.clipVictim != voices_.end()) {
@@ -142,7 +144,7 @@ void MiniaudioVoicePool::SyncAttachedVoices(
             continue;
         }
         if (iter->sound != nullptr) {
-            const kb::scene::Vec3 position = FiniteOrZero(ownerTransform->worldPosition);
+            const kb::scene::Vec3 position = FiniteOrZero(AudioSpacePosition(audioSpace_, scene, owner, *ownerTransform));
             kb::scene::Vec3 velocity{};
             if (validDelta && iter->hasPreviousOwnerPosition) {
                 velocity = kb::scene::Vec3{
@@ -172,6 +174,16 @@ void MiniaudioVoicePool::SyncAttachedVoices(
             }
         }
         ++iter;
+    }
+}
+
+void MiniaudioVoicePool::ShiftPositions(kb::scene::Vec3 shift) noexcept {
+    for (VoiceRecord& voice : voices_) {
+        voice.previousOwnerPosition = voice.previousOwnerPosition + shift;
+        if (voice.ownerEntityId == 0U && voice.sound != nullptr) {
+            voice.position = voice.position + shift;
+            voice.sound->SetPosition(voice.position);
+        }
     }
 }
 

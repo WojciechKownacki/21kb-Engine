@@ -41,6 +41,16 @@ namespace {
         .editorPreviewKeyLightIntensity = requested.editorPreviewKeyLightIntensity != defaultConfig.editorPreviewKeyLightIntensity ? requested.editorPreviewKeyLightIntensity : fallback.editorPreviewKeyLightIntensity,
         .ibl = requested.ibl.HasEnvironment() || requested.ibl.reflectionProbeCount != 0U ? requested.ibl : fallback.ibl,
         .globalIllumination = requested.globalIllumination != defaultConfig.globalIllumination ? requested.globalIllumination : fallback.globalIllumination,
+        .giIntensity = requested.giIntensity != defaultConfig.giIntensity ? requested.giIntensity : fallback.giIntensity,
+        .giRange = requested.giRange != defaultConfig.giRange ? requested.giRange : fallback.giRange,
+        .giHistoryWeight = requested.giHistoryWeight != defaultConfig.giHistoryWeight ? requested.giHistoryWeight : fallback.giHistoryWeight,
+        .giVoxelSize = requested.giVoxelSize != defaultConfig.giVoxelSize ? requested.giVoxelSize : fallback.giVoxelSize,
+        .ambientOcclusionEnabled = requested.ambientOcclusionEnabled != defaultConfig.ambientOcclusionEnabled ? requested.ambientOcclusionEnabled : fallback.ambientOcclusionEnabled,
+        .aoIntensity = requested.aoIntensity != defaultConfig.aoIntensity ? requested.aoIntensity : fallback.aoIntensity,
+        .aoRadius = requested.aoRadius != defaultConfig.aoRadius ? requested.aoRadius : fallback.aoRadius,
+        .screenSpaceReflectionsEnabled = requested.screenSpaceReflectionsEnabled != defaultConfig.screenSpaceReflectionsEnabled ? requested.screenSpaceReflectionsEnabled : fallback.screenSpaceReflectionsEnabled,
+        .ssrIntensity = requested.ssrIntensity != defaultConfig.ssrIntensity ? requested.ssrIntensity : fallback.ssrIntensity,
+        .ssrMaxDistance = requested.ssrMaxDistance != defaultConfig.ssrMaxDistance ? requested.ssrMaxDistance : fallback.ssrMaxDistance,
         .shadowMapSize = requested.shadowMapSize != defaultConfig.shadowMapSize ? requested.shadowMapSize : fallback.shadowMapSize,
         .shadowCascadeCount = requested.shadowCascadeCount != defaultConfig.shadowCascadeCount ? requested.shadowCascadeCount : fallback.shadowCascadeCount,
         .shadowAtlasSize = requested.shadowAtlasSize != defaultConfig.shadowAtlasSize ? requested.shadowAtlasSize : fallback.shadowAtlasSize,
@@ -48,6 +58,7 @@ namespace {
         .shadowDepthBias = requested.shadowDepthBias != defaultConfig.shadowDepthBias ? requested.shadowDepthBias : fallback.shadowDepthBias,
         .shadowStrength = requested.shadowStrength != defaultConfig.shadowStrength ? requested.shadowStrength : fallback.shadowStrength,
         .shadowFilter = requested.shadowFilter != defaultConfig.shadowFilter ? requested.shadowFilter : fallback.shadowFilter,
+        .shadowCascadeBlend = requested.shadowCascadeBlend != defaultConfig.shadowCascadeBlend ? requested.shadowCascadeBlend : fallback.shadowCascadeBlend,
         .shadowsEnabled = requested.shadowsEnabled != defaultConfig.shadowsEnabled ? requested.shadowsEnabled : fallback.shadowsEnabled,
         .stableShadowCascades = requested.stableShadowCascades != defaultConfig.stableShadowCascades ? requested.stableShadowCascades : fallback.stableShadowCascades,
         .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
@@ -134,10 +145,18 @@ bool SceneRenderer::HasGpuParticleEmitters(std::uint64_t sceneId) const noexcept
     return particleRenderer_ != nullptr && particleRenderer_->HasGpuEmitters(sceneId);
 }
 
-void SceneRenderer::SyncGpuParticleEmitters(kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex) {
+void SceneRenderer::DispatchGpuParticleEmitters(
+    bgfx::ViewId viewId, const SceneRenderCamera& camera, std::uint32_t viewportWidth, std::uint32_t viewportHeight) {
+    if (particleRenderer_ == nullptr || gpuParticleSceneId_ == 0U) return;
+    particleRenderer_->DispatchGpuEmitters(viewId, gpuParticleSceneId_, camera, sceneDepthTexture_, viewportWidth, viewportHeight,
+        resources_, resourceMap_);
+}
+
+void SceneRenderer::SyncGpuParticleEmitters(
+    kb::scene::Scene& scene, float frameDeltaSeconds, std::uint64_t frameIndex, const kb::math::DVec3& renderOrigin) {
     if (particleRenderer_ == nullptr || !particleRenderer_->GpuEmittersReady()) return;
     gpuParticleSceneId_ = scene.Id();
-    particleRenderer_->SyncGpuEmitters(scene, frameDeltaSeconds, frameIndex);
+    particleRenderer_->SyncGpuEmitters(scene, frameDeltaSeconds, frameIndex, renderOrigin);
 }
 
 void SceneRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {
@@ -243,6 +262,11 @@ void SceneRenderer::SubmitMeshPass(
 
     if (meshSubmitter_ != nullptr) {
         const auto& particleSnapshot = renderScene.ParticleRenderSnapshot();
+        if (particleRenderer_ != nullptr && gpuParticleSceneId_ != 0U) {
+            particleRenderer_->CollectGpuMeshDraws(gpuParticleSceneId_, gpuMeshDrawScratch_);
+        } else {
+            gpuMeshDrawScratch_.clear();
+        }
         lastSubmitStats_ = meshSubmitter_->Submit(
             viewId,
             renderScene,
@@ -268,7 +292,8 @@ void SceneRenderer::SubmitMeshPass(
             // particleRenderer_'s quad/billboard path above) need the snapshot in every pass - their
             // material determines opaque/GBuffer/transparent/ShadowDepth participation the same way
             // it already does for ordinary meshes, so this cannot stay gated to BaseTransparent only.
-            particleSnapshot.get());
+            particleSnapshot.get(),
+            gpuMeshDrawScratch_);
         if (pass == MeshPassType::BaseTransparent && particleRenderer_ != nullptr && gpuParticleSceneId_ != 0U) {
             const ParticleGpuSubmitResult gpuEmitters = particleRenderer_->SubmitGpuEmitters(
                 viewId, gpuParticleSceneId_, *camera, resources_, resourceMap_, sceneDepthTexture_);

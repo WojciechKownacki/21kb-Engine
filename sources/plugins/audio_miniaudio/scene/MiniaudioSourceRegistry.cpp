@@ -11,6 +11,7 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "runtime/MiniaudioSound.hpp"
 #include "scene/MiniaudioBusRegistry.hpp"
+#include "scene/MiniaudioAudioSpace.hpp"
 #include "scene/MiniaudioOcclusionSampler.hpp"
 
 #include <cmath>
@@ -29,7 +30,7 @@ namespace {
 
 [[nodiscard]] MiniaudioSoundSettings ToSoundSettings(
     const kb::scene::AudioSourceComponent& source,
-    const kb::scene::TransformComponent& transform,
+    const kb::scene::Vec3& position,
     const kb::scene::Vec3& velocity) noexcept {
     return MiniaudioSoundSettings{
         .volume = source.volume,
@@ -44,7 +45,7 @@ namespace {
         .maxDistance = source.maxDistance,
         .rolloff = source.rolloff,
         .dopplerFactor = source.dopplerFactor,
-        .position = FiniteOrZero(transform.worldPosition),
+        .position = FiniteOrZero(position),
         .velocity = FiniteOrZero(velocity),
     };
 }
@@ -88,6 +89,13 @@ void MiniaudioSourceRegistry::Sync(
     };
     context.Transforms().ForEach(&SyncSourceFromTransform, &syncContext);
     RemoveUnseenSounds();
+}
+
+void MiniaudioSourceRegistry::ShiftPositions(kb::scene::Vec3 shift) noexcept {
+    for (auto& [entityId, record] : sounds_) {
+        static_cast<void>(entityId);
+        record.previousPosition = record.previousPosition + shift;
+    }
 }
 
 void MiniaudioSourceRegistry::StopAll() noexcept {
@@ -169,7 +177,7 @@ void MiniaudioSourceRegistry::SyncSource(
         return;
     }
 
-    const kb::scene::Vec3 position = FiniteOrZero(transform.worldPosition);
+    const kb::scene::Vec3 position = FiniteOrZero(AudioSpacePosition(audioSpace_, scene, entity, transform));
     kb::scene::Vec3 velocity{};
     const auto existing = sounds_.find(entity.Id());
     const bool validDelta = std::isfinite(deltaSeconds) && deltaSeconds > 0.0F;
@@ -190,14 +198,14 @@ void MiniaudioSourceRegistry::SyncSource(
         .spatial = source->spatial,
     };
     SoundRecord* record = EnsureSound(
-        engine, entity.Id(), signature, resolution.clip, *source, transform, velocity, route.group);
+        engine, entity.Id(), signature, resolution.clip, *source, position, velocity, route.group);
     if (record == nullptr || record->sound == nullptr || !record->sound->IsInitialized()) {
         return;
     }
     record->previousPosition = position;
     record->hasPreviousPosition = true;
 
-    MiniaudioSoundSettings settings = ToSoundSettings(*source, transform, velocity);
+    MiniaudioSoundSettings settings = ToSoundSettings(*source, position, velocity);
     if (occlusionSampler != nullptr && source->spatial) {
         settings.volume *= occlusionSampler->Sample(
             scene,
@@ -216,7 +224,7 @@ MiniaudioSourceRegistry::SoundRecord* MiniaudioSourceRegistry::EnsureSound(
     const SoundSignature& signature,
     const ResolvedAudioClip& clip,
     const kb::scene::AudioSourceComponent& source,
-    const kb::scene::TransformComponent& transform,
+    const kb::scene::Vec3& position,
     const kb::scene::Vec3& velocity,
     ma_sound_group* group) {
     auto iterator = sounds_.find(entityId);
@@ -248,7 +256,7 @@ MiniaudioSourceRegistry::SoundRecord* MiniaudioSourceRegistry::EnsureSound(
     if (sound->Initialize(engine, clip, signature.spatial, group, playbackFrame) != MA_SUCCESS) {
         return nullptr;
     }
-    const MiniaudioSoundSettings settings = ToSoundSettings(source, transform, velocity);
+    const MiniaudioSoundSettings settings = ToSoundSettings(source, position, velocity);
     MiniaudioSoundSettings candidateSettings = settings;
     candidateSettings.mute = true;
     sound->Apply(candidateSettings);
@@ -351,8 +359,9 @@ kb::audio::AudioSourceControlResult MiniaudioSourceRegistry::PlaySource(
         .busGeneration = busRegistry.Generation(),
         .spatial = source.spatial,
     };
+    const kb::scene::Vec3 position = FiniteOrZero(AudioSpacePosition(audioSpace_, scene, entity, *transform));
     SoundRecord* record = EnsureSound(
-        engine, entity.Id(), signature, resolution.clip, source, *transform, {}, route.group);
+        engine, entity.Id(), signature, resolution.clip, source, position, {}, route.group);
     if (record == nullptr || record->sound == nullptr) {
         return { .status = kb::audio::AudioSourceControlStatus::SoundInitializationFailed };
     }
@@ -364,7 +373,7 @@ kb::audio::AudioSourceControlResult MiniaudioSourceRegistry::PlaySource(
         record->playbackState = SoundRecord::PlaybackState::Playing;
         record->resumeFrame = 0U;
     }
-    record->previousPosition = FiniteOrZero(transform->worldPosition);
+    record->previousPosition = position;
     record->hasPreviousPosition = false;
     return { .status = kb::audio::AudioSourceControlStatus::Success, .playing = true };
 }

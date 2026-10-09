@@ -28,6 +28,12 @@ Streaming& State(Scene& scene) {
     return *state.streaming;
 }
 
+kb::assets::streaming::BackgroundLoadService& Background(Scene& scene) {
+    Streaming& streaming = State(scene);
+    if (!streaming.background) streaming.background = kb::assets::streaming::BackgroundLoadService::Shared();
+    return *streaming.background;
+}
+
 const Streaming::Job* Find(const Scene& scene, std::uint64_t id) noexcept {
     const auto& state = SceneAccess::State(scene);
     if (!state.streaming) return nullptr;
@@ -68,7 +74,7 @@ void DeferComponents(ScenePrefabNodeComponents& components) {
     components.rigidbody.reset(); components.collider.reset(); components.characterController.reset();
     components.behaviour.reset(); components.audioSource.reset(); components.audioListener.reset();
     components.contentInstance.reset(); components.streamFocus.reset();
-    components.input.reset(); components.navAgent.reset(); components.navObstacle.reset();
+    components.input.reset(); components.navAgent.reset(); components.navObstacle.reset(); components.navLink.reset();
 }
 
 void BeginUnload(Scene& scene, Streaming::Job& job, bool cancelled) {
@@ -87,9 +93,10 @@ void RemoveRecord(Scene& scene, const Streaming::Job& job) {
 }
 
 // Destroying a large decoded document is linear work too. Keep its retirement
-// owned by the scene, but never pay that cost on the Update thread.
-void RetireSource(Streaming::Job& job) {
-    job.preparation = std::async(std::launch::async,
+// owned by the scene, but never pay that cost on the Update thread. It is no load,
+// so it stays off the load workers.
+void RetireSource(Scene& scene, Streaming::Job& job) {
+    job.preparation = kb::assets::streaming::RunForFuture(Background(scene), kb::assets::streaming::BackgroundJobClass::Long,
         [prefab = std::move(job.prepared.prefab), source = std::move(job.source)]() mutable {
             prefab.reset();
             source.reset();
@@ -119,7 +126,8 @@ std::size_t Advance(Scene& scene, Streaming::Job& job, std::size_t remaining, bo
                 }
                 if (status != kb::assets::AsyncAssetLoadStatus::Completed) return 0U;
                 if (job.source) {
-                    job.preparation = std::async(std::launch::async, [shared = std::move(job.source), name = job.prepared.name] {
+                    job.preparation = kb::assets::streaming::RunForFuture(Background(scene), kb::assets::streaming::BackgroundJobClass::Load,
+                        [shared = std::move(job.source), name = job.prepared.name] {
                         return Prepare(shared, name);
                     });
                 } else {
@@ -127,7 +135,8 @@ std::size_t Advance(Scene& scene, Streaming::Job& job, std::size_t remaining, bo
                     job.status = SceneLoadStatus::Failed;
                 }
             } else {
-                job.preparation = std::async(std::launch::async, [path = job.path] {
+                job.preparation = kb::assets::streaming::RunForFuture(Background(scene), kb::assets::streaming::BackgroundJobClass::Load,
+                    [path = job.path] {
                     auto loaded = SceneDocumentService::Load(path);
                     if (!loaded.succeeded) return Streaming::Prepared{.prefab = {}, .name = {}, .error = loaded.error};
                     auto shared = std::make_shared<SceneDocument>(std::move(loaded.document));
@@ -209,7 +218,7 @@ std::size_t Advance(Scene& scene, Streaming::Job& job, std::size_t remaining, bo
                 state.activeLoadedSceneId = job.id;
                 Event(scene, "SceneActivated", job);
             }
-            RetireSource(job);
+            RetireSource(scene, job);
             std::vector<SceneObject>{}.swap(job.objects);
             ScenePrefabReferenceResolver::EntityMap{}.swap(job.references);
         }
@@ -239,7 +248,7 @@ std::size_t Advance(Scene& scene, Streaming::Job& job, std::size_t remaining, bo
                 } catch (...) {}
             }
             if (job.prepared.prefab || job.source) {
-                RetireSource(job);
+                RetireSource(scene, job);
                 return operations;
             }
             RemoveRecord(scene, job);
@@ -346,7 +355,7 @@ void SceneStreamingService::Pump(Scene& scene) {
                 } else if (prefab.IsLoaded()) job.source = prefab.Shared();
                 static_cast<void>(manager.SetUnloadPolicy(job.assetId, kb::assets::AssetUnloadPolicy::ReleaseWhenUnreferenced));
             }
-            if (job.source && !job.preparation.valid()) RetireSource(job);
+            if (job.source && !job.preparation.valid()) RetireSource(scene, job);
         }
     }
     const auto expired = [&] { return std::chrono::duration<double, std::milli>(Clock::now() - start).count() >= streaming.settings.maxMillisecondsPerFrame; };

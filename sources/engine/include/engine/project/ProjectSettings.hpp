@@ -55,6 +55,11 @@ struct ProjectSettings {
     // Physics
     std::string physicsLayersAsset;
 
+    // Crash reports
+    // Where a shipped Windows game sends the crash reports its player agreed to
+    // send. Empty sends nothing; only HTTPS, or HTTP to this machine, is accepted.
+    std::string crashReportUploadUrl;
+
     [[nodiscard]] bool operator==(const ProjectSettings&) const noexcept = default;
 };
 

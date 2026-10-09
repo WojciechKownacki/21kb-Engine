@@ -63,6 +63,10 @@ public:
     [[nodiscard]] kb::particles::ParticleRuntimeResult Step(
         kb::scene::Scene& scene,
         float fixedDeltaSeconds);
+    // Moves the simulation space to `origin` (ParticlePlayback::SimulationOrigin): live particles, owner
+    // transforms and queued events keep their world positions. Step follows the scene's origin by itself.
+    void FollowSimulationOrigin(const kb::math::DVec3& origin) noexcept;
+    [[nodiscard]] const kb::math::DVec3& SimulationOrigin() const noexcept { return simulationOrigin_; }
 
     [[nodiscard]] kb::particles::ParticleRuntimeResult Create(
         kb::scene::Scene& scene,
@@ -237,7 +241,15 @@ private:
     };
     [[nodiscard]] bool GpuEligible(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint8_t prewarmGroup) const noexcept;
     void SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count,
-        const kb::math::Vec3* eventPosition) noexcept;
+        const kb::math::Vec3* eventPosition, std::uint8_t eventDepth = 0U) noexcept;
+    // Birth and death events of GPU particles are known when the particle is born (its motion is closed
+    // form), so the backend queues them itself: births at once, deaths scheduled for birth + lifetime.
+    struct ScheduledGpuEvent {
+        double due = 0.0;
+        InternalEvent event;
+    };
+    void ScheduleGpuDeath(const InternalEvent& event, double due) noexcept;
+    void ReleaseDueGpuEvents() noexcept;
     void FlushGpuSpawns() noexcept;
     void QueueGpuRelease(std::uint64_t instanceId, std::uint32_t denseIndex, bool release) noexcept;
     [[nodiscard]] kb::particles::ParticleGpuEmitterParams BuildGpuParams(
@@ -248,11 +260,14 @@ private:
         const CompiledGradient& gradient,
         float normalizedAge) noexcept;
     [[nodiscard]] float NextRandom01(InstanceRuntime& runtime) noexcept;
+    // The plane's distance from the simulation origin (planes are authored in world space).
+    [[nodiscard]] float PlaneDistance(const kb::scene::ParticleCollisionPlaneModule& plane) const noexcept;
     [[nodiscard]] kb::math::Vec3 SampleInitialVelocity(
         const CompiledEmitter& emitter,
         InstanceRuntime& runtime) noexcept;
 
     bool warmedUp_ = false;
+    kb::math::DVec3 simulationOrigin_{};
     std::uint32_t denseInstanceCount_ = 0U;
     std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene> slotGenerations_{};
     std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene> slotToDense_{};
@@ -285,6 +300,7 @@ private:
     kb::scene::Scene* gpuScene_ = nullptr;
     double gpuSimTime_ = 0.0;
     std::vector<GpuPending> gpuPending_;
+    std::vector<ScheduledGpuEvent> gpuScheduledEvents_; // min-heap on due time
 
     std::vector<std::uint64_t> particleInstanceIds_;
     std::vector<std::uint64_t> particleIds_;
@@ -298,6 +314,8 @@ private:
     std::vector<float> particleLifetimes_;
     std::vector<kb::math::Color> particleColors_;
     std::vector<float> particleSizes_;
+    std::vector<kb::math::Vec3> particleSpins_;     // angles at birth (radians), per axis
+    std::vector<kb::math::Vec3> particleSpinRates_; // angular velocities (radians per second), per axis
     std::vector<std::uint8_t> particleEventDepths_;
     std::vector<std::uint8_t> particlePrewarmGroups_;
     std::vector<kb::particles::ParticleRenderEmitterRecord> renderEmitterScratch_;

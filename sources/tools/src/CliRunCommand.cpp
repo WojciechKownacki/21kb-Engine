@@ -197,6 +197,8 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
         ? projectSettings.settings.physicsLayersAsset
         : loadedProject.legacySettings.physicsLayersAsset;
     kb::scene::Scene scene{ std::move(loadedProject.descriptor) };
+    // A headless run is a determinism tool: scripts see each physics step in the update that ran it.
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
     if (!scene.ModuleDiagnostics().empty()) {
         for (const std::string& diagnostic : scene.ModuleDiagnostics()) {
             io.err << "[module error] " << diagnostic << '\n';

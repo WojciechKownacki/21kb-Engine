@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <new>
 
 namespace kb::ecs {
@@ -16,7 +17,7 @@ ObserverId World::ObserveComponent(ComponentEventKind event, ComponentEventVisit
         void* context = nullptr;
     };
 
-    auto* binding = new (std::nothrow) Binding{ visitor, context };
+    std::unique_ptr<Binding> binding{ new (std::nothrow) Binding{ visitor, context } };
     if (binding == nullptr) {
         return 0;
     }
@@ -30,7 +31,7 @@ ObserverId World::ObserveComponent(ComponentEventKind event, ComponentEventVisit
             auto* typedContext = static_cast<Binding*>(visitorContext);
             typedContext->visitor(entity, eventKind, static_cast<const T*>(component), typedContext->context);
         },
-        binding,
+        binding.release(),
         [](void* visitorContext) {
             delete static_cast<Binding*>(visitorContext);
         },

@@ -114,6 +114,28 @@ namespace kb::editor::package_input {
     return true;
 }
 
+// The SHA-1 thumbprint signtool selects a store certificate by, upper-case.
+[[nodiscard]] inline bool IsValidCertificateThumbprint(std::string_view value) noexcept {
+    if (value.size() != 40U) return false;
+    for (const char character : value) {
+        if (std::isdigit(static_cast<unsigned char>(character)) == 0 && (character < 'A' || character > 'F')) return false;
+    }
+    return true;
+}
+
+// An RFC 3161 timestamp service. Plain HTTP is normal here: the timestamp token
+// is itself signed, so the transport adds nothing to trust in it.
+[[nodiscard]] inline bool IsValidTimestampUrl(std::string_view value) noexcept {
+    if (value.size() > 2048U || !(value.starts_with("https://") || value.starts_with("http://"))) return false;
+    const std::size_t hostStart = value.find("//") + 2U;
+    if (hostStart >= value.size() || value[hostStart] == '/') return false;
+    for (const char character : value) {
+        const auto byte = static_cast<unsigned char>(character);
+        if (byte <= 0x20U || byte >= 0x7FU || character == '"') return false;
+    }
+    return true;
+}
+
 [[nodiscard]] inline bool IsValidLinuxHost(std::string_view value) noexcept {
     if (value.empty() || value.size() > 253U) return false;
     for (const char character : value) {

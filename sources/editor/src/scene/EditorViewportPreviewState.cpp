@@ -103,6 +103,11 @@ constexpr EditorViewportProfile kProfiles[] = {
     return std::round(value / safeStep) * safeStep;
 }
 
+[[nodiscard]] double SnapValue(double value, float step) noexcept {
+    const double safeStep = ClampStep(step);
+    return std::round(value / safeStep) * safeStep;
+}
+
 [[nodiscard]] const char* StepLabel(std::span<const float> values, std::span<const char* const> labels, float value) noexcept {
     for (std::size_t index = 0; index < values.size() && index < labels.size(); ++index) {
         if (NearlyEqual(values[index], value)) {
@@ -314,6 +319,40 @@ kb::scene::Vec3 EditorViewportPreviewState::SnapGroundPosition(kb::scene::Vec3 p
     position.x = SnapValue(position.x, snapStep_);
     position.z = SnapValue(position.z, snapStep_);
     return position;
+}
+
+kb::math::DVec3 EditorViewportPreviewState::SnapPosition(const kb::math::DVec3& position) const noexcept {
+    if (!snapEnabled_) {
+        return position;
+    }
+    return kb::math::DVec3{ SnapValue(position.x, snapStep_), SnapValue(position.y, snapStep_), SnapValue(position.z, snapStep_) };
+}
+
+kb::math::DVec3 EditorViewportPreviewState::SnapGroundPosition(const kb::math::DVec3& position) const noexcept {
+    if (!snapEnabled_) {
+        return position;
+    }
+    return kb::math::DVec3{ SnapValue(position.x, snapStep_), position.y, SnapValue(position.z, snapStep_) };
+}
+
+kb::math::DVec3 EditorViewportPreviewState::SnapPositionAxis(const kb::math::DVec3& position, int axis) const noexcept {
+    if (!snapEnabled_) {
+        return position;
+    }
+    kb::math::DVec3 snapped = position;
+    switch (axis) {
+    case 0:
+        snapped.x = SnapValue(position.x, snapStep_);
+        return snapped;
+    case 1:
+        snapped.y = SnapValue(position.y, snapStep_);
+        return snapped;
+    case 2:
+        snapped.z = SnapValue(position.z, snapStep_);
+        return snapped;
+    default:
+        return SnapPosition(position);
+    }
 }
 
 kb::scene::Vec3 EditorViewportPreviewState::SnapPositionAxis(kb::scene::Vec3 position, int axis) const noexcept {

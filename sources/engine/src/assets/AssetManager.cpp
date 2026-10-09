@@ -1,6 +1,7 @@
 #include "engine/assets/AssetManager.hpp"
 
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 
 #include "assets/AssetDiscoveryService.hpp"
 #include "assets/AssetFileOperations.hpp"
@@ -23,7 +24,9 @@ namespace kb::assets {
 AssetManager::AssetManager() = default;
 
 AssetManager::~AssetManager() {
-    StopAsyncWorker();
+    // Closing the lane cancels the queued loads and waits for the running one, which uses this
+    // manager's loaders and mutex.
+    asyncLane_.reset();
 }
 
 std::string_view ToString(AssetUnloadPolicy policy) noexcept {
@@ -81,7 +84,7 @@ bool AssetManager::RegisterLoader(std::unique_ptr<IAssetLoader> loader) {
     // loader. Keeping unrelated retained assets resident is critical for
     // renderer plug-in discovery, which installs its loaders lazily after an
     // editor preview has already published engine-owned mesh/skeleton assets.
-    StopAsyncWorker();
+    StopAsyncLoads();
     if (replacesExistingType) {
         ClearRuntimeCache();
     }
@@ -150,7 +153,7 @@ bool AssetManager::MountRuntimePack(std::shared_ptr<bake::RuntimeAssetPack> pack
         });
     }
 
-    StopAsyncWorker();
+    StopAsyncLoads();
     asyncLoads_.clear();
     asyncLoadErrors_.clear();
     asyncLoadGenerations_.clear();
@@ -268,7 +271,7 @@ std::size_t AssetManager::DiscoverMountedAssets() {
     // Discovery calls loader dependency scanners and may replace registry
     // metadata. Do not race either operation with queued loader calls, and
     // never publish a payload decoded from pre-discovery metadata.
-    StopAsyncWorker();
+    StopAsyncLoads();
     std::unordered_map<std::uint64_t, std::uint64_t> previousContentHashes;
     previousContentHashes.reserve(registry_.All().size());
     for (const AssetMetadata& metadata : registry_.All()) {
@@ -579,20 +582,15 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
             .state = std::move(state),
         });
 #else
-        StartAsyncWorker();
-        {
-            std::scoped_lock lock{ asyncWorkerMutex_ };
-            asyncWorkerQueue_.push_back(AsyncLoadJob{
-                .loader = loader,
-                .metadata = *registered,
-                .resolvedPath = resolvedPath,
-                .runtimePack = runtimePack_,
-                .typeName = payloadTypeName,
-                .registry = registrySnapshot,
-                .state = std::move(state),
-            });
-        }
-        asyncWorkerWake_.notify_one();
+        QueueAsyncLoad(AsyncLoadJob{
+            .loader = loader,
+            .metadata = *registered,
+            .resolvedPath = resolvedPath,
+            .runtimePack = runtimePack_,
+            .typeName = payloadTypeName,
+            .registry = registrySnapshot,
+            .state = std::move(state),
+        });
 #endif
     } catch (...) {
         asyncLoads_.erase(id.value);
@@ -601,32 +599,26 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
     return true;
 }
 
-void AssetManager::StartAsyncWorker() {
-    std::scoped_lock lock{ asyncWorkerMutex_ };
-    if (asyncWorker_.joinable()) {
-        return;
+void AssetManager::QueueAsyncLoad(AsyncLoadJob job) {
+    if (asyncLane_ == nullptr) {
+        asyncLane_ = std::make_unique<streaming::BackgroundLane>(streaming::BackgroundLoadService::Shared());
     }
-    asyncWorkerStopping_ = false;
-    asyncWorker_ = std::thread{ [this] {
-        RunAsyncWorker();
-    } };
+    // The lane is closed (cancelled and waited for) before this manager goes, so the job may
+    // use it. PrepareAsyncLoad reports every failure through the job's prepared state.
+    static_cast<void>(asyncLane_->Run([this, job = std::move(job)](std::string&) mutable {
+        PrepareAsyncLoad(std::move(job));
+        return true;
+    }));
 }
 
-void AssetManager::StopAsyncWorker() noexcept {
-    {
-        std::scoped_lock lock{ asyncWorkerMutex_ };
-        asyncWorkerStopping_ = true;
-        asyncWorkerQueue_.clear();
+void AssetManager::StopAsyncLoads() noexcept {
+    if (asyncLane_ != nullptr) {
+        asyncLane_->CancelAndWait();
     }
-    asyncWorkerWake_.notify_one();
-    if (asyncWorker_.joinable()) {
-        asyncWorker_.join();
-    }
-    asyncWorkerStopping_ = false;
 }
 
 void AssetManager::RestartAsyncLoads() {
-    auto pendingLoads = std::move(asyncLoads_);
+    auto pendingLoads = std::exchange(asyncLoads_, {});
     if (!dependencySnapshots_) dependencySnapshots_ = std::make_unique<AssetRegistrySnapshotCache>();
     const auto registrySnapshot = dependencySnapshots_->Acquire(registry_);
     for (auto& [assetValue, record] : pendingLoads) {
@@ -668,9 +660,7 @@ void AssetManager::RestartAsyncLoads() {
                 .state = state,
             });
 #else
-            StartAsyncWorker();
-            std::scoped_lock lock{ asyncWorkerMutex_ };
-            asyncWorkerQueue_.push_back(AsyncLoadJob{
+            QueueAsyncLoad(AsyncLoadJob{
                 .loader = loader,
                 .metadata = *metadata,
                 .resolvedPath = resolvedPath,
@@ -684,9 +674,6 @@ void AssetManager::RestartAsyncLoads() {
             asyncLoads_.erase(assetValue);
             throw;
         }
-#if !defined(__EMSCRIPTEN__)
-        asyncWorkerWake_.notify_one();
-#endif
     }
 }
 
@@ -718,25 +705,6 @@ void AssetManager::PrepareAsyncLoad(AsyncLoadJob job) noexcept {
     }
     std::scoped_lock stateLock{ job.state->mutex };
     job.state->prepared = std::move(prepared);
-}
-
-void AssetManager::RunAsyncWorker() noexcept {
-    while (true) {
-        AsyncLoadJob job;
-        {
-            std::unique_lock lock{ asyncWorkerMutex_ };
-            asyncWorkerWake_.wait(lock, [this] {
-                return asyncWorkerStopping_ || !asyncWorkerQueue_.empty();
-            });
-            if (asyncWorkerStopping_) {
-                return;
-            }
-            job = std::move(asyncWorkerQueue_.front());
-            asyncWorkerQueue_.pop_front();
-        }
-
-        PrepareAsyncLoad(std::move(job));
-    }
 }
 
 void AssetManager::PumpAsyncLoads() {
@@ -971,7 +939,8 @@ void AssetManager::ClearRuntimeCache() noexcept {
 }
 
 void AssetManager::Clear() noexcept {
-    StopAsyncWorker();
+    // A cleared manager holds no lane; the next asynchronous request opens one.
+    asyncLane_.reset();
     asyncLoads_.clear();
     asyncLoadErrors_.clear();
     asyncLoadGenerations_.clear();

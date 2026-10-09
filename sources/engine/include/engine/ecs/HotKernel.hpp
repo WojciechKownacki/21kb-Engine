@@ -2707,7 +2707,8 @@ template <
 
         if (parentMatrix == nullptr) {
             for (std::size_t element = 0U; element < 16U; ++element) {
-                matrix[element] = localMatrix[element];
+                // The asserts above require the columns whenever the range is not empty.
+                matrix[element] = localMatrix[element]; // NOLINT(clang-analyzer-core.NullDereference)
             }
         } else {
             matrix[0] = parentMatrix[0] * localMatrix[0] + parentMatrix[4] * localMatrix[1];

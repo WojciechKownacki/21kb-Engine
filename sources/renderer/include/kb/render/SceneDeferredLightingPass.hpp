@@ -4,6 +4,7 @@
 #include "kb/render/shadow/ShadowCascadeUniforms.hpp"
 #include "kb/render/SceneGBuffer.hpp"
 #include "kb/render/gi/SceneGiHistory.hpp"
+#include "kb/render/gi/SceneGiUniforms.hpp"
 #include "kb/render/frame/FullscreenTexturePass.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 #include "kb/render/scene/RenderScene.hpp"
@@ -74,10 +75,7 @@ private:
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
     ShadowCascadeUniforms shadowCascades_{};
     PointShadowUniforms pointShadows_{};
-    bgfx::UniformHandle giHistorySampler_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle giViewProjUniform_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle giPrevViewProjUniform_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle giParamsUniform_ = BGFX_INVALID_HANDLE;
+    SceneGiUniforms giUniforms_{};
     bgfx::UniformHandle backdropHorizonUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropZenithUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropParamsUniform_ = BGFX_INVALID_HANDLE;

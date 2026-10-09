@@ -20,6 +20,7 @@ public:
     [[nodiscard]] const ScenePrefabRecord* Find(ScenePrefabHandle handle) const noexcept;
     [[nodiscard]] ScenePrefabRecord* FindMutable(ScenePrefabHandle handle) noexcept;
     [[nodiscard]] ScenePrefabHandle FindByGuid(std::string_view guid) const noexcept;
+    [[nodiscard]] ScenePrefabHandle FindBySourcePath(std::string_view sourcePath) const noexcept;
     // Moves `handle` off the guid it currently owns and onto a freshly generated
     // one, so the contested guid stops naming any prefab at all. Used when a
     // second asset file turns out to declare a guid this record already holds:

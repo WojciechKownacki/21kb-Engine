@@ -14,14 +14,20 @@ class SceneSystemContext;
 
 namespace kb::audio_miniaudio {
 
+class MiniaudioAudioSpace;
+
 class MiniaudioListenerSynchronizer final {
 public:
     struct State {
         bool active = false;
+        // In the audio space (world space without one).
         kb::scene::Vec3 position{};
+        // How positions kept from earlier ticks move: the audio origin followed the listener (zero otherwise).
+        kb::scene::Vec3 shift{};
     };
 
-    [[nodiscard]] State Sync(ma_engine& engine, kb::scene::SceneSystemContext& context);
+    // With an audio space the listener moves its origin (MiniaudioAudioSpace::Follow) and is placed relative to it.
+    [[nodiscard]] State Sync(ma_engine& engine, kb::scene::SceneSystemContext& context, MiniaudioAudioSpace* space = nullptr);
     void Disable(ma_engine& engine) noexcept;
     void Reset() noexcept;
 

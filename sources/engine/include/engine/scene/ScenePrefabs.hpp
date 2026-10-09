@@ -105,6 +105,12 @@ public:
     [[nodiscard]] ScenePrefabHandle CreateAsset(SceneObject root, const ScenePrefabCaptureSettings& settings, std::string name, const std::filesystem::path& path);
     [[nodiscard]] bool Contains(ScenePrefabHandle handle) const noexcept;
     [[nodiscard]] std::string Guid(ScenePrefabHandle handle) const;
+    // The .kbprefab file the prefab was loaded from or last saved to; empty for one that lives only in memory.
+    [[nodiscard]] std::filesystem::path SourcePath(ScenePrefabHandle handle) const;
+    // The prefab already loaded from the asset file at `path`, without loading it.
+    [[nodiscard]] ScenePrefabHandle FindLoaded(const std::filesystem::path& path) const;
+    // Whether `prefab` is `used`, a variant of it, or contains it as a nested prefab, at any depth.
+    [[nodiscard]] bool UsesPrefab(ScenePrefabHandle prefab, ScenePrefabHandle used) const;
     [[nodiscard]] ScenePrefabAssetType AssetType(ScenePrefabHandle handle) const noexcept;
     [[nodiscard]] std::size_t RegisteredCount() const noexcept;
     void Clear() noexcept;
@@ -146,8 +152,13 @@ public:
     [[nodiscard]] ScenePrefabInstanceHandle ContainingInstance(SceneEntity entity, std::uint32_t& nodeIndex, std::uint64_t& nodeId) const noexcept;
     [[nodiscard]] std::size_t RefreshInstances(ScenePrefabHandle handle);
     [[nodiscard]] bool Reconnect(ScenePrefabInstanceHandle handle, ScenePrefabHandle sourcePrefab);
+    // Puts objects recreated for destroyed instance objects (an undone delete) back into the
+    // instances that tracked the destroyed ones, at the same nodes.
+    void RelinkRestoredObjects(std::span<const SceneEntity> destroyed, std::span<const SceneObject> restored);
     [[nodiscard]] bool Unpack(ScenePrefabInstanceHandle handle, ScenePrefabUnpackMode mode = ScenePrefabUnpackMode::RootOnly);
     [[nodiscard]] ScenePrefabOverrideReport Overrides(ScenePrefabInstanceHandle handle) const;
+    // Moves whenever an object of any prefab instance changes; unchanged, Overrides reports the same.
+    [[nodiscard]] std::uint64_t InstanceChangeRevision() const noexcept;
     [[nodiscard]] bool RevertOverrides(ScenePrefabInstanceHandle handle);
     [[nodiscard]] bool RevertOverrides(std::span<const ScenePrefabInstanceHandle> handles);
     [[nodiscard]] bool ApplyOverrides(ScenePrefabInstanceHandle handle);

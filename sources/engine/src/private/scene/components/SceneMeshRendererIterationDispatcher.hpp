@@ -5,9 +5,9 @@
 
 #include <cstdint>
 
-struct ecs_query_t;
-
 namespace kb::scene {
+
+struct SceneComponentIterationQueries;
 
 class SceneMeshRendererIterationDispatcher {
 public:
@@ -19,7 +19,7 @@ public:
         std::uint64_t visibilityComponentId,
         std::uint64_t meshRendererComponentId,
         bool visibleOnly,
-        ecs_query_t*& cachedQuery,
+        SceneComponentIterationQueries& cachedQueries,
         MeshRendererVisitor visitor,
         void* context);
 };

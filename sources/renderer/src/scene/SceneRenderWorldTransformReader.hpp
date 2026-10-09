@@ -28,6 +28,10 @@ public:
     [[nodiscard]] kb::scene::TransformComponent Read(
         kb::scene::SceneEntity entity,
         const kb::scene::TransformComponent& computed) const;
+    // The double-precision world translation of the transform Read returns.
+    [[nodiscard]] kb::math::DVec3 ReadWorldTranslation(
+        kb::scene::SceneEntity entity,
+        const kb::scene::TransformComponent& computed) const;
 
     [[nodiscard]] std::size_t PrecomputedReadCount() const noexcept {
         return precomputedReadCount_;

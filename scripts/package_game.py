@@ -52,7 +52,53 @@ from package_contract import (
     terminate_process_tree,
     verify_unit,
 )
+from elf_trust_anchor import ElfTrustAnchorError, embed_trust_anchor, read_trust_anchor
+from third_party_notices import NoticeError, load_components, select_components, stage_notices, write_sbom
+from windows_authenticode import (
+    AuthenticodeError,
+    find_signtool,
+    normalize_thumbprint,
+    signtool_sign_command,
+    verify_signed,
+)
 from windows_pe_resources import WindowsResourceError, apply_windows_resources
+from windows_pe_symbols import (
+    PdbIdentity,
+    WindowsSymbolError,
+    find_matching_pdb,
+    is_windows_pe,
+    pe_pdb_identity,
+    publish_to_symbol_store,
+)
+
+
+# Content packaging: the zstd level cooked packs are written with (0 stores blocks as baked), the
+# pack set index the Windows player mounts a multi-pack game from, and the names a chunk or patch
+# label may take (the engine's bake-cache name rules).
+DEFAULT_PACK_COMPRESSION_LEVEL = 9
+# Platforms whose players verify a signed release manifest at startup, which is what binds a pack
+# set, its patches and its key lines to a release.
+RELEASE_MANIFEST_PLATFORMS = ("windows", "linux")
+PACK_SET_INDEX = "Game.kbpackset"
+_PACK_LABEL = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
+_RELEASE_NUMBER_LINE = re.compile(r"^release (0|[1-9][0-9]*)$", re.MULTILINE)
+# A world region a chunk takes, as kb_cli pack split --chunk-cells reads it (ParseAssetPackWorldRegion):
+# <world virtual path>[@<minX>:<minZ>..<maxX>:<maxZ>][#<layer>[,<layer>...]], "(base)" naming the base layer.
+_WORLD_LAYER = r"(?:\(base\)|[A-Za-z0-9_.-]{1,64})"
+_WORLD_REGION = re.compile(
+    r"(/[^@#\\]+\.21kbworld)(?:@(-?[0-9]{1,19}):(-?[0-9]{1,19})\.\.(-?[0-9]{1,19}):(-?[0-9]{1,19}))?"
+    rf"(?:#{_WORLD_LAYER}(?:,{_WORLD_LAYER})*)?"
+)
+
+
+@dataclass(frozen=True)
+class PackSet:
+    """The packs one package ships: the ones this job made and must seal, every pack to stage
+    (source file and name in the package), and the pack set index text when there is more than
+    one pack."""
+    new_packs: tuple[Path, ...]
+    staged: tuple[tuple[Path, str], ...]
+    index_text: str | None
 
 
 @dataclass(frozen=True)
@@ -75,6 +121,8 @@ class StageResult:
     tools: tuple[Path, ...]
     first_frame: FirstFrameResult | None = None
     running_android_adb: Path | None = None
+    # Each shipped Windows image's PDB, filed in the symbol store when the package publishes.
+    symbols: tuple[tuple[PdbIdentity, Path], ...] = ()
 
 
 def _first_frame_result(target: str, stage: Path) -> FirstFrameResult:
@@ -87,6 +135,8 @@ CONFIGURATIONS = {"Development": "Debug", "Release": "Release"}
 _SAFE_EXECUTABLE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,79}\Z")
 _ANDROID_APPLICATION_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+\Z")
 _ANDROID_ALIAS = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
+# Mirrors kb::security::IsValidProductId.
+_PRODUCT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _PROJECT_TRANSIENT_ROOTS = frozenset((".cache", "Saved", "Build", "Dist", "Packages", ".git"))
 
 
@@ -159,9 +209,20 @@ def _project_png_icon(project_file: Path, value: Path) -> Path:
     return icon
 
 
-def _validate_package_work_roots(project_file: Path, build_root: Path, output: Path) -> None:
+def _validate_package_work_roots(
+    project_file: Path, build_root: Path, output: Path, symbols: Path | None = None
+) -> None:
     project_root = project_file.parent.resolve(strict=True)
-    for label, candidate in (("build directory", build_root), ("package output", output)):
+    roots = [("build directory", build_root), ("package output", output)]
+    if symbols is not None:
+        roots.append(("symbol store", symbols))
+        try:
+            symbols.resolve(strict=False).relative_to(output.resolve(strict=False))
+        except ValueError:
+            pass
+        else:
+            raise PackagingError("symbol store must be outside the package output")
+    for label, candidate in roots:
         resolved = candidate.resolve(strict=False)
         try:
             resolved.relative_to(project_root)
@@ -177,7 +238,11 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         raise PackagingError(f"engine root is incomplete: {args.engine_root}")
     args.build_root = args.build_root.expanduser().absolute()
     args.output = args.output.expanduser().absolute()
-    _validate_package_work_roots(args.project, args.build_root, args.output)
+    # PDBs never ship with the game; they are filed beside the package by default.
+    if args.symbols_output is None:
+        args.symbols_output = args.output.parent / f"{args.output.name}.symbols"
+    args.symbols_output = args.symbols_output.expanduser().absolute()
+    _validate_package_work_roots(args.project, args.build_root, args.output, args.symbols_output)
     args.build_root.mkdir(parents=True, exist_ok=True)
     if args.output.name in ("", ".", ".."):
         raise PackagingError("output must name a package directory")
@@ -189,6 +254,26 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         raise PackagingError("executable name contains unsupported characters")
     if args.application_icon is not None:
         args.application_icon = _project_png_icon(args.project, args.application_icon)
+    if args.product_id is None:
+        args.product_id = _default_product_id(args.publisher, args.product_name)
+    if not _PRODUCT_ID.fullmatch(args.product_id):
+        raise PackagingError("product ID must be 1 to 128 characters of A-Z, a-z, 0-9, '.', '_' or '-'")
+    if args.signing_key is not None:
+        args.signing_key = _existing_file(args.signing_key, "release signing key")
+    if args.signing_broker is not None:
+        args.signing_broker = _existing_file(args.signing_broker, "release signing broker")
+    if args.encrypt_pack and TARGETS[args.target].platform not in RELEASE_MANIFEST_PLATFORMS:
+        raise PackagingError("asset pack encryption is available for Windows and Linux packages only")
+    if args.release_number is None:
+        args.release_number = int(time.time())
+    if not 0 <= args.release_number < 2**63:
+        raise PackagingError("release number must be a non-negative 63-bit integer")
+    _validate_content_packaging(args)
+    if args.crash_report_url is not None:
+        if args.target != "Windows.x64":
+            raise PackagingError("crash report upload is available only for Windows packages")
+        args.crash_report_url = _validate_crash_report_url(args.crash_report_url)
+    _validate_windows_signing(args)
     if args.target.startswith("Android."):
         if not _ANDROID_APPLICATION_ID.fullmatch(args.android_application_id):
             raise PackagingError("Android application ID is invalid")
@@ -206,6 +291,315 @@ def _validate_arguments(args: argparse.Namespace) -> None:
                 args.android_signing_broker = _existing_file(args.android_signing_broker, "Android signing broker")
             if not _ANDROID_ALIAS.fullmatch(args.android_key_alias):
                 raise PackagingError("Android signing key alias is invalid")
+
+
+def _is_pack_label(value: str) -> bool:
+    return bool(_PACK_LABEL.fullmatch(value)) and not value.endswith(".")
+
+
+def _parse_chunk_rule(text: str) -> tuple[str, tuple[str, ...]]:
+    label, separator, prefixes = text.partition("=")
+    paths = tuple(prefix for prefix in prefixes.split(",") if prefix)
+    if not separator or not _is_pack_label(label) or not paths:
+        raise PackagingError(f"--pack-chunk expects LABEL=/Game/PREFIX[,/Game/PREFIX...]: {text}")
+    for path in paths:
+        if not path.startswith("/") or "\\" in path or any(part in (".", "..") for part in path.split("/")):
+            raise PackagingError(f"--pack-chunk prefix must be a virtual path such as /Game/Cells/0_0/: {path}")
+    return label, paths
+
+
+def _parse_chunk_cells_rule(text: str) -> tuple[str, str]:
+    label, separator, region = text.partition("=")
+    match = _WORLD_REGION.fullmatch(region)
+    if not separator or not _is_pack_label(label) or match is None:
+        raise PackagingError(
+            "--pack-chunk-cells expects LABEL=/Game/WORLD.21kbworld[@MINX:MINZ..MAXX:MAXZ][#LAYER[,LAYER...]]: " + text
+        )
+    if match.group(2) is not None and (
+        int(match.group(2)) > int(match.group(4)) or int(match.group(3)) > int(match.group(5))
+    ):
+        raise PackagingError(f"--pack-chunk-cells region corners are out of order: {text}")
+    return label, region
+
+
+def _chunk_labels(args: argparse.Namespace) -> list[str]:
+    """Chunk labels in the order kb_cli pack split writes them: --pack-chunk first, then the labels
+    only --pack-chunk-cells names. A label both name is one chunk."""
+    labels = [label for label, _ in getattr(args, "pack_chunk_rules", None) or []]
+    for label, _ in getattr(args, "pack_chunk_cell_rules", None) or []:
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _parse_pack_set_index(text: str) -> list[tuple[str, str, int, str]]:
+    """(role, label, patch level, path) per pack line of a pack set index, in mount order. Key
+    lines -- pack content keys wrapped under that release's anchor key -- are left out: the new
+    release wraps the keys again under its own key (`kb_cli pack set-keys`)."""
+    lines = text.split("\n")
+    if not lines or lines[0] != "21kb-pack-set 1" or lines[-1] != "":
+        raise PackagingError("the previous release's pack set index is malformed")
+    entries: list[tuple[str, str, int, str]] = []
+    for line in lines[1:-1]:
+        kind, _, rest = line.partition(" ")
+        if kind == "key":
+            continue
+        if kind == "base":
+            entries.append(("base", "", 0, rest))
+        elif kind == "chunk":
+            label, _, path = rest.partition(" ")
+            entries.append(("chunk", label, 0, path))
+        elif kind == "patch":
+            level, _, rest = rest.partition(" ")
+            label, _, path = rest.partition(" ")
+            if not level.isdigit():
+                raise PackagingError("the previous release's pack set index is malformed")
+            entries.append(("patch", label, int(level), path))
+        else:
+            raise PackagingError("the previous release's pack set index is malformed")
+        path = entries[-1][3]
+        if not path.lower().endswith(".kbpack") or "/" in path or "\\" in path or path.startswith("."):
+            raise PackagingError(f"the previous release's pack set names an unexpected file: {path}")
+    if not entries or entries[0][0] != "base":
+        raise PackagingError("the previous release's pack set index has no base pack")
+    return entries
+
+
+def _encode_pack_set_index(entries: Sequence[tuple[str, str, int, str]]) -> str:
+    lines = ["21kb-pack-set 1"]
+    for role, label, level, path in entries:
+        if role == "base":
+            lines.append(f"base {path}")
+        elif role == "chunk":
+            lines.append(f"chunk {label} {path}")
+        else:
+            lines.append(f"patch {level} {label} {path}")
+    return "\n".join(lines) + "\n"
+
+
+def _validate_content_packaging(args: argparse.Namespace) -> None:
+    """Compression level, chunk rules and the patch base, checked before anything is built."""
+    if not 0 <= args.pack_compression_level <= 19:
+        raise PackagingError("pack compression level must be 0 (off) to 19")
+    args.pack_chunk_rules = [_parse_chunk_rule(text) for text in args.pack_chunk]
+    args.pack_chunk_cell_rules = [_parse_chunk_cells_rule(text) for text in getattr(args, "pack_chunk_cells", None) or []]
+    labels = [label for label, _ in args.pack_chunk_rules]
+    if len(set(labels)) != len(labels):
+        raise PackagingError("every --pack-chunk needs its own label")
+    released = TARGETS[args.target].platform in RELEASE_MANIFEST_PLATFORMS
+    world_regions = getattr(args, "pack_chunk_world_regions", False)
+    if (args.pack_chunk_rules or args.pack_chunk_cell_rules or world_regions) and not released:
+        raise PackagingError("chunked pack sets are packaged for Windows and Linux players only")
+    args.patch_base_entries = None
+    if args.patch_from is None:
+        if args.patch_level is not None:
+            raise PackagingError("--patch-level needs --patch-from")
+        return
+    if not released:
+        raise PackagingError("patch packs are packaged for Windows and Linux players only")
+    if args.pack_chunk_rules or args.pack_chunk_cell_rules or world_regions:
+        raise PackagingError("a patch keeps the chunks of the release it patches; --pack-chunk does not apply")
+    previous = args.patch_from.expanduser().resolve(strict=True)
+    manifest = previous / "release.kbmanifest"
+    if not (previous / "Game.kbpack").is_file() or not manifest.is_file():
+        raise PackagingError(f"--patch-from must name the directory of a signed Windows or Linux release: {previous}")
+    match = _RELEASE_NUMBER_LINE.search(manifest.read_text(encoding="utf-8"))
+    if match is None:
+        raise PackagingError("the previous release's manifest has no release number")
+    if args.release_number <= int(match.group(1)):
+        raise PackagingError(
+            f"release number {args.release_number} must be higher than the patched release's {match.group(1)}, "
+            "or anti-rollback would refuse the patch"
+        )
+    index = previous / PACK_SET_INDEX
+    entries = (
+        _parse_pack_set_index(index.read_text(encoding="utf-8"))
+        if index.is_file()
+        else [("base", "", 0, "Game.kbpack")]
+    )
+    for _, _, _, path in entries:
+        if not (previous / path).is_file():
+            raise PackagingError(f"the previous release is missing {path}")
+    highest = max((level for role, _, level, _ in entries if role == "patch"), default=0)
+    if args.patch_level is None:
+        args.patch_level = highest + 1
+    if args.patch_level <= highest:
+        raise PackagingError(f"patch level {args.patch_level} must be higher than the release's patch level {highest}")
+    args.patch_from = previous
+    args.patch_base_entries = entries
+
+
+def _validate_crash_report_url(url: str) -> str:
+    """The same rule the game applies before it sends anything: HTTPS, or HTTP to this machine."""
+    if not url or len(url) > 2048 or any(ord(character) <= 0x20 or ord(character) >= 0x7F for character in url):
+        raise PackagingError("crash report URL must be printable ASCII without spaces")
+    parts = urllib.parse.urlsplit(url)
+    if parts.username is not None or parts.password is not None or not parts.hostname:
+        raise PackagingError("crash report URL must name a host and carry no credentials")
+    if parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in ("127.0.0.1", "::1")):
+        return url
+    raise PackagingError("crash report URL must use HTTPS, or HTTP to 127.0.0.1 or ::1")
+
+
+_TIMESTAMP_URL = re.compile(r"https?://[^/\s\"]+[^\s\"]*\Z")
+
+
+def _validate_windows_signing(args: argparse.Namespace) -> None:
+    """One certificate source: the user's store by thumbprint, or a PFX file.
+
+    A PFX password never appears in arguments or the environment: the editor's signing
+    broker holds it, a broker program supplies it, or it is read from standard input.
+    """
+    signing = args.windows_sign_thumbprint is not None or args.windows_sign_pfx is not None
+    if not signing:
+        if args.windows_require_signing:
+            raise PackagingError("Windows signing is required but no certificate was given")
+        if args.windows_timestamp_url or args.windows_sign_password_stdin or args.windows_signing_broker:
+            raise PackagingError("Windows signing options need a certificate thumbprint or PFX file")
+        return
+    if args.target != "Windows.x64":
+        raise PackagingError("Authenticode signing applies only to Windows packages")
+    if args.windows_sign_thumbprint is not None and args.windows_sign_pfx is not None:
+        raise PackagingError("sign with a certificate thumbprint or a PFX file, not both")
+    if args.windows_sign_thumbprint is not None:
+        try:
+            args.windows_sign_thumbprint = normalize_thumbprint(args.windows_sign_thumbprint)
+        except AuthenticodeError as error:
+            raise PackagingError(str(error)) from error
+        if args.windows_sign_password_stdin or args.windows_signing_broker:
+            raise PackagingError("a store certificate needs no password or signing broker")
+    else:
+        args.windows_sign_pfx = _existing_file(args.windows_sign_pfx, "Windows signing certificate")
+        if args.windows_sign_password_stdin and args.windows_signing_broker is not None:
+            raise PackagingError("read the PFX password from standard input or from a broker, not both")
+        if args.windows_signing_broker is not None:
+            args.windows_signing_broker = _existing_file(args.windows_signing_broker, "Windows signing broker")
+    if args.windows_timestamp_url and not _TIMESTAMP_URL.fullmatch(args.windows_timestamp_url):
+        raise PackagingError("timestamp URL must be an http:// or https:// RFC 3161 service")
+
+
+def _request_windows_signature(
+    args: argparse.Namespace, images: Sequence[Path], job: Path
+) -> str:
+    """Has the editor (or a broker program) sign copies of the images with the PFX.
+
+    The copies sit in the job's own authenticode folder, the only place the broker
+    accepts files from. Returns the signer's thumbprint the broker reported.
+    """
+    request = job / "windows-signing-request.json"
+    response = job / "windows-signing-response.json"
+    session = secrets.token_hex(16)
+    request.write_bytes(canonical_json_bytes({
+        "schema": 1,
+        "kind": "windows-authenticode",
+        "session": session,
+        "certificate": str(args.windows_sign_pfx),
+        "timestampUrl": args.windows_timestamp_url or "",
+        "files": [str(image) for image in images],
+    }))
+    if args.windows_signing_broker is not None:
+        run_checked([args.windows_signing_broker, "--request", request, "--response", response], cwd=job,
+                    timeout_seconds=900)
+    else:
+        print(f"SIGNING_REQUEST|{request.resolve(strict=True)}|{response.absolute()}", flush=True)
+        deadline = time.monotonic() + 900.0
+        while not response.is_file():
+            if time.monotonic() >= deadline:
+                raise PackagingError("Windows signing broker did not answer within 900 seconds")
+            time.sleep(0.05)
+    try:
+        value = json.loads(response.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise PackagingError("Windows signing broker returned an invalid response") from error
+    if not isinstance(value, dict) or set(value) != {"schema", "session", "succeeded", "signerThumbprint"} or \
+            value["schema"] != 1 or value["session"] != session or value["succeeded"] is not True:
+        raise PackagingError("Windows signing broker refused or did not sign the images")
+    try:
+        return normalize_thumbprint(str(value["signerThumbprint"]))
+    except AuthenticodeError as error:
+        raise PackagingError("Windows signing broker reported no signer") from error
+
+
+def _sign_with_pfx_signer(
+    signer: Path, pfx: Path, password: str, images: Sequence[Path], timestamp_url: str | None, job: Path
+) -> str:
+    """Runs kb_authenticode_signer with the PFX password on its standard input."""
+    command: list[Path | str] = [signer, "--pfx", pfx]
+    if timestamp_url:
+        command.extend(("--timestamp-url", timestamp_url))
+    command.append("--")
+    command.extend(images)
+    output = run_checked(command, cwd=job, timeout_seconds=120 + 30 * len(images), input_text=password + "\n").output
+    match = re.search(r"(?m)^SIGNER\|([0-9A-F]{40})\|", output)
+    if match is None:
+        raise PackagingError("the Authenticode signer did not report its certificate")
+    return match.group(1)
+
+
+def _sign_windows_images(args: argparse.Namespace, cmake: Path, stage: Path, job: Path) -> tuple[Path, ...]:
+    """Authenticode-signs every image the package ships and proves each signature.
+
+    Runs after every step that changes a binary, so what is signed is what ships.
+    With a certificate, an image that is unsigned, altered after signing, signed by
+    another certificate or chained to an untrusted root fails the package.
+    """
+    images = sorted(path for path in stage.rglob("*") if is_windows_pe(path))
+    tools: list[Path] = []
+    if args.windows_sign_thumbprint is not None:
+        try:
+            signtool = find_signtool()
+        except AuthenticodeError as error:
+            raise PackagingError(str(error)) from error
+        tools.append(signtool)
+        run_checked(
+            signtool_sign_command(signtool, images, args.windows_sign_thumbprint, args.windows_timestamp_url),
+            cwd=job,
+            timeout_seconds=120 + 30 * len(images),
+            on_line=lambda line: emit_diagnostic("Info", line),
+        )
+        signer = args.windows_sign_thumbprint
+    elif args.windows_sign_pfx is not None:
+        work = job / "authenticode"
+        work.mkdir()
+        copies = [work / f"{index:04d}-{image.name}" for index, image in enumerate(images)]
+        for image, copy in zip(images, copies):
+            shutil.copy2(image, copy)
+        if args.windows_sign_password_stdin:
+            configuration = CONFIGURATIONS[args.configuration]
+            _build_targets(cmake, args.build_root, configuration, ("kb_authenticode_signer",), args.engine_root)
+            signer_tool = _build_tool_path(args.build_root, configuration, "kb_authenticode_signer")
+            tools.append(signer_tool)
+            password = sys.stdin.readline().rstrip("\r\n")
+            if not password:
+                raise PackagingError("no PFX password arrived on standard input")
+            try:
+                signer = _sign_with_pfx_signer(
+                    signer_tool, args.windows_sign_pfx, password, copies, args.windows_timestamp_url, job
+                )
+            finally:
+                del password
+        else:
+            signer = _request_windows_signature(args, copies, job)
+        for image, copy in zip(images, copies):
+            os.replace(copy, image)
+    else:
+        return ()
+    if not args.windows_timestamp_url:
+        emit_diagnostic("Warning", "Windows images are signed without a timestamp; their signatures end with the certificate")
+    try:
+        verify_signed(images, expected_thumbprint=signer)
+    except AuthenticodeError as error:
+        raise PackagingError(str(error)) from error
+    emit_diagnostic("Info", f"Signed and verified {len(images)} Windows image(s) with certificate {signer}")
+    return tuple(tools)
+
+
+def _write_crash_report_config(stage: Path, url: str | None) -> None:
+    # Read by the player's crash reporter at start; without it reports stay on the player's machine.
+    if url is not None:
+        (stage / "CrashReports.ini").write_text(
+            f"[CrashReports]\nUploadUrl={url}\n", encoding="utf-8", newline="\n"
+        )
 
 
 def _copy_project_snapshot(project_file: Path, destination: Path) -> Path:
@@ -293,6 +687,7 @@ def _cook(args: argparse.Namespace, snapshot_project: Path, job: Path, cooker: P
     ]
     if args.target == "Windows.x64":
         command.extend(("--runtime-modules-output", output.parent / "RuntimeModules"))
+    command.extend(("--pack-compression-level", str(args.pack_compression_level)))
     shaderc = _find_optional_build_tool(args.build_root, CONFIGURATIONS[args.configuration], "shaderc")
     if shaderc is not None:
         command.extend(("--shaderc", shaderc))
@@ -322,36 +717,317 @@ def _find_optional_build_tool(build_root: Path, configuration: str, name: str) -
     return next((path.resolve(strict=True) for path in matches if path.is_file()), None)
 
 
-def _stage_licenses(engine_root: Path, stage: Path, target: str) -> None:
-    sources = {
-        "bgfx.rst": engine_root / "third_party/bgfx.cmake/bgfx/docs/license.rst",
-        "bx.txt": engine_root / "third_party/bgfx.cmake/bx/LICENSE",
-        "bimg.txt": engine_root / "third_party/bgfx.cmake/bimg/LICENSE",
-        "flecs.txt": engine_root / "third_party/flecs/LICENSE",
-        "jolt.txt": engine_root / "third_party/jolt/LICENSE",
-        "lua.txt": engine_root / "third_party/licenses/lua-5.4.8.txt",
-        "miniaudio.txt": engine_root / "third_party/miniaudio/LICENSE",
-        "ufbx.txt": engine_root / "third_party/ufbx/LICENSE",
-    }
-    included = ["bgfx", "bx", "bimg", "Flecs", "Jolt Physics", "Lua", "miniaudio", "ufbx"]
-    if target.startswith("Android."):
-        sources["androidx-apache-2.0.txt"] = engine_root / "third_party/bgfx.cmake/bgfx/3rdparty/spirv-tools/LICENSE"
-        included.append("AndroidX AppCompat, Games Activity, and their AndroidX dependencies")
-    if target == "WebGPU.wasm32":
-        sources["dawn.txt"] = engine_root / "third_party/bgfx.cmake/bgfx/3rdparty/dawn/LICENSE"
-        included.append("Dawn WebGPU")
-    licenses = stage / "Licenses"
-    licenses.mkdir()
-    for name, source in sources.items():
-        if not source.is_file():
-            raise PackagingError(f"required third-party license is missing: {source}")
-        shutil.copy2(source, licenses / name)
-    (stage / "THIRD_PARTY_NOTICES.txt").write_text(
-        "This product includes " + ", ".join(included) + ".\n"
-        "Their license texts are included in the Licenses directory.\n",
-        encoding="utf-8",
-        newline="\n",
+def _default_product_id(publisher: str, product_name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{publisher}.{product_name}").strip("-._")
+    return slug[:128].rstrip("-._") or "game"
+
+
+def _default_signing_key(product_id: str) -> Path:
+    """Where the per-product release key lives when none is supplied: in the user's profile,
+    outside every project, so it is never packaged or committed."""
+    override = os.environ.get("KB_RELEASE_KEY_ROOT")
+    if override:
+        root = Path(override)
+    elif os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        root = Path(os.environ["LOCALAPPDATA"]) / "21kb" / "ReleaseKeys"
+    else:
+        root = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "21kb" / "release-keys"
+    return root / f"{product_id}.kbkey"
+
+
+@dataclass(frozen=True)
+class ReleaseSigning:
+    """How this job reaches the release signing key: a key file kb_cli reads directly, or a
+    broker that runs kb_cli itself so the key (or its passphrase) never passes through here."""
+    kb_cli: Path
+    key: Path | None
+    broker: Path | None
+
+
+def _run_with_release_key(signing: ReleaseSigning, job: Path, arguments: Sequence[Path | str]) -> None:
+    if signing.broker is None:
+        assert signing.key is not None
+        run_checked([signing.kb_cli, *arguments, "--key", signing.key], cwd=job, timeout_seconds=3600)
+        return
+    session = secrets.token_hex(16)
+    request = job / f"release-signing-request-{session}.json"
+    response = job / f"release-signing-response-{session}.json"
+    request.write_bytes(canonical_json_bytes({
+        "schema": 1,
+        "session": session,
+        "kind": "kbReleaseSigning",
+        "kbCli": str(signing.kb_cli),
+        "key": None if signing.key is None else str(signing.key),
+        "arguments": [str(argument) for argument in arguments],
+    }))
+    run_checked([signing.broker, "--request", request, "--response", response], cwd=job, timeout_seconds=3600)
+    try:
+        value = json.loads(response.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise PackagingError("release signing broker returned an invalid response") from error
+    if value != {"schema": 1, "session": session, "succeeded": True}:
+        raise PackagingError("release signing broker refused the request")
+
+
+def _release_signing(args: argparse.Namespace, kb_cli: Path) -> ReleaseSigning:
+    if args.signing_broker is not None:
+        return ReleaseSigning(kb_cli, args.signing_key, args.signing_broker)
+    key = args.signing_key or _default_signing_key(args.product_id)
+    if not key.is_file():
+        key.parent.mkdir(parents=True, exist_ok=True)
+        run_checked([kb_cli, "keys", "generate", "--out", key], cwd=key.parent, timeout_seconds=60)
+        emit_diagnostic(
+            "Warning",
+            f"Created the release signing key for {args.product_id} at {key}. Back it up and keep it private: "
+            "every update of this game must be signed with the same key.",
+        )
+    return ReleaseSigning(kb_cli, key, None)
+
+
+def _kb_cli(args: argparse.Namespace, cmake: Path) -> Path:
+    configuration = CONFIGURATIONS[args.configuration]
+    _build_targets(cmake, args.build_root, configuration, ("kb_cli",), args.engine_root)
+    return _build_tool_path(args.build_root, configuration, "kb_cli")
+
+
+def _world_region_chunk_rules(
+    args: argparse.Namespace, kb_cli: Path, job: Path, explicit: Sequence[tuple[str, tuple[str, ...]]]
+) -> list[tuple[str, tuple[str, ...]]]:
+    """One chunk per region of every partitioned world the cook built into the project snapshot
+    (--pack-chunk-world-regions). Files an explicit --pack-chunk already claims stay with it."""
+    command: list[Path | str] = [kb_cli, "world", "chunks", "--project", Path(args.snapshot_project).parent]
+    excluded = [prefix for _, prefixes in explicit for prefix in prefixes]
+    if excluded:
+        command.extend(("--exclude", ",".join(excluded)))
+    result = run_checked(command, cwd=job, timeout_seconds=600)
+    rules = [_parse_chunk_rule(line[len("chunk "):]) for line in result.output.splitlines() if line.startswith("chunk ")]
+    labels = {label for label, _ in explicit}
+    for label, _ in rules:
+        if label in labels:
+            raise PackagingError(f"--pack-chunk label {label} is also the label of a world region chunk")
+    return rules
+
+
+def _build_pack_set(args: argparse.Namespace, cmake: Path, pack: Path, job: Path) -> PackSet:
+    """Turns the cooked pack into what the package ships: the pack itself; a base pack and chunk
+    packs split off by world cell or data layer (--pack-chunk); or, for a patch release
+    (--patch-from), the packs of the release being patched plus one patch pack carrying what the
+    new cook changed. The new pack set is recorded on `args` for the platform stage."""
+    chunk_rules = list(getattr(args, "pack_chunk_rules", None) or [])
+    cell_rules = getattr(args, "pack_chunk_cell_rules", None) or []
+    if getattr(args, "pack_chunk_world_regions", False):
+        if cell_rules:
+            raise PackagingError("--pack-chunk-world-regions and --pack-chunk-cells both place world cells; use one")
+        chunk_rules.extend(_world_region_chunk_rules(args, _kb_cli(args, cmake), job, chunk_rules))
+        # Region chunks then count as --pack-chunk rules, so later stages find their packs by label.
+        args.pack_chunk_rules = chunk_rules
+    if not chunk_rules and not cell_rules and getattr(args, "patch_base_entries", None) is None:
+        pack_set = PackSet((pack,), ((pack, "Game.kbpack"),), None)
+        args.pack_set = pack_set
+        return pack_set
+    kb_cli = _kb_cli(args, cmake)
+    level = str(args.pack_compression_level)
+    if chunk_rules or cell_rules:
+        cooked = pack.parent / "unsplit" / pack.name
+        cooked.parent.mkdir(exist_ok=True)
+        pack.replace(cooked)
+        index = pack.parent / PACK_SET_INDEX
+        command: list[Path | str] = [kb_cli, "pack", "split", "--base", pack, "--level", level, "--index", index]
+        for label, prefixes in chunk_rules:
+            command.extend(("--chunk", f"{label}={','.join(prefixes)}"))
+        for label, region in cell_rules:
+            command.extend(("--chunk-cells", f"{label}={region}"))
+        command.append(cooked)
+        run_checked(command, cwd=job, timeout_seconds=3600, on_line=lambda line: emit_diagnostic("Info", line))
+        chunks = [pack.with_name(f"Game.{label}.kbpack") for label in _chunk_labels(args)]
+        for path in (pack, *chunks, index):
+            if not path.is_file():
+                raise PackagingError(f"pack split did not produce {path.name}")
+        pack_set = PackSet(
+            (pack, *chunks),
+            ((pack, "Game.kbpack"), *((chunk, chunk.name) for chunk in chunks)),
+            index.read_text(encoding="utf-8"),
+        )
+        args.pack_set = pack_set
+        return pack_set
+    previous: Path = args.patch_from
+    label = f"patch-{args.patch_level:04d}"
+    patch = pack.with_name(f"Game.{label}.kbpack")
+    current = previous / PACK_SET_INDEX if (previous / PACK_SET_INDEX).is_file() else previous / "Game.kbpack"
+    # The current content is read with the key of the player that shipped it, so an encrypted
+    # release can be patched.
+    run_checked(
+        [kb_cli, "pack", "patch", "--current", current, "--current-release", previous,
+         "--patch-level", str(args.patch_level), "--label", label, "--level", level, "--output", patch, pack],
+        cwd=job,
+        timeout_seconds=3600,
+        on_line=lambda line: emit_diagnostic("Info", line),
     )
+    if not patch.is_file():
+        raise PackagingError(f"pack patch did not produce {patch.name}")
+    entries = [*args.patch_base_entries, ("patch", label, args.patch_level, patch.name)]
+    pack_set = PackSet(
+        (patch,),
+        (*((previous / path, path) for _, _, _, path in args.patch_base_entries), (patch, patch.name)),
+        _encode_pack_set_index(entries),
+    )
+    args.pack_set = pack_set
+    return pack_set
+
+
+def _sign_pack(args: argparse.Namespace, cmake: Path, pack_set: PackSet | Path, job: Path) -> None:
+    """Seals every pack this job made with the release key (encrypting them when asked) and
+    writes the trust anchor the player embeds. The anchor is recorded on `args` for the platform
+    stage. The packs of a release being patched were sealed when it shipped and stay as they are."""
+    if isinstance(pack_set, Path):
+        pack_set = PackSet((pack_set,), ((pack_set, "Game.kbpack"),), None)
+    kb_cli = _kb_cli(args, cmake)
+    signing = _release_signing(args, kb_cli)
+    content_key: list[Path | str] = []
+    if args.encrypt_pack:
+        key_file = job / "pack-content.key"
+        run_checked([kb_cli, "keys", "content-key", "--out", key_file], cwd=job, timeout_seconds=60)
+        content_key = ["--content-key", key_file]
+        args.pack_content_key = key_file
+    for pack in pack_set.new_packs:
+        _run_with_release_key(signing, job, ["pack", "sign", *content_key, pack])
+    anchor = job / "trust-anchor.bin"
+    _run_with_release_key(signing, job, ["keys", "anchor", "--product", args.product_id, *content_key, "--out", anchor])
+    for pack in pack_set.new_packs:
+        run_checked([kb_cli, "pack", "verify", "--anchor", anchor, pack], cwd=job, timeout_seconds=1800)
+    args.release_signing = signing
+    args.trust_anchor = anchor
+
+
+def _stage_pack_set(args: argparse.Namespace, pack: Path, stage: Path, job: Path) -> None:
+    """Copies the packs of the package beside the player, writes the pack set index when there is
+    one, and verifies the whole set -- the reused packs of a patched release included -- against
+    this release's trust anchor."""
+    pack_set: PackSet | None = getattr(args, "pack_set", None)
+    if pack_set is None:
+        pack_set = PackSet((pack,), ((pack, "Game.kbpack"),), None)
+    for source, name in pack_set.staged:
+        shutil.copy2(source, stage / name)
+    if pack_set.index_text is None:
+        return
+    index = stage / PACK_SET_INDEX
+    index.write_bytes(pack_set.index_text.encode("utf-8"))
+    signing: ReleaseSigning | None = getattr(args, "release_signing", None)
+    anchor: Path | None = getattr(args, "trust_anchor", None)
+    if signing is None or anchor is None:
+        return
+    previous: Path | None = getattr(args, "patch_from", None)
+    if previous is not None:
+        # The packs of the release being patched stay encrypted under the keys they were sealed
+        # with; the index carries those keys wrapped under this release's key.
+        content_key: Path | None = getattr(args, "pack_content_key", None)
+        run_checked(
+            [signing.kb_cli, "pack", "set-keys", *(("--content-key", content_key) if content_key else ()),
+             "--previous-release", previous, index],
+            cwd=job,
+            timeout_seconds=600,
+        )
+    run_checked([signing.kb_cli, "pack", "set-verify", "--anchor", anchor, index], cwd=job, timeout_seconds=3600)
+
+
+def _release_tools(args: argparse.Namespace) -> tuple[Path, ...]:
+    signing: ReleaseSigning | None = getattr(args, "release_signing", None)
+    if signing is None:
+        return ()
+    return (signing.kb_cli,) if signing.broker is None else (signing.kb_cli, signing.broker)
+
+
+def _content_version(version: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._+-]", "-", version)[:64]
+
+
+def _sign_release(args: argparse.Namespace, stage: Path, job: Path) -> None:
+    """Writes the signed release manifest over the finished release directory and verifies it
+    against the trust anchor inside the staged player. Every file must be final by now: an
+    Authenticode signature changes the executable's bytes, so it has to come before this."""
+    signing: ReleaseSigning | None = getattr(args, "release_signing", None)
+    if signing is None:
+        return
+    command: list[Path | str] = [
+        "release", "sign",
+        "--dir", stage,
+        "--product", args.product_id,
+        "--content-version", _content_version(args.version),
+        "--release", str(args.release_number),
+    ]
+    if args.anti_rollback:
+        command.append("--anti-rollback")
+    _run_with_release_key(signing, job, command)
+    run_checked([signing.kb_cli, "release", "verify", stage], cwd=job, timeout_seconds=1800)
+
+
+def _stage_licenses(args: argparse.Namespace, stage: Path) -> None:
+    """The license texts, notices and SBOM of every third-party component the target's player ships."""
+    try:
+        components = select_components(
+            load_components(args.engine_root), "game", TARGETS[args.target].platform
+        )
+        stage_notices(args.engine_root, stage, components, args.product_name)
+        write_sbom(stage / "sbom.cdx.json", args.product_name, args.version, components)
+    except (NoticeError, OSError, KeyError, ValueError) as error:
+        raise PackagingError(f"third-party notices could not be staged: {error}") from error
+
+
+def _stage_crash_report_notice(engine_root: Path, stage: Path) -> None:
+    # What a crash report holds, in plain words, beside the player; the game shows it
+    # in its settings before anyone agrees to send a report.
+    source = engine_root / "platform" / "windows" / "CRASH_REPORTS.txt"
+    if not source.is_file():
+        raise PackagingError(f"crash report privacy notice is missing: {source}")
+    shutil.copy2(source, stage / "CRASH_REPORTS.txt")
+
+
+def _collect_windows_symbols(
+    stage: Path,
+    job: Path,
+    built: dict[Path, Path],
+    required: set[Path],
+) -> tuple[tuple[PdbIdentity, Path], ...]:
+    """Pair every shipped image with the PDB of the exact build it came from.
+
+    A crash dump from a player names its modules by PDB GUID and age, so only that
+    PDB can read it. Required images must have one; a PDB copied into the stage with
+    runtime modules is taken out, since symbols never ship with the game.
+    """
+    staged_pdbs = job / "staged-pdbs"
+    for pdb in sorted(path for path in stage.rglob("*") if path.is_file() and path.suffix.lower() == ".pdb"):
+        destination = staged_pdbs / pdb.relative_to(stage)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(pdb, destination)
+    symbols: list[tuple[PdbIdentity, Path]] = []
+    for image in sorted(path for path in stage.rglob("*") if is_windows_pe(path)):
+        relative = image.relative_to(stage)
+        try:
+            identity = pe_pdb_identity(image)
+        except (OSError, WindowsSymbolError) as error:
+            raise PackagingError(str(error)) from error
+        if identity is None:
+            if image in required:
+                raise PackagingError(f"{relative.as_posix()} was linked without a PDB; its crash reports could not be read")
+            emit_diagnostic("Warning", f"{relative.as_posix()} has no PDB identity; its crashes cannot be symbolized")
+            continue
+        candidates = [staged_pdbs / relative.parent / identity.name]
+        if image in built:
+            candidates.insert(0, built[image].parent / identity.name)
+        linked = Path(identity.linked_path)
+        if linked.is_absolute():
+            candidates.append(linked)
+        try:
+            pdb = find_matching_pdb(identity, candidates)
+        except (OSError, WindowsSymbolError) as error:
+            raise PackagingError(str(error)) from error
+        if pdb is None:
+            if image in required:
+                raise PackagingError(f"the PDB of this exact build is missing for {relative.as_posix()} ({identity.name})")
+            emit_diagnostic("Warning", f"no matching PDB for {relative.as_posix()}; its crashes cannot be symbolized")
+            continue
+        symbols.append((identity, pdb))
+    return tuple(symbols)
 
 
 def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> StageResult:
@@ -375,13 +1051,18 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
             executable_name=args.executable_name,
             development=args.configuration == "Development",
             icon=args.application_icon,
+            trust_anchor=args.trust_anchor.read_bytes() if getattr(args, "trust_anchor", None) else None,
         )
     except WindowsResourceError as error:
         raise PackagingError(str(error)) from error
-    shutil.copy2(pack, stage / "Game.kbpack")
+    _stage_pack_set(args, pack, stage, job)
+    _write_crash_report_config(stage, args.crash_report_url)
     custom_modules = pack.parent / "RuntimeModules"
+    built = {destination: game}
     if custom_modules.is_dir():
         copy_tree_exact(custom_modules, stage / "RuntimeModules")
+        for module in custom_modules.rglob("*"):
+            built[stage / "RuntimeModules" / module.relative_to(custom_modules)] = module
     plugin_paths: list[Path] = []
     for target in plugin_targets:
         expected = f"{target}.dll"
@@ -394,10 +1075,17 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
         if plugin is None:
             raise PackagingError(f"Windows player provider was not produced: {expected}")
         shutil.copy2(plugin, stage / expected)
+        built[stage / expected] = plugin
         plugin_paths.append(plugin)
-    _stage_licenses(args.engine_root, stage, args.target)
+    _stage_licenses(args, stage)
+    _stage_crash_report_notice(args.engine_root, stage)
+    symbols = _collect_windows_symbols(
+        stage, job, built, {destination, *(stage / f"{target}.dll" for target in plugin_targets)}
+    )
+    signing_tools = _sign_windows_images(args, cmake, stage, job)
     if destination.read_bytes()[:2] != b"MZ":
         raise PackagingError("Windows player does not contain a valid PE header")
+    _sign_release(args, stage, job)
     smoke = job / "windows-first-frame"
     copy_tree_exact(stage, smoke)
     try:
@@ -409,7 +1097,9 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
     finally:
         if smoke.exists():
             remove_tree(smoke, allowed_parent=job)
-    return StageResult((game, *plugin_paths), _first_frame_result(args.target, stage))
+    return StageResult(
+        (game, *plugin_paths, *signing_tools), _first_frame_result(args.target, stage), symbols=symbols
+    )
 
 
 def _android_sdk() -> Path:
@@ -499,6 +1189,7 @@ def _verify_android_apk(
                 "assets/Licenses/miniaudio.txt",
                 "assets/Licenses/ufbx.txt",
                 "assets/Licenses/androidx-apache-2.0.txt",
+                "assets/kb_trust_anchor.bin",
             })
             if not required.issubset(names):
                 raise PackagingError(f"Android APK is missing runtime entries: {sorted(required - set(names))}")
@@ -650,7 +1341,7 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
     validator = _build_tool_path(args.build_root, CONFIGURATIONS[args.configuration], "kb_runtime_asset_pack_validator")
     legal_assets = job / "android-legal-assets"
     legal_assets.mkdir()
-    _stage_licenses(args.engine_root, legal_assets, args.target)
+    _stage_licenses(args, legal_assets)
     command: list[Path | str] = [
         _java(), "-classpath", gradle_wrapper, "org.gradle.wrapper.GradleWrapperMain",
         task,
@@ -668,6 +1359,8 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
     ]
     if args.application_icon is not None:
         command.append(f"-PkbApplicationIcon={args.application_icon}")
+    if getattr(args, "trust_anchor", None):
+        command.append(f"-PkbTrustAnchor={args.trust_anchor}")
     run_checked(
         command,
         cwd=gradle_root,
@@ -951,7 +1644,7 @@ def _stage_web(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, j
             raise PackagingError(f"{backend} build produced ambiguous {suffix} artifacts")
         shutil.copy2(files[0], stage / f"{args.executable_name}{suffix}")
     shutil.copy2(pack, stage / "Game.kbpack")
-    _stage_licenses(args.engine_root, stage, args.target)
+    _stage_licenses(args, stage)
     html_path = stage / f"{args.executable_name}.html"
     javascript_path = stage / f"{args.executable_name}.js"
     html_text = html_path.read_text(encoding="utf-8", errors="strict")
@@ -1047,7 +1740,41 @@ def _create_deterministic_tar(
                         archive.addfile(info, stream)
 
 
-def _stage_linux_local(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path) -> list[Path]:
+def _embed_linux_trust_anchor(args: argparse.Namespace, player: Path) -> None:
+    """Fills the trust anchor slot of a Linux player, the counterpart of the Windows RT_RCDATA
+    resource: a player carrying it refuses content its release key did not sign."""
+    anchor: Path | None = getattr(args, "trust_anchor", None)
+    if anchor is None:
+        return
+    try:
+        embed_trust_anchor(player, anchor.read_bytes())
+    except (ElfTrustAnchorError, OSError) as error:
+        raise PackagingError(f"Linux player trust anchor could not be embedded: {error}") from error
+
+
+def _finish_linux_release(args: argparse.Namespace, pack: Path, stage: Path, job: Path) -> None:
+    """Completes a Linux release around its player: the packs (a pack set with its index when there
+    is one), the third-party notices, and the signed release manifest the player verifies at
+    startup. Runs before the first-frame proof, which runs the release exactly as it ships."""
+    _stage_pack_set(args, pack, stage, job)
+    _stage_licenses(args, stage)
+    _sign_release(args, stage, job)
+
+
+def _linux_build_receipt(args: argparse.Namespace, stage: Path) -> bytes:
+    return canonical_json_bytes({
+        "schema": 1,
+        "configuration": CONFIGURATIONS[args.configuration],
+        "engineSha256": args.engine_fingerprint,
+        "executableSha256": sha256_file(stage / args.executable_name),
+        "assetPackSha256": sha256_file(stage / "Game.kbpack"),
+        "firstFrame": True,
+    })
+
+
+def _stage_linux_local(
+    args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path | None = None
+) -> list[Path]:
     if sys.platform != "linux":
         raise PackagingError("local Linux packaging must run on Linux")
     configuration = CONFIGURATIONS[args.configuration]
@@ -1075,8 +1802,10 @@ def _stage_linux_local(args: argparse.Namespace, cmake: Path, pack: Path, stage:
     destination = stage / args.executable_name
     shutil.copy2(game, destination)
     destination.chmod(destination.stat().st_mode | 0o111)
-    shutil.copy2(pack, stage / "Game.kbpack")
-    _stage_licenses(args.engine_root, stage, args.target)
+    # Before the first-frame proof: the player runs in packaged mode from here on, and verifies
+    # the release it is part of.
+    _embed_linux_trust_anchor(args, destination)
+    _finish_linux_release(args, pack, stage, job if job is not None else stage.parent)
     if destination.read_bytes()[:4] != b"\x7fELF":
         raise PackagingError("Linux player does not contain a valid ELF header")
     ldd = _required_executable("ldd")
@@ -1087,14 +1816,7 @@ def _stage_linux_local(args: argparse.Namespace, cmake: Path, pack: Path, stage:
     smoke = run_checked([xvfb, "-a", destination, "--frames=1"], cwd=stage, timeout_seconds=180).output
     if "frames=1" not in smoke or "rendered=1" not in smoke or "shutdown=clean" not in smoke:
         raise PackagingError("Linux player did not prove a clean first frame")
-    (stage / "linux-build.receipt.json").write_bytes(canonical_json_bytes({
-        "schema": 1,
-        "configuration": configuration,
-        "engineSha256": args.engine_fingerprint,
-        "executableSha256": sha256_file(destination),
-        "assetPackSha256": sha256_file(stage / "Game.kbpack"),
-        "firstFrame": True,
-    }))
+    (stage / "linux-build.receipt.json").write_bytes(_linux_build_receipt(args, stage))
     return [game, ldd, xvfb]
 
 
@@ -1124,11 +1846,16 @@ def _stage_linux_remote(args: argparse.Namespace, pack: Path, stage: Path, job: 
     source_archive = job / "linux-input.tar.gz"
     transport = job / "linux-transport"
     transport.mkdir()
-    shutil.copy2(pack, transport / "Game.kbpack")
+    if getattr(args, "trust_anchor", None) is not None:
+        # The guest fills the player's slot before its first-frame proof and build receipt.
+        shutil.copy2(args.trust_anchor, transport / "trust-anchor.bin")
     _create_deterministic_tar(transport, source_archive)
     helper = args.engine_root / "scripts/package_linux_guest.py"
     if not helper.is_file():
         raise PackagingError("Linux guest package helper is missing")
+    anchor_helper = args.engine_root / "scripts/elf_trust_anchor.py"
+    if not anchor_helper.is_file():
+        raise PackagingError("Linux trust anchor helper is missing")
     known_hosts = job / "linux-known-hosts"
     known_host_name = host if args.linux_port == 22 else f"[{host}]:{args.linux_port}"
     known_hosts.write_text(f"{known_host_name} {host_key}\n", encoding="ascii", newline="\n")
@@ -1150,25 +1877,46 @@ def _stage_linux_remote(args: argparse.Namespace, pack: Path, stage: Path, job: 
         contract = args.engine_root / "scripts/package_contract.py"
         if not contract.is_file():
             raise PackagingError("package contract helper is missing")
-        run_checked([*scp_base, source_archive, helper, contract, f"{destination}:{remote_job}/"], cwd=job, timeout_seconds=1800)
-        command = (
-            f"python3 {shlex.quote(remote_job + '/package_linux_guest.py')} "
-            f"--archive {shlex.quote(remote_job + '/' + source_archive.name)} "
-            f"--engine-root {shlex.quote(args.linux_engine_root)} "
+        run_checked(
+            [*scp_base, source_archive, helper, contract, anchor_helper, f"{destination}:{remote_job}/"],
+            cwd=job,
+            timeout_seconds=1800,
+        )
+        guest = f"python3 {shlex.quote(remote_job + '/package_linux_guest.py')} "
+        identity_arguments = (
             f"--configuration {CONFIGURATIONS[args.configuration]} "
             f"--executable-name {shlex.quote(args.executable_name)} "
             f"--engine-fingerprint {args.engine_fingerprint} "
+        )
+        # 1. The guest builds the player and fills its trust anchor slot.
+        command = (
+            guest + f"--archive {shlex.quote(remote_job + '/' + source_archive.name)} "
+            f"--engine-root {shlex.quote(args.linux_engine_root)} " + identity_arguments +
             f"--output {shlex.quote(remote_job + '/result.tar.gz')}"
         )
         run_checked([*ssh_base, destination, command], cwd=job, timeout_seconds=3600, on_line=lambda line: emit_diagnostic("Info", line))
         result_archive = job / "linux-result.tar.gz"
         run_checked([*scp_base, f"{destination}:{remote_job}/result.tar.gz", result_archive], cwd=job, timeout_seconds=1800)
         _extract_linux_result(result_archive, stage)
+        executable = stage / args.executable_name
+        if not executable.is_file() or executable.read_bytes()[:4] != b"\x7fELF":
+            raise PackagingError("Linux guest result does not contain the requested ELF player")
+        # 2. This host, which holds the release key, completes and signs the release.
+        _finish_linux_release(args, pack, stage, job)
+        # 3. The guest proves the first frame of the release exactly as it ships.
+        release_archive = job / "linux-release.tar.gz"
+        _create_deterministic_tar(stage, release_archive, executable_name=args.executable_name)
+        run_checked([*scp_base, release_archive, f"{destination}:{remote_job}/"], cwd=job, timeout_seconds=1800)
+        command = (
+            guest + f"--prove-archive {shlex.quote(remote_job + '/' + release_archive.name)} " + identity_arguments +
+            f"--output {shlex.quote(remote_job + '/linux-build.receipt.json')}"
+        )
+        run_checked([*ssh_base, destination, command], cwd=job, timeout_seconds=600, on_line=lambda line: emit_diagnostic("Info", line))
+        receipt = job / "linux-build.receipt.json"
+        run_checked([*scp_base, f"{destination}:{remote_job}/linux-build.receipt.json", receipt], cwd=job, timeout_seconds=120)
+        shutil.copy2(receipt, stage / "linux-build.receipt.json")
     finally:
         run_checked([*ssh_base, destination, f"rm -rf -- {remote_job}"], cwd=job, timeout_seconds=120)
-    executable = stage / args.executable_name
-    if not executable.is_file() or executable.read_bytes()[:4] != b"\x7fELF":
-        raise PackagingError("Linux guest result does not contain the requested ELF player")
     return [ssh, scp]
 
 
@@ -1196,6 +1944,16 @@ def _verify_linux_stage(stage: Path, args: argparse.Namespace) -> None:
     }
     if receipt != expected:
         raise PackagingError("Linux build receipt does not match the returned artifact")
+    if getattr(args, "release_signing", None) is not None and not (stage / "release.kbmanifest").is_file():
+        raise PackagingError("Linux release is missing its signed release manifest")
+    anchor: Path | None = getattr(args, "trust_anchor", None)
+    if anchor is not None:
+        try:
+            carried = read_trust_anchor(player)
+        except (ElfTrustAnchorError, OSError) as error:
+            raise PackagingError(f"Linux player trust anchor could not be read: {error}") from error
+        if carried != anchor.read_bytes():
+            raise PackagingError("Linux player does not carry this release's trust anchor")
 
 
 def _extract_linux_result(archive_path: Path, destination: Path) -> None:
@@ -1240,7 +1998,7 @@ def _stage_target(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path
         linux_stage = job / "linux-release-folder"
         linux_stage.mkdir()
     if sys.platform == "linux":
-        tools = _stage_linux_local(args, cmake, pack, linux_stage)
+        tools = _stage_linux_local(args, cmake, pack, linux_stage, job)
     else:
         tools = _stage_linux_remote(args, pack, linux_stage, job)
     _verify_linux_stage(linux_stage, args)
@@ -1251,11 +2009,13 @@ def _stage_target(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path
             archive,
             executable_name=args.executable_name,
         )
-        _verify_linux_release_archive(archive, args.executable_name)
+        _verify_linux_release_archive(
+            archive, args.executable_name, signed=getattr(args, "release_signing", None) is not None
+        )
     return StageResult(tuple(tools), _first_frame_result(args.target, stage))
 
 
-def _verify_linux_release_archive(archive: Path, executable_name: str) -> None:
+def _verify_linux_release_archive(archive: Path, executable_name: str, signed: bool = False) -> None:
     with tarfile.open(archive, "r:gz") as package:
         player_members = [member for member in package.getmembers() if member.name == executable_name]
         if (len(player_members) != 1 or not player_members[0].isfile() or
@@ -1269,6 +2029,8 @@ def _verify_linux_release_archive(archive: Path, executable_name: str) -> None:
             raise PackagingError("Linux Release archive does not contain the requested ELF player")
         if not (extracted / "Game.kbpack").is_file() or not (extracted / "linux-build.receipt.json").is_file():
             raise PackagingError("Linux Release archive is missing its asset pack or build receipt")
+        if signed and not (extracted / "release.kbmanifest").is_file():
+            raise PackagingError("Linux Release archive is missing its signed release manifest")
 
 
 def _launch_linux(args: argparse.Namespace) -> None:
@@ -1518,6 +2280,30 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--version", required=True)
     parser.add_argument("--executable-name", required=True)
     parser.add_argument("--application-icon", type=Path)
+    parser.add_argument("--product-id")
+    parser.add_argument("--signing-key", type=Path)
+    parser.add_argument("--signing-broker", type=Path)
+    parser.add_argument("--encrypt-pack", action="store_true")
+    parser.add_argument("--pack-compression-level", type=int, default=DEFAULT_PACK_COMPRESSION_LEVEL)
+    parser.add_argument("--pack-chunk", action="append", default=[], metavar="LABEL=/Game/PREFIX[,...]")
+    parser.add_argument("--pack-chunk-world-regions", action="store_true",
+                        help="put every region of every partitioned world into a chunk pack of its own")
+    parser.add_argument(
+        "--pack-chunk-cells", action="append", default=[],
+        metavar="LABEL=/Game/WORLD.21kbworld[@MINX:MINZ..MAXX:MAXZ][#LAYER,...]",
+    )
+    parser.add_argument("--patch-from", type=Path)
+    parser.add_argument("--patch-level", type=int)
+    parser.add_argument("--release-number", type=int)
+    parser.add_argument("--anti-rollback", action="store_true")
+    parser.add_argument("--symbols-output", type=Path)
+    parser.add_argument("--crash-report-url")
+    parser.add_argument("--windows-sign-thumbprint")
+    parser.add_argument("--windows-sign-pfx", type=Path)
+    parser.add_argument("--windows-sign-password-stdin", action="store_true")
+    parser.add_argument("--windows-signing-broker", type=Path)
+    parser.add_argument("--windows-timestamp-url")
+    parser.add_argument("--windows-require-signing", action="store_true")
     parser.add_argument("--launch", action="store_true")
     parser.add_argument("--android-application-id", default="com.kbengine.game")
     parser.add_argument("--android-label")
@@ -1555,6 +2341,7 @@ def package(args: argparse.Namespace) -> None:
             emit_stage("Validate", 5, f"Validating {args.target} {args.configuration}")
             project_fingerprint = _project_source_fingerprint(args.project)
             snapshot_project = _copy_project_snapshot(args.project, job / "project")
+            args.snapshot_project = snapshot_project
             engine_fingerprint = _engine_fingerprint(args.engine_root)
             args.engine_fingerprint = engine_fingerprint
             cooker, validator = _ensure_host_tools(args, cmake)
@@ -1562,7 +2349,10 @@ def package(args: argparse.Namespace) -> None:
 
             emit_stage("Cook", 25, f"Cooking {target.texture_family} assets and {target.shader_format} shaders")
             pack = _cook(args, snapshot_project, job, cooker, validator)
-            emit_stage("Cook", 50, "Runtime asset pack verified")
+            pack_set = _build_pack_set(args, cmake, pack, job)
+            emit_stage("Cook", 45, "Signing the runtime asset pack")
+            _sign_pack(args, cmake, pack_set, job)
+            emit_stage("Cook", 50, "Runtime asset pack signed and verified")
 
             emit_stage("Stage", 55, f"Building and staging {args.target}")
             candidate.mkdir(mode=0o700)
@@ -1581,7 +2371,7 @@ def package(args: argparse.Namespace) -> None:
                     args,
                     project_fingerprint,
                     engine_fingerprint,
-                    (cmake, cooker, validator, *stage_result.tools),
+                    (cmake, cooker, validator, *_release_tools(args), *stage_result.tools),
                 ),
                 runtime_first_frame=(
                     stage_result.first_frame.receipt_fields()
@@ -1590,6 +2380,12 @@ def package(args: argparse.Namespace) -> None:
                 ),
             )
             verify_unit(candidate)
+            if stage_result.symbols:
+                try:
+                    stored = publish_to_symbol_store(args.symbols_output, stage_result.symbols)
+                except (OSError, WindowsSymbolError) as error:
+                    raise PackagingError(f"symbol store could not be written: {error}") from error
+                emit_diagnostic("Info", f"Filed {len(stored)} PDB(s) under {args.symbols_output}")
             atomic_publish(candidate, args.output)
             verify_unit(args.output)
             published = True

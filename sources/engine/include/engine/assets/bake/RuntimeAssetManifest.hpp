@@ -69,11 +69,21 @@ struct RuntimeAuxiliaryFileEntry {
 struct RuntimeAssetManifest {
     std::string targetProfileId;
     std::uint64_t targetProfileHash = 0U;
+    // The manifest of a chunk or patch pack: it lists only the assets of its own pack, so its
+    // default map and the dependencies of its assets may live in another pack of the set, and
+    // the set checks them once every pack is mounted. A base pack's manifest is complete.
+    bool partial = false;
     kb::project::ProjectDescriptor descriptor{};
     kb::project::ProjectSettings settings{};
     std::vector<RuntimeAssetManifestEntry> assets;
     std::vector<RuntimeAuxiliaryFileEntry> auxiliaryFiles;
-
+    // Tombstones, only in a partial manifest: the assets (by id) and auxiliary files (by path) a
+    // patch takes out of the packs mounted before it. They are part of the manifest block, so the
+    // pack's seal signs them like every other entry. A removed asset id may not be one of this
+    // manifest's assets, nor a removed file path one of its auxiliary files; a removed file's path
+    // may be an asset's here, when a file became an asset.
+    std::vector<AssetId> removedAssets;
+    std::vector<std::string> removedAuxiliaryFiles;
 };
 
 enum class RuntimeAssetManifestStatus : std::uint8_t {

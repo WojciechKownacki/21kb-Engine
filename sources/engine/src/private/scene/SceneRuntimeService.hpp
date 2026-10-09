@@ -53,6 +53,7 @@ public:
     [[nodiscard]] static const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace(const Scene& scene) noexcept;
     [[nodiscard]] static SceneRuntimeHotPathReport HotPathReport(const Scene& scene) noexcept;
     [[nodiscard]] static std::optional<TransformComponent> InterpolatedTransform(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static std::optional<kb::math::DVec3> InterpolatedWorldTranslation(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static std::span<const SceneEntity> TransformRenderProxyUpdateEntities(const Scene& scene) noexcept;
     [[nodiscard]] static std::span<const WorldTransformAffine3x4> TransformRenderProxyWorldAffine3x4(const Scene& scene) noexcept;
     [[nodiscard]] static std::span<const SceneEntity> RenderProxyUpdateEntities(const Scene& scene) noexcept;

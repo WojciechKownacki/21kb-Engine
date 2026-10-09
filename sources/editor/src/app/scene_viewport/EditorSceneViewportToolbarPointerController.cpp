@@ -1,5 +1,6 @@
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
 
+#include "app/EditorSceneLifecycleGuard.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
@@ -220,6 +221,18 @@ bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const Editor
     }
     if (PointInRect(toolbar.rotationSnapButton, x, y)) {
         preview.ToggleToolbarDropdown(EditorViewportToolbarDropdown::RotationSnap);
+        sceneViewport_.RequestPresent();
+        return true;
+    }
+    if (sceneContext_.InPrefabEditMode() && PointInRect(toolbar.prefabSaveButton, x, y)) {
+        preview.CloseToolbarDropdown();
+        static_cast<void>(sceneContext_.SavePrefabEditMode());
+        sceneViewport_.RequestPresent();
+        return true;
+    }
+    if (sceneContext_.InPrefabEditMode() && PointInRect(toolbar.prefabCloseButton, x, y)) {
+        preview.CloseToolbarDropdown();
+        static_cast<void>(EditorSceneLifecycleGuard::LeavePrefabEditMode(GetActiveWindow(), sceneContext_, L"closing it"));
         sceneViewport_.RequestPresent();
         return true;
     }

@@ -1,6 +1,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneIterationService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/transform/SceneTransformHierarchySystem.hpp"
 #include "scene/components/SceneComponentIteration.hpp"
 
 #include <algorithm>
@@ -19,6 +20,7 @@ void ForEachUpdatedMeshRendererRenderProxyImpl(
     }
 
     const SceneState& state = SceneAccess::State(scene);
+    EnsureSceneTransformRenderProxyLists(state);
     const std::span<const std::size_t> proxyIndices = visibleOnly
         ? std::span<const std::size_t>{ state.transformRenderProxyVisibleMeshRendererIndices }
         : std::span<const std::size_t>{ state.transformRenderProxyMeshRendererIndices };
@@ -44,7 +46,7 @@ void SceneIterationService::ForEachMeshRenderer(const Scene& scene, MeshRenderer
         state.world,
         state.components.TransformComponentId(),
         state.components.MeshRendererComponentId(),
-        state.meshRendererIterationQuery,
+        state.ComponentIterationQueries(),
         visitor,
         context);
 }
@@ -56,7 +58,7 @@ void SceneIterationService::ForEachVisibleMeshRenderer(const Scene& scene, MeshR
         state.components.TransformComponentId(),
         state.components.VisibilityComponentId(),
         state.components.MeshRendererComponentId(),
-        state.visibleMeshRendererIterationQuery,
+        state.ComponentIterationQueries(),
         visitor,
         context);
 }

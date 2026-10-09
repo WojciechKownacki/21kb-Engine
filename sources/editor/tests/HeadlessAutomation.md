@@ -155,6 +155,21 @@ scenario-local aliases.
 | `attach_script` | `entity`, `asset` |
 | `open_asset` | `asset` alias or virtual path |
 | `new_scene`, `reload_scene` | none |
+| `world_convert_scene` | optional `cell_size` (metres, default 128); converts the saved scene being edited into `<scene>.21kbworld` with one file per object and opens it |
+| `open_world` | project-relative `path` of a `.21kbworld`; opens it with only its always-loaded objects |
+| `world_load_region`, `world_unload_region` | integer `min_x`, `min_z`, `max_x`, `max_z` cell coordinates (inclusive); unloading keeps unsaved edits for the next save |
+| `world_load_near_camera`, `world_load_all`, `world_unload_all` | none; the World menu's region commands |
+| `world_build` | none; saves pending edits and builds the open world's cells and HLOD proxies |
+| `world_set_grid_visible` | `visible`; shows or hides the cell grid overlay |
+| `world_declare_data_layer` | `name`; optional `initially_active` (default `true`) |
+| `world_bind_object` | result `id`, `name` of a loaded world object |
+| `world_cycle_layer`, `world_toggle_always_loaded` | `entity`; the World menu's selection commands |
+| `assert_world` | optional `open` (default `true`), `loaded_objects`, `loaded_cells`, `occupied_cells`, `grid_lines`, `object_files` |
+| `assert_world_object` | `entity` or `name`; optional `layer`, `always_loaded`, `loaded`, `x`, `z` |
+| `assert_world_build` | project-relative world `path`; optional `cells`, `hlods`, `persistent`, `layered` counts read from the built cell index |
+| `assert_world_build_matches_tools` | project-relative world `path`; rebuilds it from a copy of the project's content with the build kb_cli and kb_cooker run and requires byte-identical cells, index and HLOD proxies |
+| `assign_world` | `entity` with a Content Instance, `world` alias or virtual path; places the partitioned world through that component |
+| `assert_world_cell` | world owner `entity`, `state` (`unloaded`, `loading`, `loaded`, `unloading`, `failed`), integer `x`,`z` or `persistent`; optional `layer`, `hlod_visible`, `timeout_ms` (keeps Play mode ticking until the state arrives) |
 | `save_scene`, `open_scene` | optional `path`; `save_scene` also accepts a positive `max_ms` budget |
 | `advance_autosave` | positive `seconds`; advances the production autosave clock and requires a dirty scene to be persisted with a visible success notification |
 | `undo`, `redo` | optional `restore_entity` alias refreshed from the selected restored entity |
@@ -173,6 +188,8 @@ scenario-local aliases.
 | `capture_screenshot_matrix` | `panel`, `checkpoint`; captures `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, or `animator_editor` through production docked and floating renderers. Every invocation writes six checked BMPs: 1920x1080, 1366x768, and a 1280x720 logical client at 150% DPI (a 1920x1080 bitmap), each in both layouts. |
 | `verify_viewport_host_lifecycle` | none; renders the real native viewport child plus, when an Animator Controller asset is open, the Animator Editor preview surface (the shared host-surface mechanism keyed by `panel.id` used by all three animation editors). Verifies over every host surface registered for the window that minimize, application deactivation, DPI transition, resize/move, and removing the panel leave no viewport overlay visible over its host, and that an owned overlay popup (scene viewport toolbar dropdown) shown through the production paint path is hidden by the `WM_ACTIVATEAPP` deactivation path and restored by the repaint after reactivation. |
 | `capture_runtime` | `checkpoint`; optional `require_non_uniform`; requires Play Mode and writes a PNG from the production GPU readback path |
+| `capture_scene_viewport` | `checkpoint`; renders the Scene panel's viewport with its own camera and present settings (editor overlays included) on the GPU and reads it back to a PNG |
+| `assert_capture_color_difference` | `with`, `without` capture checkpoints, `color` `[r, g, b]` (0..255); optional `tolerance` per channel (default 48) and `min_pixels` (default 100); counts pixels that differ and show the color in `with` |
 | `assert_capture_difference` | `before`, `after` capture checkpoints; requires equal dimensions and at least 100 changed pixels |
 | `set_animator_debug_target` | `target`: `preview` or a live entity alias using the open Animator Controller |
 | `assert_animator_debug_snapshot` | `target`: `preview` or entity alias; optional `minimum_layers`, `minimum_bones` |

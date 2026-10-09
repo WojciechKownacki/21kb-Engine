@@ -4,9 +4,11 @@
 #include "engine/assets/TerrainAsset.hpp"
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace kb::assets::bake {
@@ -95,6 +97,8 @@ std::string_view ToString(RuntimeAssetPackStatus status) noexcept {
     case RuntimeAssetPackStatus::ArtifactCorrupt: return "ArtifactCorrupt";
     case RuntimeAssetPackStatus::SourceCorrupt: return "SourceCorrupt";
     case RuntimeAssetPackStatus::NotMounted: return "NotMounted";
+    case RuntimeAssetPackStatus::PackSetInvalid: return "PackSetInvalid";
+    case RuntimeAssetPackStatus::PackSetBaseMismatch: return "PackSetBaseMismatch";
     }
     return "Unknown";
 }
@@ -102,125 +106,403 @@ std::string_view ToString(RuntimeAssetPackStatus status) noexcept {
 RuntimeAssetPackStatus RuntimeAssetPack::Mount(
     const std::filesystem::path& path,
     const BakeTargetProfile& profile,
-    AssetPackAccess access) {
-    Unmount();
-    if (reader_.Mount(path, access) != AssetPackReadStatus::Success) {
-        return RuntimeAssetPackStatus::ContainerRejected;
-    }
-    return FinishMount(profile);
+    AssetPackAccess access,
+    const AssetPackTrust& trust) {
+    const std::array<RuntimeAssetPackMount, 1U> base{ RuntimeAssetPackMount{ .path = path } };
+    return MountSet(base, profile, access, trust);
 }
 
 RuntimeAssetPackStatus RuntimeAssetPack::MountMemory(
     std::span<const std::uint8_t> bytes,
-    const BakeTargetProfile& profile) {
+    const BakeTargetProfile& profile,
+    const AssetPackTrust& trust) {
     Unmount();
-    if (reader_.MountMemory(bytes) != AssetPackReadStatus::Success) {
+    refusedContainer_ = 0U;
+    Container& container = containers_.emplace_back();
+    container.reader = std::make_unique<AssetPackReader>();
+    container.readMutex = std::make_unique<std::mutex>();
+    containerStatus_ = container.reader->MountMemory(bytes, trust);
+    if (containerStatus_ != AssetPackReadStatus::Success) {
+        Unmount();
         return RuntimeAssetPackStatus::ContainerRejected;
     }
-    return FinishMount(profile);
+    const std::array<RuntimeAssetPackMount, 1U> base{ RuntimeAssetPackMount{} };
+    return FinishMount(base, profile);
 }
 
-RuntimeAssetPackStatus RuntimeAssetPack::FinishMount(const BakeTargetProfile& profile) {
-    const auto refuse = [this](RuntimeAssetPackStatus status) {
-        Unmount();
-        return status;
-    };
-    if (!reader_.MatchesTargetProfile(profile)) {
-        return refuse(RuntimeAssetPackStatus::ProfileMismatch);
+RuntimeAssetPackStatus RuntimeAssetPack::MountSet(
+    std::span<const RuntimeAssetPackMount> packs,
+    const BakeTargetProfile& profile,
+    AssetPackAccess access,
+    const AssetPackTrust& trust) {
+    Unmount();
+    refusedContainer_ = 0U;
+    if (packs.empty() || packs.size() > kMaxAssetPackSetPacks) {
+        return RuntimeAssetPackStatus::PackSetInvalid;
+    }
+    containers_.reserve(packs.size());
+    for (std::size_t index = 0U; index < packs.size(); ++index) {
+        Container& container = containers_.emplace_back();
+        container.path = packs[index].path;
+        container.reader = std::make_unique<AssetPackReader>();
+        container.readMutex = std::make_unique<std::mutex>();
+        // A pack with its own content key gets it unwrapped with the release's key; one that
+        // does not unwrap is a key for another release (or an altered one).
+        AssetPackTrust packTrust = trust;
+        if (packs[index].wrappedContentKey.has_value()) {
+            kb::security::AeadKey packKey{};
+            if (!trust.contentKey.has_value() ||
+                !UnwrapAssetPackContentKey(*trust.contentKey, *packs[index].wrappedContentKey, packKey)) {
+                Unmount();
+                containerStatus_ = trust.contentKey.has_value() ? AssetPackReadStatus::ContentKeyMismatch
+                                                                : AssetPackReadStatus::ContentKeyMissing;
+                refusedContainer_ = static_cast<std::uint32_t>(index);
+                return RuntimeAssetPackStatus::ContainerRejected;
+            }
+            packTrust.contentKey = packKey;
+        }
+        containerStatus_ = container.reader->Mount(packs[index].path, access, packTrust);
+        if (containerStatus_ != AssetPackReadStatus::Success) {
+            Unmount();
+            refusedContainer_ = static_cast<std::uint32_t>(index);
+            return RuntimeAssetPackStatus::ContainerRejected;
+        }
+    }
+    return FinishMount(packs, profile);
+}
+
+RuntimeAssetPackStatus RuntimeAssetPack::MountSetIndex(
+    const std::filesystem::path& indexPath,
+    const BakeTargetProfile& profile,
+    AssetPackAccess access,
+    const AssetPackTrust& trust) {
+    Unmount();
+    refusedContainer_ = 0U;
+    AssetPackSetIndex index{};
+    if (ReadAssetPackSetIndex(indexPath, index) != AssetPackSetStatus::Success) {
+        return RuntimeAssetPackStatus::PackSetInvalid;
+    }
+    std::vector<RuntimeAssetPackMount> packs;
+    packs.reserve(index.packs.size());
+    for (const AssetPackSetEntry& entry : index.packs) {
+        packs.push_back(RuntimeAssetPackMount{
+            .path = ResolveAssetPackSetPath(indexPath, entry.path),
+            .role = entry.role,
+            .label = entry.label,
+            .patchLevel = entry.patchLevel,
+            .wrappedContentKey = entry.wrappedContentKey,
+        });
+    }
+    return MountSet(packs, profile, access, trust);
+}
+
+RuntimeAssetPackStatus RuntimeAssetPack::ValidateContainer(Container& container, const BakeTargetProfile& profile) {
+    AssetPackReader& reader = *container.reader;
+    if (!reader.MatchesTargetProfile(profile)) {
+        return RuntimeAssetPackStatus::ProfileMismatch;
     }
 
     const AssetPackArtifactEntry* manifestArtifact = nullptr;
-    for (const AssetPackArtifactEntry& artifact : reader_.Artifacts()) {
+    for (const AssetPackArtifactEntry& artifact : reader.Artifacts()) {
         if (artifact.assetTypeId != kRuntimeManifestAssetTypeId) {
             continue;
         }
         if (manifestArtifact != nullptr) {
-            return refuse(RuntimeAssetPackStatus::ManifestDuplicate);
+            return RuntimeAssetPackStatus::ManifestDuplicate;
         }
         manifestArtifact = &artifact;
     }
     if (manifestArtifact == nullptr) {
-        return refuse(RuntimeAssetPackStatus::ManifestMissing);
+        return RuntimeAssetPackStatus::ManifestMissing;
     }
     if (manifestArtifact->blocks.size() != 1U) {
-        return refuse(RuntimeAssetPackStatus::ManifestCorrupt);
+        return RuntimeAssetPackStatus::ManifestCorrupt;
     }
     std::vector<std::uint8_t> manifestBytes;
-    if (reader_.ReadBlock(*manifestArtifact, kBakedAssetPrimaryBlockName, manifestBytes) !=
+    if (reader.ReadBlock(*manifestArtifact, kBakedAssetPrimaryBlockName, manifestBytes) !=
         AssetPackReadStatus::Success) {
-        return refuse(RuntimeAssetPackStatus::ManifestCorrupt);
+        return RuntimeAssetPackStatus::ManifestCorrupt;
     }
     RuntimeAssetManifest manifest{};
+    // A base pack's manifest is complete; a chunk's or a patch's lists only its own pack.
+    const bool partialExpected = reader.Header().role != AssetPackRole::Base;
     if (DecodeRuntimeAssetManifest(manifestBytes, manifest) != RuntimeAssetManifestStatus::Success ||
-        manifest.targetProfileId != reader_.Header().targetProfileId ||
-        manifest.targetProfileHash != reader_.Header().targetProfileHash) {
-        return refuse(RuntimeAssetPackStatus::ManifestCorrupt);
+        manifest.targetProfileId != reader.Header().targetProfileId ||
+        manifest.targetProfileHash != reader.Header().targetProfileHash ||
+        manifest.partial != partialExpected) {
+        return RuntimeAssetPackStatus::ManifestCorrupt;
     }
 
     std::map<AssetBakeDigest, const AssetPackArtifactEntry*> artifactsByDigest;
-    for (const AssetPackArtifactEntry& artifact : reader_.Artifacts()) {
+    for (const AssetPackArtifactEntry& artifact : reader.Artifacts()) {
         artifactsByDigest.emplace(artifact.key, &artifact);
     }
     std::set<AssetBakeDigest> referenced;
-    std::set<std::uint64_t> assetIds;
     for (const RuntimeAssetManifestEntry& asset : manifest.assets) {
-        assetIds.insert(asset.id.value);
         if (!ValidateAssetArtifactShape(asset, profile)) {
-            return refuse(RuntimeAssetPackStatus::ReferenceTypeMismatch);
+            return RuntimeAssetPackStatus::ReferenceTypeMismatch;
         }
+        // An asset's artifacts travel with it: they lie in the same pack as its manifest entry,
+        // so replacing the entry (a patch) replaces exactly its bytes.
         for (const RuntimeArtifactReference& reference : asset.artifacts) {
             const auto artifact = artifactsByDigest.find(reference.digest);
             if (artifact == artifactsByDigest.end()) {
-                return refuse(RuntimeAssetPackStatus::ReferenceMissing);
+                return RuntimeAssetPackStatus::ReferenceMissing;
             }
             if (artifact->second->assetTypeId != ExpectedArtifactType(reference.encoding)) {
-                return refuse(RuntimeAssetPackStatus::ReferenceTypeMismatch);
+                return RuntimeAssetPackStatus::ReferenceTypeMismatch;
             }
             referenced.insert(reference.digest);
         }
     }
-    for (const RuntimeAssetManifestEntry& asset : manifest.assets) {
-        for (const AssetId dependency : asset.dependencies) {
-            if (!assetIds.contains(dependency.value)) {
-                return refuse(RuntimeAssetPackStatus::DependencyMissing);
-            }
+    // Dependencies are checked once the whole set is merged: a base may depend on content its
+    // chunks carry, and a chunk on content of the base.
+    if (!manifest.partial) {
+        const auto defaultMap = std::ranges::find(
+            manifest.assets, manifest.settings.defaultMap, &RuntimeAssetManifestEntry::virtualPath);
+        if (defaultMap == manifest.assets.end()) {
+            return RuntimeAssetPackStatus::DependencyMissing;
         }
-    }
-    const auto defaultMap = std::ranges::find(
-        manifest.assets, manifest.settings.defaultMap, &RuntimeAssetManifestEntry::virtualPath);
-    if (defaultMap == manifest.assets.end()) {
-        return refuse(RuntimeAssetPackStatus::DependencyMissing);
-    }
-    if (defaultMap->type != "Scene" || !defaultMap->runtimeLoadable) {
-        return refuse(RuntimeAssetPackStatus::ReferenceTypeMismatch);
+        if (defaultMap->type != "Scene" || !defaultMap->runtimeLoadable) {
+            return RuntimeAssetPackStatus::ReferenceTypeMismatch;
+        }
     }
     for (const RuntimeAuxiliaryFileEntry& file : manifest.auxiliaryFiles) {
         const auto artifact = artifactsByDigest.find(file.artifactDigest);
         if (artifact == artifactsByDigest.end()) {
-            return refuse(RuntimeAssetPackStatus::ReferenceMissing);
+            return RuntimeAssetPackStatus::ReferenceMissing;
         }
         if (artifact->second->assetTypeId != kSourceAssetTypeId) {
-            return refuse(RuntimeAssetPackStatus::ReferenceTypeMismatch);
+            return RuntimeAssetPackStatus::ReferenceTypeMismatch;
         }
         referenced.insert(file.artifactDigest);
     }
-    for (const AssetPackArtifactEntry& artifact : reader_.Artifacts()) {
+    for (const AssetPackArtifactEntry& artifact : reader.Artifacts()) {
         if (&artifact == manifestArtifact) {
             continue;
         }
         if (!referenced.contains(artifact.key)) {
-            return refuse(RuntimeAssetPackStatus::OrphanArtifact);
+            return RuntimeAssetPackStatus::OrphanArtifact;
+        }
+    }
+    container.manifest = std::move(manifest);
+    return RuntimeAssetPackStatus::Success;
+}
+
+RuntimeAssetPackStatus RuntimeAssetPack::FinishMount(
+    std::span<const RuntimeAssetPackMount> expected,
+    const BakeTargetProfile& profile) {
+    std::uint32_t current = 0U;
+    const auto refuse = [this, &current](RuntimeAssetPackStatus status) {
+        Unmount();
+        refusedContainer_ = current;
+        return status;
+    };
+    if (expected.size() != containers_.size()) {
+        return refuse(RuntimeAssetPackStatus::PackSetInvalid);
+    }
+
+    // What every pack says about itself, in its sealed header, must be what the set expects of
+    // it, and the order must be the set's: the base, the chunks, the patches in ascending level.
+    const AssetBakeDigest baseIdentity = containers_.front().reader->CatalogIdentity();
+    bool seenPatch = false;
+    std::uint32_t previousPatchLevel = 0U;
+    for (current = 0U; current < containers_.size(); ++current) {
+        const AssetPackHeader& header = containers_[current].reader->Header();
+        const RuntimeAssetPackMount& mount = expected[current];
+        if (header.role != mount.role || (current == 0U) != (header.role == AssetPackRole::Base) ||
+            header.patchLevel != mount.patchLevel ||
+            (header.role != AssetPackRole::Base && header.label != mount.label)) {
+            return refuse(RuntimeAssetPackStatus::PackSetInvalid);
+        }
+        if (header.role == AssetPackRole::Chunk && seenPatch) {
+            return refuse(RuntimeAssetPackStatus::PackSetInvalid);
+        }
+        if (header.role == AssetPackRole::Patch) {
+            if (seenPatch && header.patchLevel <= previousPatchLevel) {
+                return refuse(RuntimeAssetPackStatus::PackSetInvalid);
+            }
+            seenPatch = true;
+            previousPatchLevel = header.patchLevel;
+        }
+        if (current != 0U && header.baseIdentity != baseIdentity) {
+            return refuse(RuntimeAssetPackStatus::PackSetBaseMismatch);
+        }
+        if (const RuntimeAssetPackStatus status = ValidateContainer(containers_[current], profile);
+            status != RuntimeAssetPackStatus::Success) {
+            return refuse(status);
         }
     }
 
-    manifest_ = std::move(manifest);
+    // Merge, in mount order. An entry is a slot that a patch may empty; slots are compacted at
+    // the end.
+    struct Slot {
+        const RuntimeAssetManifestEntry* entry = nullptr;
+        std::uint32_t container = 0U;
+    };
+    struct FileSlot {
+        const RuntimeAuxiliaryFileEntry* entry = nullptr;
+        std::uint32_t container = 0U;
+    };
+    std::vector<Slot> slots;
+    std::vector<FileSlot> fileSlots;
+    std::unordered_map<std::uint64_t, std::size_t> slotById;
+    std::unordered_map<std::string, std::size_t> slotByPath;
+    std::unordered_map<std::string, std::size_t> fileSlotByPath;
+    const RuntimeAssetManifest* settingsSource = &containers_.front().manifest;
+    for (current = 0U; current < containers_.size(); ++current) {
+        const Container& container = containers_[current];
+        const bool patch = container.reader->Header().role == AssetPackRole::Patch;
+        if (patch) {
+            settingsSource = &container.manifest;
+        }
+        // A patch's tombstones take assets and files out of the packs before it; each must name
+        // something those packs hold. Only a patch may carry them.
+        if (!patch && (!container.manifest.removedAssets.empty() || !container.manifest.removedAuxiliaryFiles.empty())) {
+            return refuse(RuntimeAssetPackStatus::PackSetInvalid);
+        }
+        for (const AssetId removed : container.manifest.removedAssets) {
+            const auto byId = slotById.find(removed.value);
+            if (byId == slotById.end()) {
+                return refuse(RuntimeAssetPackStatus::PackSetInvalid);
+            }
+            slotByPath.erase(slots[byId->second].entry->virtualPath);
+            slots[byId->second].entry = nullptr;
+            slotById.erase(byId);
+        }
+        for (const std::string& removed : container.manifest.removedAuxiliaryFiles) {
+            const auto existing = fileSlotByPath.find(removed);
+            if (existing == fileSlotByPath.end()) {
+                return refuse(RuntimeAssetPackStatus::PackSetInvalid);
+            }
+            fileSlots[existing->second].entry = nullptr;
+            fileSlotByPath.erase(existing);
+        }
+        for (const RuntimeAssetManifestEntry& asset : container.manifest.assets) {
+            const auto byId = slotById.find(asset.id.value);
+            const auto byPath = slotByPath.find(asset.virtualPath);
+            if (!patch && (byId != slotById.end() || byPath != slotByPath.end())) {
+                // A chunk adds content; two packs claiming one asset is a split gone wrong.
+                return refuse(RuntimeAssetPackStatus::ManifestDuplicate);
+            }
+            if (byId != slotById.end()) {
+                slotByPath.erase(slots[byId->second].entry->virtualPath);
+                slots[byId->second].entry = nullptr;
+                slotById.erase(byId);
+            }
+            if (const auto again = slotByPath.find(asset.virtualPath); again != slotByPath.end()) {
+                slotById.erase(slots[again->second].entry->id.value);
+                slots[again->second].entry = nullptr;
+                slotByPath.erase(again);
+            }
+            slotById.emplace(asset.id.value, slots.size());
+            slotByPath.emplace(asset.virtualPath, slots.size());
+            slots.push_back(Slot{ &asset, current });
+        }
+        for (const RuntimeAuxiliaryFileEntry& file : container.manifest.auxiliaryFiles) {
+            const auto existing = fileSlotByPath.find(file.virtualPath);
+            if (existing != fileSlotByPath.end()) {
+                if (!patch) {
+                    return refuse(RuntimeAssetPackStatus::ManifestDuplicate);
+                }
+                fileSlots[existing->second].entry = nullptr;
+                fileSlotByPath.erase(existing);
+            }
+            fileSlotByPath.emplace(file.virtualPath, fileSlots.size());
+            fileSlots.push_back(FileSlot{ &file, current });
+        }
+    }
+    current = 0U;
+
+    RuntimeAssetManifest merged{};
+    merged.targetProfileId = containers_.front().manifest.targetProfileId;
+    merged.targetProfileHash = containers_.front().manifest.targetProfileHash;
+    merged.descriptor = settingsSource->descriptor;
+    merged.settings = settingsSource->settings;
+    std::vector<Slot> live;
+    live.reserve(slots.size());
+    for (const Slot& slot : slots) {
+        if (slot.entry != nullptr) {
+            live.push_back(slot);
+        }
+    }
+    std::ranges::sort(live, [](const Slot& lhs, const Slot& rhs) { return lhs.entry->id.value < rhs.entry->id.value; });
+    merged.assets.reserve(live.size());
+    std::vector<std::uint32_t> assetContainers;
+    assetContainers.reserve(live.size());
+    for (const Slot& slot : live) {
+        merged.assets.push_back(*slot.entry);
+        assetContainers.push_back(slot.container);
+    }
+    std::vector<FileSlot> liveFiles;
+    for (const FileSlot& slot : fileSlots) {
+        if (slot.entry != nullptr) {
+            liveFiles.push_back(slot);
+        }
+    }
+    std::ranges::sort(liveFiles, [](const FileSlot& lhs, const FileSlot& rhs) {
+        return lhs.entry->virtualPath < rhs.entry->virtualPath;
+    });
+    std::vector<std::uint32_t> auxiliaryContainers;
+    auxiliaryContainers.reserve(liveFiles.size());
+    for (const FileSlot& slot : liveFiles) {
+        if (slotByPath.contains(slot.entry->virtualPath)) {
+            return refuse(RuntimeAssetPackStatus::ManifestDuplicate);
+        }
+        merged.auxiliaryFiles.push_back(*slot.entry);
+        auxiliaryContainers.push_back(slot.container);
+    }
+
+    std::unordered_map<std::uint64_t, std::size_t> byId;
+    std::unordered_map<std::string, std::size_t> byPath;
+    byId.reserve(merged.assets.size());
+    byPath.reserve(merged.assets.size());
+    for (std::size_t index = 0U; index < merged.assets.size(); ++index) {
+        byId.emplace(merged.assets[index].id.value, index);
+        byPath.emplace(merged.assets[index].virtualPath, index);
+    }
+    // Dependencies and the default map are a property of the whole set: a chunk's asset may
+    // depend on the base, and a patch may bring the default map.
+    for (const RuntimeAssetManifestEntry& asset : merged.assets) {
+        for (const AssetId dependency : asset.dependencies) {
+            if (!byId.contains(dependency.value)) {
+                return refuse(RuntimeAssetPackStatus::DependencyMissing);
+            }
+        }
+    }
+    const auto defaultMap = byPath.find(merged.settings.defaultMap);
+    if (defaultMap == byPath.end()) {
+        return refuse(RuntimeAssetPackStatus::DependencyMissing);
+    }
+    if (merged.assets[defaultMap->second].type != "Scene" || !merged.assets[defaultMap->second].runtimeLoadable) {
+        return refuse(RuntimeAssetPackStatus::ReferenceTypeMismatch);
+    }
+
+    std::map<AssetBakeDigest, ArtifactOwner> artifacts;
+    for (std::uint32_t index = 0U; index < containers_.size(); ++index) {
+        for (const AssetPackArtifactEntry& artifact : containers_[index].reader->Artifacts()) {
+            artifacts.insert_or_assign(artifact.key, ArtifactOwner{ index, &artifact });
+        }
+    }
+
+    manifest_ = std::move(merged);
+    assetContainers_ = std::move(assetContainers);
+    auxiliaryContainers_ = std::move(auxiliaryContainers);
+    assetsById_ = std::move(byId);
+    assetsByPath_ = std::move(byPath);
+    artifacts_ = std::move(artifacts);
     mounted_ = true;
     return RuntimeAssetPackStatus::Success;
 }
 
 void RuntimeAssetPack::Unmount() noexcept {
-    reader_.Unmount();
+    containers_.clear();
     manifest_ = RuntimeAssetManifest{};
+    assetContainers_.clear();
+    auxiliaryContainers_.clear();
+    assetsById_.clear();
+    assetsByPath_.clear();
+    artifacts_.clear();
     mounted_ = false;
 }
 
@@ -236,18 +518,32 @@ const RuntimeAssetManifestEntry* RuntimeAssetPack::FindAsset(AssetId id) const n
     if (!mounted_) {
         return nullptr;
     }
-    const auto found = std::ranges::find(manifest_.assets, id, &RuntimeAssetManifestEntry::id);
-    return found == manifest_.assets.end() ? nullptr : &*found;
+    const auto found = assetsById_.find(id.value);
+    return found == assetsById_.end() ? nullptr : &manifest_.assets[found->second];
 }
 
 const RuntimeAssetManifestEntry* RuntimeAssetPack::FindAsset(std::string_view virtualPath) const noexcept {
     if (!mounted_) {
         return nullptr;
     }
-    const auto found = std::ranges::find_if(manifest_.assets, [virtualPath](const RuntimeAssetManifestEntry& asset) {
-        return asset.virtualPath == virtualPath;
-    });
-    return found == manifest_.assets.end() ? nullptr : &*found;
+    const auto found = assetsByPath_.find(std::string{ virtualPath });
+    return found == assetsByPath_.end() ? nullptr : &manifest_.assets[found->second];
+}
+
+std::optional<std::uint32_t> RuntimeAssetPack::AssetContainer(AssetId id) const noexcept {
+    if (!mounted_) {
+        return std::nullopt;
+    }
+    const auto found = assetsById_.find(id.value);
+    if (found == assetsById_.end()) {
+        return std::nullopt;
+    }
+    return assetContainers_[found->second];
+}
+
+const RuntimeAssetPack::ArtifactOwner* RuntimeAssetPack::FindArtifactOwner(const AssetBakeDigest& digest) const noexcept {
+    const auto found = artifacts_.find(digest);
+    return found == artifacts_.end() ? nullptr : &found->second;
 }
 
 AssetPackReadStatus RuntimeAssetPack::ReadArtifactBlock(
@@ -258,11 +554,13 @@ AssetPackReadStatus RuntimeAssetPack::ReadArtifactBlock(
     if (!mounted_) {
         return AssetPackReadStatus::NotMounted;
     }
-    std::scoped_lock lock{ readMutex_ };
-    const AssetPackArtifactEntry* artifact = reader_.FindArtifact(digest);
-    return artifact == nullptr
-        ? AssetPackReadStatus::ArtifactNotFound
-        : reader_.ReadBlock(*artifact, blockName, out);
+    const ArtifactOwner* owner = FindArtifactOwner(digest);
+    if (owner == nullptr) {
+        return AssetPackReadStatus::ArtifactNotFound;
+    }
+    Container& container = containers_[owner->container];
+    std::scoped_lock lock{ *container.readMutex };
+    return container.reader->ReadBlock(*owner->artifact, blockName, out);
 }
 
 RuntimeAssetPackStatus RuntimeAssetPack::ReadSourceFile(
@@ -272,17 +570,21 @@ RuntimeAssetPackStatus RuntimeAssetPack::ReadSourceFile(
     if (!mounted_) {
         return RuntimeAssetPackStatus::NotMounted;
     }
-    std::scoped_lock lock{ readMutex_ };
-    const AssetPackArtifactEntry* artifact = reader_.FindArtifact(digest);
-    if (artifact == nullptr) {
+    const ArtifactOwner* owner = FindArtifactOwner(digest);
+    if (owner == nullptr) {
         return RuntimeAssetPackStatus::ReferenceMissing;
     }
-    if (artifact->assetTypeId != kSourceAssetTypeId) {
+    if (owner->artifact->assetTypeId != kSourceAssetTypeId) {
         return RuntimeAssetPackStatus::ReferenceTypeMismatch;
     }
     std::vector<std::uint8_t> blob;
-    if (reader_.ReadBlock(*artifact, kBakedAssetPrimaryBlockName, blob) != AssetPackReadStatus::Success) {
-        return RuntimeAssetPackStatus::SourceCorrupt;
+    {
+        Container& container = containers_[owner->container];
+        std::scoped_lock lock{ *container.readMutex };
+        if (container.reader->ReadBlock(*owner->artifact, kBakedAssetPrimaryBlockName, blob) !=
+            AssetPackReadStatus::Success) {
+            return RuntimeAssetPackStatus::SourceCorrupt;
+        }
     }
     std::span<const std::uint8_t> source;
     if (!DecodeRuntimeSourceBlob(blob, source)) {
@@ -297,24 +599,47 @@ RuntimeAssetPackStatus RuntimeAssetPack::ReadAssetPayload(
     RuntimeArtifactEncoding encoding,
     std::string_view qualifier,
     RuntimeAssetPayload& out) {
+    return ReadPayload(assetId, encoding, qualifier, nullptr, out);
+}
+
+RuntimeAssetPackStatus RuntimeAssetPack::ReadAssetPayloadBlocks(
+    AssetId assetId,
+    RuntimeArtifactEncoding encoding,
+    std::string_view qualifier,
+    const std::function<bool(const AssetPackBlockEntry&)>& include,
+    RuntimeAssetPayload& out) {
+    return ReadPayload(assetId, encoding, qualifier, &include, out);
+}
+
+RuntimeAssetPackStatus RuntimeAssetPack::ReadPayload(
+    AssetId assetId,
+    RuntimeArtifactEncoding encoding,
+    std::string_view qualifier,
+    const std::function<bool(const AssetPackBlockEntry&)>* include,
+    RuntimeAssetPayload& out) {
     if (!mounted_) {
         return RuntimeAssetPackStatus::NotMounted;
     }
-    const RuntimeAssetManifestEntry* asset = FindAsset(assetId);
-    if (asset == nullptr) {
+    const auto found = assetsById_.find(assetId.value);
+    if (found == assetsById_.end()) {
         return RuntimeAssetPackStatus::ReferenceMissing;
     }
+    const RuntimeAssetManifestEntry& asset = manifest_.assets[found->second];
+    Container& container = containers_[assetContainers_[found->second]];
     const auto reference = std::ranges::find_if(
-        asset->artifacts,
+        asset.artifacts,
         [encoding, qualifier](const RuntimeArtifactReference& candidate) {
             return candidate.encoding == encoding && candidate.qualifier == qualifier;
         });
-    if (reference == asset->artifacts.end()) {
+    if (reference == asset.artifacts.end()) {
         return RuntimeAssetPackStatus::ReferenceMissing;
     }
 
-    std::scoped_lock lock{ readMutex_ };
-    const AssetPackArtifactEntry* artifact = reader_.FindArtifact(reference->digest);
+    std::scoped_lock lock{ *container.readMutex };
+    // The asset's artifacts lie in the pack that supplies its manifest entry; a later pack that
+    // happens to hold the same digest holds the same bytes, but the owner is the one validated.
+    const AssetPackReader& reader = *container.reader;
+    const AssetPackArtifactEntry* artifact = reader.FindArtifact(reference->digest);
     if (artifact == nullptr || artifact->assetTypeId != ExpectedArtifactType(encoding)) {
         return artifact == nullptr
             ? RuntimeAssetPackStatus::ReferenceMissing
@@ -333,19 +658,24 @@ RuntimeAssetPackStatus RuntimeAssetPack::ReadAssetPayload(
             .alignmentBytes = indexedBlock.alignmentBytes,
         };
         const auto fragment = std::ranges::find_if(
-            reader_.Fragments(),
+            reader.Fragments(),
             [&indexedBlock](const AssetPackFragmentEntry& candidate) {
                 return candidate.offset == indexedBlock.offset &&
                     candidate.bytes == indexedBlock.storedBytes;
             });
-        if (fragment != reader_.Fragments().end()) {
+        if (fragment != reader.Fragments().end()) {
             block.fragment = BakedAssetBlockFragment{
                 .boundsMin = fragment->boundsMin,
                 .boundsMax = fragment->boundsMax,
                 .clusterCount = fragment->clusterCount,
             };
         }
-        if (reader_.ReadBlock(*artifact, indexedBlock.name, block.bytes) !=
+        const bool primary = indexedBlock.name == kBakedAssetPrimaryBlockName;
+        if (include != nullptr && !primary && !(*include)(indexedBlock)) {
+            payload.blocks.push_back(std::move(block));
+            continue;
+        }
+        if (container.reader->ReadBlock(*artifact, indexedBlock.name, block.bytes) !=
             AssetPackReadStatus::Success) {
             return RuntimeAssetPackStatus::ArtifactCorrupt;
         }
@@ -355,7 +685,7 @@ RuntimeAssetPackStatus RuntimeAssetPack::ReadAssetPayload(
                 !DecodeRuntimeSourceBlob(block.bytes, source)) {
                 return RuntimeAssetPackStatus::SourceCorrupt;
             }
-            if (HashBakeBytes(source) != asset->contentHash) {
+            if (HashBakeBytes(source) != asset.contentHash) {
                 return RuntimeAssetPackStatus::SourceCorrupt;
             }
             block.bytes.assign(source.begin(), source.end());
@@ -373,11 +703,12 @@ RuntimeAssetPackStatus RuntimeAssetPack::ReadAuxiliaryFile(
     if (!mounted_) {
         return RuntimeAssetPackStatus::NotMounted;
     }
-    const auto file = std::ranges::find(
+    const auto file = std::ranges::lower_bound(
         manifest_.auxiliaryFiles,
         virtualPath,
-        &RuntimeAuxiliaryFileEntry::virtualPath);
-    if (file == manifest_.auxiliaryFiles.end()) {
+        {},
+        [](const RuntimeAuxiliaryFileEntry& entry) -> std::string_view { return entry.virtualPath; });
+    if (file == manifest_.auxiliaryFiles.end() || file->virtualPath != virtualPath) {
         return RuntimeAssetPackStatus::ReferenceMissing;
     }
     const RuntimeAssetPackStatus status = ReadSourceFile(file->artifactDigest, out);
@@ -391,12 +722,136 @@ RuntimeAssetPackStatus RuntimeAssetPack::ReadAuxiliaryFile(
     return RuntimeAssetPackStatus::Success;
 }
 
+AssetPackReadStatus RuntimeAssetPack::LocateArtifactBlock(
+    const AssetBakeDigest& digest,
+    std::string_view blockName,
+    RuntimeAssetBlockLocation& out) const {
+    out = {};
+    if (!mounted_) {
+        return AssetPackReadStatus::NotMounted;
+    }
+    const ArtifactOwner* owner = FindArtifactOwner(digest);
+    if (owner == nullptr) {
+        return AssetPackReadStatus::ArtifactNotFound;
+    }
+    const AssetPackBlockEntry* block = containers_[owner->container].reader->FindBlock(*owner->artifact, blockName);
+    if (block == nullptr) {
+        return AssetPackReadStatus::BlockNotFound;
+    }
+    out = RuntimeAssetBlockLocation{ owner->container, block };
+    return AssetPackReadStatus::Success;
+}
+
+AssetPackReadStatus RuntimeAssetPack::DecodeStoredArtifactBlock(
+    const RuntimeAssetBlockLocation& location,
+    std::vector<std::uint8_t>& bytes) const {
+    if (!mounted_) {
+        bytes.clear();
+        return AssetPackReadStatus::NotMounted;
+    }
+    if (location.container >= containers_.size() || location.block == nullptr) {
+        bytes.clear();
+        return AssetPackReadStatus::BlockNotFound;
+    }
+    return containers_[location.container].reader->DecodeStoredBlock(*location.block, bytes);
+}
+
+namespace {
+
+[[nodiscard]] const AssetPackHeader& EmptyHeader() noexcept {
+    static const AssetPackHeader header{};
+    return header;
+}
+
+[[nodiscard]] const std::filesystem::path& EmptyPath() noexcept {
+    static const std::filesystem::path path{};
+    return path;
+}
+
+[[nodiscard]] const kb::security::Sha512Digest& EmptyDigest() noexcept {
+    static const kb::security::Sha512Digest digest{};
+    return digest;
+}
+
+[[nodiscard]] const AssetBakeDigest& EmptyIdentity() noexcept {
+    static const AssetBakeDigest identity{};
+    return identity;
+}
+
+} // namespace
+
 const AssetPackHeader& RuntimeAssetPack::Header() const noexcept {
-    return reader_.Header();
+    return ContainerHeader(0U);
 }
 
 std::span<const AssetPackArtifactEntry> RuntimeAssetPack::Artifacts() const noexcept {
-    return reader_.Artifacts();
+    return ContainerArtifacts(0U);
+}
+
+AssetPackReadStatus RuntimeAssetPack::ContainerStatus() const noexcept {
+    return containerStatus_;
+}
+
+std::uint32_t RuntimeAssetPack::RefusedContainer() const noexcept {
+    return refusedContainer_;
+}
+
+const AssetPackSeal* RuntimeAssetPack::Seal() const noexcept {
+    return ContainerSeal(0U);
+}
+
+const kb::security::Sha512Digest& RuntimeAssetPack::SealDigest() const noexcept {
+    return ContainerSealDigest(0U);
+}
+
+std::uint32_t RuntimeAssetPack::ContainerCount() const noexcept {
+    return mounted_ ? static_cast<std::uint32_t>(containers_.size()) : 0U;
+}
+
+const AssetPackHeader& RuntimeAssetPack::ContainerHeader(std::uint32_t container) const noexcept {
+    return container < containers_.size() ? containers_[container].reader->Header() : EmptyHeader();
+}
+
+std::span<const AssetPackArtifactEntry> RuntimeAssetPack::ContainerArtifacts(std::uint32_t container) const noexcept {
+    return container < containers_.size() ? containers_[container].reader->Artifacts()
+                                          : std::span<const AssetPackArtifactEntry>{};
+}
+
+const std::filesystem::path& RuntimeAssetPack::ContainerPath(std::uint32_t container) const noexcept {
+    return container < containers_.size() ? containers_[container].path : EmptyPath();
+}
+
+std::span<const std::uint8_t> RuntimeAssetPack::ContainerResidentBytes(std::uint32_t container) const noexcept {
+    return container < containers_.size() ? containers_[container].reader->ResidentBytes()
+                                          : std::span<const std::uint8_t>{};
+}
+
+const AssetPackSeal* RuntimeAssetPack::ContainerSeal(std::uint32_t container) const noexcept {
+    return container < containers_.size() ? containers_[container].reader->Seal() : nullptr;
+}
+
+const kb::security::Sha512Digest& RuntimeAssetPack::ContainerSealDigest(std::uint32_t container) const noexcept {
+    return container < containers_.size() ? containers_[container].reader->SealDigest() : EmptyDigest();
+}
+
+const AssetBakeDigest& RuntimeAssetPack::ContainerCatalogIdentity(std::uint32_t container) const noexcept {
+    return container < containers_.size() ? containers_[container].reader->CatalogIdentity() : EmptyIdentity();
+}
+
+AssetPackReadStatus RuntimeAssetPack::ReadContainerBlock(
+    std::uint32_t container,
+    const AssetPackArtifactEntry& artifact,
+    std::string_view blockName,
+    std::vector<std::uint8_t>& out) {
+    out.clear();
+    if (!mounted_) {
+        return AssetPackReadStatus::NotMounted;
+    }
+    if (container >= containers_.size()) {
+        return AssetPackReadStatus::ArtifactNotFound;
+    }
+    std::scoped_lock lock{ *containers_[container].readMutex };
+    return containers_[container].reader->ReadBlock(artifact, blockName, out);
 }
 
 } // namespace kb::assets::bake

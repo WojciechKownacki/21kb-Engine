@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
@@ -18,10 +19,12 @@ const CameraComponent* SceneComponentQueryService::TryGetCamera(const Scene& sce
 }
 
 CameraComponent* SceneComponentMutationService::TryGetCamera(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Cameras().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetCamera(Scene& scene, SceneEntity entity, const CameraComponent& camera) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         const bool hadCamera = state.componentStorage.Cameras().Has(entity);
@@ -36,6 +39,7 @@ void SceneComponentMutationService::SetCamera(Scene& scene, SceneEntity entity, 
 }
 
 void SceneComponentMutationService::RemoveCamera(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         const bool hadCamera = state.componentStorage.Cameras().Has(entity);

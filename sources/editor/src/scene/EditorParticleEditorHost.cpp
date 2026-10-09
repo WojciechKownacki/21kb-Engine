@@ -209,7 +209,7 @@ bool EditorSceneContext::TickEditorSceneParticles(float deltaSeconds) {
         std::size_t retainedCount = 0U;
         bool any = false;
         bool releasedAny = false;
-    } context{scene_.get(), &liveIds};
+    } context{scene_, &liveIds};
     const auto visit = [](kb::scene::SceneEntity entity, const kb::scene::ParticleEffectComponent& component, void* raw) {
         auto* pulse = static_cast<PulseContext*>(raw);
         if (!component.enabled || component.effectAssetId == 0U || pulse->scene == nullptr || pulse->liveIds == nullptr) {
@@ -755,6 +755,14 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
     const auto setFloat = [&](float& target) { return ParseNumber(text, floatValue) && (target = floatValue, true); };
     const auto setUInt = [&](std::uint32_t& target) { return ParseNumber(text, uintValue) && (target = uintValue, true); };
     const auto setBool = [&](bool& target) { return ParseBool(text, boolValue) && (target = boolValue, true); };
+    // After one bound of a spin range was edited, the other follows on every axis where they crossed.
+    const auto keepSpinOrdered = [](kb::math::Vec3& low, kb::math::Vec3& high, bool lowEdited) {
+        float* lows[3] = { &low.x, &low.y, &low.z };
+        float* highs[3] = { &high.x, &high.y, &high.z };
+        for (int axis = 0; axis < 3; ++axis) {
+            if (*lows[axis] > *highs[axis]) (lowEdited ? *highs[axis] : *lows[axis]) = lowEdited ? *lows[axis] : *highs[axis];
+        }
+    };
     bool parsed = false;
     bool editsSpawn = true;
     switch (row.property) {
@@ -774,6 +782,22 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
         break;
     }
     case kb::particle_editor::ParticleEditorProperty::SpawnStartSize: parsed = setFloat(spawn.startSize); break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnRotationMin:
+        parsed = ParseVec3(text, vectorValue);
+        if (parsed) { spawn.initialRotationMinDegrees = vectorValue; keepSpinOrdered(spawn.initialRotationMinDegrees, spawn.initialRotationMaxDegrees, true); }
+        break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnRotationMax:
+        parsed = ParseVec3(text, vectorValue);
+        if (parsed) { spawn.initialRotationMaxDegrees = vectorValue; keepSpinOrdered(spawn.initialRotationMinDegrees, spawn.initialRotationMaxDegrees, false); }
+        break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnAngularVelocityMin:
+        parsed = ParseVec3(text, vectorValue);
+        if (parsed) { spawn.angularVelocityMinDegrees = vectorValue; keepSpinOrdered(spawn.angularVelocityMinDegrees, spawn.angularVelocityMaxDegrees, true); }
+        break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnAngularVelocityMax:
+        parsed = ParseVec3(text, vectorValue);
+        if (parsed) { spawn.angularVelocityMaxDegrees = vectorValue; keepSpinOrdered(spawn.angularVelocityMinDegrees, spawn.angularVelocityMaxDegrees, false); }
+        break;
     case kb::particle_editor::ParticleEditorProperty::SpawnSpeedMin:
         parsed = setFloat(spawn.speedMin);
         if (parsed && spawn.speedMin > spawn.speedMax) spawn.speedMax = spawn.speedMin;

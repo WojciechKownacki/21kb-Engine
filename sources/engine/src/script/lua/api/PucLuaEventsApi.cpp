@@ -112,7 +112,10 @@ void InvokeSubscriber(const std::shared_ptr<SubscriberInvocation>& invocation, c
     lua_insert(invocation->state, errorHandlerIndex);
     PucLuaEventApi::PushEvent(invocation->state, event);
     PucLuaDebugHook::Install(invocation->state, *invocation->runtime);
-    const int status = lua_pcall(invocation->state, 1, 0, errorHandlerIndex);
+    const int status = [&] {
+        const PucLuaMemoryLimitScope memoryLimit{ invocation->state };
+        return lua_pcall(invocation->state, 1, 0, errorHandlerIndex);
+    }();
     PucLuaDebugHook::Clear(invocation->state);
     if (status != LUA_OK) {
         // Caught by ScriptEventBus::Emit's try/catch and turned into a

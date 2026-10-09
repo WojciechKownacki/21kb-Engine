@@ -119,6 +119,9 @@ enum class SceneRenderGlobalIlluminationMode : std::uint8_t {
     Ddgi,
     ProbeGrid,
     Lightmaps,
+    // Bounce light traced through a coarse voxel copy of the scene (all mesh instances as boxes), so
+    // objects outside the camera's view still light what is on screen.
+    VoxelGrid,
 };
 
 enum class SceneRenderReflectionProbeShape : std::uint8_t {
@@ -299,6 +302,22 @@ struct SceneRenderLightingConfig {
     float editorPreviewKeyLightIntensity = 0.0F;
     SceneRenderIblConfig ibl{};
     SceneRenderGlobalIlluminationMode globalIllumination = SceneRenderGlobalIlluminationMode::Disabled;
+    // Screen-space GI: bounce strength, how far (m) rays travel, and how much of the previous frame's
+    // result is kept (0 = no temporal accumulation, the raw noisy gather).
+    float giIntensity = 1.0F;
+    float giRange = 3.0F;
+    float giHistoryWeight = 0.9F;
+    // Voxel GI: edge length (m) of one voxel of the 64^3 grid centred on the camera.
+    float giVoxelSize = 0.5F;
+    // Screen-space ambient occlusion of the indirect light: strength and radius (m) of the sampled hemisphere.
+    bool ambientOcclusionEnabled = false;
+    float aoIntensity = 1.0F;
+    float aoRadius = 0.6F;
+    // Screen-space reflections of the previous frame's lit colour on smooth surfaces: strength and how far
+    // (m) a reflection ray travels.
+    bool screenSpaceReflectionsEnabled = false;
+    float ssrIntensity = 1.0F;
+    float ssrMaxDistance = 25.0F;
     std::uint32_t shadowMapSize = 1024U;
     std::uint32_t shadowCascadeCount = 4U;
     std::uint32_t shadowAtlasSize = 2048U;
@@ -306,6 +325,8 @@ struct SceneRenderLightingConfig {
     float shadowDepthBias = 0.002F;
     float shadowStrength = 0.65F;
     SceneRenderShadowFilter shadowFilter = SceneRenderShadowFilter::Pcf3x3;
+    // Width of the fade between neighbouring cascades, as a fraction of the finer cascade (0 = hard switch).
+    float shadowCascadeBlend = 0.1F;
     bool shadowsEnabled = true;
     bool stableShadowCascades = true;
     bool perLightShadowCaching = true;
@@ -316,15 +337,17 @@ struct SceneRenderLightingConfig {
 
 // Cube shadows of up to four point lights share one depth atlas: face f of light s occupies the
 // tile at column f, row s. Faces use a slightly wider than 90 degree frustum so that filtering
-// near a face edge stays inside the tile.
+// near a face edge stays inside the tile. A spot light takes a slot too but renders only column 0,
+// one frustum along its axis that covers the cone.
 struct ScenePointShadowBinding {
-    static constexpr std::uint32_t kMaxLights = 4U;
+    static constexpr std::uint32_t kMaxLights = 8U;
     static constexpr std::uint32_t kFaceCount = 6U;
     bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
     std::uint32_t lightCount = 0U;
     std::array<std::uint64_t, kMaxLights> entityId{};
     std::array<float, 4U * kMaxLights> positionRange{}; // xyz = light position, w = far plane
     std::array<float, 4U * kMaxLights> depthParams{};   // x = near plane, y = depth bias (m)
+    std::array<float, 4U * kMaxLights> spot{};          // xyz = spot axis, w = tan(half fov); w = 0 for a cube light
     std::array<float, 4U> atlas{};                      // x,y = 1 / atlas size, z = tile px, w = tan(half fov)
     float strength = 0.0F;                              // 0 = no darkening, 1 = fully dark
 
@@ -343,7 +366,7 @@ struct SceneRenderShadowMapBinding {
     std::uint32_t cascadeCount = 1U;
     std::array<float, 16U * kMaxCascades> cascadeViewProjection{};
     std::array<float, 4U * kMaxCascades> cascadeAtlas{ 0.0F, 0.0F, 1.0F, 0.0F };
-    std::array<float, 4> cascadeInfo{ 1.0F, 0.0F, 0.0F, 0.0F }; // x = count, y = edge margin (tile uv)
+    std::array<float, 4> cascadeInfo{ 1.0F, 0.0F, 0.0F, 0.0F }; // x = count, y = edge margin, z = blend width (tile uv)
 
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(depthTexture) && params[3] > 0.0F;

@@ -11,7 +11,8 @@ class EditorSceneViewportGizmoTargetResolver {
 public:
     EditorSceneViewportGizmoTargetResolver() = delete;
 
-    [[nodiscard]] static std::optional<kb::scene::Vec3> SelectedTarget(EditorSceneContext& sceneContext) noexcept;
+    // The selection's pivot in viewport space: relative to `viewportOrigin`.
+    [[nodiscard]] static std::optional<kb::scene::Vec3> SelectedTarget(EditorSceneContext& sceneContext, const kb::math::DVec3& viewportOrigin) noexcept;
 };
 
 } // namespace kb::editor

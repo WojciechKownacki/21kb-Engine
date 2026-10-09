@@ -43,6 +43,8 @@ void WriteNestedOverride(std::vector<std::uint8_t>& output, const ScenePrefabPro
     WriteUInt32(output, static_cast<std::uint32_t>(property.flag));
     WriteString(output, property.propertyPath);
     WriteString(output, property.value);
+    WriteUInt64(output, property.nodeId);
+    WriteUInt64(output, property.objectReferenceNodeId);
 }
 
 void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& node) {
@@ -53,8 +55,14 @@ void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& nod
     for (const ScenePrefabPropertyOverride& property : node.nestedPrefabOverrides) {
         WriteNestedOverride(output, property);
     }
+    WriteUInt32(output, static_cast<std::uint32_t>(node.nestedPrefabNodeIds.size()));
+    for (const std::uint64_t nodeId : node.nestedPrefabNodeIds) {
+        WriteUInt64(output, nodeId);
+    }
+    WriteUInt64(output, node.nestedPrefabContentHash);
     WriteUInt32(output, node.parentNode);
-    SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localPosition);
+    // From SceneDocument::DoubleTranslationFileVersion the local translation is stored in double precision.
+    SceneAssetPrimitiveCodec::WriteDVec3(output, node.LocalTranslation());
     SceneAssetPrimitiveCodec::WriteQuat(output, node.transform.localRotation);
     SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localScale);
     // Prefab descriptors authored against the pre-v2 visibility API can
@@ -159,6 +167,10 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
 }
 
 } // namespace
+
+std::vector<std::uint8_t> SceneAssetWriter::Encode(const SceneDocument& scene) {
+    return CanWrite(scene) ? Serialize(scene) : std::vector<std::uint8_t>{};
+}
 
 bool SceneAssetWriter::Write(const std::filesystem::path& path, const SceneDocument& scene) {
     if (path.extension() != SceneAssetFormat::Extension || !CanWrite(scene)) {

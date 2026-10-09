@@ -96,6 +96,15 @@ void EditorSceneViewportMath::MoveEntityTo(kb::scene::Scene& scene, kb::scene::S
     scene.Transforms().Set(entity, transform);
 }
 
+void EditorSceneViewportMath::MoveEntityTo(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::math::DVec3& position) {
+    scene.Transforms().SetLocalTranslation(entity, position);
+}
+
+kb::scene::Vec3 EditorSceneViewportMath::ViewportPosition(
+    const kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::math::DVec3& origin) noexcept {
+    return kb::math::RelativeTo(scene.Transforms().WorldTranslation(entity, transform), origin);
+}
+
 } // namespace kb::editor
 
 #endif

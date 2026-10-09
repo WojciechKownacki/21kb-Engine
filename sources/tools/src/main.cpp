@@ -37,12 +37,65 @@ Commands:
   mcp          Serve the commands above as MCP tools over stdio (newline-
                delimited JSON-RPC), for use from MCP-compatible clients.
                  [--project <dir>]
+  keys         Manage release signing keys. Private keys are refused inside a
+               project or a repository; keep them out of version control.
+                 generate --out <key file>
+                 public --key <key file>
+                 content-key --out <file>
+                 anchor --key <key file> --product <id> [--content-key <file>]
+                        --out <file>
+  pack         Sign (and optionally encrypt) an asset pack, or verify one;
+               inspect, recompress, split and patch packs and pack sets.
+                 sign --key <key file> [--content-key <file>] <pack.kbpack>
+                 verify [--anchor <file> | --public-key <hex>
+                        [--content-key <file>]] <pack.kbpack>
+                 info <pack.kbpack>
+                 compress [--level <0-19>] <input.kbpack> <output.kbpack>
+                 split --base <base.kbpack> --chunk <label>=<prefix>[,...]
+                       [--chunk ...] [--chunk-cells <label>=<world.21kbworld>
+                       [@<x0>:<z0>..<x1>:<z1>][#<layer>,...] ...]
+                       [--level <0-19>] [--index <file>]
+                       <cooked.kbpack>
+                 patch --current <Game.kbpackset | Game.kbpack>
+                       --patch-level <n> --output <patch.kbpack>
+                       [--label <label>] [--level <0-19>]
+                       [--current-release <dir>] <new-cook.kbpack>
+                 set-keys [--content-key <file>]
+                          [--previous-release <dir> ...] <Game.kbpackset>
+                 set-verify [--anchor <file> | --public-key <hex>]
+                            <Game.kbpackset>
+  release      Sign the manifest of a finished release directory, or verify one
+               against the trust anchor of the player it ships.
+                 sign --key <key file> --dir <dir> --product <id>
+                      --content-version <version> --release <number>
+                      [--anti-rollback]
+                 verify [--anchor <file>] <dir>
+  world        Convert a single-file scene into a partitioned world (one file
+               per object), or build a world's streaming cells.
+                 migrate --scene <file.21kbscene> --out <file.21kbworld>
+                         [--cell-size <metres>] [--project <dir>]
+                 build --world <file.21kbworld> [--project <dir>]
+               build writes the cells, the cell index and the HLOD proxies,
+               exactly as the editor and kb_cooker do.
+                 chunks --project <dir> [--exclude <prefix>[,<prefix>...]]
+               chunks prints one pack chunk rule per region of every built world.
+               A world whose file enables navigation also gets one navigation
+               mesh per cell from build.
+  navmesh      Bake a scene's navigation mesh, or describe a baked one.
+                 bake --scene <file.21kbscene> [--project <dir>]
+                      [--out <file.21kbnavmesh>] [--cell-size <metres>]
+                      [--cell-height <metres>] [--tile-cells <n>]
+                      [--agent <name>:<radius>:<height>:<climb>:<slope>]...
+               bake writes <scene>.21kbnavmesh by default, exactly as the
+               editor's Bake Navigation Mesh does; settings not given are
+               those of the mesh it replaces, else the defaults.
+                 info <file.21kbnavmesh>
 
 Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).
 )";
 
-constexpr std::array<std::string_view, 3> kFlagNames{ "--disabled", "--quiet", "--update-baseline" };
+constexpr std::array<std::string_view, 4> kFlagNames{ "--anti-rollback", "--disabled", "--quiet", "--update-baseline" };
 
 } // namespace
 
@@ -94,6 +147,21 @@ int main(int argc, char** argv) {
     }
     if (command == "mcp") {
         return kb::cli::RunMcpCommand(arguments, std::cin, io);
+    }
+    if (command == "keys") {
+        return kb::cli::RunKeysCommand(arguments, io);
+    }
+    if (command == "pack") {
+        return kb::cli::RunPackCommand(arguments, io);
+    }
+    if (command == "release") {
+        return kb::cli::RunReleaseCommand(arguments, io);
+    }
+    if (command == "world") {
+        return kb::cli::RunWorldCommand(arguments, io);
+    }
+    if (command == "navmesh") {
+        return kb::cli::RunNavMeshCommand(arguments, io);
     }
     if (command == "help" || command == "--help" || command == "-h") {
         std::cout << kUsage;

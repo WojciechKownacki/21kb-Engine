@@ -7,6 +7,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -14,9 +15,9 @@ namespace kb::scene {
 
 bool SceneComponentQueryService::HasAuxFrame(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.AuxFrames().Has(entity); }
 const AuxFrameComponent* SceneComponentQueryService::TryGetAuxFrame(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.AuxFrames().TryGet(entity) : nullptr; }
-AuxFrameComponent* SceneComponentMutationService::TryGetAuxFrame(Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.AuxFrames().TryGet(entity) : nullptr; }
-void SceneComponentMutationService::SetAuxFrame(Scene& scene, SceneEntity entity, const AuxFrameComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.AuxFrames().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::RemoveAuxFrame(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.AuxFrames().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
+AuxFrameComponent* SceneComponentMutationService::TryGetAuxFrame(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.AuxFrames().TryGet(entity) : nullptr; }
+void SceneComponentMutationService::SetAuxFrame(Scene& scene, SceneEntity entity, const AuxFrameComponent& component) { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.AuxFrames().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::RemoveAuxFrame(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.AuxFrames().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
 void SceneComponentMutationService::MarkAuxFrameModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.AuxFrames().MarkModified(entity); MarkScenePrefabNodeDirty(state, entity); } }
 
 SceneAuxFrameComponentQueries::SceneAuxFrameComponentQueries(const Scene& scene) noexcept : scene_(scene) {}

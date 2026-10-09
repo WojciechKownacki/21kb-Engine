@@ -25,6 +25,7 @@ public:
     [[nodiscard]] const ScenePrefab* Find(ScenePrefabHandle handle) const noexcept;
     [[nodiscard]] ScenePrefab* FindMutable(ScenePrefabHandle handle) noexcept;
     [[nodiscard]] ScenePrefabHandle FindByGuid(std::string_view guid) const noexcept;
+    [[nodiscard]] ScenePrefabHandle FindBySourcePath(std::string_view sourcePath) const noexcept;
     [[nodiscard]] std::vector<ScenePrefabHandle> VariantChildrenOf(ScenePrefabHandle baseHandle) const;
     [[nodiscard]] bool UpsertVariantOverride(ScenePrefabHandle handle, ScenePrefabPropertyOverride property);
     // LIB-092: replaces a variant's stored added-child subtrees wholesale and

@@ -17,6 +17,8 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
+#include "engine/assets/bake/AssetPackSeal.hpp"
+#include "engine/assets/bake/AssetPackTools.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
@@ -32,6 +34,17 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneUI.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/SceneNavigation.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/world/WorldCellIndex.hpp"
+#include "engine/world/WorldDescriptor.hpp"
+#include "engine/world/WorldObjectFile.hpp"
+#include "engine/world/WorldPackChunks.hpp"
+#include "engine/world/WorldPartitionRuntime.hpp"
+#include "CliCommands.hpp"
+#include "engine/security/ReleaseKeys.hpp"
+#include "engine/security/ReleaseManifest.hpp"
+#include "engine/save/SaveGameService.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
@@ -54,6 +67,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <thread>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -608,6 +622,382 @@ void RunNativeBehaviourPackagingTests() {
         "Native package accepted a missing DLL after authoring content was removed");
 }
 
+// A player with a trust anchor (a packaged release) mounts only packs sealed by its release key
+// and names the reason when it refuses one; a player without an anchor accepts an unsigned pack;
+// a damaged anchor is an error, never a development player.
+void RunPackagedTrustTests() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "packaged_trust_project", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    const auto packPath = TestRoot() / "packaged_trust_package" / "Game.kbpack";
+    std::ostringstream diagnostics;
+    const auto cooked = kb::game::CookProject(
+        kb::game::ProjectCookRequest{ .projectPath = fixture.root, .targetProfileId = "Windows.x64", .outputPackPath = packPath },
+        diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+
+    kb::security::ReleaseSigningKey key;
+    Require(kb::security::GenerateReleaseSigningKey(key), "Packaged trust test key could not be generated");
+    kb::security::TrustAnchorLookup anchor{};
+    bake::AssetPackTrust trust{};
+    std::ostringstream err;
+    Require(kb::game::ResolvePackagedAssetPackTrust(anchor, trust, err) && !trust.requiredSigner.has_value(),
+        "A player without a trust anchor demanded a signed pack");
+    anchor.state = kb::security::TrustAnchorLookup::State::Invalid;
+    anchor.error = "damaged";
+    Require(!kb::game::ResolvePackagedAssetPackTrust(anchor, trust, err) && Mentions(err.str(), "damaged"),
+        "A damaged trust anchor was treated as a development player");
+    anchor.state = kb::security::TrustAnchorLookup::State::Present;
+    anchor.anchor.productId = "Publisher.Game";
+    anchor.anchor.releaseKey = key.publicKey;
+    Require(kb::game::ResolvePackagedAssetPackTrust(anchor, trust, err) && trust.requiredSigner == key.publicKey,
+        "A packaged player did not require its release key");
+
+    {
+        bake::RuntimeAssetPack pack;
+        const bake::RuntimeAssetPackStatus status = pack.Mount(
+            packPath, bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged, trust);
+        Require(status == bake::RuntimeAssetPackStatus::ContainerRejected &&
+                pack.ContainerStatus() == bake::AssetPackReadStatus::Unsigned,
+            "A packaged player mounted an unsigned pack");
+        std::ostringstream refusal;
+        kb::game::ReportRuntimePackageRefusal(pack, status, refusal);
+        Require(Mentions(refusal.str(), "Unsigned") && Mentions(refusal.str(), "not signed"),
+            "The unsigned-pack refusal does not say why");
+    }
+    std::string error;
+    Require(bake::SealAssetPack(packPath, key, nullptr, error), error.c_str());
+    {
+        bake::RuntimeAssetPack pack;
+        Require(pack.Mount(packPath, bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged, trust) ==
+                bake::RuntimeAssetPackStatus::Success,
+            "A packaged player refused a pack sealed by its release key");
+    }
+    kb::security::ReleaseSigningKey otherKey;
+    Require(kb::security::GenerateReleaseSigningKey(otherKey), "Second packaged trust test key could not be generated");
+    trust.requiredSigner = otherKey.publicKey;
+    bake::RuntimeAssetPack foreign;
+    const bake::RuntimeAssetPackStatus status = foreign.Mount(
+        packPath, bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged, trust);
+    std::ostringstream refusal;
+    kb::game::ReportRuntimePackageRefusal(foreign, status, refusal);
+    Require(foreign.ContainerStatus() == bake::AssetPackReadStatus::UntrustedSigner &&
+            Mentions(refusal.str(), "signed by a different key"),
+        "A pack sealed by another key was not refused with its reason");
+
+    // A packaged player binds saves to its game, not to one machine: a save it writes does not load
+    // under the development key, and loads in any other copy of the same game, as a cloud save or a
+    // save carried to another computer must.
+    anchor.anchor.saveSecret = kb::security::DeriveGameSaveSecret(key, anchor.anchor.productId);
+    std::ostringstream saveWarnings;
+    kb::game::ConfigurePackagedSaveIntegrity(anchor.anchor, saveWarnings);
+    Require(saveWarnings.str().empty(), "A packaged player could not configure its save key");
+    kb::save::SaveGame save;
+    save.SetInt("level", 3);
+    const std::filesystem::path savePath = TestRoot() / "packaged_trust_save.kbsave";
+    Require(kb::save::SaveGameService::Save(savePath, save), "A packaged save could not be written");
+    Require(kb::save::SaveGameService::Load(savePath).Succeeded(), "A packaged save did not load in its game");
+    kb::save::SaveGameService::ConfigureIntegrity(kb::save::DevelopmentSaveGameIntegrity());
+    Require(kb::save::SaveGameService::Load(savePath).status == kb::save::SaveGameLoadStatus::Tampered,
+        "A packaged save loaded without its game's secret");
+    kb::security::TrustAnchor otherCopy = anchor.anchor;
+    kb::game::ConfigurePackagedSaveIntegrity(otherCopy, saveWarnings);
+    Require(kb::save::SaveGameService::Load(savePath).Succeeded(),
+        "A packaged save did not load in another copy of the same game");
+    kb::save::SaveGameService::ConfigureIntegrity(kb::save::DevelopmentSaveGameIntegrity());
+
+    // A packaged release starts only from the files its signed manifest lists, binds its pack by
+    // the pack's own seal, and refuses to go back to an older release when it asks for that.
+    const std::filesystem::path releaseRoot = TestRoot() / "packaged_trust_release";
+    const std::filesystem::path securityRoot = TestRoot() / "packaged_trust_security";
+    std::filesystem::create_directories(releaseRoot);
+    std::filesystem::copy_file(packPath, releaseRoot / "Game.kbpack");
+    WriteTextFile(releaseRoot / "Game.exe", "player");
+    const auto signRelease = [&](std::uint64_t number, bool antiRollback) {
+        std::filesystem::remove(releaseRoot / "release.kbmanifest");
+        kb::security::ReleaseManifest manifest{};
+        manifest.productId = anchor.anchor.productId;
+        manifest.contentVersion = "1.0.0";
+        manifest.releaseNumber = number;
+        manifest.antiRollback = antiRollback;
+        std::string manifestError;
+        Require(kb::security::BuildReleaseManifest(releaseRoot, manifest, manifestError), manifestError.c_str());
+        WriteTextFile(releaseRoot / "release.kbmanifest", kb::security::SignReleaseManifest(manifest, key));
+    };
+    signRelease(5U, true);
+    std::ostringstream releaseErrors;
+    const auto release = kb::game::VerifyPackagedRelease(
+        anchor.anchor, releaseRoot, releaseRoot / "Game.exe", securityRoot, releaseErrors);
+    Require(release != nullptr && kb::security::CurrentVerifiedRelease() == release, releaseErrors.str().c_str());
+    trust.requiredSigner = key.publicKey;
+    {
+        bake::RuntimeAssetPack pack;
+        Require(pack.Mount(releaseRoot / "Game.kbpack", bake::WindowsX64BakeTargetProfile(),
+                    bake::AssetPackAccess::Ranged, trust) == bake::RuntimeAssetPackStatus::Success &&
+                kb::game::PackBelongsToRelease(*release, releaseRoot / "Game.kbpack", pack, releaseErrors),
+            "The release's own pack was not bound to its manifest");
+        Require(!kb::game::PackBelongsToRelease(*release, TestRoot() / "Elsewhere.kbpack", pack, releaseErrors),
+            "A pack outside the release was bound to its manifest");
+    }
+    WriteTextFile(releaseRoot / "Game.exe", "playex");
+    std::ostringstream modified;
+    Require(kb::game::VerifyPackagedRelease(anchor.anchor, releaseRoot, releaseRoot / "Game.exe", securityRoot, modified) == nullptr &&
+            Mentions(modified.str(), "FileModified") && Mentions(modified.str(), "Game.exe"),
+        "A modified player executable was allowed to start");
+    WriteTextFile(releaseRoot / "Game.exe", "player");
+    signRelease(4U, true);
+    std::ostringstream rolledBack;
+    Require(kb::game::VerifyPackagedRelease(anchor.anchor, releaseRoot, releaseRoot / "Game.exe", securityRoot, rolledBack) == nullptr &&
+            Mentions(rolledBack.str(), "older than a release"),
+        "An older release started after a newer one had run");
+    signRelease(3U, false);
+    std::ostringstream unprotected;
+    Require(kb::game::VerifyPackagedRelease(anchor.anchor, releaseRoot, releaseRoot / "Game.exe", securityRoot, unprotected) != nullptr,
+        "A release without anti-rollback was refused for its release number");
+    kb::security::InstallVerifiedRelease(nullptr);
+}
+
+// A game cooked with compressed blocks, split into a base and a chunk and patched, mounts as one
+// pack set in the player, and its packaged release binds every pack and the pack set index: an
+// older but correctly sealed patch in place of the shipped one, or an edited index, stops it.
+void RunPackSetPackagingTests() {
+    namespace bake = kb::assets::bake;
+    const Fixture fixture = BuildFixture(TestRoot() / "pack_set_project", "Project");
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    // A texture of world cell 0_0 the scene shows, so the cook carries it.
+    const std::filesystem::path texturePath = fixture.root / "Assets/Cells/0_0/Ground.tga";
+    std::string texture(18U + 4U * 4U * 3U, '\0');
+    texture[2] = 2; texture[12] = 4; texture[14] = 4; texture[16] = 24;
+    WriteTextFile(texturePath, texture);
+    {
+        kb::scene::Scene scene;
+        Require(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()),
+            "Pack set fixture loader registration failed");
+        Require(scene.Assets().MountProject(fixture.root), "Pack set fixture mount failed");
+        static_cast<void>(scene.Assets().Discover());
+        const auto* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Cells/0_0/Ground.tga");
+        Require(metadata != nullptr, "Pack set fixture texture was not discovered");
+        const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Ground" });
+        scene.Components().UI().Set(object.Entity(), kb::scene::UIRawImage{ .imageAssetId = metadata->id.value });
+        Require(kb::scene::SceneDocumentService::Save(scene, fixture.root / "Assets/Scenes/Main.21kbscene", "Main"),
+            "Pack set fixture scene save failed");
+    }
+    const std::filesystem::path work = TestRoot() / "pack_set_work";
+    const auto cook = [&](const std::filesystem::path& output) {
+        std::ostringstream diagnostics;
+        const auto cooked = kb::game::CookProject(
+            kb::game::ProjectCookRequest{ .projectPath = fixture.root, .targetProfileId = "Windows.x64",
+                .outputPackPath = output, .packCompressionLevel = 9 },
+            diagnostics);
+        Require(cooked.succeeded, cooked.error.c_str());
+    };
+    const std::filesystem::path firstCook = work / "first.kbpack";
+    cook(firstCook);
+    {
+        bake::AssetPackReader reader;
+        Require(reader.Mount(firstCook) == bake::AssetPackReadStatus::Success, "A compressed cook does not mount");
+        bool compressed = false;
+        for (const bake::AssetPackArtifactEntry& artifact : reader.Artifacts()) {
+            for (const bake::AssetPackBlockEntry& block : artifact.blocks) {
+                compressed = compressed || block.compression == bake::AssetPackBlockCompression::Zstd;
+            }
+        }
+        Require(compressed, "A cook asked to compress stored no block compressed");
+    }
+
+    // Version 1 of the game: a base and world cell 0_0 split into a chunk.
+    const std::filesystem::path release = TestRoot() / "pack_set_release";
+    std::filesystem::create_directories(release);
+    const std::vector<bake::AssetPackChunkRule> rules{
+        { .label = "cell_0_0", .virtualPathPrefixes = { "/Game/Cells/0_0/" }, .output = release / "Game.cell_0_0.kbpack" } };
+    bake::AssetPackSplitReport split{};
+    std::string error;
+    const bool splitOk = bake::SplitRuntimeAssetPack(
+        firstCook, release / "Game.kbpack", rules, bake::AssetPackBlockCompression::Zstd, 9, split, error);
+    Require(splitOk, error.c_str());
+    // Version 2: the texture changed; the patch carries it.
+    texture[18] = 127;
+    WriteTextFile(texturePath, texture);
+    const std::filesystem::path secondCook = work / "second.kbpack";
+    cook(secondCook);
+    WriteTextFile(release / "Game.kbpackset", "21kb-pack-set 1\nbase Game.kbpack\nchunk cell_0_0 Game.cell_0_0.kbpack\n");
+    bake::AssetPackPatchReport patch{};
+    const bool patched = bake::BuildAssetPackPatch(bake::AssetPackPatchRequest{ .current = release / "Game.kbpackset",
+        .next = secondCook, .output = release / "Game.patch-0001.kbpack", .label = "patch-0001", .patchLevel = 1U },
+        patch, error);
+    Require(patched, error.c_str());
+    Require(patch.changedAssets == 1U, "The patch does not carry exactly the changed texture");
+    // An older build of the same patch, as an attacker would plant it.
+    texture[18] = 64;
+    WriteTextFile(texturePath, texture);
+    const std::filesystem::path olderCook = work / "older.kbpack";
+    cook(olderCook);
+    const bool olderPatched = bake::BuildAssetPackPatch(bake::AssetPackPatchRequest{ .current = release / "Game.kbpackset",
+        .next = olderCook, .output = work / "Game.patch-0001.kbpack", .label = "patch-0001", .patchLevel = 1U },
+        patch, error);
+    Require(olderPatched, error.c_str());
+    const std::string index =
+        "21kb-pack-set 1\nbase Game.kbpack\nchunk cell_0_0 Game.cell_0_0.kbpack\npatch 1 patch-0001 Game.patch-0001.kbpack\n";
+    WriteTextFile(release / "Game.kbpackset", index);
+
+    // A development player mounts the set beside the base pack.
+    {
+        kb::game::GameProjectRuntime runtime{};
+        std::ostringstream diagnostics;
+        Require(kb::game::ReadGameProjectRuntime(release, {}, runtime, diagnostics) && runtime.assetPack != nullptr,
+            diagnostics.str().c_str());
+        Require(runtime.assetPack->ContainerCount() == 3U, "The player did not mount the whole pack set");
+        const bake::RuntimeAssetManifestEntry* ground = runtime.assetPack->FindAsset("/Game/Cells/0_0/Ground.tga");
+        Require(ground != nullptr && runtime.assetPack->AssetContainer(ground->id) == 2U,
+            "The patched texture is not answered by the patch");
+    }
+
+    // Sealed and signed into a release.
+    kb::security::ReleaseSigningKey key;
+    Require(kb::security::GenerateReleaseSigningKey(key), "Pack set release key could not be generated");
+    for (const char* member : { "Game.kbpack", "Game.cell_0_0.kbpack", "Game.patch-0001.kbpack" }) {
+        {
+            const bool succeeded = bake::SealAssetPack(release / member, key, nullptr, error);
+            Require(succeeded, error.c_str());
+        }
+    }
+    {
+        const bool succeeded = bake::SealAssetPack(work / "Game.patch-0001.kbpack", key, nullptr, error);
+        Require(succeeded, error.c_str());
+    }
+    WriteTextFile(release / "Game.exe", "player");
+    kb::security::TrustAnchor anchor{};
+    anchor.productId = "Publisher.PackSet";
+    anchor.releaseKey = key.publicKey;
+    {
+        kb::security::ReleaseManifest manifest{};
+        manifest.productId = anchor.productId;
+        manifest.contentVersion = "2.0.0";
+        manifest.releaseNumber = 2U;
+        {
+            const bool succeeded = kb::security::BuildReleaseManifest(release, manifest, error);
+            Require(succeeded, error.c_str());
+        }
+        WriteTextFile(release / "release.kbmanifest", kb::security::SignReleaseManifest(manifest, key));
+    }
+    const std::filesystem::path securityRoot = TestRoot() / "pack_set_security";
+    std::ostringstream releaseErrors;
+    const auto installed = kb::game::VerifyPackagedRelease(anchor, release, release / "Game.exe", securityRoot, releaseErrors);
+    Require(installed != nullptr, releaseErrors.str().c_str());
+    bake::AssetPackTrust trust{};
+    trust.requiredSigner = key.publicKey;
+    const auto mountSet = [&](bake::RuntimeAssetPack& pack) {
+        return pack.MountSetIndex(release / "Game.kbpackset", bake::WindowsX64BakeTargetProfile(), bake::AssetPackAccess::Ranged,
+            trust);
+    };
+    {
+        bake::RuntimeAssetPack pack;
+        Require(mountSet(pack) == bake::RuntimeAssetPackStatus::Success &&
+                kb::game::PackBelongsToRelease(*installed, release / "Game.kbpack", pack, releaseErrors),
+            "The release's own pack set was not bound to its manifest");
+    }
+
+    // The same release laid out for Linux: an ELF player without an extension beside the same
+    // packs and index. The player verifies it the same way -- its own image hashed, the index
+    // hashed, every pack bound by its seal -- and refuses a modified player, a planted shared
+    // library and a missing manifest.
+    {
+        const std::filesystem::path linuxRoot = TestRoot() / "pack_set_release_linux";
+        std::error_code linuxError;
+        std::filesystem::remove_all(linuxRoot, linuxError);
+        std::filesystem::create_directories(linuxRoot / "Licenses", linuxError);
+        for (const char* member : { "Game.kbpack", "Game.cell_0_0.kbpack", "Game.patch-0001.kbpack", "Game.kbpackset" }) {
+            std::filesystem::copy_file(release / member, linuxRoot / member, linuxError);
+        }
+        Require(!linuxError, "The Linux release fixture could not be staged");
+        const std::string elf{ "\x7F" "ELF\x02\x01\x01 player image" };
+        WriteTextFile(linuxRoot / "Game", elf);
+        WriteTextFile(linuxRoot / "Licenses" / "notice.txt", "notices");
+        const auto signLinux = [&] {
+            std::filesystem::remove(linuxRoot / "release.kbmanifest", linuxError);
+            kb::security::ReleaseManifest manifest{};
+            manifest.productId = anchor.productId;
+            manifest.contentVersion = "2.0.0";
+            manifest.releaseNumber = 2U;
+            {
+                const bool succeeded = kb::security::BuildReleaseManifest(linuxRoot, manifest, error);
+                Require(succeeded, error.c_str());
+            }
+            WriteTextFile(linuxRoot / "release.kbmanifest", kb::security::SignReleaseManifest(manifest, key));
+        };
+        signLinux();
+        std::ostringstream linuxErrors;
+        const auto linuxRelease = kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, linuxErrors);
+        Require(linuxRelease != nullptr, linuxErrors.str().c_str());
+        {
+            bake::RuntimeAssetPack pack;
+            Require(pack.MountSetIndex(linuxRoot / "Game.kbpackset", bake::WindowsX64BakeTargetProfile(),
+                        bake::AssetPackAccess::Ranged, trust) == bake::RuntimeAssetPackStatus::Success &&
+                    kb::game::PackBelongsToRelease(*linuxRelease, linuxRoot / "Game.kbpack", pack, linuxErrors),
+                "A Linux release's pack set was not bound to its manifest");
+        }
+        WriteTextFile(linuxRoot / "Game", elf + "patched");
+        std::ostringstream modified;
+        Require(kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, modified) == nullptr &&
+                Mentions(modified.str(), "Game"),
+            "A modified Linux player was allowed to start");
+        WriteTextFile(linuxRoot / "Game", elf);
+        WriteTextFile(linuxRoot / "libplanted.so", "planted");
+        std::ostringstream planted;
+        Require(kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, planted) == nullptr &&
+                Mentions(planted.str(), "UnlistedFile") && Mentions(planted.str(), "libplanted.so"),
+            "A Linux release with a planted shared library was allowed to start");
+        std::filesystem::remove(linuxRoot / "libplanted.so", linuxError);
+        // A stray file without an extension -- an executable on Linux -- is refused like an unlisted
+        // DLL on Windows, beside the player or deeper; a listed one is part of the release.
+        for (const std::filesystem::path stray : { linuxRoot / "helper", linuxRoot / "Licenses" / "run-me" }) {
+            WriteTextFile(stray, elf + "stray");
+            std::ostringstream strayErrors;
+            Require(kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, strayErrors) == nullptr &&
+                    Mentions(strayErrors.str(), "UnlistedFile") &&
+                    Mentions(strayErrors.str(), stray.lexically_relative(linuxRoot).generic_string()),
+                "A Linux release with a stray file without an extension was allowed to start");
+            std::filesystem::remove(stray, linuxError);
+        }
+        WriteTextFile(linuxRoot / "Licenses" / "COPYING", "license text without an extension");
+        signLinux();
+        std::ostringstream listedErrors;
+        Require(kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, listedErrors) != nullptr,
+            ("A Linux release whose extension-less files are all listed was refused: " + listedErrors.str()).c_str());
+        std::filesystem::remove(linuxRoot / "release.kbmanifest", linuxError);
+        std::ostringstream withoutManifest;
+        Require(kb::game::VerifyPackagedRelease(anchor, linuxRoot, linuxRoot / "Game", securityRoot, withoutManifest) == nullptr,
+            "A Linux release without its manifest was allowed to start");
+        std::filesystem::remove_all(linuxRoot, linuxError);
+    }
+    // The older patch is sealed by the same key and mounts -- and is not this release's.
+    std::filesystem::copy_file(work / "Game.patch-0001.kbpack", release / "Game.patch-0001.kbpack",
+        std::filesystem::copy_options::overwrite_existing);
+    {
+        bake::RuntimeAssetPack pack;
+        std::ostringstream refusal;
+        Require(mountSet(pack) == bake::RuntimeAssetPackStatus::Success &&
+                !kb::game::PackBelongsToRelease(*installed, release / "Game.kbpack", pack, refusal) &&
+                Mentions(refusal.str(), "not the one this release shipped"),
+            "A patch swapped for an older sealed build was bound to the release");
+    }
+    // The index is hashed at startup: dropping the patch from it stops the game.
+    WriteTextFile(release / "Game.kbpackset", "21kb-pack-set 1\nbase Game.kbpack\nchunk cell_0_0 Game.cell_0_0.kbpack\n");
+    std::ostringstream edited;
+    Require(kb::game::VerifyPackagedRelease(anchor, release, release / "Game.exe", securityRoot, edited) == nullptr &&
+            Mentions(edited.str(), "FileModified") && Mentions(edited.str(), "Game.kbpackset"),
+        "An edited pack set index was allowed to start");
+    kb::security::InstallVerifiedRelease(nullptr);
+}
+
 void RunWindowsRuntimeModulePackagingTests() {
     namespace bake = kb::assets::bake;
 
@@ -778,6 +1168,351 @@ void RunWindowsRuntimeModulePackagingTests() {
         missingCookDiagnostics);
     Require(!missingCook.succeeded && Mentions(missingCook.error, "missing"),
         "Windows cooker accepted a missing custom module DLL");
+}
+
+struct PartitionedWorldFixture {
+    Fixture fixture;
+    std::uint64_t worldId = 0U;
+};
+
+// A project whose default map places Forest.21kbworld: 64 m cells, three rocks with a mesh along
+// X, a night-only lamp, HLOD proxies enabled.
+[[nodiscard]] PartitionedWorldFixture BuildPartitionedWorldFixture(std::string_view name, std::uint32_t regionCells = 16U) {
+    const Fixture fixture = BuildFixture(TestRoot() / name, "Project");
+    WriteTextFile(fixture.root / "Assets" / "Meshes" / "Rock.obj",
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\n"
+        "usemtl stone\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n");
+    const std::uint64_t meshId = kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath("/Game/Meshes/Rock.obj") + ":RenderMesh").value;
+    const std::filesystem::path descriptorPath = fixture.root / "Assets" / "Worlds" / "Forest.21kbworld";
+    kb::world::WorldDescriptor descriptor;
+    descriptor.guid = "forest";
+    descriptor.name = "Forest";
+    descriptor.cellSize = 64.0;
+    descriptor.objectsDirectory = "Forest.objects";
+    descriptor.dataLayers = { { .name = "night", .initiallyActive = false } };
+    descriptor.hlod = { .enabled = true, .range = 512.0, .triangleRatio = 0.5 };
+    descriptor.regionCells = regionCells;
+    // A ground collider under the first three cells gives every build navigation meshes to carry.
+    descriptor.navigation.enabled = true;
+    std::string error;
+    Require(kb::world::WorldDescriptorIO::Write(descriptorPath, descriptor, error), "World fixture descriptor could not be written");
+    const auto writeObject = [&](const std::string& name, double x, const std::string& layer) {
+        kb::world::WorldObjectFile object;
+        object.header.guid = kb::world::MakeDeterministicWorldObjectGuid(name);
+        object.header.name = name;
+        object.header.position = { x, 0.0, 10.0 };
+        object.header.dataLayer = layer;
+        object.header.nodeCount = 1U;
+        kb::scene::ScenePrefabNodeDesc node;
+        node.stableId = kb::world::WorldObjectStableId(object.header.guid, 0U);
+        node.name = name;
+        node.transform.localPosition = { static_cast<float>(x), 0.0F, 10.0F };
+        node.components.meshRenderer = kb::scene::MeshRendererComponent{ .meshAssetId = meshId };
+        static_cast<void>(object.prefab.AddNode(node));
+        const std::vector<std::uint8_t> bytes = kb::world::WorldObjectFileIO::Serialize(object, error);
+        Require(!bytes.empty() && kb::world::WorldObjectFileIO::WriteBytes(
+            descriptorPath.parent_path() / "Forest.objects" / (object.header.guid + ".21kbobject"), bytes, error),
+            "World fixture object could not be written");
+    };
+    for (int index = 0; index < 3; ++index) {
+        writeObject("Rock" + std::to_string(index), index * 64.0 + 10.0, {});
+    }
+    writeObject("Lamp", 12.0, "night");
+    {
+        kb::world::WorldObjectFile ground;
+        ground.header.guid = kb::world::MakeDeterministicWorldObjectGuid("Ground");
+        ground.header.name = "Ground";
+        ground.header.position = { 96.0, -0.25, 10.0 };
+        ground.header.nodeCount = 1U;
+        kb::scene::ScenePrefabNodeDesc node;
+        node.stableId = kb::world::WorldObjectStableId(ground.header.guid, 0U);
+        node.name = "Ground";
+        node.transform.localPosition = { 96.0F, -0.25F, 10.0F };
+        node.components.collider = kb::scene::ColliderComponent{ .shape = kb::scene::ColliderShape::Box, .boxSize = { 192.0F, 0.5F, 20.0F } };
+        static_cast<void>(ground.prefab.AddNode(node));
+        const std::vector<std::uint8_t> bytes = kb::world::WorldObjectFileIO::Serialize(ground, error);
+        Require(!bytes.empty() && kb::world::WorldObjectFileIO::WriteBytes(
+            descriptorPath.parent_path() / "Forest.objects" / (ground.header.guid + ".21kbobject"), bytes, error),
+            "World fixture ground could not be written");
+    }
+    std::uint64_t worldId = 0U;
+    {
+        kb::scene::Scene authored;
+        Require(authored.Assets().MountProject(fixture.root), "World fixture project could not be mounted");
+        static_cast<void>(authored.Assets().Discover());
+        const kb::assets::AssetMetadata* world = authored.Assets().Manager().Registry().FindByPath("/Game/Worlds/Forest.21kbworld");
+        Require(world != nullptr && world->type == "World", "World fixture descriptor was not discovered as a world");
+        worldId = world->id.value;
+        const kb::scene::SceneObject owner = authored.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Forest" });
+        authored.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+            .assetId = worldId, .kind = kb::scene::ContentInstanceKind::PartitionedWorld });
+        Require(kb::scene::SceneDocumentService::Save(authored, fixture.root / "Assets" / "Scenes" / "Main.21kbscene", "Main"),
+            "World fixture scene could not be saved");
+    }
+    kb::project::ProjectSettings settings;
+    settings.defaultMap = fixture.sceneVirtualPath;
+    settings.physicsLayersAsset.clear();
+    settings.inputEnabled = false;
+    WriteSettings(fixture.root, settings);
+    return { .fixture = fixture, .worldId = worldId };
+}
+
+// Relative path -> bytes of every file below `root`.
+[[nodiscard]] std::map<std::string, std::string> FileTree(const std::filesystem::path& root) {
+    std::map<std::string, std::string> files;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator{ root }) {
+        if (!entry.is_regular_file()) continue;
+        std::ifstream input{ entry.path(), std::ios::binary };
+        files.emplace(entry.path().lexically_relative(root).generic_string(),
+            std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} });
+    }
+    return files;
+}
+
+// kb_cli, kb_cooker and the editor run one world build (kb::render::BuildWorldWithHlod): the
+// same project yields byte-identical cells, cell index and HLOD proxies from the command line
+// and from a cook. The editor side is compared by the world partition headless scenario.
+void RunWorldBuildAgreementTest() {
+    const PartitionedWorldFixture world = BuildPartitionedWorldFixture("world_build_cli");
+    const std::filesystem::path cookedProject = TestRoot() / "world_build_cook";
+    std::filesystem::copy(world.fixture.root, cookedProject, std::filesystem::copy_options::recursive);
+
+    const std::vector<std::string> arguments{ "build", "--project", world.fixture.root.string(),
+        "--world", (world.fixture.root / "Assets" / "Worlds" / "Forest.21kbworld").string() };
+    const kb::cli::ArgumentList parsed{ arguments };
+    std::ostringstream output;
+    Require(kb::cli::RunWorldCommand(parsed, kb::cli::CommandIo{ .out = output, .err = output }) == 0, output.str().c_str());
+    Require(Mentions(output.str(), "built 4 cells and 3 HLOD proxies"), "kb_cli world build did not build the proxies");
+
+    std::ostringstream diagnostics;
+    const kb::game::ProjectCookResult cooked = kb::game::CookProject(
+        kb::game::ProjectCookRequest{ .projectPath = cookedProject, .targetProfileId = "Windows.x64",
+            .outputPackPath = TestRoot() / "world_build_package" / "Game.kbpack" },
+        diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+
+    const std::map<std::string, std::string> fromCli = FileTree(world.fixture.root / "Assets" / "Worlds" / "Forest.cells");
+    const std::map<std::string, std::string> fromCook = FileTree(cookedProject / "Assets" / "Worlds" / "Forest.cells");
+    const std::size_t proxies = static_cast<std::size_t>(std::ranges::count_if(fromCli, [](const auto& file) {
+        return file.first.ends_with(".obj") && Mentions(file.second, "usemtl slot0");
+    }));
+    Require(proxies == 3U, "kb_cli did not write the three HLOD proxies");
+    const std::size_t navMeshes = static_cast<std::size_t>(std::ranges::count_if(fromCli, [](const auto& file) {
+        return file.first.ends_with(".21kbnavmesh");
+    }));
+    Require(navMeshes == 3U, "kb_cli did not write a navigation mesh for each cell over the ground");
+    Require(fromCli == fromCook, "kb_cli and kb_cooker built the same world differently");
+}
+
+// A partitioned world placed in the default map ships as its built cells: the cooker builds
+// the world from its object files, follows world -> cell index -> cells and HLOD proxies,
+// and the packaged runtime streams the cells without any loose file.
+void RunPartitionedWorldCookTest() {
+    namespace bake = kb::assets::bake;
+    const PartitionedWorldFixture placed = BuildPartitionedWorldFixture("partitioned_world");
+    const Fixture& fixture = placed.fixture;
+    const std::uint64_t worldId = placed.worldId;
+    const std::filesystem::path packPath = TestRoot() / "partitioned_world_package" / "Game.kbpack";
+    std::ostringstream diagnostics;
+    const kb::game::ProjectCookResult cooked = kb::game::CookProject(
+        kb::game::ProjectCookRequest{ .projectPath = fixture.root, .targetProfileId = "Windows.x64", .outputPackPath = packPath },
+        diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+    Require(Mentions(diagnostics.str(), "built 1 partitioned world(s): 4 cells, 3 HLOD proxies, 3 navigation meshes"),
+        "The cooker did not build the partitioned world before collecting assets");
+
+    auto pack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(pack->Mount(packPath, bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+        "Partitioned world package could not be mounted");
+    {
+        kb::scene::Scene runtime;
+        kb::assets::AssetManager& manager = runtime.Assets().Manager();
+        Require(manager.MountRuntimePack(pack), "Partitioned world package registry mount failed");
+        for (const char* path : { "/Game/Worlds/Forest.21kbworld", "/Game/Worlds/Forest.cells/Forest.21kbcells",
+                 "/Game/Worlds/Forest.cells/base/r_0_0/c_0_0.21kbscene", "/Game/Worlds/Forest.cells/base/r_0_0/c_2_0.21kbscene",
+                 "/Game/Worlds/Forest.cells/layer.night/r_0_0/c_0_0.21kbscene", "/Game/Worlds/Forest.cells/hlod/r_0_0/h_1_0.obj",
+                 "/Game/Worlds/Forest.cells/nav/r_0_0/n_0_0.21kbnavmesh", "/Game/Worlds/Forest.cells/nav/r_0_0/n_2_0.21kbnavmesh" }) {
+            Require(manager.Registry().FindByPath(path) != nullptr, (std::string{ "The package is missing " } + path).c_str());
+        }
+        Require(manager.Registry().FindByPath("/Game/Worlds/Forest.cells/hlod/r_0_0/h_1_0.obj")->type == "RenderMesh",
+            "The HLOD proxy was not packaged as a mesh");
+        const kb::scene::SceneObject owner = runtime.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Forest" });
+        runtime.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+            .assetId = worldId, .kind = kb::scene::ContentInstanceKind::PartitionedWorld });
+        kb::world::WorldPartitionRuntime world{ runtime };
+        static_cast<void>(world.AddSource({ .position = { 10.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 }));
+        const auto deadline = Clock::now() + std::chrono::seconds{ 30 };
+        while (world.CellState(owner.Entity(), { 0, 0 }) != kb::world::WorldCellState::Loaded && Clock::now() < deadline) {
+            static_cast<void>(runtime.Runtime().Update(1.0F / 60.0F));
+            std::this_thread::yield();
+        }
+        Require(world.CellState(owner.Entity(), { 0, 0 }) == kb::world::WorldCellState::Loaded,
+            "The packaged world did not stream its first cell");
+        Require(world.CellState(owner.Entity(), { 2, 0 }) == kb::world::WorldCellState::Unloaded &&
+                world.CellState(owner.Entity(), { 0, 0 }, "night") == kb::world::WorldCellState::Unloaded,
+            "The packaged world streamed cells outside the source or an inactive layer");
+        // The cell's navigation tiles stream out of the package with it.
+        while (!world.IsNavMeshLoaded(owner.Entity(), { 0, 0 }) && Clock::now() < deadline) {
+            static_cast<void>(runtime.Runtime().Update(1.0F / 60.0F));
+            std::this_thread::yield();
+        }
+        Require(world.IsNavMeshLoaded(owner.Entity(), { 0, 0 }) && !world.IsNavMeshLoaded(owner.Entity(), { 2, 0 }),
+            "The packaged world did not stream the navigation tiles of its first cell");
+        const kb::scene::NavPathResult path = runtime.Navigation().FindPath(kb::math::DVec3{ 3.0, 0.0, 4.0 }, kb::math::DVec3{ 50.0, 0.0, 4.0 });
+        Require(path.status == kb::scene::NavPathStatus::Complete, "Agents cannot find a path over the packaged navigation tiles");
+    }
+    pack->Unmount();
+
+    // A world region's cells and proxies, and a data layer's cells, split into chunk packs of
+    // their own; the set streams them from there.
+    const std::filesystem::path chunks = TestRoot() / "partitioned_world_chunks";
+    std::error_code removeError;
+    std::filesystem::remove_all(chunks, removeError);
+    std::filesystem::create_directories(chunks);
+    std::string error;
+    bake::AssetPackWorldRegion east{};
+    bake::AssetPackWorldRegion night{};
+    Require(bake::ParseAssetPackWorldRegion("/Game/Worlds/Forest.21kbworld@1:0..2:0", east, error) &&
+            bake::ParseAssetPackWorldRegion("/Game/Worlds/Forest.21kbworld#night", night, error),
+        error.c_str());
+    const std::vector<bake::AssetPackChunkRule> rules{
+        { .label = "forest_east", .worldRegions = { east }, .output = chunks / "Game.forest_east.kbpack" },
+        { .label = "forest_night", .worldRegions = { night }, .output = chunks / "Game.forest_night.kbpack" },
+    };
+    bake::AssetPackSplitReport split{};
+    {
+        const bool succeeded = bake::SplitRuntimeAssetPack(
+            packPath, chunks / "Game.kbpack", rules, bake::AssetPackBlockCompression::Zstd, 9, split, error);
+        Require(succeeded, error.c_str());
+    }
+    Require(split.chunkAssets == std::vector<std::uint64_t>{ 4U, 1U },
+        "A world region did not take exactly its cells' scenes and proxies, or a layer its cells");
+    const std::vector<bake::RuntimeAssetPackMount> mounts{
+        { .path = chunks / "Game.kbpack" },
+        { .path = rules[0].output, .role = bake::AssetPackRole::Chunk, .label = "forest_east" },
+        { .path = rules[1].output, .role = bake::AssetPackRole::Chunk, .label = "forest_night" },
+    };
+    auto set = std::make_shared<bake::RuntimeAssetPack>();
+    Require(set->MountSet(mounts, bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success,
+        "The split world did not mount as a pack set");
+    const auto containerOf = [&](std::string_view path) {
+        const bake::RuntimeAssetManifestEntry* entry = set->FindAsset(path);
+        Require(entry != nullptr, (std::string{ "The split world lost " } + std::string{ path }).c_str());
+        return set->AssetContainer(entry->id).value_or(99U);
+    };
+    Require(containerOf("/Game/Worlds/Forest.cells/base/r_0_0/c_0_0.21kbscene") == 0U &&
+            containerOf("/Game/Worlds/Forest.cells/base/r_0_0/c_1_0.21kbscene") == 1U &&
+            containerOf("/Game/Worlds/Forest.cells/base/r_0_0/c_2_0.21kbscene") == 1U &&
+            containerOf("/Game/Worlds/Forest.cells/hlod/r_0_0/h_1_0.obj") == 1U &&
+            containerOf("/Game/Worlds/Forest.cells/hlod/r_0_0/h_0_0.obj") == 0U &&
+            containerOf("/Game/Worlds/Forest.cells/layer.night/r_0_0/c_0_0.21kbscene") == 2U &&
+            containerOf("/Game/Worlds/Forest.cells/Forest.21kbcells") == 0U &&
+            containerOf("/Game/Meshes/Rock.obj") == 0U,
+        "The split put a world asset into the wrong pack");
+    {
+        kb::scene::Scene runtime;
+        Require(runtime.Assets().Manager().MountRuntimePack(set), "The split world registry mount failed");
+        const kb::scene::SceneObject owner = runtime.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Forest" });
+        runtime.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+            .assetId = worldId, .kind = kb::scene::ContentInstanceKind::PartitionedWorld });
+        kb::world::WorldPartitionRuntime world{ runtime };
+        world.SetDataLayerActive("night", true);
+        static_cast<void>(world.AddSource({ .position = { 140.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 }));
+        static_cast<void>(world.AddSource({ .position = { 10.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 }));
+        const auto loaded = [&] {
+            return world.CellState(owner.Entity(), { 2, 0 }) == kb::world::WorldCellState::Loaded &&
+                world.CellState(owner.Entity(), { 0, 0 }, "night") == kb::world::WorldCellState::Loaded;
+        };
+        const auto deadline = Clock::now() + std::chrono::seconds{ 30 };
+        while (!loaded() && Clock::now() < deadline) {
+            static_cast<void>(runtime.Runtime().Update(1.0F / 60.0F));
+            std::this_thread::yield();
+        }
+        Require(loaded(), "The pack set did not stream world cells from their chunk packs");
+    }
+    set->Unmount();
+    bake::AssetPackWorldRegion missing{};
+    Require(bake::ParseAssetPackWorldRegion("/Game/Worlds/Nowhere.21kbworld", missing, error), error.c_str());
+    const std::vector<bake::AssetPackChunkRule> nowhere{
+        { .label = "nowhere", .worldRegions = { missing }, .output = chunks / "Game.nowhere.kbpack" } };
+    Require(!bake::SplitRuntimeAssetPack(packPath, chunks / "Other.kbpack", nowhere, bake::AssetPackBlockCompression::None, 9,
+                split, error) &&
+            Mentions(error, "no built partitioned world"),
+        "A region of a world the pack does not hold was split");
+}
+
+// A big world need not ship as one pack: every region goes to a chunk pack of its own (the rules
+// kb_cli world chunks prints and package_game.py --pack-chunk-world-regions applies), and the
+// packaged runtime mounts the pack set and streams each cell out of its region's chunk.
+void RunChunkedWorldPackageTest() {
+    namespace bake = kb::assets::bake;
+    const PartitionedWorldFixture world = BuildPartitionedWorldFixture("chunked_world", 1U);
+    const std::filesystem::path work = TestRoot() / "chunked_world_work";
+    std::ostringstream diagnostics;
+    const kb::game::ProjectCookResult cooked = kb::game::CookProject(
+        kb::game::ProjectCookRequest{ .projectPath = world.fixture.root, .targetProfileId = "Windows.x64",
+            .outputPackPath = work / "Game.kbpack", .packCompressionLevel = 9 },
+        diagnostics);
+    Require(cooked.succeeded, cooked.error.c_str());
+
+    const kb::world::WorldRegionChunksResult regions = kb::world::CollectWorldRegionChunks(world.fixture.root / "Assets", {});
+    Require(regions.succeeded && regions.chunks.size() == 3U, "every region of the world must become a chunk");
+    const std::filesystem::path release = TestRoot() / "chunked_world_release";
+    std::filesystem::create_directories(release);
+    std::vector<bake::AssetPackChunkRule> rules;
+    std::string index = "21kb-pack-set 1\nbase Game.kbpack\n";
+    for (const kb::world::WorldRegionChunk& chunk : regions.chunks) {
+        const std::string file = "Game." + chunk.label + ".kbpack";
+        rules.push_back({ .label = chunk.label, .virtualPathPrefixes = chunk.prefixes, .output = release / file });
+        index += "chunk " + chunk.label + " " + file + "\n";
+    }
+    bake::AssetPackSplitReport split{};
+    std::string error;
+    const bool splitOk = bake::SplitRuntimeAssetPack(
+        work / "Game.kbpack", release / "Game.kbpack", rules, bake::AssetPackBlockCompression::Zstd, 9, split, error);
+    Require(splitOk, error.c_str());
+    WriteTextFile(release / "Game.kbpackset", index);
+
+    auto pack = std::make_shared<bake::RuntimeAssetPack>();
+    Require(pack->MountSetIndex(release / "Game.kbpackset", bake::WindowsX64BakeTargetProfile()) == bake::RuntimeAssetPackStatus::Success &&
+            pack->ContainerCount() == 4U,
+        "The chunked world pack set does not mount");
+    const auto containerOf = [&](const char* path) {
+        const bake::RuntimeAssetManifestEntry* entry = pack->FindAsset(std::string_view{ path });
+        return entry == nullptr ? std::optional<std::uint32_t>{} : pack->AssetContainer(entry->id);
+    };
+    const std::optional<std::uint32_t> first = containerOf("/Game/Worlds/Forest.cells/base/r_0_0/c_0_0.21kbscene");
+    const std::optional<std::uint32_t> last = containerOf("/Game/Worlds/Forest.cells/base/r_2_0/c_2_0.21kbscene");
+    Require(first.has_value() && last.has_value() && *first != 0U && *last != 0U && *first != *last &&
+            containerOf("/Game/Worlds/Forest.cells/hlod/r_2_0/h_2_0.obj") == last &&
+            containerOf("/Game/Worlds/Forest.cells/nav/r_2_0/n_2_0.21kbnavmesh") == last &&
+            containerOf("/Game/Worlds/Forest.cells/layer.night/r_0_0/c_0_0.21kbscene") == first &&
+            containerOf("/Game/Worlds/Forest.cells/Forest.21kbcells") == std::optional<std::uint32_t>{ 0U },
+        "Each region's cells and proxy must live in that region's chunk, the index in the base");
+    {
+        kb::scene::Scene runtime;
+        Require(runtime.Assets().Manager().MountRuntimePack(pack), "The chunked world registry mount failed");
+        const kb::scene::SceneObject owner = runtime.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Forest" });
+        runtime.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+            .assetId = world.worldId, .kind = kb::scene::ContentInstanceKind::PartitionedWorld });
+        kb::world::WorldPartitionRuntime partition{ runtime };
+        const std::uint64_t source = partition.AddSource({ .position = { 10.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 });
+        const auto streamUntil = [&](kb::world::WorldCellCoord cell, kb::world::WorldCellState state) {
+            const auto deadline = Clock::now() + std::chrono::seconds{ 30 };
+            while (partition.CellState(owner.Entity(), cell) != state && Clock::now() < deadline) {
+                static_cast<void>(runtime.Runtime().Update(1.0F / 60.0F));
+                std::this_thread::yield();
+            }
+            return partition.CellState(owner.Entity(), cell) == state;
+        };
+        Require(streamUntil({ 0, 0 }, kb::world::WorldCellState::Loaded), "A cell did not stream from its region's chunk pack");
+        Require(partition.UpdateSource(source, { .position = { 140.0, 0.0, 10.0 }, .loadRadius = 30.0, .unloadRadius = 40.0, .priority = 0 }),
+            "The source could not move");
+        Require(streamUntil({ 2, 0 }, kb::world::WorldCellState::Loaded) && streamUntil({ 0, 0 }, kb::world::WorldCellState::Unloaded),
+            "Cells of another region's chunk did not stream in and out");
+        Require(partition.Worlds().front().lastFailure.empty(), "A chunked cell failed to load");
+    }
+    pack->Unmount();
 }
 
 void RunSceneMetaCookValidationTests() {
@@ -1532,6 +2267,19 @@ int main(int argc, char** argv) {
         RunPackagedRuntimeModuleContractTests();
         RunWindowsRuntimeModulePackagingTests();
         std::fputs("kb_game_core Windows runtime-module tests passed\n", stdout);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "--packaged-trust") {
+        RunPackagedTrustTests();
+        RunPackSetPackagingTests();
+        std::fputs("kb_game_core packaged trust tests passed\n", stdout);
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "--partitioned-world") {
+        RunWorldBuildAgreementTest();
+        RunPartitionedWorldCookTest();
+        RunChunkedWorldPackageTest();
+        std::fputs("kb_game_core partitioned world package tests passed\n", stdout);
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "--native-behaviours") {

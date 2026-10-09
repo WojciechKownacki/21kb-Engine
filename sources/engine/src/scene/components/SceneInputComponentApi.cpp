@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -16,10 +17,12 @@ const InputComponent* SceneComponentQueryService::TryGetInput(const Scene& scene
 }
 
 InputComponent* SceneComponentMutationService::TryGetInput(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Inputs().TryGet(entity) : nullptr;
 }
 
 void SceneComponentMutationService::SetInput(Scene& scene, SceneEntity entity, const InputComponent& input) {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Inputs().Set(entity, input);
@@ -28,6 +31,7 @@ void SceneComponentMutationService::SetInput(Scene& scene, SceneEntity entity, c
 }
 
 void SceneComponentMutationService::RemoveInput(Scene& scene, SceneEntity entity) noexcept {
+    SceneHistoryService::NoteObjectChanging(scene, entity);
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Inputs().Remove(entity);

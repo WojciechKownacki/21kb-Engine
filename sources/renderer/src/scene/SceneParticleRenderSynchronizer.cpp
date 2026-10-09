@@ -45,6 +45,8 @@ void SceneParticleRenderSynchronizer::Sync(const kb::scene::Scene& scene, Render
         throw std::logic_error{"21kb Particle System renderer capability consumer conflict"};
     }
     scenes_[scene.Id()].scene = &mutableScene;
+    // Particles simulate around the render origin, so they stay precise where the camera is (docs/large_worlds.md).
+    kb::particles::ParticlePlayback::SetSimulationOrigin(mutableScene, renderScene.RenderOrigin());
     std::shared_ptr<const kb::particles::ParticleRenderSnapshot> snapshot =
         kb::particles::ParticlePlayback::ReadRenderSnapshot(scene);
     if (!snapshot || snapshot->SceneId() != scene.Id() || snapshot->IsTombstone()) {

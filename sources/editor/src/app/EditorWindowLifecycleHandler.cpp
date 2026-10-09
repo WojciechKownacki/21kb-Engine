@@ -177,6 +177,9 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
             L"closing the editor")) {
         return 0;
     }
+    if (!EditorSceneLifecycleGuard::LeavePrefabEditMode(mainWindow_, sceneContext_, L"closing the editor")) {
+        return 0;
+    }
     const std::optional<EditorDirtySceneResolution> resolution =
         EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow_, sceneContext_, L"closing the editor");
     if (!resolution.has_value()) {

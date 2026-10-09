@@ -7,6 +7,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneHistoryService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -14,9 +15,9 @@ namespace kb::scene {
 
 bool SceneComponentQueryService::HasVisibilityCell(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.VisibilityCells().Has(entity); }
 const VisibilityCellComponent* SceneComponentQueryService::TryGetVisibilityCell(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.VisibilityCells().TryGet(entity) : nullptr; }
-VisibilityCellComponent* SceneComponentMutationService::TryGetVisibilityCell(Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.VisibilityCells().TryGet(entity) : nullptr; }
-void SceneComponentMutationService::SetVisibilityCell(Scene& scene, SceneEntity entity, const VisibilityCellComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.VisibilityCells().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::RemoveVisibilityCell(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.VisibilityCells().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
+VisibilityCellComponent* SceneComponentMutationService::TryGetVisibilityCell(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.VisibilityCells().TryGet(entity) : nullptr; }
+void SceneComponentMutationService::SetVisibilityCell(Scene& scene, SceneEntity entity, const VisibilityCellComponent& component) { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.VisibilityCells().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::RemoveVisibilityCell(Scene& scene, SceneEntity entity) noexcept { SceneHistoryService::NoteObjectChanging(scene, entity); if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.VisibilityCells().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
 void SceneComponentMutationService::MarkVisibilityCellModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.VisibilityCells().MarkModified(entity); MarkScenePrefabNodeDirty(state, entity); } }
 
 SceneVisibilityCellComponentQueries::SceneVisibilityCellComponentQueries(const Scene& scene) noexcept : scene_(scene) {}
@@ -31,6 +32,11 @@ void SceneVisibilityCellComponents::Remove(SceneEntity entity) noexcept { SceneC
 void SceneVisibilityCellComponents::MarkModified(SceneEntity entity) noexcept { SceneComponentMutationService::MarkVisibilityCellModified(scene_, entity); }
 
 bool SceneVisibilityCellContains(const Scene& scene, SceneEntity entity, kb::math::Vec3 worldPoint) noexcept {
+    const VisibilityCellComponent* cell = scene.Components().VisibilityCells().TryGet(entity);
+    return cell != nullptr && cell->enabled && IsVisibilityCellComponentValid(*cell) && SceneRegionShapeContains(scene, entity, worldPoint);
+}
+
+bool SceneVisibilityCellContains(const Scene& scene, SceneEntity entity, const kb::math::DVec3& worldPoint) noexcept {
     const VisibilityCellComponent* cell = scene.Components().VisibilityCells().TryGet(entity);
     return cell != nullptr && cell->enabled && IsVisibilityCellComponentValid(*cell) && SceneRegionShapeContains(scene, entity, worldPoint);
 }

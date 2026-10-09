@@ -63,4 +63,18 @@ bool SceneRegionShapeContains(const Scene& scene, SceneEntity entity, Vec3 world
     return RegionShapeContainsLocal(*shape, local);
 }
 
+bool SceneRegionShapeContains(const Scene& scene, SceneEntity entity, const kb::math::DVec3& worldPoint) noexcept {
+    const RegionShapeComponent* shape = scene.Components().RegionShapes().TryGet(entity);
+    const TransformComponent* transform = scene.Transforms().TryGet(entity);
+    if (shape == nullptr || transform == nullptr || !std::isfinite(worldPoint.x) || !std::isfinite(worldPoint.y) || !std::isfinite(worldPoint.z)
+        || !IsFinite(transform->worldScale)
+        || std::abs(transform->worldScale.x) <= 0.000001F || std::abs(transform->worldScale.y) <= 0.000001F || std::abs(transform->worldScale.z) <= 0.000001F) return false;
+    Vec3 local = kb::math::Rotate(kb::math::Inverse(transform->worldRotation),
+        kb::math::RelativeTo(worldPoint, scene.Transforms().WorldTranslation(entity, *transform)));
+    local.x /= transform->worldScale.x;
+    local.y /= transform->worldScale.y;
+    local.z /= transform->worldScale.z;
+    return RegionShapeContainsLocal(*shape, local);
+}
+
 } // namespace kb::scene

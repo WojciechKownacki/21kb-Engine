@@ -92,6 +92,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.navObstacle.has_value()) {
         sceneComponents.NavObstacles().Set(entity, *components.navObstacle);
     }
+    if (components.navLink.has_value()) {
+        sceneComponents.NavLinks().Set(entity, *components.navLink);
+    }
 }
 
 } // namespace kb::scene

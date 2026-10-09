@@ -16,6 +16,7 @@ constexpr std::string_view kMaps = "Project.Maps";
 constexpr std::string_view kRendering = "Project.Rendering";
 constexpr std::string_view kInput = "Project.Input";
 constexpr std::string_view kPhysics = "Project.Physics";
+constexpr std::string_view kCrashReports = "Project.CrashReports";
 
 [[nodiscard]] std::string_view LightingPathName(ProjectSceneLightingPath path) noexcept {
     switch (path) {
@@ -107,6 +108,7 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     result.settings.inputEnabled = document.GetBool(kInput, "Enabled").value_or(defaults.inputEnabled);
     result.settings.inputMappingContext = ReadString(document, kInput, "MappingContext", defaults.inputMappingContext);
     result.settings.physicsLayersAsset = ReadString(document, kPhysics, "LayersAsset", defaults.physicsLayersAsset);
+    result.settings.crashReportUploadUrl = ReadString(document, kCrashReports, "UploadUrl", defaults.crashReportUploadUrl);
     return result;
 }
 
@@ -145,6 +147,7 @@ bool ProjectSettingsStore::Save(
     document.SetBool(kInput, "Enabled", settings.inputEnabled);
     document.SetString(kInput, "MappingContext", settings.inputMappingContext);
     document.SetString(kPhysics, "LayersAsset", settings.physicsLayersAsset);
+    document.SetString(kCrashReports, "UploadUrl", settings.crashReportUploadUrl);
     return document.Save(path, error);
 }
 

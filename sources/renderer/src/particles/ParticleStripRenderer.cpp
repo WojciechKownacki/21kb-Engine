@@ -39,8 +39,9 @@ bool ParticleStripRenderer::IsInitialized() const noexcept {
 
 const ParticleStripBuildResult& ParticleStripRenderer::Build(
     const kb::particles::ParticleRenderSnapshot& snapshot,
-    const SceneRenderCamera& camera) noexcept {
-    lastBuild_ = geometryBuilder_.Build(snapshot, camera);
+    const SceneRenderCamera& camera,
+    kb::math::Vec3 renderOffset) noexcept {
+    lastBuild_ = geometryBuilder_.Build(snapshot, camera, renderOffset);
     if (!IsInitialized() || !lastBuild_.Usable() || lastBuild_.vertices.empty()) return lastBuild_;
     bgfx::update(vertexBuffer_, 0U, bgfx::copy(lastBuild_.vertices.data(),
         static_cast<std::uint32_t>(lastBuild_.vertices.size_bytes())));

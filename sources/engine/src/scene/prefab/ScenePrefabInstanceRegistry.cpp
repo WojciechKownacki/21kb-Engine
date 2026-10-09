@@ -1,4 +1,5 @@
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
+#include "ecs/GeometricReserve.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -88,6 +89,7 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandl
         return {};
     }
 
+    ReleaseObjects(objects);
     const std::uint64_t id = nextId_++;
     const ScenePrefabInstanceHandle handle{ id };
     EnsureRecordSlot(handle);
@@ -120,6 +122,7 @@ bool ScenePrefabInstanceRegistry::Restore(
         return false;
     }
 
+    NoteChange(handle);
     static_cast<void>(Remove(handle));
     EnsureRecordSlot(handle);
     const std::size_t slot = RecordSlotIndex(handle);
@@ -154,8 +157,8 @@ std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::RegisterMany
 
     std::vector<ScenePrefabInstanceHandle> handles;
     handles.reserve(objectSets.size());
-    records_.reserve(records_.size() + objectSets.size());
-    recordAlive_.reserve(recordAlive_.size() + objectSets.size());
+    kb::ecs::ReserveGeometric(records_, records_.size() + objectSets.size());
+    kb::ecs::ReserveGeometric(recordAlive_, recordAlive_.size() + objectSets.size());
     const std::uint64_t firstBatchId = nextId_;
     EnsureRecordSlots(firstBatchId, objectSets.size());
     const PrefabInstanceBatchIndexPlan indexPlan = AnalyzePrefabInstanceBatch(
@@ -184,7 +187,7 @@ std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::RegisterMany
     const bool denseOnlyBatch = indexPlan.DenseOnly();
     const bool contiguousDenseBatch = indexPlan.ContiguousDense();
     std::vector<ScenePrefabInstanceHandle>& prefabHandles = prefabIndex_[prefab];
-    prefabHandles.reserve(prefabHandles.size() + objectSets.size());
+    kb::ecs::ReserveGeometric(prefabHandles, prefabHandles.size() + objectSets.size());
     auto sharedNodeIds = std::make_shared<std::vector<std::uint64_t>>(NodeIdsFor(resolvedPrefab));
     const std::vector<std::uint64_t>* pooledNodeIds = sharedNodeIds.get();
     batchNodeIdPool_.push_back(std::move(sharedNodeIds));
@@ -238,8 +241,8 @@ std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::RegisterMany
 
     std::vector<ScenePrefabInstanceHandle> handles;
     handles.reserve(instances.size());
-    records_.reserve(records_.size() + instances.size());
-    recordAlive_.reserve(recordAlive_.size() + instances.size());
+    kb::ecs::ReserveGeometric(records_, records_.size() + instances.size());
+    kb::ecs::ReserveGeometric(recordAlive_, recordAlive_.size() + instances.size());
     const std::uint64_t firstBatchId = nextId_;
     EnsureRecordSlots(firstBatchId, instances.size());
     const PrefabInstanceBatchIndexPlan indexPlan = AnalyzePrefabInstanceBatch(
@@ -269,7 +272,7 @@ std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::RegisterMany
     const bool contiguousDenseBatch = indexPlan.ContiguousDense();
 
     std::vector<ScenePrefabInstanceHandle>& prefabHandles = prefabIndex_[prefab];
-    prefabHandles.reserve(prefabHandles.size() + instances.size());
+    kb::ecs::ReserveGeometric(prefabHandles, prefabHandles.size() + instances.size());
     auto sharedNodeIds = std::make_shared<std::vector<std::uint64_t>>(NodeIdsFor(resolvedPrefab));
     const std::vector<std::uint64_t>* pooledNodeIds = sharedNodeIds.get();
     batchNodeIdPool_.push_back(std::move(sharedNodeIds));
@@ -328,8 +331,8 @@ std::size_t ScenePrefabInstanceRegistry::RegisterManyInstancesInPlace(
         return 0U;
     }
 
-    records_.reserve(records_.size() + instances.size());
-    recordAlive_.reserve(recordAlive_.size() + instances.size());
+    kb::ecs::ReserveGeometric(records_, records_.size() + instances.size());
+    kb::ecs::ReserveGeometric(recordAlive_, recordAlive_.size() + instances.size());
     const std::uint64_t firstBatchId = nextId_;
     EnsureRecordSlots(firstBatchId, instances.size());
     const PrefabInstanceBatchIndexPlan indexPlan = AnalyzePrefabInstanceBatch(
@@ -359,7 +362,7 @@ std::size_t ScenePrefabInstanceRegistry::RegisterManyInstancesInPlace(
     const bool contiguousDenseBatch = indexPlan.ContiguousDense();
 
     std::vector<ScenePrefabInstanceHandle>& prefabHandles = prefabIndex_[prefab];
-    prefabHandles.reserve(prefabHandles.size() + instances.size());
+    kb::ecs::ReserveGeometric(prefabHandles, prefabHandles.size() + instances.size());
     auto sharedNodeIds = std::make_shared<std::vector<std::uint64_t>>(NodeIdsFor(resolvedPrefab));
     const std::vector<std::uint64_t>* pooledNodeIds = sharedNodeIds.get();
     batchNodeIdPool_.push_back(std::move(sharedNodeIds));
@@ -448,8 +451,8 @@ std::size_t ScenePrefabInstanceRegistry::RegisterManyCreatedDenseInstancesInPlac
         return 0U;
     }
 
-    records_.reserve(records_.size() + instances.size());
-    recordAlive_.reserve(recordAlive_.size() + instances.size());
+    kb::ecs::ReserveGeometric(records_, records_.size() + instances.size());
+    kb::ecs::ReserveGeometric(recordAlive_, recordAlive_.size() + instances.size());
     const std::uint64_t firstBatchId = nextId_;
     EnsureRecordSlots(firstBatchId, instances.size());
     const std::size_t requiredDenseSize = static_cast<std::size_t>(maxDenseIndex) + 1U;
@@ -461,7 +464,7 @@ std::size_t ScenePrefabInstanceRegistry::RegisterManyCreatedDenseInstancesInPlac
     }
 
     std::vector<ScenePrefabInstanceHandle>& prefabHandles = prefabIndex_[prefab];
-    prefabHandles.reserve(prefabHandles.size() + instances.size());
+    kb::ecs::ReserveGeometric(prefabHandles, prefabHandles.size() + instances.size());
     auto sharedNodeIds = std::make_shared<std::vector<std::uint64_t>>(NodeIdsFor(resolvedPrefab));
     const std::vector<std::uint64_t>* pooledNodeIds = sharedNodeIds.get();
     batchNodeIdPool_.push_back(std::move(sharedNodeIds));
@@ -572,7 +575,36 @@ ScenePrefabInstanceRecord* ScenePrefabInstanceRegistry::FindMutable(ScenePrefabI
         return nullptr;
     }
 
+    NoteChange(handle);
     return &records_[RecordSlotIndex(handle)];
+}
+
+ScenePrefabInstanceRecord* ScenePrefabInstanceRegistry::MutableRecord(ScenePrefabInstanceHandle handle) noexcept {
+    return RecordSlotAlive(handle) ? &records_[RecordSlotIndex(handle)] : nullptr;
+}
+
+void ScenePrefabInstanceRegistry::NoteChange(ScenePrefabInstanceHandle handle) noexcept {
+    if (journal_ != nullptr) {
+        journal_->BeforeChange(handle, RecordSlotAlive(handle) ? &records_[RecordSlotIndex(handle)] : nullptr);
+    }
+}
+
+void ScenePrefabInstanceRegistry::SetJournal(ScenePrefabInstanceJournal* journal) noexcept {
+    journal_ = journal;
+}
+
+std::uint64_t ScenePrefabInstanceRegistry::NextHandleId() const noexcept {
+    return nextId_;
+}
+
+std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::HandlesSince(std::uint64_t firstId) const {
+    std::vector<ScenePrefabInstanceHandle> handles;
+    for (std::size_t index = firstId == 0U ? 0U : static_cast<std::size_t>(firstId - 1U); index < recordAlive_.size(); ++index) {
+        if (recordAlive_[index] != 0U) {
+            handles.push_back(ScenePrefabInstanceHandle{ static_cast<std::uint64_t>(index) + 1U });
+        }
+    }
+    return handles;
 }
 
 ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindRootInstance(SceneObject object) const noexcept {
@@ -680,21 +712,27 @@ bool ScenePrefabInstanceRegistry::ContainsExactlyPrefabHandles(ScenePrefabHandle
 }
 
 void ScenePrefabInstanceRegistry::MarkNodeDirty(ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex) {
-    ScenePrefabInstanceRecord* record = FindMutable(handle);
+    ScenePrefabInstanceRecord* record = MutableRecord(handle);
     if (record == nullptr || nodeIndex >= record->Objects().size()) {
         return;
     }
 
+    ++changeRevision_;
     if (std::ranges::find(record->dirtyNodeIndices, nodeIndex) == record->dirtyNodeIndices.end()) {
         record->dirtyNodeIndices.push_back(nodeIndex);
     }
 }
 
 void ScenePrefabInstanceRegistry::MarkTopologyDirty(ScenePrefabInstanceHandle handle) {
-    ScenePrefabInstanceRecord* record = FindMutable(handle);
+    ScenePrefabInstanceRecord* record = MutableRecord(handle);
     if (record != nullptr) {
+        ++changeRevision_;
         record->topologyDirty = true;
     }
+}
+
+std::uint64_t ScenePrefabInstanceRegistry::ChangeRevision() const noexcept {
+    return changeRevision_;
 }
 
 std::span<const std::uint32_t> ScenePrefabInstanceRegistry::DirtyNodes(ScenePrefabInstanceHandle handle) const noexcept {
@@ -708,7 +746,7 @@ bool ScenePrefabInstanceRegistry::TopologyDirty(ScenePrefabInstanceHandle handle
 }
 
 void ScenePrefabInstanceRegistry::ClearDirtyNodes(ScenePrefabInstanceHandle handle) noexcept {
-    ScenePrefabInstanceRecord* record = FindMutable(handle);
+    ScenePrefabInstanceRecord* record = MutableRecord(handle);
     if (record != nullptr) {
         record->dirtyNodeIndices.clear();
         record->topologyDirty = false;
@@ -727,6 +765,22 @@ void ScenePrefabInstanceRegistry::ReindexObjects(ScenePrefabInstanceHandle handl
 
     UnindexObjects(handle, oldObjects);
     IndexObjects(handle, *record);
+}
+
+void ScenePrefabInstanceRegistry::ForgetDestroyedObject(SceneEntity entity) noexcept {
+    if (liveRecordCount_ == 0U) {
+        return;
+    }
+    std::uint32_t nodeIndex = 0U;
+    const ScenePrefabInstanceHandle owner = FindContainingEntity(entity, nodeIndex);
+    const ScenePrefabInstanceRecord* record = Find(owner);
+    if (record == nullptr || nodeIndex >= record->Objects().size() || record->Objects()[nodeIndex].Entity() != entity) {
+        return;
+    }
+    // The record keeps the destroyed object in its slot; history needs it to relink the object it recreates.
+    NoteChange(owner);
+    const SceneObject tracked = record->Objects()[nodeIndex];
+    UnindexObjects(owner, std::span<const SceneObject>{ &tracked, 1U });
 }
 
 bool ScenePrefabInstanceRegistry::UpdateSource(ScenePrefabInstanceHandle handle, ScenePrefabHandle prefab, std::string prefabGuid) {
@@ -755,6 +809,7 @@ bool ScenePrefabInstanceRegistry::Remove(ScenePrefabInstanceHandle handle) noexc
         return false;
     }
 
+    NoteChange(handle);
     const std::size_t slot = RecordSlotIndex(handle);
     ScenePrefabInstanceRecord& record = records_[slot];
     RemoveFromPrefabIndex(record.prefab, handle);
@@ -772,6 +827,13 @@ bool ScenePrefabInstanceRegistry::Remove(ScenePrefabInstanceHandle handle) noexc
 }
 
 void ScenePrefabInstanceRegistry::Clear() noexcept {
+    if (journal_ != nullptr) {
+        for (std::size_t index = 0; index < recordAlive_.size(); ++index) {
+            if (recordAlive_[index] != 0U) {
+                journal_->BeforeChange(ScenePrefabInstanceHandle{ static_cast<std::uint64_t>(index) + 1U }, &records_[index]);
+            }
+        }
+    }
     records_.clear();
     recordAlive_.clear();
     liveRecordCount_ = 0;
@@ -962,6 +1024,25 @@ void ScenePrefabInstanceRegistry::UnindexObjects(ScenePrefabInstanceHandle handl
                 objectIndex_.erase(objectIterator);
             }
         }
+    }
+}
+
+// An object belongs to one instance. Registering it again takes it out of the instance that held it,
+// and an instance whose root is taken goes away: its objects belong to the new instance's prefab.
+void ScenePrefabInstanceRegistry::ReleaseObjects(std::span<const SceneObject> objects) {
+    for (const SceneObject object : objects) {
+        std::uint32_t nodeIndex = 0U;
+        const ScenePrefabInstanceHandle owner = FindContainingEntity(object.Entity(), nodeIndex);
+        ScenePrefabInstanceRecord* record = FindMutable(owner);
+        if (record == nullptr || nodeIndex >= record->Objects().size() || record->Objects()[nodeIndex].Entity() != object.Entity()) {
+            continue;
+        }
+        if (nodeIndex == 0U) {
+            static_cast<void>(Remove(owner));
+            continue;
+        }
+        record->MutableObjects()[nodeIndex] = SceneObject{};
+        UnindexObjects(owner, std::span<const SceneObject>{ &object, 1U });
     }
 }
 

@@ -7,8 +7,12 @@
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabComponentSnapshot.hpp"
 #include "scene/prefab/ScenePrefabInstanceTopology.hpp"
+#include "scene/prefab/ScenePrefabNestedResolver.hpp"
+#include "scene/prefab/ScenePrefabOverrideDetector.hpp"
+#include "scene/prefab/ScenePrefabRecord.hpp"
 
 #include <algorithm>
 #include <span>
@@ -41,24 +45,54 @@ void AppendNode(
 
     std::uint64_t stableId = ScenePrefabNodeDesc::InvalidStableId;
     const std::uint32_t sourceNodeIndex = FindTrackedObjectIndex(sourceInstance, object);
-    if (const ScenePrefabNodeDesc* sourceNode = sourcePrefab.TryGetNode(sourceNodeIndex); sourceNode != nullptr) {
+    const ScenePrefabNodeDesc* sourceNode = sourcePrefab.TryGetNode(sourceNodeIndex);
+    if (sourceNode != nullptr) {
         stableId = sourceNode->stableId;
     }
 
-    const std::uint32_t nodeIndex = output.AddNode(ScenePrefabNodeDesc{
+    ScenePrefabNodeDesc node{
         .stableId = stableId,
         .name = scene.Entities().Name(object),
-        .nestedPrefabGuid = {},
-        .nestedPrefabOverrides = {},
+        .nestedPrefabGuid = sourceNode != nullptr ? sourceNode->nestedPrefabGuid : std::string{},
+        .nestedPrefabOverrides = sourceNode != nullptr ? sourceNode->nestedPrefabOverrides : std::vector<ScenePrefabPropertyOverride>{},
         .parentNode = parentNode,
         .transform = scene.Transforms().Get(object),
         .visibility = scene.Components().Visibility().Get(object.Entity()),
         .components = ScenePrefabComponentSnapshot::Capture(scene, object),
-    });
+    };
+    node.SetLocalTranslation(scene.Transforms().LocalTranslation(object.Entity()));
+    const std::uint32_t nodeIndex = output.AddNode(std::move(node));
     outputObjects.push_back(object);
 
     for (const SceneEntity child : scene.Hierarchy().ChildEntities(object.Entity())) {
         AppendNode(scene, SceneAccess::MakeObject(scene, child), nodeIndex, sourcePrefab, sourceInstance, output, outputObjects);
+    }
+}
+
+// A node that nests another prefab keeps the link, and its overrides become what its live subtree now
+// changes in that prefab. The subtree is matched to the nested prefab in depth-first order, as the
+// nested resolver maps it.
+void RecordNestedOverrides(Scene& scene, ScenePrefab& prefab, std::span<const SceneObject> objects, SceneObject rootParent) {
+    const ScenePrefabRegistry& registry = SceneAccess::State(scene).prefabs;
+    const std::uint32_t nodeCount = static_cast<std::uint32_t>(std::min(prefab.NodeCount(), objects.size()));
+    for (std::uint32_t root = 0U; root < nodeCount; ++root) {
+        const std::string guid = prefab.Nodes()[root].nestedPrefabGuid;
+        const ScenePrefabRecord* record = guid.empty() ? nullptr : registry.FindRecord(registry.FindByGuid(guid));
+        if (record == nullptr) {
+            continue;
+        }
+        const ScenePrefab nested = ScenePrefabNestedResolver::Resolve(registry, record->prefab);
+        std::uint32_t end = root + 1U;
+        while (end < nodeCount && prefab.Nodes()[end].parentNode >= root && prefab.Nodes()[end].parentNode < end) {
+            ++end;
+        }
+        if (end - root < nested.NodeCount()) {
+            continue;
+        }
+        const std::uint32_t parentNode = prefab.Nodes()[root].parentNode;
+        ScenePrefabInstanceRecord subtree{ .rootParent = parentNode < nodeCount ? objects[parentNode] : rootParent };
+        subtree.SetObjects(std::vector<SceneObject>{ objects.begin() + root, objects.begin() + root + static_cast<std::ptrdiff_t>(nested.NodeCount()) });
+        prefab.TryGetMutableNode(root)->nestedPrefabOverrides = ScenePrefabOverrideDetector::Detect(scene, nested, subtree).properties;
     }
 }
 
@@ -105,6 +139,7 @@ bool ScenePrefabOverrideApplier::Apply(Scene& scene, ScenePrefab& prefab, SceneP
         }
     }
 
+    RecordNestedOverrides(scene, updated, updatedObjects, instance.rootParent);
     prefab = std::move(updated);
     instance.SetObjects(std::move(updatedObjects));
     return true;

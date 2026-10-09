@@ -55,15 +55,13 @@ bool EditorDockModelCommands::RestoreWorkspace(std::string_view tree) {
     root_ = std::move(restored);
     nextNodeId_ = nextNodeId;
     maximizedLeafId_ = 0U;
-    // Panels the saved layout does not place - closed when it was written, or added by
-    // a later build - stay out of the tree. Marking them hidden keeps the model honest
-    // and lets the caller reopen or float them from the saved session.
+    // The saved tree decides what is open: a panel it places is visible even when the
+    // default workspace starts it closed, and one it does not place - closed when it was
+    // written, or added by a later build - stays hidden, so the caller can reopen or close
+    // it from the saved session.
     for (const DockPanel& panel : panels_.All()) {
-        if (DockNodeQuery::FindLeafContaining(root_.get(), panel.id) != nullptr) {
-            continue;
-        }
-        if (DockPanel* hidden = panels_.Find(panel.id); hidden != nullptr) {
-            hidden->visible = false;
+        if (DockPanel* restoredPanel = panels_.Find(panel.id); restoredPanel != nullptr) {
+            restoredPanel->visible = DockNodeQuery::FindLeafContaining(root_.get(), panel.id) != nullptr;
         }
     }
     return true;

@@ -1,4 +1,5 @@
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
+#include "app/EditorKeyState.hpp"
 
 #if defined(_WIN32)
 #include "rendering/script_editor/ScriptEditorDocument.hpp"
@@ -74,8 +75,9 @@ LRESULT CALLBACK EditorProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     ScriptEditorInstance* instance = InstanceOf(window);
     switch (message) {
     case WM_NCCREATE:
+        // The window owns the instance until WM_NCDESTROY deletes it.
         SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(new ScriptEditorInstance{}));
-        return DefWindowProcW(window, message, wparam, lparam);
+        return DefWindowProcW(window, message, wparam, lparam); // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
     case WM_NCDESTROY:
         delete instance;
         SetWindowLongPtrW(window, GWLP_USERDATA, 0);
@@ -148,7 +150,7 @@ LRESULT CALLBACK EditorProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                 SetCapture(window);
                 return 0;
             }
-            instance->document.SetCaret(ScriptEditorLayout::CaretFromPoint(instance->document, instance->viewport, instance->metrics, x, y), (GetKeyState(VK_SHIFT) & 0x8000) != 0);
+            instance->document.SetCaret(ScriptEditorLayout::CaretFromPoint(instance->document, instance->viewport, instance->metrics, x, y), EditorKeyDown(VK_SHIFT));
             SetCapture(window);
             InvalidateRect(window, nullptr, FALSE);
         }

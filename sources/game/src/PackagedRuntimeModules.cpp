@@ -18,11 +18,15 @@ namespace kb::game {
 bool CreatePackagedRuntimeModules(
     const kb::project::ProjectDescriptor& descriptor,
     PackagedRuntimeModules& output,
-    std::string& error) {
+    std::string& error,
+    std::filesystem::path scriptUserStorageRoot) {
     error.clear();
     PackagedRuntimeModules candidate{};
 
-    auto script = std::make_unique<kb::script::ScriptModule>();
+    kb::script::ScriptModuleOptions scriptOptions;
+    scriptOptions.runtimeOptions.userStorageRoot = std::move(scriptUserStorageRoot);
+    scriptOptions.runtimeOptions.disableFailingBehaviours = true;
+    auto script = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
     candidate.script = script.get();
     candidate.modules.push_back(std::move(script));
 

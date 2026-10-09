@@ -4,6 +4,7 @@
 #include "engine/audio/AudioPlayback.hpp"
 #include "playback/MiniaudioVoicePool.hpp"
 #include "runtime/MiniaudioEngine.hpp"
+#include "scene/MiniaudioAudioSpace.hpp"
 #include "scene/MiniaudioBusRegistry.hpp"
 #include "scene/MiniaudioListenerSynchronizer.hpp"
 #include "scene/MiniaudioOcclusionSampler.hpp"
@@ -90,6 +91,7 @@ private:
 
     MiniaudioEngine engine_;
     MiniaudioClipResolver clipResolver_;
+    MiniaudioAudioSpace audioSpace_;
     MiniaudioListenerSynchronizer listenerSynchronizer_;
     MiniaudioBusRegistry busRegistry_;
     MiniaudioOcclusionSampler occlusionSampler_;

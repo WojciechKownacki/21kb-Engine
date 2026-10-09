@@ -12,6 +12,7 @@
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace kb::scene {
@@ -24,7 +25,33 @@ class WorkerPool;
 
 namespace kb::render {
 
+struct MeshRenderProxy;
+
 class RenderScene;
+
+// Every proxy kind that shows an entity's world transform, in the order PullTransforms refreshes them: cameras
+// first, as a view-facing panel faces the primary camera, and facing panels before the meshes they orient.
+enum class RenderTransformProxyKind : std::uint8_t {
+    Camera,
+    Light,
+    FacingPanel,
+    Mesh,
+    VisibilityBlocker,
+    GeometrySwarm,
+    SurfaceCast,
+    SpaceStroke,
+};
+
+inline constexpr std::array<RenderTransformProxyKind, 8U> kRenderTransformProxyKinds{
+    RenderTransformProxyKind::Camera,
+    RenderTransformProxyKind::Light,
+    RenderTransformProxyKind::FacingPanel,
+    RenderTransformProxyKind::Mesh,
+    RenderTransformProxyKind::VisibilityBlocker,
+    RenderTransformProxyKind::GeometrySwarm,
+    RenderTransformProxyKind::SurfaceCast,
+    RenderTransformProxyKind::SpaceStroke,
+};
 
 struct EcsRenderSceneSynchronizerReserveDesc {
     std::uint32_t meshProxies = 0;
@@ -83,6 +110,11 @@ public:
         SyncRenderProxyUpdates(scene, renderScene);
     }
     void SyncFacingPanelUpdates(const kb::scene::Scene& scene, RenderScene& renderScene, bool primaryCameraChanged) const;
+    // Refreshes the transform of every existing proxy of the kinds above by reading the scene's transform store in
+    // place: a proxy whose entity's world version it already applied is skipped, a row written after the last
+    // transform sync is resolved as the structural sync resolves it. Models are built as the scene's render-proxy
+    // affines are. Proxies are created and removed by the structural and entity syncs, not here.
+    void PullTransforms(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     // Skinning palette handles address the renderer's current frame buffer and cannot be
     // retained in a render proxy across frames. Refresh only deformed mesh proxies on an
     // otherwise unchanged scene so camera-only presents keep their GPU skinning data alive.
@@ -120,6 +152,7 @@ public:
 
 private:
     void SyncImpl(const kb::scene::Scene& scene, RenderScene& renderScene, bool preserveExistingMeshes) const;
+    void PullComposedMeshTransforms(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     mutable std::vector<std::uint64_t> seenMeshes_;
     mutable std::vector<std::uint64_t> seenCameras_;
     mutable std::vector<std::uint64_t> seenLights_;
@@ -128,6 +161,21 @@ private:
     mutable std::vector<std::uint64_t> seenSurfaceCasts_;
     mutable std::vector<std::uint64_t> seenSpaceStrokes_;
     mutable std::vector<std::uint64_t> transformUpdateEntities_;
+    // PullTransforms: every mesh proxy with its transform row, retained through appends without mesh renderers.
+    struct MeshPullRow {
+        kb::scene::SceneEntity entity{};
+        const kb::scene::TransformComponent* transform = nullptr;
+        const MeshRenderProxy* proxy = nullptr;
+    };
+    mutable std::vector<MeshPullRow> meshPullRows_;
+    mutable const kb::scene::Scene* meshPullScene_ = nullptr;
+    mutable const RenderScene* meshPullRenderScene_ = nullptr;
+    mutable std::uint64_t meshPullStructuralVersion_ = 0U;
+    mutable std::uint64_t meshPullMeshSetVersion_ = 0U;
+    mutable std::size_t meshPullMeshCount_ = 0U;
+    // Rows written after the last transform sync, resolved on the calling thread after the workers.
+    mutable std::vector<std::size_t> meshPullDirtyRows_;
+    mutable std::vector<std::uint32_t> meshPullChangedGroups_;
     mutable std::vector<RenderSkinningMatrix> skinningMatrixScratch_;
     mutable std::vector<kb::scene::SkeletonBoneId> skinningBoneScratch_;
     mutable std::vector<kb::math::Mat4> skinningPoseScratch_;
@@ -136,7 +184,8 @@ private:
     mutable std::unordered_set<std::uint64_t> transformResolving_;
     mutable std::size_t transformPrecomputedReadCount_ = 0;
     mutable std::size_t transformResolvedFallbackCount_ = 0;
-    struct HistoryRibbonSample { std::array<float, 3> position{}; double timeSeconds = 0.0; };
+    // Samples keep the double-precision world position: the render origin may move between them.
+    struct HistoryRibbonSample { kb::math::DVec3 position{}; double timeSeconds = 0.0; };
     struct HistoryRibbonState {
         std::vector<HistoryRibbonSample> samples;
         std::vector<std::uint64_t> generatedMeshEntityIds;

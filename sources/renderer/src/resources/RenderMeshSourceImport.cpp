@@ -1,5 +1,8 @@
 #include "kb/render/resources/RenderMeshSourceImport.hpp"
 
+#include "engine/assets/GltfExternalResources.hpp"
+#include "engine/scene/SkeletalMeshFbxImporter.hpp"
+
 #include "resources/RenderMeshGltfMaterialImporter.hpp"
 
 #include <cgltf/cgltf.h>
@@ -11,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <system_error>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -66,43 +70,6 @@ template <typename T>
     return output;
 }
 
-[[nodiscard]] bool IsSafeRelativePath(const std::filesystem::path& path) {
-    if (path.empty() || path.is_absolute() || path.has_root_name()) return false;
-    for (const std::filesystem::path& part : path) {
-        if (part.empty() || part == "." || part == "..") return false;
-    }
-    return true;
-}
-
-[[nodiscard]] std::optional<char> HexByte(char high, char low) noexcept {
-    const auto digit = [](char value) -> std::optional<unsigned char> {
-        if (value >= '0' && value <= '9') return static_cast<unsigned char>(value - '0');
-        if (value >= 'a' && value <= 'f') return static_cast<unsigned char>(value - 'a' + 10);
-        if (value >= 'A' && value <= 'F') return static_cast<unsigned char>(value - 'A' + 10);
-        return std::nullopt;
-    };
-    const auto upper = digit(high), lower = digit(low);
-    if (!upper || !lower) return std::nullopt;
-    return static_cast<char>((*upper << 4U) | *lower);
-}
-
-[[nodiscard]] std::optional<std::string> DecodeUriPath(std::string_view uri) {
-    std::string output;
-    output.reserve(uri.size());
-    for (std::size_t index = 0U; index < uri.size(); ++index) {
-        if (uri[index] != '%') {
-            output.push_back(uri[index]);
-            continue;
-        }
-        if (index + 2U >= uri.size()) return std::nullopt;
-        const auto decoded = HexByte(uri[index + 1U], uri[index + 2U]);
-        if (!decoded) return std::nullopt;
-        output.push_back(*decoded);
-        index += 2U;
-    }
-    return output;
-}
-
 [[nodiscard]] std::optional<std::vector<std::byte>> DecodeBase64(std::string_view text) {
     static constexpr std::string_view alphabet =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -140,8 +107,8 @@ using GltfData = std::unique_ptr<cgltf_data, GltfDeleter>;
 
 [[nodiscard]] std::string GltfImageKey(const cgltf_image& image, std::size_t index) {
     if (image.uri != nullptr && !std::string_view{ image.uri }.starts_with("data:")) {
-        const auto decoded = DecodeUriPath(image.uri);
-        if (decoded && IsSafeRelativePath(std::filesystem::path{ *decoded })) return *decoded;
+        const auto relative = kb::assets::GltfRelativeResourcePath(image.uri);
+        if (relative) return relative->generic_string();
     }
     std::string extension = image.mime_type == nullptr ? std::string{} : ExtensionForMime(image.mime_type);
     if (extension.empty()) extension = ".png";
@@ -199,11 +166,13 @@ void SetGltfMaterialTexturePaths(
         texture.embeddedBytes = std::move(*decoded);
         return texture;
     }
-    const auto decoded = DecodeUriPath(uri);
-    if (!decoded || !IsSafeRelativePath(std::filesystem::path{ *decoded })) {
-        return Fail<RenderMeshSourceTexture>(error, "glTF image URI is not a safe relative path.");
+    // Only a relative file inside the document's folder: no scheme, no absolute path, no "..".
+    std::string resolveError;
+    const auto file = kb::assets::ResolveGltfResourceFile(sourcePath.parent_path(), uri, &resolveError);
+    if (!file) {
+        return Fail<RenderMeshSourceTexture>(error, "glTF image URI is not a safe relative path: " + resolveError);
     }
-    texture.sourcePath = (sourcePath.parent_path() / std::filesystem::path{ *decoded }).lexically_normal();
+    texture.sourcePath = *file;
     return texture;
 }
 
@@ -216,16 +185,16 @@ void SetGltfMaterialTexturePaths(
         return Fail<RenderMeshSourceImportManifest>(error, "Mesh material inspection could not parse glTF source.");
     }
     GltfData data{ raw };
-    if (cgltf_load_buffers(&options, data.get(), sourcePath.string().c_str()) != cgltf_result_success) {
-        return Fail<RenderMeshSourceImportManifest>(error, "Mesh material inspection could not load glTF buffers.");
+    std::string bufferError;
+    if (!kb::assets::LoadGltfBuffers(options, *data, sourcePath.parent_path(), {}, &bufferError)) {
+        return Fail<RenderMeshSourceImportManifest>(error,
+            "Mesh material inspection could not load glTF buffers: " + bufferError);
     }
     RenderMeshSourceImportManifest manifest{};
     manifest.materials.reserve(data->materials_count);
     for (cgltf_size index = 0U; index < data->materials_count; ++index) {
         const cgltf_material& material = data->materials[index];
-        const std::string name = material.name == nullptr || material.name[0] == '\0'
-            ? "Material_" + std::to_string(index)
-            : std::string{ material.name };
+        const std::string name = kb::assets::GltfMaterialSlotName(*data, static_cast<std::size_t>(index));
         RenderMeshEmbeddedMaterial embedded = RenderMeshGltfMaterialImporter::BuildEmbeddedMaterial(name, &material);
         SetGltfMaterialTexturePaths(embedded, material, *data);
         manifest.materials.push_back(std::move(embedded));
@@ -330,6 +299,10 @@ using FbxScene = std::unique_ptr<ufbx_scene, FbxDeleter>;
     ufbx_load_opts options{};
     options.load_external_files = false;
     options.use_blender_pbr_material = true;
+    std::error_code sizeError;
+    const std::size_t memoryLimit = kb::scene::FbxLoadMemoryLimit(std::filesystem::file_size(sourcePath, sizeError));
+    options.temp_allocator.memory_limit = memoryLimit;
+    options.result_allocator.memory_limit = memoryLimit;
     ufbx_error loadError{};
     FbxScene scene{ ufbx_load_file(sourcePath.string().c_str(), &options, &loadError) };
     if (!scene) return Fail<RenderMeshSourceImportManifest>(error,

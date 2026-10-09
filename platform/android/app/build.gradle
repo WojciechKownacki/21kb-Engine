@@ -91,6 +91,8 @@ def requestedMinSdk = providers.gradleProperty("kbMinSdk").orElse("28")
 def requestedTargetSdk = providers.gradleProperty("kbTargetSdk").orElse("35")
 def requestedApplicationIcon = providers.gradleProperty("kbApplicationIcon")
 def requestedLegalAssets = providers.gradleProperty("kbLegalAssets")
+// Release public key and product id the player checks its pack against; written by packaging.
+def requestedTrustAnchor = providers.gradleProperty("kbTrustAnchor")
 
 def applicationIdValue = requestedApplicationId.get().trim()
 def versionNameValue = requestedVersionName.get().trim()
@@ -258,6 +260,11 @@ tasks.register("stageRuntimeAssets", Sync) {
     }
     if (requestedLegalAssets.isPresent()) {
         from(new File(requestedLegalAssets.get()))
+    }
+    if (requestedTrustAnchor.isPresent()) {
+        from(new File(requestedTrustAnchor.get())) {
+            rename { "kb_trust_anchor.bin" }
+        }
     }
 }
 

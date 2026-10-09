@@ -1,10 +1,7 @@
 #pragma once
 
-// Kernel column primitives: explicit no-alias and alignment contracts for hot
-// kernels. These wrappers carry the compiler-visible promises that the roadmap
-// hot path depends on (restrict pointers, known alignment) without adding any
-// runtime overhead in release builds. They are intentionally minimal: a single
-// responsibility each, composable, and zero-cost once optimized.
+// Non-owning kernel column views. Alignment hints are issued only when the
+// actual pointer satisfies them; offsets and overlapping views remain valid.
 
 #include <cassert>
 #include <cstddef>
@@ -22,8 +19,8 @@
 
 namespace kb::ecs {
 
-// Default SoA column alignment used across the native archetype storage. Columns
-// are allocated 64-byte aligned so AVX-512 loads and full cache lines are legal.
+// Preferred kernel alignment. Native chunk bases have this alignment, but an
+// individual component column is only guaranteed its registered type alignment.
 inline constexpr std::size_t kKernelColumnAlignment = 64U;
 
 [[nodiscard]] constexpr bool IsPowerOfTwo(std::size_t value) noexcept {
@@ -34,19 +31,20 @@ inline constexpr std::size_t kKernelColumnAlignment = 64U;
     return alignment != 0U && (reinterpret_cast<std::uintptr_t>(pointer) % alignment) == 0U;
 }
 
-// Returns a pointer the compiler may assume is aligned to Alignment bytes. In
-// debug builds the assumption is checked; in release it lowers to the bare
-// pointer with the optimizer hint attached.
+// Attach an alignment hint only after checking the actual address. An offset
+// column can retain its ordinary element alignment without meeting Alignment.
 template <std::size_t Alignment, typename T>
 [[nodiscard]] T* AssumeAligned(T* pointer) noexcept {
     static_assert(IsPowerOfTwo(Alignment), "ECS kernel alignment must be a power of two");
-    assert((pointer == nullptr || IsPointerAligned(pointer, Alignment)) && "ECS kernel pointer is not aligned to the assumed boundary");
-    return std::assume_aligned<Alignment>(pointer);
+    if (pointer != nullptr && IsPointerAligned(pointer, Alignment)) {
+        return std::assume_aligned<Alignment>(pointer);
+    }
+    return pointer;
 }
 
-// Thin wrapper over a pointer that promises the referenced data does not alias
-// any other restrict pointer in the same scope. Use for hot kernel column
-// arguments so the compiler can vectorize without alias guards.
+// Compatibility pointer wrapper. A view alone cannot prove that other column
+// views do not overlap, so the historical name does not impose a no-alias
+// promise. Restricted kernel arguments require a separate disjoint-range proof.
 template <typename T>
 class RestrictPtr {
 public:
@@ -76,13 +74,13 @@ public:
     }
 
 private:
-    T* KB_RESTRICT pointer_ = nullptr;
+    T* pointer_ = nullptr;
 };
 
-// A non-owning, alignment-annotated, non-aliasing view over a single SoA column.
-// Carries a compile-time alignment contract (default 64B to match storage) plus
-// a runtime debug assertion, and hands out pointers the compiler may assume are
-// aligned. It owns no memory: storage lifetime is the caller's responsibility.
+// A non-owning column view with a preferred alignment. Data() supplies a checked
+// alignment hint when possible and an ordinary pointer otherwise. IsAligned()
+// lets an intrinsic kernel choose between aligned and unaligned operations.
+// Storage lifetime and ordinary element alignment remain the caller's responsibility.
 template <typename T, std::size_t Alignment = kKernelColumnAlignment>
 class AlignedColumn {
 public:
@@ -94,17 +92,19 @@ public:
 
     constexpr AlignedColumn() noexcept = default;
 
-    AlignedColumn(T* data, std::size_t count) noexcept : data_(data), count_(count) {
-        assert((data == nullptr || IsPointerAligned(data, Alignment)) && "ECS aligned column constructed from an unaligned pointer");
-    }
+    AlignedColumn(T* data, std::size_t count) noexcept : data_(data), count_(count) {}
 
-    // Returns the column base with the alignment assumption attached for codegen.
+    // Returns the base; the compiler hint is conditional on its actual alignment.
     [[nodiscard]] T* Data() const noexcept {
         return AssumeAligned<Alignment>(data_);
     }
 
     [[nodiscard]] std::size_t Count() const noexcept {
         return count_;
+    }
+
+    [[nodiscard]] bool IsAligned() const noexcept {
+        return data_ == nullptr || IsPointerAligned(data_, Alignment);
     }
 
     [[nodiscard]] bool Empty() const noexcept {
@@ -121,18 +121,12 @@ public:
     }
 
     [[nodiscard]] AlignedColumn Subrange(std::size_t begin, std::size_t count) const noexcept {
-        assert(begin <= count_ && begin + count <= count_ && "ECS aligned column subrange is out of bounds");
-        // A sub-offset only preserves the column alignment when it lands on an
-        // aligned element boundary; otherwise the caller must fall back to an
-        // unaligned view. We keep the contract honest by asserting it.
+        assert(begin <= count_ && count <= count_ - begin && "ECS aligned column subrange is out of bounds");
         T* offsetData = data_ == nullptr ? nullptr : data_ + begin;
-        return AlignedColumn{ offsetData, count, AlignmentHonoredTag{} };
+        return AlignedColumn{ offsetData, count };
     }
 
 private:
-    struct AlignmentHonoredTag {};
-    AlignedColumn(T* data, std::size_t count, AlignmentHonoredTag) noexcept : data_(data), count_(count) {}
-
     T* data_ = nullptr;
     std::size_t count_ = 0U;
 };

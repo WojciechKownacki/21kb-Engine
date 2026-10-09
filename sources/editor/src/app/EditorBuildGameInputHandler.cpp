@@ -1,4 +1,5 @@
 #include "app/EditorBuildGameInputHandler.hpp"
+#include "app/EditorKeyState.hpp"
 
 #include "app/EditorTextInputShortcuts.hpp"
 #include "rendering/BuildGamePanelModel.hpp"
@@ -17,7 +18,7 @@ bool EditorBuildGameInputHandler::HandleCharacter(wchar_t character) const {
 bool EditorBuildGameInputHandler::HandleKeyDown(HWND owner, WPARAM key) const {
     if (!sceneContext_.IsBuildGameTextEditing()) return false;
     const BuildGameField field = sceneContext_.BuildGameEditingField();
-    const bool sensitive = field == BuildGameField::AndroidStorePassword || field == BuildGameField::AndroidKeyPassword;
+    const bool sensitive = BuildGamePanelModel::IsSecret(field);
     switch (EditorTextInputShortcuts::Resolve(key)) {
     case EditorTextInputShortcut::SelectAll:
         static_cast<void>(sceneContext_.SelectAllBuildGameText());
@@ -51,7 +52,7 @@ bool EditorBuildGameInputHandler::HandleKeyDown(HWND owner, WPARAM key) const {
         return true;
     case VK_TAB:
         static_cast<void>(sceneContext_.FocusAdjacentBuildGameTextField(
-            (GetKeyState(VK_SHIFT) & 0x8000) != 0));
+            EditorKeyDown(VK_SHIFT)));
         return true;
     case VK_BACK:
         static_cast<void>(sceneContext_.BackspaceBuildGameText());

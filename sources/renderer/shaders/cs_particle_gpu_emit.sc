@@ -5,36 +5,33 @@
 // acceleration with linear drag), so each frame the kernel only re-evaluates the slot at the
 // current time and writes the instance consumed by vs_particle_instanced.
 BUFFER_RO(spawnRecords, vec4, 0);
-BUFFER_WO(instanceOut, vec4, 1);
+#include "particle_gpu_common.sh"
 
-uniform vec4 u_gpuParticleMotion; // xyz = acceleration, w = linear drag
-uniform vec4 u_gpuParticleTime;   // x = now, y = slot count, z = stretch velocity scale, w = minimum stretch
-uniform vec4 u_gpuParticleColor[8];
-uniform vec4 u_gpuParticleSize[2]; // eight sizes over normalized age
+// Local-space emitters: the birth records are in the owner's frame; u_gpuParticleWorld carries them to
+// world space every frame. The (world-space) acceleration is expressed in that frame for the closed form.
+uniform mat4 u_gpuParticleWorld;
+uniform mat4 u_gpuParticleWorldInverse;
+uniform vec4 u_gpuParticleLocal; // x = 1 for a local-space emitter
 
-float SampleSize(float u)
+// Where a particle born at `start` with velocity `launch` is after `t` seconds (constant acceleration, linear drag).
+vec3 ClosedFormPosition(vec3 start, vec3 launch, vec3 accel, float drag, float t)
 {
-    float sizes[8];
-    sizes[0] = u_gpuParticleSize[0].x; sizes[1] = u_gpuParticleSize[0].y;
-    sizes[2] = u_gpuParticleSize[0].z; sizes[3] = u_gpuParticleSize[0].w;
-    sizes[4] = u_gpuParticleSize[1].x; sizes[5] = u_gpuParticleSize[1].y;
-    sizes[6] = u_gpuParticleSize[1].z; sizes[7] = u_gpuParticleSize[1].w;
-    float scaled = clamp(u, 0.0, 1.0) * 7.0;
-    int index = int(min(floor(scaled), 6.0));
-    return mix(sizes[index], sizes[index + 1], scaled - float(index));
-}
-
-vec4 SampleColor(float u)
-{
-    float scaled = clamp(u, 0.0, 1.0) * 7.0;
-    int index = int(min(floor(scaled), 6.0));
-    return mix(u_gpuParticleColor[index], u_gpuParticleColor[index + 1], scaled - float(index));
+    if (drag > 0.0001)
+    {
+        vec3 terminal = accel / drag;
+        return start + terminal * t + (launch - terminal) * ((1.0 - exp(-drag * t)) / drag);
+    }
+    return start + launch * t + accel * (0.5 * t * t);
 }
 
 NUM_THREADS(64, 1, 1)
 void main()
 {
-    uint slot = gl_GlobalInvocationID.x;
+    // A trail emitter writes one instance per trail segment of every slot; the other outputs one per slot.
+    uint perSlot = max(uint(u_gpuParticleOutput.y), 1u);
+    uint index = gl_GlobalInvocationID.x;
+    uint slot = index / perSlot;
+    uint segment = index - slot * perSlot;
     if (slot >= uint(u_gpuParticleTime.y))
     {
         return;
@@ -44,19 +41,43 @@ void main()
     vec4 motion = spawnRecords[slot * 2u + 1u];
     float age = u_gpuParticleTime.x - start.w;
     float lifetime = motion.w;
-    uint base = slot * 5u;
+    uint base = index * 5u;
     if (lifetime <= 0.0 || age < 0.0 || age >= lifetime)
     {
-        // Dead or unborn slot: a zero-sized instance collapses to a point and is clipped.
-        instanceOut[base] = vec4(0.0, 0.0, 0.0, 0.0);
-        instanceOut[base + 1u] = vec4(0.0, 0.0, 0.0, 0.0);
-        instanceOut[base + 2u] = vec4(0.0, 0.0, 0.0, 0.0);
-        instanceOut[base + 3u] = vec4(0.0, 0.0, 0.0, 0.0);
-        instanceOut[base + 4u] = vec4(0.0, 0.0, 0.0, 0.0);
+        WriteDeadInstance(base);
         return;
     }
 
+    if (u_gpuParticleOutput.x > 1.5)
+    {
+        // Trail segment `segment` (newest first) runs between the positions one segment-time apart.
+        float newer = age - float(segment) * u_gpuParticleOutput.z;
+        float older = max(newer - u_gpuParticleOutput.z, 0.0);
+        vec3 trailAccel = u_gpuParticleMotion.xyz;
+        vec3 head = ClosedFormPosition(start.xyz, motion.xyz, trailAccel, u_gpuParticleMotion.w, newer);
+        vec3 tail = ClosedFormPosition(start.xyz, motion.xyz, trailAccel, u_gpuParticleMotion.w, older);
+        vec3 along = head - tail;
+        float length_ = length(along);
+        if (newer <= 0.0 || length_ < 0.0001)
+        {
+            WriteDeadInstance(base);
+            return;
+        }
+        float width = max(u_gpuParticleOutput.w, 0.0001);
+        instanceOut[base] = vec4((head + tail) * 0.5, width);
+        instanceOut[base + 1u] = vec4(0.0, 0.0, 0.0, 0.0);
+        instanceOut[base + 2u] = vec4(along, length_ / width);
+        instanceOut[base + 3u] = vec4(1.0, 1.0, 1.0, 1.0);
+        instanceOut[base + 4u] = vec4(0.0, age / lifetime, 0.0, 0.0);
+        return;
+    }
+
+    bool local = u_gpuParticleLocal.x > 0.5;
     vec3 accel = u_gpuParticleMotion.xyz;
+    if (local)
+    {
+        accel = mul(u_gpuParticleWorldInverse, vec4(accel, 0.0)).xyz;
+    }
     float drag = u_gpuParticleMotion.w;
     vec3 position;
     vec3 velocity;
@@ -73,11 +94,10 @@ void main()
         position = start.xyz + motion.xyz * age + accel * (0.5 * age * age);
     }
 
-    float u = age / lifetime;
-    float speed = length(velocity);
-    instanceOut[base] = vec4(position, SampleSize(u));
-    instanceOut[base + 1u] = vec4(position - velocity * 0.016666668, 0.0);
-    instanceOut[base + 2u] = vec4(velocity, max(u_gpuParticleTime.w, speed * u_gpuParticleTime.z));
-    instanceOut[base + 3u] = SampleColor(u);
-    instanceOut[base + 4u] = vec4(0.0, u, 0.0, 0.0);
+    if (local)
+    {
+        position = mul(u_gpuParticleWorld, vec4(position, 1.0)).xyz;
+        velocity = mul(u_gpuParticleWorld, vec4(velocity, 0.0)).xyz;
+    }
+    WriteLiveInstance(base, position, velocity, age / lifetime, ParticleSpin(slot, start.w, age));
 }

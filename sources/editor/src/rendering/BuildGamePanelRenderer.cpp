@@ -167,10 +167,10 @@ void DrawCheckbox(HDC dc, const RECT& box, bool checked, const EditorTheme& them
             DrawInputFrame(dc, valueBox, Color(theme.chrome), editing ? Color(theme.accent) : Color(theme.borderPanel));
             std::string value;
             if (spec.kind == BuildGameRowKind::Password) {
-                const bool present = spec.field == BuildGameField::AndroidStorePassword
-                    ? sceneContext.HasBuildGameStorePassword() : sceneContext.HasBuildGameKeyPassword();
+                const bool present = sceneContext.HasBuildGameSecret(spec.field);
                 const std::size_t length = editing ? sceneContext.BuildGameEditBuffer().size() : (present ? 8U : 0U);
-                value = length == 0U ? "Required for this Release build" : std::string(length, '*');
+                value = length == 0U ? (spec.required ? "Required for this Release build" : "Needed only with a certificate file")
+                                     : std::string(length, '*');
             } else {
                 value = editing ? std::string{ sceneContext.BuildGameEditBuffer() } :
                     BuildGamePanelModel::Value(spec.field, sceneContext.BuildGameTarget(),
@@ -193,7 +193,8 @@ void DrawFooter(HDC dc, const BuildGamePanelLayoutRects& rects, const EditorThem
     const BuildGameValidation validation = BuildGamePanelModel::Validate(sceneContext.BuildGameTarget(),
         sceneContext.ProjectConfiguration(), sceneContext.BuildGameSettings(),
         sceneContext.BuildGameSelectedProfile() == 1, running,
-        sceneContext.HasBuildGameStorePassword(), sceneContext.HasBuildGameKeyPassword());
+        sceneContext.HasBuildGameStorePassword(), sceneContext.HasBuildGameKeyPassword(),
+        sceneContext.HasBuildGameSecret(BuildGameField::WindowsCertificatePassword));
     const EditorBuildGameTargetSettings& targetSettings = sceneContext.BuildGameSettings().For(sceneContext.BuildGameTarget());
     std::string first = targetSettings.outputDirectory.empty() ? "Output directory is not selected" : targetSettings.outputDirectory.generic_string();
     std::string second = validation.reason;
