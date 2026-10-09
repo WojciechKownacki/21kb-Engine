@@ -104,6 +104,7 @@
 #include "engine/scene/AiBehaviourRuntime.hpp"
 #include "engine/scene/AiBlackboard.hpp"
 #include "engine/scene/Navigation.hpp"
+#include "engine/scene/SceneNavigation.hpp"
 #include "engine/scene/Perception.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/visual/VisualGraphNodeCatalog.hpp"
@@ -4652,29 +4653,28 @@ void RunEngineLibrarySignalTest() {
 }
 
 void RunNavigationFoundationContractTest() {
-    kb::scene::NavQueryFilter filter;
-    kb::tests::Require(filter.Allows(kb::scene::kDefaultNavArea) && filter.AreaCost(kb::scene::kDefaultNavArea) == 1.0F,
-        "Navigation filter must admit the default area at unit cost");
+    // Area costs live with the scene's navigation meshes: invalid areas and costs are refused.
+    kb::scene::Scene costScene;
     constexpr kb::scene::NavAreaId kMudArea = 3U;
-    filter.SetIncludedAreas(kb::scene::NavAreaBit(kMudArea));
-    kb::tests::Require(!filter.Allows(kb::scene::kDefaultNavArea) && filter.Allows(kMudArea),
-        "Navigation filter included-area mask did not constrain traversal");
-    kb::tests::Require(filter.SetAreaCost(kMudArea, 2.5F) && filter.AreaCost(kMudArea) == 2.5F,
-        "Navigation filter did not retain a positive area cost");
-    filter.SetExcludedAreas(kb::scene::NavAreaBit(kMudArea));
-    kb::tests::Require(!filter.Allows(kMudArea), "Navigation filter exclusion must override inclusion");
-    kb::tests::Require(!filter.SetAreaCost(kb::scene::NavAreaId{ 32U }, 1.0F) &&
-            !filter.SetAreaCost(kMudArea, 0.0F) && !filter.SetAreaCost(kMudArea, std::numeric_limits<float>::infinity()),
-        "Navigation filter accepted an invalid area id or invalid traversal cost");
+    kb::tests::Require(costScene.Navigation().AreaCost(kb::scene::kDefaultNavArea) == 1.0F && costScene.Navigation().AreaCost(kMudArea) == 1.0F,
+        "Navigation areas must cost one by default");
+    costScene.Navigation().SetAreaCost(kMudArea, 2.5F);
+    kb::tests::Require(costScene.Navigation().AreaCost(kMudArea) == 2.5F, "Navigation did not retain a positive area cost");
+    costScene.Navigation().SetAreaCost(kMudArea, 0.0F);
+    costScene.Navigation().SetAreaCost(kMudArea, std::numeric_limits<float>::infinity());
+    costScene.Navigation().SetAreaCost(kb::scene::NavAreaId{ 32U }, 1.0F);
+    kb::tests::Require(costScene.Navigation().AreaCost(kMudArea) == 2.5F && costScene.Navigation().AreaCost(kb::scene::NavAreaId{ 32U }) == 0.0F,
+        "Navigation accepted an invalid area id or invalid traversal cost");
+    kb::tests::Require(kb::scene::NavAreaBit(kMudArea) == 8U && kb::scene::NavAreaBit(kb::scene::NavAreaId{ 32U }) == 0U,
+        "Navigation area masks must hold one bit per valid area");
 
-    const kb::scene::NavMesh mesh{};
     const kb::scene::NavAgent agent{};
     const kb::scene::NavObstacle obstacle{};
-    kb::tests::Require(mesh.agentRadius > 0.0F && agent.radius > 0.0F && agent.maxSpeed > 0.0F &&
+    kb::tests::Require(agent.radius > 0.0F && agent.maxSpeed > 0.0F &&
             agent.velocity.x == 0.0F && agent.velocity.y == 0.0F && agent.velocity.z == 0.0F &&
             agent.remainingDistance == 0.0F && agent.pathStatus == kb::scene::NavPathStatus::Invalid &&
             obstacle.area == kb::scene::kDefaultNavArea && obstacle.carve,
-        "Navigation foundation defaults must define a usable walkable mesh, agent and obstacle");
+        "Navigation foundation defaults must define a usable agent and obstacle");
 
     kb::scene::Scene authoredNavigationScene;
     const kb::scene::SceneObject authoredAgent = authoredNavigationScene.Entities().CreateObject({ .name = "NavigationAgent" });
@@ -4697,93 +4697,13 @@ void RunNavigationFoundationContractTest() {
             authoredObstacleComponent->size.x == 3.0F,
         "Navigation ECS components must be readable through the const scene query facade");
 
-    kb::scene::NavMesh graph;
-    graph.nodes = {
-        { .position = { 0.0F, 0.0F, 0.0F }, .area = kb::scene::kDefaultNavArea, .neighbours = { 1U, 2U } },
-        { .position = { 1.0F, 0.0F, 0.0F }, .area = kMudArea, .neighbours = { 3U } },
-        { .position = { 0.0F, 0.0F, 3.0F }, .area = kb::scene::kDefaultNavArea, .neighbours = { 3U } },
-        { .position = { 2.0F, 0.0F, 0.0F }, .area = kb::scene::kDefaultNavArea, .neighbours = {} },
-    };
-    kb::scene::NavQueryFilter routing;
-    kb::tests::Require(routing.SetAreaCost(kMudArea, 10.0F), "Navigation routing fixture could not configure mud cost");
-    const kb::scene::NavPath path = kb::scene::FindNavPath(graph, 0U, 3U, routing);
-    kb::tests::Require(path.status == kb::scene::NavPathStatus::Complete && path.corners.size() == 3U &&
-            path.corners[1].z == 3.0F, "Navigation path query did not choose the lower-cost area route");
-    routing.SetExcludedAreas(kb::scene::NavAreaBit(kMudArea));
-    const kb::scene::NavPath excludedPath = kb::scene::FindNavPath(graph, 0U, 3U, routing);
-    kb::tests::Require(excludedPath.Succeeded() && excludedPath.corners[1].z == 3.0F,
-        "Navigation path query did not respect excluded areas");
-    kb::scene::NavPathAsyncRequest asynchronous;
-    kb::tests::Require(asynchronous.Start(graph, 0U, 3U, routing), "Navigation async path request did not start");
-    kb::scene::NavPath asynchronousPath;
-    // Wait on a clock, not on a fixed number of yields. A yield budget measures how
-    // often this thread was scheduled, not how long the worker was given, so on a busy
-    // machine the budget ran out while the request was still perfectly healthy and the
-    // assertion below failed for a reason no code change caused. The deadline is far
-    // longer than the work (a four-node path) so it still catches a request that never
-    // completes, and sleeping rather than spinning stops this thread starving the
-    // worker it is waiting for.
-    const auto navigationDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 30 };
-    while (std::chrono::steady_clock::now() < navigationDeadline) {
-        asynchronousPath = asynchronous.Poll();
-        if (asynchronousPath.status != kb::scene::NavPathStatus::Pending) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
-    }
-    kb::tests::Require(asynchronousPath.Succeeded() && asynchronousPath.corners.size() == excludedPath.corners.size() &&
-            asynchronousPath.corners.size() == 3U && asynchronousPath.corners[1].z == excludedPath.corners[1].z,
-        "Navigation async path request did not publish the same filtered result as synchronous pathfinding");
-    kb::tests::Require(path.IsCurrent(graph), "Navigation path was not current for the graph revision that produced it");
-    ++graph.revision;
-    kb::tests::Require(!path.IsCurrent(graph), "Navigation path was not invalidated after navmesh topology revision changed");
-    kb::scene::NavPathAsyncRequest targetDestroyedRequest;
-    kb::tests::Require(targetDestroyedRequest.Start(graph, 0U, 3U, routing) && targetDestroyedRequest.Cancel() &&
-            targetDestroyedRequest.Poll().status == kb::scene::NavPathStatus::Cancelled,
-        "Navigation request was not cancelled when its owner reports target destruction");
-    kb::scene::NavMesh unloadMesh = graph;
-    kb::scene::NavPathAsyncRequest unloadRequest;
-    kb::tests::Require(unloadRequest.Start(unloadMesh, 0U, 3U, routing), "Navigation request could not start before scene unload");
-    unloadMesh = {};
-    kb::scene::NavPath unloadedPath;
-    const auto unloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 30 };
-    while (std::chrono::steady_clock::now() < unloadDeadline) {
-        unloadedPath = unloadRequest.Poll();
-        if (unloadedPath.status != kb::scene::NavPathStatus::Pending) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
-    }
-    kb::tests::Require(unloadedPath.Succeeded(), "Navigation request did not retain a safe navmesh snapshot across scene unload");
-    kb::scene::NavAgent steeringAgent;
-    steeringAgent.destination = { 10.0F, 5.0F, 0.0F };
-    steeringAgent.maxSpeed = 4.0F;
-    steeringAgent.acceleration = 2.0F;
-    steeringAgent.stoppingDistance = 0.5F;
-    const kb::scene::NavSteeringResult steering = kb::scene::ComputeNavSteering(
-        steeringAgent, {}, { 0.0F, 7.0F, 0.0F }, 0.25F);
-    kb::tests::Require(!steering.arrived && steering.desiredVelocity.x == 0.5F && steering.desiredVelocity.y == 0.0F,
-        "Navigation steering must accelerate horizontally without injecting vertical physics velocity");
-    const std::array avoidanceNeighbours{
-        kb::scene::NavAvoidanceNeighbor{ .position = { 0.5F, 20.0F, 0.0F }, .radius = 0.5F },
-        kb::scene::NavAvoidanceNeighbor{ .position = { 8.0F, 0.0F, 0.0F }, .radius = 0.5F },
-    };
-    const kb::math::Vec3 avoidedVelocity = kb::scene::ComputeNavAvoidance(
-        steeringAgent, {}, steering.desiredVelocity, avoidanceNeighbours);
-    kb::tests::Require(avoidedVelocity.x < steering.desiredVelocity.x && avoidedVelocity.y == 0.0F &&
-            std::sqrt(avoidedVelocity.x * avoidedVelocity.x + avoidedVelocity.z * avoidedVelocity.z) <= steeringAgent.maxSpeed,
-        "Navigation avoidance must apply deterministic horizontal separation without exceeding agent speed");
-    const std::array coincidentNeighbours{
-        kb::scene::NavAvoidanceNeighbor{ .position = {}, .radius = 0.5F },
-    };
-    const kb::math::Vec3 coincidentVelocity = kb::scene::ComputeNavAvoidance(
-        steeringAgent, {}, steering.desiredVelocity, coincidentNeighbours);
-    kb::tests::Require(coincidentVelocity.x < 0.0F && coincidentVelocity.y == 0.0F,
-        "Navigation avoidance must provide deterministic separation for coincident agents");
-    steeringAgent.destination = { 0.25F, 0.0F, 0.0F };
-    kb::tests::Require(kb::scene::ComputeNavSteering(steeringAgent, {}, {}, 0.25F).arrived,
-        "Navigation steering did not stop inside the agent stopping distance");
-    steeringAgent.velocity = { 1.0F, 0.0F, 0.0F };
-    steeringAgent.remainingDistance = 4.5F;
-    steeringAgent.pathStatus = kb::scene::NavPathStatus::Pending;
-    kb::tests::Require(steeringAgent.destination.x == 0.25F && steeringAgent.velocity.x == 1.0F &&
-            steeringAgent.remainingDistance == 4.5F && steeringAgent.pathStatus == kb::scene::NavPathStatus::Pending,
+    kb::scene::NavAgent runtimeAgent;
+    runtimeAgent.destination = { 0.25F, 0.0F, 0.0F };
+    runtimeAgent.velocity = { 1.0F, 0.0F, 0.0F };
+    runtimeAgent.remainingDistance = 4.5F;
+    runtimeAgent.pathStatus = kb::scene::NavPathStatus::Pending;
+    kb::tests::Require(runtimeAgent.destination.x == 0.25F && runtimeAgent.velocity.x == 1.0F &&
+            runtimeAgent.remainingDistance == 4.5F && runtimeAgent.pathStatus == kb::scene::NavPathStatus::Pending,
         "Navigation agent runtime state must expose destination, velocity, remaining distance and path status without moving physics state");
     kb::scene::PerceptionFilter perception{ .observerTeam = 1U, .maxResults = 8U, .range = 12.0F };
     kb::tests::Require(perception.IsValid() && !perception.AcceptsTeam(1U) && perception.AcceptsTeam(2U),

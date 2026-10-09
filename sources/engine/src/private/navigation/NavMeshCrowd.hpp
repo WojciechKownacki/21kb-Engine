@@ -79,7 +79,6 @@ private:
         // Slot in the profile's crowd; -1 while the agent is not a member.
         int index = -1;
         int filter = 0;
-        kb::scene::NavAreaMask areas = kb::scene::kAllNavAreas;
         // The destination handed to the crowd, and whether one was.
         kb::math::Vec3 destination{};
         bool requested = false;

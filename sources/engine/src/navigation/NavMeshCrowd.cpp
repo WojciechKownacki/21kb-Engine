@@ -249,7 +249,6 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         }
         record.profile = profile;
         record.filter = std::max(filter, 0);
-        record.areas = input.agent.areaMask;
         if (input.agent.enabled && filter >= 0 && profile < profiles) ++members[profile];
     }
 
@@ -402,8 +401,9 @@ void NavMeshCrowd::Step(NavMeshRuntime& runtime, std::span<const NavMeshCrowdAge
         if (!SameParams(current, params)) crowd->updateAgentParameters(record.index, &params);
         ++stats_.agents;
 
-        // A new destination, new areas, or tiles that changed under a path that did not reach.
-        bool replan = !record.requested || !SameBits(record.destination, input.agent.destination) || record.areas != input.agent.areaMask;
+        // A new destination (new areas move the agent to another filter and join it again, unplanned), or
+        // tiles that changed under a path that did not reach.
+        bool replan = !record.requested || !SameBits(record.destination, input.agent.destination);
         if (record.meshRevision != revision) {
             record.meshRevision = revision;
             replan = replan || record.destinationMissing || record.status == NavPathStatus::Partial || record.status == NavPathStatus::Failed;
