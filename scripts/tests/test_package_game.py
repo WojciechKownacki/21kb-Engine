@@ -1543,7 +1543,7 @@ class PackageGameTests(unittest.TestCase):
             self.assertIn(component.name, documented, component.id)
         windows = {component.id for component in third_party_notices.select_components(components, "game", "windows")}
         # meshoptimizer is compiled into the renderer, so every player ships its notice.
-        self.assertTrue({"bgfx", "bx", "bimg", "meshoptimizer", "lua", "jolt", "miniaudio", "directx-headers"} <= windows)
+        self.assertTrue({"bgfx", "bx", "bimg", "meshoptimizer", "lua", "jolt", "miniaudio", "directx-headers", "zstd"} <= windows)
         self.assertFalse({"glslang", "heroicons", "nvtt", "dawn", "androidx"} & windows)
         self.assertIn("androidx", {c.id for c in third_party_notices.select_components(components, "game", "android")})
         self.assertIn("dawn", {c.id for c in third_party_notices.select_components(components, "game", "webgpu")})

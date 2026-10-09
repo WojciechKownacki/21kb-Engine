@@ -93,6 +93,20 @@ Monocypher provides the engine's signatures, hashes, message authentication and
 authenticated encryption. For binary distributions the BSD copyright notice,
 license conditions and disclaimer are reproduced with the shipped licenses.
 
+## Zstandard
+
+- Repository: https://github.com/facebook/zstd
+- Release: `1.5.7`, fetched by CMake from
+  `https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz` at a pinned SHA-256
+- Files used: `lib/common`, `lib/compress` and `lib/decompress` (no legacy formats, no
+  dictionary builder, no assembly decoder)
+- License selected: BSD 3-Clause (dual licensed with GPLv2)
+- License file: `third_party/licenses/zstd-1.5.7.txt`
+
+Zstandard compresses the blocks of asset packs. For binary distributions the BSD
+copyright notice, license conditions and disclaimer are reproduced with the shipped
+licenses.
+
 ## etcpak
 
 - Repository: https://github.com/wolfpld/etcpak
