@@ -11,7 +11,7 @@
 #include <vector>
 
 namespace kb::navigation {
-class NavCrowd;
+class NavMeshCrowd;
 class NavMeshRuntime;
 }
 
@@ -46,8 +46,8 @@ struct SceneNavigationState {
     float stepAccumulator = 0.0F;
     // Polygon navigation meshes and the crowd moving agents over them (created on first use).
     std::shared_ptr<kb::navigation::NavMeshRuntime> polygons;
-    std::shared_ptr<kb::navigation::NavCrowd> crowd;
-    NavCrowdSettings crowdSettings{};
+    std::shared_ptr<kb::navigation::NavMeshCrowd> crowd;
+    NavigationCrowdSettings crowdSettings{};
     std::vector<kb::math::DVec3> crowdFocuses;
     bool crowdFocusesSet = false;
     // Keyed by the ContentInstance owner's entity id.

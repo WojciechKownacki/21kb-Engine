@@ -22,7 +22,7 @@
 #include "scene/systems/NavigationSceneSystem.hpp"
 #include "scene/transform/SceneTransformPrecision.hpp"
 #include "scene/transform/SceneTransformResiduals.hpp"
-#include "navigation/NavCrowd.hpp"
+#include "navigation/NavMeshCrowd.hpp"
 #include "navigation/NavMeshRuntime.hpp"
 
 #include <algorithm>
@@ -583,10 +583,10 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
     SceneNavigationState& navigation = state.navigation;
     nav::NavMeshRuntime& runtime = *navigation.polygons;
     SynchronizeOverlays(scene, state);
-    if (!navigation.crowd) navigation.crowd = std::make_shared<nav::NavCrowd>();
+    if (!navigation.crowd) navigation.crowd = std::make_shared<nav::NavMeshCrowd>();
 
     std::vector<AgentState> agents;
-    std::vector<nav::NavCrowdAgentInput> inputs;
+    std::vector<nav::NavMeshCrowdAgentInput> inputs;
     agents.reserve(authored.size());
     inputs.reserve(authored.size());
     for (const auto& [entity, agent] : authored) {
@@ -600,19 +600,20 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
             .rotation = transform->worldRotation,
             .character = scene.Components().CharacterControllers().Has(entity),
         });
-        inputs.push_back(nav::NavCrowdAgentInput{ .id = entity.Id(), .agent = agent, .position = position });
+        inputs.push_back(nav::NavMeshCrowdAgentInput{ .id = entity.Id(), .agent = agent, .position = position });
     }
-    std::vector<nav::NavCrowdCircle> circles;
+    // Obstacles that neither carve nor repaint an area are circles the crowd steers around.
+    std::vector<nav::NavMeshCrowdObstacle> circles;
     for (const nav::NavRuntimeObstacle& obstacle : runtime.Obstacles()) {
         if (obstacle.carve || obstacle.area != kDefaultNavArea) continue;
         const float radius = obstacle.shape == NavObstacleShape::Cylinder
             ? obstacle.radius
             : std::sqrt(obstacle.halfExtents.x * obstacle.halfExtents.x + obstacle.halfExtents.z * obstacle.halfExtents.z);
-        const float half = obstacle.shape == NavObstacleShape::Cylinder ? obstacle.height * 0.5F : obstacle.halfExtents.y;
-        circles.push_back(nav::NavCrowdCircle{ .center = obstacle.center, .radius = radius, .bottom = obstacle.center.y - half, .top = obstacle.center.y + half });
+        const float height = obstacle.shape == NavObstacleShape::Cylinder ? obstacle.height : obstacle.halfExtents.y * 2.0F;
+        circles.push_back(nav::NavMeshCrowdObstacle{ .id = obstacle.id, .center = obstacle.center, .radius = radius, .height = height });
     }
     const std::vector<Vec3> focuses = CrowdFocuses(scene, state);
-    std::vector<nav::NavCrowdAgentOutput> outputs;
+    std::vector<nav::NavMeshCrowdAgentOutput> outputs;
     for (std::uint32_t step = 0U; step < steps; ++step) {
         navigation.crowd->Step(runtime, inputs, circles, focuses, navigation.crowdSettings, deltaSeconds, outputs);
         for (std::size_t index = 0U; index < inputs.size(); ++index) inputs[index].position = outputs[index].position;
@@ -620,7 +621,7 @@ void StepPolygonNavigation(Scene& scene, SceneState& state, std::span<const std:
     const float elapsed = deltaSeconds * static_cast<float>(steps);
     for (std::size_t index = 0U; index < agents.size(); ++index) {
         AgentState& agent = agents[index];
-        const nav::NavCrowdAgentOutput& output = outputs[index];
+        const nav::NavMeshCrowdAgentOutput& output = outputs[index];
         if (NavAgent* component = state.componentStorage.Navigation().TryGetNavAgent(agent.entity); component != nullptr) {
             component->velocity = agent.agent.enabled ? output.velocity : Vec3{};
             component->remainingDistance = output.remainingDistance;
@@ -1039,22 +1040,22 @@ float SceneNavigation::AreaCost(NavAreaId area) const noexcept {
     return navigation.polygons ? navigation.polygons->AreaCost(area) : 1.0F;
 }
 
-void SceneNavigation::ConfigureCrowd(const NavCrowdSettings& settings) {
-    if (!std::isfinite(settings.nearDistance) || settings.nearDistance < 0.0F || settings.farUpdateInterval == 0U ||
-        settings.maxPathSearchesPerStep == 0U || !std::isfinite(settings.neighbourRangeRadii) || settings.neighbourRangeRadii <= 0.0F ||
+void SceneNavigation::ConfigureCrowd(const NavigationCrowdSettings& settings) {
+    if (!std::isfinite(settings.nearDistance) || settings.nearDistance < 0.0F || settings.farPathOptimizationInterval == 0U ||
+        settings.maxPathRequestsPerStep == 0U || !std::isfinite(settings.neighbourRangeRadii) || settings.neighbourRangeRadii <= 0.0F ||
         !std::isfinite(settings.separationWeight) || settings.separationWeight < 0.0F) {
-        throw std::invalid_argument("Crowd settings need a non-negative near distance, a positive update interval, search budget and range");
+        throw std::invalid_argument("Crowd settings need a non-negative near distance, a positive optimisation interval, request budget and range");
     }
     SceneAccess::State(scene_).navigation.crowdSettings = settings;
 }
 
-NavCrowdSettings SceneNavigation::CrowdSettings() const noexcept {
+NavigationCrowdSettings SceneNavigation::CrowdSettings() const noexcept {
     return SceneAccess::State(scene_).navigation.crowdSettings;
 }
 
-NavCrowdStats SceneNavigation::CrowdStats() const noexcept {
+NavigationCrowdStats SceneNavigation::CrowdStats() const noexcept {
     const SceneNavigationState& navigation = SceneAccess::State(scene_).navigation;
-    return navigation.crowd ? navigation.crowd->Stats() : NavCrowdStats{};
+    return navigation.crowd ? navigation.crowd->Stats() : NavigationCrowdStats{};
 }
 
 void SceneNavigation::SetCrowdFocuses(std::vector<kb::math::DVec3> focuses) {

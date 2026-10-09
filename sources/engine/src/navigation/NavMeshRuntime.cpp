@@ -22,7 +22,6 @@ constexpr int kMaxPathPolygons = 512;
 constexpr int kMaxStraightCorners = 256;
 // Runtime tile coordinates (relative to the origin's tile) stay well inside Detour's int range.
 constexpr std::int64_t kMaxRuntimeTile = std::int64_t{ 1 } << 28U;
-constexpr unsigned short kWalkableFlag = 1U;
 
 // Owns the buffers the tile cache builder fills.
 struct TileCacheScratch {
@@ -122,6 +121,7 @@ bool NavMeshRuntime::CreateMesh(std::uint32_t profile, int capacity) {
         return false;
     }
     target.capacity = capacity;
+    target.generation = nextGeneration_++;
     // The tiles of the previous mesh went with it.
     for (auto& [key, slot] : tiles_) {
         if (key.profile == profile) slot.placed.clear();
@@ -379,7 +379,7 @@ bool NavMeshRuntime::BuildLayer(const TileKey& key, const NavTile& tile, std::si
         return false;
     }
     for (int polygon = 0; polygon < scratch.polygons->npolys; ++polygon) {
-        scratch.polygons->flags[polygon] = kWalkableFlag;
+        scratch.polygons->flags[polygon] = PolygonFlags(scratch.polygons->areas[polygon]);
     }
 
     // Links whose start lies in this tile belong to it; Detour keeps the ones within the layer.
@@ -395,7 +395,7 @@ bool NavMeshRuntime::BuildLayer(const TileKey& key, const NavTile& tile, std::si
         }
         linkVertices.insert(linkVertices.end(), { link.start.x, link.start.y, link.start.z, link.end.x, link.end.y, link.end.z });
         linkRadii.push_back(link.radius);
-        linkFlags.push_back(kWalkableFlag);
+        linkFlags.push_back(PolygonFlags(AreaCode(link.area)));
         linkAreas.push_back(AreaCode(link.area));
         linkDirections.push_back(link.bidirectional ? static_cast<unsigned char>(DT_OFFMESH_CON_BIDIR) : 0U);
         linkIds.push_back(userId);
@@ -623,6 +623,68 @@ void NavMeshRuntime::ConfigureFilter(NavAreaFilter& filter, kb::scene::NavAreaMa
     for (std::uint32_t area = 0U; area < kb::scene::kNavAreaCount; ++area) {
         filter.setAreaCost(static_cast<int>(area + 1U), costs_[area]);
     }
+}
+
+unsigned short NavMeshRuntime::PolygonFlags(unsigned char areaCode) const noexcept {
+    if (areaCode == 0U || areaCode > kb::scene::kNavAreaCount) {
+        return 0U;
+    }
+    const kb::scene::NavAreaMask bit = kb::scene::NavAreaBit(static_cast<kb::scene::NavAreaId>(areaCode - 1U));
+    unsigned short flags = 0U;
+    for (int slot = 0; slot < kCrowdFilterCount; ++slot) {
+        if ((filterMasks_[static_cast<std::size_t>(slot)] & bit) != 0U) flags = static_cast<unsigned short>(flags | (1U << slot));
+    }
+    return flags;
+}
+
+void NavMeshRuntime::RefreshPolygonFlags() {
+    for (ProfileMesh& profile : meshes_) {
+        dtNavMesh* mesh = profile.mesh.get();
+        if (mesh == nullptr) continue;
+        const dtNavMesh& view = *mesh;
+        for (int index = 0; index < view.getMaxTiles(); ++index) {
+            const dtMeshTile* tile = view.getTile(index);
+            if (tile == nullptr || tile->header == nullptr) continue;
+            const dtPolyRef base = view.getPolyRefBase(tile);
+            for (int polygon = 0; polygon < tile->header->polyCount; ++polygon) {
+                static_cast<void>(mesh->setPolyFlags(base | static_cast<dtPolyRef>(polygon), PolygonFlags(tile->polys[polygon].getArea())));
+            }
+        }
+    }
+}
+
+int NavMeshRuntime::FilterSlot(kb::scene::NavAreaMask areas) {
+    int free = -1;
+    for (int slot = 0; slot < kCrowdFilterCount; ++slot) {
+        const kb::scene::NavAreaMask mask = filterMasks_[static_cast<std::size_t>(slot)];
+        if (mask != 0U && mask == areas) return slot;
+        if (mask == 0U && free < 0) free = slot;
+    }
+    if (free < 0 || areas == 0U) {
+        return -1;
+    }
+    filterMasks_[static_cast<std::size_t>(free)] = areas;
+    RefreshPolygonFlags();
+    return free;
+}
+
+void NavMeshRuntime::KeepFilterSlots(std::span<const kb::scene::NavAreaMask> used) {
+    for (int slot = 1; slot < kCrowdFilterCount; ++slot) {
+        kb::scene::NavAreaMask& mask = filterMasks_[static_cast<std::size_t>(slot)];
+        if (mask != 0U && !std::ranges::binary_search(used, mask)) mask = 0U;
+    }
+}
+
+void NavMeshRuntime::ConfigureCrowdFilter(dtQueryFilter& filter, int slot) const noexcept {
+    filter.setIncludeFlags(static_cast<unsigned short>(1U << static_cast<unsigned>(std::clamp(slot, 0, kCrowdFilterCount - 1))));
+    filter.setExcludeFlags(0U);
+    for (std::uint32_t area = 0U; area < kb::scene::kNavAreaCount; ++area) {
+        filter.setAreaCost(static_cast<int>(area + 1U), costs_[area]);
+    }
+}
+
+std::uint64_t NavMeshRuntime::MeshGeneration(std::uint32_t profile) const noexcept {
+    return profile < meshes_.size() ? meshes_[profile].generation : 0U;
 }
 
 std::optional<std::pair<dtPolyRef, Vec3>> NavMeshRuntime::Nearest(std::uint32_t profile, Vec3 position, Vec3 extents, const NavAreaFilter& filter) {

@@ -9,7 +9,7 @@ them as a crowd.
 | Generation (Recast), build settings, geometry | `engine/navigation/NavMeshBuild.hpp`, `NavGeometryCollector.hpp` |
 | The navigation mesh asset (`.21kbnavmesh`) | `engine/navigation/NavMeshAsset.hpp` |
 | Runtime meshes, obstacles, links (Detour) | `src/private/navigation/NavMeshRuntime.hpp` |
-| Crowd | `src/private/navigation/NavCrowd.hpp` |
+| Crowd (DetourCrowd) | `src/private/navigation/NavMeshCrowd.hpp` |
 | Scene API | `engine/scene/SceneNavigation.hpp` (`scene.Navigation()`) |
 | Off-mesh links | `kb::scene::NavLink` component (`engine/scene/Navigation.hpp`) |
 | Baking with the renderer's mesh loaders | `kb/render/world/NavMeshBakeTool.hpp`, `RenderNavGeometrySource.hpp` |
@@ -141,27 +141,40 @@ Without polygon meshes, agents keep using the node graph of `SetMesh` as before.
 
 ## Crowds
 
-With polygon meshes present, the navigation system moves every enabled `NavAgent` as a crowd at
-the scene's fixed step:
+With polygon meshes present, the navigation system moves every enabled `NavAgent` with DetourCrowd
+(`dtCrowd`, compiled from the same Recast & Detour release) at the scene's fixed step. A crowd walks
+one Detour mesh, so there is one crowd per agent profile; `NavMeshCrowd` keeps the agents and the
+crowds in step:
 
-- Paths are planned on the polygons (A* over the agent's areas and the scene's area costs) with a
-  bounded number of searches per step (`maxPathSearchesPerStep`); waiting agents report `Pending`.
-  A destination off the mesh, or unreachable, gives a `Partial` path to the closest point.
-- Agents follow a path corridor, string-pulled into corners, shortened when a later corner comes
-  into view and re-optimised locally twice a second.
-- They keep apart (separation) and choose velocities with velocity obstacles against neighbours,
-  walls and non-carving obstacles, then resolve remaining overlaps; their moves are constrained to
-  the mesh, so they follow its height.
-- Off-mesh links are crossed as jumps (an arc), ladders (climbing on the low end) or walks.
+- Each agent is a crowd member with its `NavAgent` values: radius, height, maximum speed and
+  acceleration; its neighbour range is `neighbourRangeRadii` radii.
+- Destinations are handed to the crowd with at most `maxPathRequestsPerStep` per step; waiting
+  agents report `Pending`. The crowd plans the path corridor (a quick search first, the rest of a
+  long path through its path queue), string-pulls it into corners, shortens it when a later corner
+  comes into view and re-optimises it locally. A destination off the mesh gives `Failed`; an
+  unreachable one a `Partial` path to the closest point. An agent stops within its
+  `stoppingDistance` of the end of its path.
+- The crowd keeps agents apart (separation), samples velocities against neighbours and walls
+  (obstacle avoidance), resolves remaining overlaps and constrains moves to the mesh, so agents
+  follow its height.
+- **Areas:** the crowd filters polygons by their flag bits. Every area mask in use gets one of 16
+  filter slots, and the polygons whose area is in a slot's mask carry that slot's flag, so masks
+  and the scene's area costs apply exactly.
+- **Non-carving obstacles** without an area join every crowd as members that never move: agents
+  avoid them like other agents and are pushed out of them.
+- **Off-mesh links** are crossed by the crowd; the agent is shown arcing over a jump, climbing a
+  ladder at its low end before stepping across, or walking straight.
 - **Level of detail:** agents within `nearDistance` of a focus (`SetCrowdFocuses`, else every
-  enabled Stream Focus; without any focus every agent is near) update every step; the others
-  update every `farUpdateInterval` steps with the time that passed, without velocity sampling.
-- Agents are processed in entity id order and decide from one snapshot, so equal input replays to
-  equal positions. Agents with a character controller hand their velocity to the physics
-  character; while crossing a link their transform is placed directly.
+  enabled Stream Focus; without any focus every agent is near) avoid, separate and shorten their
+  paths every step; the others only follow their corridors, shortening them every
+  `farPathOptimizationInterval` steps.
+- Agents join the crowds in entity id order and the crowds run on one thread, so equal input
+  replays to equal positions. Agents with a character controller hand their velocity to the
+  physics character and follow where it moved them; while crossing a link their transform is
+  placed directly.
 
-`ConfigureCrowd(NavCrowdSettings)` sets the budgets; `CrowdStats()` reports near and far updates,
-searches, waiting agents, agents on links and the step's wall time.
+`ConfigureCrowd(NavigationCrowdSettings)` sets the budgets; `CrowdStats()` reports near and far
+agents, path requests, waiting agents, agents on links, sampled velocities and the step's wall time.
 
 ## Script API
 
@@ -181,9 +194,10 @@ components.
 
 On the development machine (Release, one thread for the crowd):
 
-- Baking a 200 x 200 m arena with 25 pillars (cell 0.3 m, 96-cell tiles, 64 tiles): about 21 ms.
-- Crowd step, agents walking across that arena through each other: 1000 agents about 2 ms,
-  5000 agents about 18 ms, 5000 agents with level of detail around one focus about 7.6 ms.
+- Baking a 200 x 200 m arena with 25 pillars (cell 0.3 m, 96-cell tiles, 64 tiles) without a
+  worker pool: about 73 ms.
+- Crowd step, agents walking across that arena through each other: 1000 agents about 2.6 ms,
+  5000 agents about 21 ms, 5000 agents with level of detail around one focus about 16 ms.
   Under load from other builds on the same machine the figures doubled.
 
 `kb_engine_navigation-crowd-bench` checks that 1000 agents step within 8 ms and that level of
@@ -192,6 +206,13 @@ detail makes a large crowd cheaper.
 ## Limits
 
 - The crowd runs on one thread; LOD is the lever for very large crowds.
+- A crowd walks one Detour mesh, so agents avoid and push only agents of their own profile.
+- At most 16 different agent area masks are in use at a time (the crowd's filter slots); an agent
+  whose mask finds no free slot reports a `Failed` path. A crowd holds at most 65 535 agents and
+  non-carving obstacles.
+- The crowd's own budgets are fixed by DetourCrowd: a 20-node quick search per destination, 8 paths
+  in its queue with 100 search nodes per step, at most 6 neighbours per agent and corridors of up to
+  256 polygons.
 - Polygons have no detail mesh: heights inside a polygon are interpolated from its corners.
 - A layer spans at most 255 voxels of height; Recast splits taller walkable regions into layers.
 - A layer holds at most 255 walkable regions; a layer of a tile more cluttered than that builds

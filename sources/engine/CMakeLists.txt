@@ -886,7 +886,7 @@ add_library(kb_engine STATIC
         src/scene/components/SceneLensEchoApi.cpp
         src/scene/components/SceneLensEchoStorage.cpp
       src/scene/SceneContentInstanceService.cpp
-    src/navigation/NavCrowd.cpp
+    src/navigation/NavMeshCrowd.cpp
     src/navigation/NavGeometryCollector.cpp
     src/navigation/NavMeshAsset.cpp
     src/navigation/NavMeshBuilder.cpp
@@ -1266,7 +1266,7 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneLensEchoComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
-    src/private/navigation/NavCrowd.hpp
+    src/private/navigation/NavMeshCrowd.hpp
     src/private/navigation/NavMeshRuntime.hpp
     src/private/world/WorldAssetLoaders.hpp
     src/private/world/WorldObjectSplit.hpp
