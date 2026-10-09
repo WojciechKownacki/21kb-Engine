@@ -570,7 +570,7 @@ void AppendWorldPartitionGrid(
         return;
     }
     const kb::scene::Vec3& camera = sceneContext.ViewportCamera().Position();
-    for (const EditorWorldGridLine& line : sceneContext.WorldPartition().GridLines(camera.x, 0.0, camera.z)) {
+    for (const EditorWorldGridLine& line : sceneContext.WorldPartition().CachedGridLines(camera.x, 0.0, camera.z)) {
         lines.push_back(kb::render::PhysicsDebugLine{
             .from = line.from,
             .to = line.to,

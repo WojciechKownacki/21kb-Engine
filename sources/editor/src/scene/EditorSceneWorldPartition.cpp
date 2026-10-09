@@ -80,6 +80,7 @@ bool EditorSceneContext::LoadWorldRegion(kb::world::WorldCellCoord min, kb::worl
         console_.Error("World", "Cells could not be loaded: " + error);
         return false;
     }
+    worldPartition_.InvalidateGrid();
     sceneGraphCookPending_ = true;
     InvalidateHierarchyRows();
     MarkSceneRenderDirty();
@@ -115,6 +116,7 @@ bool EditorSceneContext::UnloadWorldRegion(kb::world::WorldCellCoord min, kb::wo
         return false;
     }
     // Undo steps may name the removed objects; edits themselves are kept for saving.
+    worldPartition_.InvalidateGrid();
     ReleaseRenderedSceneResources();
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
@@ -134,6 +136,7 @@ bool EditorSceneContext::LoadAllWorldCells() {
         console_.Error("World", "Cells could not be loaded: " + error);
         return false;
     }
+    worldPartition_.InvalidateGrid();
     sceneGraphCookPending_ = true;
     InvalidateHierarchyRows();
     MarkSceneRenderDirty();
@@ -152,6 +155,7 @@ bool EditorSceneContext::UnloadAllWorldCells() {
         console_.Error("World", "Cells could not be unloaded: " + error);
         return false;
     }
+    worldPartition_.InvalidateGrid();
     ReleaseRenderedSceneResources();
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
@@ -259,6 +263,7 @@ bool EditorSceneContext::ToggleSelectedObjectAlwaysLoaded() {
         console_.Error("World", "Object could not be changed: " + error);
         return false;
     }
+    worldPartition_.InvalidateGrid();
     MarkSceneDocumentDirty();
     console_.Info("World", scene_->Entities().Name(root) + (alwaysLoaded ? " is now always loaded." : " now streams with its cell."));
     return true;
