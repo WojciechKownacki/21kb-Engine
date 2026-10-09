@@ -12,6 +12,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/world/WorldCellBuilder.hpp"
 #include "engine/world/WorldCellIndex.hpp"
@@ -26,9 +27,11 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -762,6 +765,154 @@ void RunUnbuiltWorldTests() {
 
 } // namespace
 
+struct EntitySearch {
+    scene::Scene* scene = nullptr;
+    std::string_view name;
+    std::optional<scene::SceneEntity> found;
+};
+
+void VisitEntityNamed(scene::SceneEntity entity, const scene::TransformComponent&, void* context) {
+    auto* search = static_cast<EntitySearch*>(context);
+    if (!search->found.has_value() && search->scene->Entities().Name(entity) == search->name) search->found = entity;
+}
+
+[[nodiscard]] std::optional<scene::SceneEntity> EntityNamed(scene::Scene& target, std::string_view name) {
+    EntitySearch search{ .scene = &target, .name = name, .found = std::nullopt };
+    target.Transforms().ForEach(&VisitEntityNamed, &search);
+    return search.found;
+}
+
+// A world 100 000 km out, where neighbouring floats are 8 m apart: objects keep their exact translations through the
+// edit session, their object files, the cell builder (cells, cell scenes, HLOD input) and streaming (sources, HLOD
+// proxies), and their cells are decided by those translations. An object file written before translations were
+// stored in double precision still loads.
+void RunFarWorldTests() {
+    constexpr double kFar = 1.0e8;
+    const std::filesystem::path root = FreshDirectory("far");
+    const std::filesystem::path descriptorPath = root / "Worlds" / "Far.21kbworld";
+    WorldDescriptor descriptor;
+    descriptor.guid = "far-world";
+    descriptor.name = "Far";
+    descriptor.cellSize = 100.0;
+    descriptor.objectsDirectory = "Far.objects";
+    descriptor.hlod = { .enabled = true, .range = 500.0, .triangleRatio = 0.5 };
+    std::string error;
+    Check(WorldDescriptorIO::Write(descriptorPath, descriptor, error), "far world must write: " + error);
+    const std::filesystem::path objects = WorldPaths::ObjectsDirectory(descriptorPath, descriptor);
+    // 199.5 m past a cell corner: rounded to float, the tower would stand in the next cell.
+    const kb::math::DVec3 towerPosition{ kFar + 199.5, 2.0, kFar + 50.25 };
+    WorldObjectFile tower = MakeObject("far-tower", "Tower", 0.0, 0.0, {}, false, 77U);
+    tower.prefab.TryGetMutableNode(0U)->SetLocalTranslation(towerPosition);
+    tower.header.position = { towerPosition.x, towerPosition.y, towerPosition.z };
+    WriteObject(objects, tower);
+    const WorldCellCoord towerCell{ 1000001, 1000000 };
+
+    scene::Scene editor;
+    WorldEditSession session;
+    Check(session.Open(editor, descriptorPath, error) && session.LoadAll(error) == 1U, "the far world must open: " + error);
+    std::optional<WorldEditObjectInfo> loaded;
+    for (const WorldEditObjectInfo& object : session.Objects()) {
+        if (object.name == "Tower") loaded = object;
+    }
+    Check(loaded.has_value() && loaded->cell == std::optional<WorldCellCoord>{ towerCell } &&
+            editor.Transforms().WorldTranslation(loaded->root) == towerPosition,
+        "a far object loads at its exact translation and in its own cell");
+    const kb::math::DVec3 movedPosition = towerPosition + kb::math::DVec3{ 0.125, 0.0, 0.0 };
+    editor.Transforms().SetLocalTranslation(loaded->root, movedPosition);
+    editor.Runtime().SynchronizeTransforms();
+    Check(session.Save(error) && session.LastSaveStats().written == 1U, "a far edit saves: " + error);
+    const WorldObjectReadResult saved = WorldObjectFileIO::Read(objects / (tower.header.guid + ".21kbobject"));
+    Check(saved.succeeded && saved.object.header.position.x == movedPosition.x && saved.object.header.position.z == movedPosition.z &&
+            saved.object.prefab.Nodes().front().LocalTranslation() == movedPosition,
+        "a far object file stores its root's exact translation");
+    session.Close();
+
+    RecordingHlodBaker baker;
+    const WorldBuildResult built = WorldCellBuilder::Build(descriptorPath, &baker);
+    Check(built.succeeded, "the far world must build: " + built.error);
+    const WorldCellIndexReadResult index = WorldCellIndexIO::Read(WorldPaths::CellIndexPath(descriptorPath));
+    Check(index.succeeded && index.index.units.size() == 1U && index.index.units.front().coord == towerCell,
+        "a far object is built into the cell of its exact translation");
+    const scene::SceneDocumentLoadResult cellScene = scene::SceneDocumentService::Load(WorldPaths::CellsDirectory(descriptorPath) / index.index.units.front().scene);
+    Check(cellScene.succeeded && cellScene.document.worldPrefab.Nodes().front().LocalTranslation() == movedPosition,
+        "a far cell scene keeps the exact translation");
+    Check(baker.requests.size() == 1U && std::abs(baker.requests.front().instances.front().transform[9] - 99.625) < 1e-9 &&
+            std::abs(baker.requests.front().instances.front().transform[11] - 50.25) < 1e-9,
+        "far HLOD input is relative to the cell corner to the micrometre");
+
+    // Streaming: the tower's cell is outside the load radius and inside the HLOD range of a far source.
+    StreamingHarness harness;
+    harness.scene = std::make_unique<scene::Scene>();
+    kb::assets::AssetManager& manager = harness.scene->Assets().Manager();
+    Check(manager.RegisterLoader(std::make_unique<StandInMeshLoader>()) && manager.Mounts().Mount("Game", root) &&
+            manager.DiscoverMountedAssets() > 0U, "the far world project must mount");
+    const kb::assets::AssetMetadata* world = manager.Registry().FindByPath("/Game/Worlds/Far.21kbworld");
+    Check(world != nullptr, "the far world asset is registered");
+    const scene::SceneObject owner = harness.scene->Entities().CreateObject(scene::SceneObjectDesc{ .name = "World" });
+    harness.scene->Components().ContentInstances().Set(owner.Entity(), scene::ContentInstanceComponent{
+        .assetId = world->id.value, .kind = scene::ContentInstanceKind::PartitionedWorld, .lifetime = scene::ContentInstanceLifetime::Owner, .active = true });
+    harness.world = owner.Entity();
+    WorldPartitionRuntime runtime = harness.Runtime();
+    const std::uint64_t source = runtime.AddSource({ .position = { kFar + 199.5 - 400.0, 0.0, kFar + 50.0 }, .loadRadius = 20.0, .unloadRadius = 30.0, .priority = 0 });
+    Settle(harness);
+    const std::optional<scene::SceneEntity> proxy = EntityNamed(*harness.scene, "HLOD 1000001,1000000");
+    harness.scene->Runtime().SynchronizeTransforms();
+    Check(runtime.IsHlodVisible(harness.world, towerCell) && proxy.has_value() &&
+            harness.scene->Transforms().WorldTranslation(*proxy) == kb::math::DVec3{ kFar + 100.0, 0.0, kFar },
+        "a far HLOD proxy stands exactly at its cell corner");
+    Check(runtime.RemoveSource(source), "the far source must be removable");
+    // A stream focus on an entity standing next to the tower (2 m away) loads exactly the tower's cell.
+    const scene::SceneObject focus = harness.scene->Entities().CreateObject(scene::SceneObjectDesc{ .name = "Focus" });
+    harness.scene->Transforms().SetLocalTranslation(focus.Entity(), movedPosition + kb::math::DVec3{ -2.0, 0.0, 0.0 });
+    harness.scene->Components().StreamFocuses().Set(focus.Entity(), scene::StreamFocusComponent{ .innerRadius = 5.0F, .outerRadius = 10.0F });
+    Settle(harness);
+    const std::optional<scene::SceneEntity> streamed = EntityNamed(*harness.scene, "Tower");
+    Check(Loaded(harness) == std::set<WorldCellCoord>{ towerCell } && streamed.has_value() &&
+            harness.scene->Transforms().WorldTranslation(*streamed) == movedPosition,
+        "a far stream focus loads the cell around it and the object streams in at its exact translation");
+
+    // An object file whose payload stores float translations (scene version 41) still loads.
+    WorldObjectFile legacy;
+    legacy.header.guid = MakeDeterministicWorldObjectGuid("legacy-rock");
+    legacy.header.name = "Legacy Rock";
+    legacy.header.position = { 120.5, 0.0, -40.25 };
+    scene::ScenePrefabNodeDesc legacyRoot;
+    legacyRoot.stableId = WorldObjectStableId(legacy.header.guid, 0U);
+    legacyRoot.name = "Legacy Rock";
+    legacyRoot.transform.localPosition = { 120.5F, 0.0F, -40.25F };
+    static_cast<void>(legacy.prefab.AddNode(std::move(legacyRoot)));
+    legacy.header.nodeCount = 1U;
+    std::vector<std::uint8_t> bytes = WorldObjectFileIO::Serialize(legacy, error);
+    Check(!bytes.empty(), "the legacy object must serialize: " + error);
+    const std::size_t payloadSizeOffset = [&] {
+        for (std::size_t offset = bytes.size() - 4U;; --offset) {
+            std::uint32_t size = 0U;
+            std::memcpy(&size, bytes.data() + offset, 4U);
+            if (offset + 4U + size == bytes.size()) return offset;
+        }
+    }();
+    const double doubles[3]{ 120.5, 0.0, -40.25 };
+    std::vector<std::uint8_t> doubleBytes(24U);
+    std::vector<std::uint8_t> floatBytes(12U);
+    for (std::size_t axis = 0U; axis < 3U; ++axis) {
+        const float value = static_cast<float>(doubles[axis]);
+        std::memcpy(doubleBytes.data() + axis * 8U, &doubles[axis], 8U);
+        std::memcpy(floatBytes.data() + axis * 4U, &value, 4U);
+    }
+    const auto found = std::search(bytes.begin() + static_cast<std::ptrdiff_t>(payloadSizeOffset + 4U), bytes.end(), doubleBytes.begin(), doubleBytes.end());
+    Check(found != bytes.end(), "the legacy object payload holds its double translation");
+    const auto at = bytes.erase(found, found + 24);
+    bytes.insert(at, floatBytes.begin(), floatBytes.end());
+    const std::uint32_t legacySize = static_cast<std::uint32_t>(bytes.size() - payloadSizeOffset - 4U);
+    const std::uint32_t legacyVersion = 41U;
+    std::memcpy(bytes.data() + payloadSizeOffset, &legacySize, 4U);
+    std::memcpy(bytes.data() + payloadSizeOffset + 4U + 8U, &legacyVersion, 4U);
+    const WorldObjectReadResult legacyRead = WorldObjectFileIO::Parse(bytes);
+    Check(legacyRead.succeeded && legacyRead.object.prefab.Nodes().front().LocalTranslation() == kb::math::DVec3{ 120.5, 0.0, -40.25 },
+        "an object file with a float-translation payload must still load: " + legacyRead.error);
+    std::filesystem::remove_all(root);
+}
+
 void RunWorldPartitionTests() {
     RunGridTests();
     RunFormatTests();
@@ -771,6 +922,7 @@ void RunWorldPartitionTests() {
     RunBudgetTests();
     RunDeterminismTests();
     RunUnbuiltWorldTests();
+    RunFarWorldTests();
 }
 
 } // namespace kb::tests
