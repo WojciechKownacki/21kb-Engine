@@ -16,6 +16,7 @@ void SceneNavigationComponentStore::Mark##Name##Modified(SceneEntity entity) noe
 
 KB_NAVIGATION_STORE(NavAgent, NavAgent)
 KB_NAVIGATION_STORE(NavObstacle, NavObstacle)
+KB_NAVIGATION_STORE(NavLink, NavLink)
 
 #undef KB_NAVIGATION_STORE
 

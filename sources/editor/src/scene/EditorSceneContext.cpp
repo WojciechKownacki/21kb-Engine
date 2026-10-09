@@ -4511,6 +4511,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "NavLink") {
+        if (scene_->Components().NavLinks().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Nav Link component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Nav Link Component", [this, entity]() {
+            scene_->Components().NavLinks().Set(entity, kb::scene::NavLink{});
+            return true;
+        });
+    }
 
     console_.Warning("Inspector", "Unknown component: " + std::string{ componentId });
     return false;

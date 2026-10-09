@@ -254,9 +254,31 @@ struct ComponentAccess {
             return true; \
         } }
 
+#define KB_NAV_LINK_KIND(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::NavLinkKind::Walk)) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<kb::scene::NavLinkKind>(value.AsInt()); \
+            return true; \
+        } }
+
+#define KB_NAV_AREA(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() >= static_cast<int>(kb::scene::kNavAreaCount)) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<kb::scene::NavAreaId>(value.AsInt()); \
+            return true; \
+        } }
+
 // clang-format on
 
-constexpr std::array<std::string_view, 32> kComponentNames{
+constexpr std::array<std::string_view, 33> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -270,6 +292,7 @@ constexpr std::array<std::string_view, 32> kComponentNames{
     "Joint",
     "NavAgent",
     "NavObstacle",
+    "NavLink",
     "Tags",
     "RegionShape",
     "GuideCurve",
@@ -606,6 +629,20 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kNavObstaclePropertyDe
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
+constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kNavLinkPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "start.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "start.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "start.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "end.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "end.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "end.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "area", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "bidirectional", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
 constexpr std::array<FieldBinding, 13> kTransformFields{
     KB_NESTED_FLOAT(kb::scene::TransformComponent, localPosition, x),
     KB_NESTED_FLOAT(kb::scene::TransformComponent, localPosition, y),
@@ -800,6 +837,20 @@ constexpr std::array<FieldBinding, 9> kNavObstacleFields{
     KB_FLOAT(kb::scene::NavObstacle, radius),
     KB_FLOAT(kb::scene::NavObstacle, height),
     KB_BOOL(kb::scene::NavObstacle, enabled),
+};
+
+constexpr std::array<FieldBinding, 11> kNavLinkFields{
+    KB_NESTED_FLOAT(kb::scene::NavLink, start, x),
+    KB_NESTED_FLOAT(kb::scene::NavLink, start, y),
+    KB_NESTED_FLOAT(kb::scene::NavLink, start, z),
+    KB_NESTED_FLOAT(kb::scene::NavLink, end, x),
+    KB_NESTED_FLOAT(kb::scene::NavLink, end, y),
+    KB_NESTED_FLOAT(kb::scene::NavLink, end, z),
+    KB_FLOAT(kb::scene::NavLink, radius),
+    KB_NAV_LINK_KIND(kb::scene::NavLink, kind),
+    KB_NAV_AREA(kb::scene::NavLink, area),
+    KB_BOOL(kb::scene::NavLink, bidirectional),
+    KB_BOOL(kb::scene::NavLink, enabled),
 };
 
 constexpr std::array<FieldBinding, 1> kTagsFields{
@@ -1112,6 +1163,7 @@ void MarkJointModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) n
 }
 void MarkNavAgentModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavAgents().MarkModified(entity); }
 void MarkNavObstacleModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavObstacles().MarkModified(entity); }
+void MarkNavLinkModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavLinks().MarkModified(entity); }
 void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tags().MarkModified(entity); }
 void MarkRegionShapeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionShapes().MarkModified(entity); }
 void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().GuideCurves().MarkModified(entity); }
@@ -1183,6 +1235,10 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
     if (componentName == "NavObstacle") {
         kb::scene::NavObstacle* component = scene.Components().NavObstacles().TryGet(entity);
         return ComponentAccess{ component, component, kNavObstacleFields, &MarkNavObstacleModified };
+    }
+    if (componentName == "NavLink") {
+        kb::scene::NavLink* component = scene.Components().NavLinks().TryGet(entity);
+        return ComponentAccess{ component, component, kNavLinkFields, &MarkNavLinkModified };
     }
     if (componentName == "Tags") {
         kb::scene::TagsComponent* component = scene.Components().Tags().TryGet(entity);
@@ -1331,6 +1387,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     }
     if (componentName == "NavAgent") return kNavAgentPropertyDescs;
     if (componentName == "NavObstacle") return kNavObstaclePropertyDescs;
+    if (componentName == "NavLink") return kNavLinkPropertyDescs;
     if (componentName == "Tags") return kTagsPropertyDescs;
     return {};
 }

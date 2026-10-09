@@ -90,6 +90,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneDeformedGeometryComponents deformedGeometries;
     SceneNavAgentComponents navAgents;
     SceneNavObstacleComponents navObstacles;
+    SceneNavLinkComponents navLinks;
     SceneUIComponents ui;
 };
 

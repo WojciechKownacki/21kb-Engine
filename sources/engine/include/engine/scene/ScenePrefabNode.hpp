@@ -130,6 +130,7 @@ struct ScenePrefabNodeComponents {
     std::optional<DrawD3DeformedGeometryComponent> deformedGeometry;
     std::optional<NavAgent> navAgent;
     std::optional<NavObstacle> navObstacle;
+    std::optional<NavLink> navLink;
 };
 
 struct ScenePrefabNodeDesc {

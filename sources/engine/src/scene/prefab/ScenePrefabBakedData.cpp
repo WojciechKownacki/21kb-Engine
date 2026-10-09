@@ -84,6 +84,7 @@ namespace {
     if (components.deformedGeometry.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::DeformedGeometry);
     if (components.navAgent.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavAgent);
     if (components.navObstacle.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavObstacle);
+    if (components.navLink.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavLink);
     return mask;
 }
 
@@ -211,6 +212,7 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         if (node.components.deformedGeometry.has_value()) archetype.deformedGeometries.push_back(*node.components.deformedGeometry);
         if (node.components.navAgent.has_value()) archetype.navAgents.push_back(*node.components.navAgent);
         if (node.components.navObstacle.has_value()) archetype.navObstacles.push_back(*node.components.navObstacle);
+        if (node.components.navLink.has_value()) archetype.navLinks.push_back(*node.components.navLink);
     }
 
     return data;

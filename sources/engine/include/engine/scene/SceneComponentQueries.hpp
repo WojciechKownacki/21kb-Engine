@@ -84,6 +84,7 @@ public:
     [[nodiscard]] SceneDeformedGeometryComponentQueries DeformedGeometries() const noexcept;
     [[nodiscard]] SceneNavAgentComponentQueries NavAgents() const noexcept;
     [[nodiscard]] SceneNavObstacleComponentQueries NavObstacles() const noexcept;
+    [[nodiscard]] SceneNavLinkComponentQueries NavLinks() const noexcept;
     [[nodiscard]] SceneComponentVisitors Visitors() const noexcept;
     [[nodiscard]] SceneUIComponentQueries UI() const noexcept;
 

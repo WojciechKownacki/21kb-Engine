@@ -44,6 +44,7 @@ enum class ScenePrefabBakedComponentMask : std::uint64_t {
     DeformedGeometry = 1ULL << 33U,
     MotionSkeletonRule = 1ULL << 34U,
     ParticleEffect = 1ULL << 35U,
+    NavLink = 1ULL << 36U,
 };
 
 [[nodiscard]] constexpr std::uint64_t ScenePrefabBakedMask(ScenePrefabBakedComponentMask mask) noexcept {
@@ -94,6 +95,7 @@ struct ScenePrefabBakedArchetype {
     std::vector<DrawD3DeformedGeometryComponent> deformedGeometries;
     std::vector<NavAgent> navAgents;
     std::vector<NavObstacle> navObstacles;
+    std::vector<NavLink> navLinks;
 };
 
 class ScenePrefabBakedData {

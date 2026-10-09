@@ -1501,6 +1501,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::NavObstacleShape && property <= InspectorPropertyId::NavObstacleEnabled;
 }
 
+[[nodiscard]] bool IsNavLinkProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::NavLinkKind && property <= InspectorPropertyId::NavLinkEnabled;
+}
+
 [[nodiscard]] bool IsRegionShapeProperty(InspectorPropertyId property) noexcept {
     return property >= InspectorPropertyId::RegionShapeKind && property <= InspectorPropertyId::RegionShapeEnabled;
 }
@@ -1579,6 +1583,19 @@ template <typename Mutator>
         return false;
     }
     sceneContext.Scene().Components().NavObstacles().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditNavLink(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::NavLink* link = sceneContext.Scene().Components().NavLinks().TryGet(entity);
+    if (link == nullptr || !mutator(*link)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().NavLinks().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1772,6 +1789,20 @@ template <typename Mutator>
     }
 }
 
+[[nodiscard]] std::string NavLinkFieldValue(const kb::scene::NavLink& link, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::NavLinkStartX: return FormatCompactFloat(link.start.x);
+    case InspectorPropertyId::NavLinkStartY: return FormatCompactFloat(link.start.y);
+    case InspectorPropertyId::NavLinkStartZ: return FormatCompactFloat(link.start.z);
+    case InspectorPropertyId::NavLinkEndX: return FormatCompactFloat(link.end.x);
+    case InspectorPropertyId::NavLinkEndY: return FormatCompactFloat(link.end.y);
+    case InspectorPropertyId::NavLinkEndZ: return FormatCompactFloat(link.end.z);
+    case InspectorPropertyId::NavLinkRadius: return FormatCompactFloat(link.radius);
+    case InspectorPropertyId::NavLinkArea: return std::to_string(link.area);
+    default: return {};
+    }
+}
+
 [[nodiscard]] std::string RegionShapeFieldValue(const kb::scene::RegionShapeComponent& shape, InspectorPropertyId property) {
     switch (property) {
     case InspectorPropertyId::RegionShapeCenterX: return FormatCompactFloat(shape.center.x);
@@ -1815,6 +1846,28 @@ template <typename Mutator>
     }
     if (IsNavObstacleProperty(hit.property)) {
         sceneContext.Inspector().BeginTextEdit(hit.property, NavObstacleFieldValue(*obstacle, hit.property));
+    }
+    return true;
+}
+
+[[nodiscard]] bool HandleNavLinkClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::NavLink* link = sceneContext.Scene().Components().NavLinks().TryGet(entity);
+    if (link == nullptr) return false;
+    if (hit.property == InspectorPropertyId::NavLinkBidirectional) {
+        return EditNavLink(sceneContext, entity, "Toggle Nav Link Direction", [](kb::scene::NavLink& value) { value.bidirectional = !value.bidirectional; return true; });
+    }
+    if (hit.property == InspectorPropertyId::NavLinkEnabled) {
+        return EditNavLink(sceneContext, entity, "Toggle Nav Link", [](kb::scene::NavLink& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (hit.property == InspectorPropertyId::NavLinkKind) {
+        return EditNavLink(sceneContext, entity, "Change Nav Link Kind", [](kb::scene::NavLink& value) {
+            value.kind = value.kind == kb::scene::NavLinkKind::Jump ? kb::scene::NavLinkKind::Ladder
+                : value.kind == kb::scene::NavLinkKind::Ladder ? kb::scene::NavLinkKind::Walk : kb::scene::NavLinkKind::Jump;
+            return true;
+        });
+    }
+    if (IsNavLinkProperty(hit.property)) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, NavLinkFieldValue(*link, hit.property));
     }
     return true;
 }
@@ -2227,6 +2280,29 @@ template <typename Mutator>
         case InspectorPropertyId::NavObstacleSizeX: if (value <= 0.0F) return false; obstacle.size.x = value; return true;
         case InspectorPropertyId::NavObstacleSizeY: if (value <= 0.0F) return false; obstacle.size.y = value; return true;
         case InspectorPropertyId::NavObstacleSizeZ: if (value <= 0.0F) return false; obstacle.size.z = value; return true;
+        default: return false;
+        }
+    });
+}
+
+[[nodiscard]] bool ApplyNavLinkText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property == InspectorPropertyId::NavLinkArea) {
+        unsigned int area = 0U;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), area);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || area >= kb::scene::kNavAreaCount) return false;
+        return EditNavLink(sceneContext, entity, "Edit Nav Link Area", [area](kb::scene::NavLink& link) { link.area = static_cast<kb::scene::NavAreaId>(area); return true; });
+    }
+    float value = 0.0F;
+    if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
+    return EditNavLink(sceneContext, entity, "Edit Nav Link", [property, value](kb::scene::NavLink& link) {
+        switch (property) {
+        case InspectorPropertyId::NavLinkStartX: link.start.x = value; return true;
+        case InspectorPropertyId::NavLinkStartY: link.start.y = value; return true;
+        case InspectorPropertyId::NavLinkStartZ: link.start.z = value; return true;
+        case InspectorPropertyId::NavLinkEndX: link.end.x = value; return true;
+        case InspectorPropertyId::NavLinkEndY: link.end.y = value; return true;
+        case InspectorPropertyId::NavLinkEndZ: link.end.z = value; return true;
+        case InspectorPropertyId::NavLinkRadius: if (value <= 0.0F) return false; link.radius = value; return true;
         default: return false;
         }
     });
@@ -3065,6 +3141,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().NavObstacles().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::NavLink && sceneContext.Scene().Components().NavLinks().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Nav Link")) {
+                    sceneContext.Scene().Components().NavLinks().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (hit.section == InspectorSectionId::WorldBackdrop && sceneContext.Scene().Components().WorldBackdrops().Has(entity)) {
                 if (sceneContext.BeginSceneEditTransaction("Remove World Backdrop")) {
                     sceneContext.Scene().Components().WorldBackdrops().Remove(entity);
@@ -3365,6 +3446,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::NavObstacle) {
         return HandleNavObstacleClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::NavLink) {
+        return HandleNavLinkClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::RegionShape) {
         return HandleRegionShapeClick(sceneContext, entity, hit);
@@ -3788,6 +3872,12 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsNavObstacleProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyNavObstacleText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsNavLinkProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyNavLinkText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

@@ -12443,6 +12443,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{});
     scene.Components().NavAgents().Set(object.Entity(), kb::scene::NavAgent{});
     scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
+    scene.Components().NavLinks().Set(object.Entity(), kb::scene::NavLink{});
     scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
     scene.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{});
     scene.Components().GuideCurves().Set(object.Entity(), kb::scene::GuideCurveComponent{});
@@ -12575,7 +12576,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // task components and the complete Lens Echo schema.
     // Light is a public compatibility alias for 3D Radiance Emitter and
     // deliberately exercises the same 16 generated accessors.
-    kb::tests::Require(fieldsChecked == 617U, "Script component API generated accessor coverage test did not exercise the expected total field count (617, including collision mesh assets and the Light compatibility alias)");
+    // NavLink adds eleven fields.
+    kb::tests::Require(fieldsChecked == 628U, "Script component API generated accessor coverage test did not exercise the expected total field count (628, including collision mesh assets and the Light compatibility alias)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12607,6 +12609,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{});
     scene.Components().NavAgents().Set(object.Entity(), kb::scene::NavAgent{});
     scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
+    scene.Components().NavLinks().Set(object.Entity(), kb::scene::NavLink{});
     scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
     scene.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{});
     scene.Components().GuideCurves().Set(object.Entity(), kb::scene::GuideCurveComponent{});
@@ -12656,7 +12659,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 617U, "LIB-082 raw-pointer audit did not exercise the expected total field count (617, including collision mesh assets and the Light compatibility alias)");
+    kb::tests::Require(propertiesChecked == 628U, "LIB-082 raw-pointer audit did not exercise the expected total field count (628, including collision mesh assets and the Light compatibility alias)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
