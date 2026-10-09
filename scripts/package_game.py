@@ -76,6 +76,9 @@ from windows_pe_symbols import (
 # pack set index the Windows player mounts a multi-pack game from, and the names a chunk or patch
 # label may take (the engine's bake-cache name rules).
 DEFAULT_PACK_COMPRESSION_LEVEL = 9
+# Platforms whose players verify a signed release manifest at startup, which is what binds a pack
+# set, its patches and its key lines to a release.
+RELEASE_MANIFEST_PLATFORMS = ("windows", "linux")
 PACK_SET_INDEX = "Game.kbpackset"
 _PACK_LABEL = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 _RELEASE_NUMBER_LINE = re.compile(r"^release (0|[1-9][0-9]*)$", re.MULTILINE)
@@ -259,8 +262,8 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         args.signing_key = _existing_file(args.signing_key, "release signing key")
     if args.signing_broker is not None:
         args.signing_broker = _existing_file(args.signing_broker, "release signing broker")
-    if args.encrypt_pack and TARGETS[args.target].platform != "windows":
-        raise PackagingError("asset pack encryption is available for Windows packages only")
+    if args.encrypt_pack and TARGETS[args.target].platform not in RELEASE_MANIFEST_PLATFORMS:
+        raise PackagingError("asset pack encryption is available for Windows and Linux packages only")
     if args.release_number is None:
         args.release_number = int(time.time())
     if not 0 <= args.release_number < 2**63:
@@ -383,23 +386,23 @@ def _validate_content_packaging(args: argparse.Namespace) -> None:
     labels = [label for label, _ in args.pack_chunk_rules]
     if len(set(labels)) != len(labels):
         raise PackagingError("every --pack-chunk needs its own label")
-    windows = TARGETS[args.target].platform == "windows"
+    released = TARGETS[args.target].platform in RELEASE_MANIFEST_PLATFORMS
     world_regions = getattr(args, "pack_chunk_world_regions", False)
-    if (args.pack_chunk_rules or args.pack_chunk_cell_rules or world_regions) and not windows:
-        raise PackagingError("chunked pack sets are packaged for Windows players only")
+    if (args.pack_chunk_rules or args.pack_chunk_cell_rules or world_regions) and not released:
+        raise PackagingError("chunked pack sets are packaged for Windows and Linux players only")
     args.patch_base_entries = None
     if args.patch_from is None:
         if args.patch_level is not None:
             raise PackagingError("--patch-level needs --patch-from")
         return
-    if not windows:
-        raise PackagingError("patch packs are packaged for Windows players only")
+    if not released:
+        raise PackagingError("patch packs are packaged for Windows and Linux players only")
     if args.pack_chunk_rules or args.pack_chunk_cell_rules or world_regions:
         raise PackagingError("a patch keeps the chunks of the release it patches; --pack-chunk does not apply")
     previous = args.patch_from.expanduser().resolve(strict=True)
     manifest = previous / "release.kbmanifest"
     if not (previous / "Game.kbpack").is_file() or not manifest.is_file():
-        raise PackagingError(f"--patch-from must name a signed Windows release: {previous}")
+        raise PackagingError(f"--patch-from must name the directory of a signed Windows or Linux release: {previous}")
     match = _RELEASE_NUMBER_LINE.search(manifest.read_text(encoding="utf-8"))
     if match is None:
         raise PackagingError("the previous release's manifest has no release number")
@@ -809,7 +812,7 @@ def _build_pack_set(args: argparse.Namespace, cmake: Path, pack: Path, job: Path
     """Turns the cooked pack into what the package ships: the pack itself; a base pack and chunk
     packs split off by world cell or data layer (--pack-chunk); or, for a patch release
     (--patch-from), the packs of the release being patched plus one patch pack carrying what the
-    new cook changed. The new pack set is recorded on `args` for the Windows stage."""
+    new cook changed. The new pack set is recorded on `args` for the platform stage."""
     chunk_rules = list(getattr(args, "pack_chunk_rules", None) or [])
     cell_rules = getattr(args, "pack_chunk_cell_rules", None) or []
     if getattr(args, "pack_chunk_world_regions", False):
@@ -1749,7 +1752,29 @@ def _embed_linux_trust_anchor(args: argparse.Namespace, player: Path) -> None:
         raise PackagingError(f"Linux player trust anchor could not be embedded: {error}") from error
 
 
-def _stage_linux_local(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path) -> list[Path]:
+def _finish_linux_release(args: argparse.Namespace, pack: Path, stage: Path, job: Path) -> None:
+    """Completes a Linux release around its player: the packs (a pack set with its index when there
+    is one), the third-party notices, and the signed release manifest the player verifies at
+    startup. Runs before the first-frame proof, which runs the release exactly as it ships."""
+    _stage_pack_set(args, pack, stage, job)
+    _stage_licenses(args, stage)
+    _sign_release(args, stage, job)
+
+
+def _linux_build_receipt(args: argparse.Namespace, stage: Path) -> bytes:
+    return canonical_json_bytes({
+        "schema": 1,
+        "configuration": CONFIGURATIONS[args.configuration],
+        "engineSha256": args.engine_fingerprint,
+        "executableSha256": sha256_file(stage / args.executable_name),
+        "assetPackSha256": sha256_file(stage / "Game.kbpack"),
+        "firstFrame": True,
+    })
+
+
+def _stage_linux_local(
+    args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path | None = None
+) -> list[Path]:
     if sys.platform != "linux":
         raise PackagingError("local Linux packaging must run on Linux")
     configuration = CONFIGURATIONS[args.configuration]
@@ -1777,10 +1802,10 @@ def _stage_linux_local(args: argparse.Namespace, cmake: Path, pack: Path, stage:
     destination = stage / args.executable_name
     shutil.copy2(game, destination)
     destination.chmod(destination.stat().st_mode | 0o111)
-    # Before the first-frame proof: the player runs in packaged mode from here on.
+    # Before the first-frame proof: the player runs in packaged mode from here on, and verifies
+    # the release it is part of.
     _embed_linux_trust_anchor(args, destination)
-    shutil.copy2(pack, stage / "Game.kbpack")
-    _stage_licenses(args, stage)
+    _finish_linux_release(args, pack, stage, job if job is not None else stage.parent)
     if destination.read_bytes()[:4] != b"\x7fELF":
         raise PackagingError("Linux player does not contain a valid ELF header")
     ldd = _required_executable("ldd")
@@ -1791,14 +1816,7 @@ def _stage_linux_local(args: argparse.Namespace, cmake: Path, pack: Path, stage:
     smoke = run_checked([xvfb, "-a", destination, "--frames=1"], cwd=stage, timeout_seconds=180).output
     if "frames=1" not in smoke or "rendered=1" not in smoke or "shutdown=clean" not in smoke:
         raise PackagingError("Linux player did not prove a clean first frame")
-    (stage / "linux-build.receipt.json").write_bytes(canonical_json_bytes({
-        "schema": 1,
-        "configuration": configuration,
-        "engineSha256": args.engine_fingerprint,
-        "executableSha256": sha256_file(destination),
-        "assetPackSha256": sha256_file(stage / "Game.kbpack"),
-        "firstFrame": True,
-    }))
+    (stage / "linux-build.receipt.json").write_bytes(_linux_build_receipt(args, stage))
     return [game, ldd, xvfb]
 
 
@@ -1828,7 +1846,6 @@ def _stage_linux_remote(args: argparse.Namespace, pack: Path, stage: Path, job: 
     source_archive = job / "linux-input.tar.gz"
     transport = job / "linux-transport"
     transport.mkdir()
-    shutil.copy2(pack, transport / "Game.kbpack")
     if getattr(args, "trust_anchor", None) is not None:
         # The guest fills the player's slot before its first-frame proof and build receipt.
         shutil.copy2(args.trust_anchor, transport / "trust-anchor.bin")
@@ -1865,24 +1882,41 @@ def _stage_linux_remote(args: argparse.Namespace, pack: Path, stage: Path, job: 
             cwd=job,
             timeout_seconds=1800,
         )
-        command = (
-            f"python3 {shlex.quote(remote_job + '/package_linux_guest.py')} "
-            f"--archive {shlex.quote(remote_job + '/' + source_archive.name)} "
-            f"--engine-root {shlex.quote(args.linux_engine_root)} "
+        guest = f"python3 {shlex.quote(remote_job + '/package_linux_guest.py')} "
+        identity_arguments = (
             f"--configuration {CONFIGURATIONS[args.configuration]} "
             f"--executable-name {shlex.quote(args.executable_name)} "
             f"--engine-fingerprint {args.engine_fingerprint} "
+        )
+        # 1. The guest builds the player and fills its trust anchor slot.
+        command = (
+            guest + f"--archive {shlex.quote(remote_job + '/' + source_archive.name)} "
+            f"--engine-root {shlex.quote(args.linux_engine_root)} " + identity_arguments +
             f"--output {shlex.quote(remote_job + '/result.tar.gz')}"
         )
         run_checked([*ssh_base, destination, command], cwd=job, timeout_seconds=3600, on_line=lambda line: emit_diagnostic("Info", line))
         result_archive = job / "linux-result.tar.gz"
         run_checked([*scp_base, f"{destination}:{remote_job}/result.tar.gz", result_archive], cwd=job, timeout_seconds=1800)
         _extract_linux_result(result_archive, stage)
+        executable = stage / args.executable_name
+        if not executable.is_file() or executable.read_bytes()[:4] != b"\x7fELF":
+            raise PackagingError("Linux guest result does not contain the requested ELF player")
+        # 2. This host, which holds the release key, completes and signs the release.
+        _finish_linux_release(args, pack, stage, job)
+        # 3. The guest proves the first frame of the release exactly as it ships.
+        release_archive = job / "linux-release.tar.gz"
+        _create_deterministic_tar(stage, release_archive, executable_name=args.executable_name)
+        run_checked([*scp_base, release_archive, f"{destination}:{remote_job}/"], cwd=job, timeout_seconds=1800)
+        command = (
+            guest + f"--prove-archive {shlex.quote(remote_job + '/' + release_archive.name)} " + identity_arguments +
+            f"--output {shlex.quote(remote_job + '/linux-build.receipt.json')}"
+        )
+        run_checked([*ssh_base, destination, command], cwd=job, timeout_seconds=600, on_line=lambda line: emit_diagnostic("Info", line))
+        receipt = job / "linux-build.receipt.json"
+        run_checked([*scp_base, f"{destination}:{remote_job}/linux-build.receipt.json", receipt], cwd=job, timeout_seconds=120)
+        shutil.copy2(receipt, stage / "linux-build.receipt.json")
     finally:
         run_checked([*ssh_base, destination, f"rm -rf -- {remote_job}"], cwd=job, timeout_seconds=120)
-    executable = stage / args.executable_name
-    if not executable.is_file() or executable.read_bytes()[:4] != b"\x7fELF":
-        raise PackagingError("Linux guest result does not contain the requested ELF player")
     return [ssh, scp]
 
 
@@ -1910,6 +1944,8 @@ def _verify_linux_stage(stage: Path, args: argparse.Namespace) -> None:
     }
     if receipt != expected:
         raise PackagingError("Linux build receipt does not match the returned artifact")
+    if getattr(args, "release_signing", None) is not None and not (stage / "release.kbmanifest").is_file():
+        raise PackagingError("Linux release is missing its signed release manifest")
     anchor: Path | None = getattr(args, "trust_anchor", None)
     if anchor is not None:
         try:
@@ -1962,11 +1998,10 @@ def _stage_target(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path
         linux_stage = job / "linux-release-folder"
         linux_stage.mkdir()
     if sys.platform == "linux":
-        tools = _stage_linux_local(args, cmake, pack, linux_stage)
+        tools = _stage_linux_local(args, cmake, pack, linux_stage, job)
     else:
         tools = _stage_linux_remote(args, pack, linux_stage, job)
     _verify_linux_stage(linux_stage, args)
-    _stage_licenses(args, linux_stage)
     if args.configuration == "Release":
         archive = stage / f"{args.executable_name}-linux-x64.tar.gz"
         _create_deterministic_tar(
@@ -1974,11 +2009,13 @@ def _stage_target(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path
             archive,
             executable_name=args.executable_name,
         )
-        _verify_linux_release_archive(archive, args.executable_name)
+        _verify_linux_release_archive(
+            archive, args.executable_name, signed=getattr(args, "release_signing", None) is not None
+        )
     return StageResult(tuple(tools), _first_frame_result(args.target, stage))
 
 
-def _verify_linux_release_archive(archive: Path, executable_name: str) -> None:
+def _verify_linux_release_archive(archive: Path, executable_name: str, signed: bool = False) -> None:
     with tarfile.open(archive, "r:gz") as package:
         player_members = [member for member in package.getmembers() if member.name == executable_name]
         if (len(player_members) != 1 or not player_members[0].isfile() or
@@ -1992,6 +2029,8 @@ def _verify_linux_release_archive(archive: Path, executable_name: str) -> None:
             raise PackagingError("Linux Release archive does not contain the requested ELF player")
         if not (extracted / "Game.kbpack").is_file() or not (extracted / "linux-build.receipt.json").is_file():
             raise PackagingError("Linux Release archive is missing its asset pack or build receipt")
+        if signed and not (extracted / "release.kbmanifest").is_file():
+            raise PackagingError("Linux Release archive is missing its signed release manifest")
 
 
 def _launch_linux(args: argparse.Namespace) -> None:

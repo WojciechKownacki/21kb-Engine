@@ -131,9 +131,9 @@ Every pack of a set is sealed with the release key, and a packaged player passes
 anchor to every pack it mounts: an unsigned or foreign chunk or patch is refused exactly like an
 unsigned base.
 
-In a Windows release the pack set index is a critical file of the signed release manifest. At
-startup the player hashes the index against the manifest and binds every pack the index names to
-the release through its seal digest, so:
+In a Windows or Linux release the pack set index is a critical file of the signed release
+manifest. At startup the player hashes the index against the manifest and binds every pack the
+index names to the release through its seal digest, so:
 
 - a pack cannot be swapped, added to or dropped from the set without breaking the manifest;
 - the mount order and patch levels are part of what the release key signs;
@@ -278,8 +278,9 @@ stage, index and packs included.
 
 ## Limits
 
-- Packaging produces pack sets and patches for Windows packages only, the platform with a
-  release manifest; other targets ship one pack.
+- Packaging produces pack sets, patches and encrypted packs for Windows and Linux packages, the
+  platforms whose players verify a signed release manifest; Android and web packages ship one
+  pack. For a Linux Release package, `--patch-from` names the extracted release archive.
 - `--patch-from` cannot be combined with `--pack-chunk` (a patch keeps the chunks of the release
   it patches).
 - Only packaged content streams. A loose project in the editor or a development player loads

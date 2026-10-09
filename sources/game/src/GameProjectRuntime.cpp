@@ -136,17 +136,29 @@ namespace {
         return false;
     }
     std::shared_ptr<const kb::security::InstalledRelease> release;
-#if defined(_WIN32)
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
+    // A player that carries an anchor -- in its PE resource, or in its ELF slot -- runs only the
+    // release its signed manifest describes, from the directory it lies in.
     if (anchor.state == kb::security::TrustAnchorLookup::State::Present) {
         std::filesystem::path executable;
-        std::filesystem::path executableDirectory = ExecutableDirectory();
+#if defined(_WIN32)
         {
             std::wstring buffer(32768U, L'\0');
             const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
             buffer.resize(length);
             executable = std::filesystem::path{ buffer };
         }
-        release = VerifyPackagedRelease(anchor.anchor, executableDirectory, executable,
+#else
+        {
+            std::error_code linkError;
+            executable = std::filesystem::read_symlink("/proc/self/exe", linkError);
+            if (linkError || executable.empty()) {
+                err << "this player could not locate its own executable to verify its release\n";
+                return false;
+            }
+        }
+#endif
+        release = VerifyPackagedRelease(anchor.anchor, executable.parent_path(), executable,
             kb::security::DefaultUserSecurityRoot(anchor.anchor.productId), err);
         if (release == nullptr) {
             return false;
