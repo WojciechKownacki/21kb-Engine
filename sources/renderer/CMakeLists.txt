@@ -5,6 +5,7 @@ add_library(kb_renderer STATIC
     include/kb/render/RendererCapabilityReport.hpp
     include/kb/render/RenderSurface.hpp
     include/kb/render/bake/MeshBaker.hpp
+    include/kb/render/world/NavMeshBakeTool.hpp
     include/kb/render/world/RenderNavGeometrySource.hpp
     include/kb/render/world/WorldBuildTool.hpp
     include/kb/render/world/WorldHlodMeshBaker.hpp
@@ -117,6 +118,7 @@ add_library(kb_renderer STATIC
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
     src/bake/MeshBaker.cpp
+    src/world/NavMeshBakeTool.cpp
     src/world/RenderNavGeometrySource.cpp
     src/world/WorldBuildTool.cpp
     src/world/WorldHlodMeshBaker.cpp
