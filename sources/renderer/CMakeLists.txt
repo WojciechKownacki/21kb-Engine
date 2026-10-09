@@ -5,6 +5,7 @@ add_library(kb_renderer STATIC
     include/kb/render/RendererCapabilityReport.hpp
     include/kb/render/RenderSurface.hpp
     include/kb/render/bake/MeshBaker.hpp
+    include/kb/render/world/WorldHlodMeshBaker.hpp
     include/kb/render/bake/TextureBaker.hpp
     include/kb/render/SceneDeferredLightingPass.hpp
     include/kb/render/SceneDepthPolicy.hpp
@@ -113,6 +114,7 @@ add_library(kb_renderer STATIC
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
     src/bake/MeshBaker.cpp
+    src/world/WorldHlodMeshBaker.cpp
     src/bake/TextureBakedPayload.cpp
     src/DisplayConfig.cpp
     src/Renderer.cpp
@@ -774,6 +776,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/ShaderPrewarmParseTests.cpp
         tests/MeshBakeTests.cpp
         tests/TextureBakeTests.cpp
+        tests/WorldHlodMeshBakerTests.cpp
     )
 
     target_link_libraries(kb_renderer_tests
