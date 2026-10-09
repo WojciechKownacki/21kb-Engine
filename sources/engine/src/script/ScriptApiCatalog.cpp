@@ -220,6 +220,11 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 193> kLuaBindings{ {
     { "Task", "WaitScene", "Task.WaitScene", ScriptApiCatalogLuaReturnKind::SingleOutput, "task" },
     { "Task", "IsRunning", "Task.IsRunning", ScriptApiCatalogLuaReturnKind::SingleOutput, "running" },
     { "Task", "Cancel", "Task.Cancel", ScriptApiCatalogLuaReturnKind::SingleOutput, "cancelled" },
+    { "Navigation", "FindPath", "Navigation.FindPath", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Navigation", "PathCorner", "Navigation.PathCorner", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Navigation", "Raycast", "Navigation.Raycast", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Navigation", "NearestPoint", "Navigation.NearestPoint", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Navigation", "SetAreaCost", "Navigation.SetAreaCost", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "", "Log", "Log", ScriptApiCatalogLuaReturnKind::Default, "" },
 } };
 

@@ -18,6 +18,7 @@
 #include "engine/script/ScriptMeshRendererApi.hpp"
 #include "engine/script/ScriptParticleSystemApi.hpp"
 #include "engine/script/ScriptPostProcessApi.hpp"
+#include "engine/script/ScriptNavigationApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRendererApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -296,6 +297,13 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Text",
             .ownerRuntime = "kb::library::TryParse* (EngineLibraryParsing)",
             .Register = &kb::script::ScriptTextApi::Register,
+        },
+        // Navigation.*: path queries, raycasts and nearest points on the scene's polygon
+        // navigation meshes, and area costs.
+        LibraryModuleDesc{
+            .name = "Navigation",
+            .ownerRuntime = "kb::scene::SceneNavigation",
+            .Register = &kb::script::ScriptNavigationApi::Register,
         },
     };
     return kCatalog;

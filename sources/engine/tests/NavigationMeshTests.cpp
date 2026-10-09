@@ -575,6 +575,48 @@ void TestNavLinkPersists() {
     std::filesystem::remove_all(root);
 }
 
+void TestNavigationScriptApi() {
+    // Scripts edit links through the component API and query the mesh through Navigation.*.
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes(TwoPlatforms(1.0))));
+    const scene::SceneEntity link = AddLink(scene, { -0.8F, 0.0F, 0.0F }, scene::NavLink{ .end = { 4.6F, 1.0F, 0.0F }, .radius = 0.6F, .enabled = false });
+    const auto enabled = kb::script::ScriptSceneComponentApi::SetProperty(scene, link, "NavLink", "enabled",
+        kb::script::ScriptValue{ true });
+    Check(enabled.succeeded && scene.Components().NavLinks().TryGet(link)->enabled, "a script enables a link");
+    kb::script::ScriptRuntimeHost host{ scene };
+    const kb::script::ScriptFunctionCallContext call{ .scene = &scene };
+    const auto point = [](std::string_view prefix, Vec3 value) {
+        return std::vector<kb::script::ScriptFunctionArgument>{
+            { .name = std::string{ prefix } + "X", .value = kb::script::ScriptValue{ value.x } },
+            { .name = std::string{ prefix } + "Y", .value = kb::script::ScriptValue{ value.y } },
+            { .name = std::string{ prefix } + "Z", .value = kb::script::ScriptValue{ value.z } } };
+    };
+    std::vector<kb::script::ScriptFunctionArgument> arguments = point("start", { -6.0F, 0.0F, 0.0F });
+    const std::vector<kb::script::ScriptFunctionArgument> end = point("end", { 8.0F, 1.0F, 0.0F });
+    arguments.insert(arguments.end(), end.begin(), end.end());
+    const kb::script::ScriptFunctionCallResult path = host.Functions().Call("Navigation.FindPath", arguments, call);
+    Check(path.Succeeded() && path.Output("complete").has_value() && path.Output("complete")->AsBool() && path.Output("corners")->AsInt() >= 4 &&
+        std::fabs(path.Output("endX")->AsFloat() - 8.0F) < 0.01F, "Navigation.FindPath finds the linked path");
+    const kb::script::ScriptFunctionCallResult corner = host.Functions().Call("Navigation.PathCorner",
+        std::vector<kb::script::ScriptFunctionArgument>{ { .name = "index", .value = kb::script::ScriptValue{ 0 } } }, call);
+    Check(corner.Succeeded() && corner.Output("found")->AsBool() && std::fabs(corner.Output("x")->AsFloat() + 6.0F) < 0.01F,
+        "Navigation.PathCorner returns the corners of that path");
+    std::vector<kb::script::ScriptFunctionArgument> ray = point("start", { -6.0F, 0.0F, 0.0F });
+    const std::vector<kb::script::ScriptFunctionArgument> rayEnd = point("end", { -16.0F, 0.0F, 0.0F });
+    ray.insert(ray.end(), rayEnd.begin(), rayEnd.end());
+    const kb::script::ScriptFunctionCallResult cast = host.Functions().Call("Navigation.Raycast", ray, call);
+    Check(cast.Succeeded() && cast.Output("hit")->AsBool() && cast.Output("x")->AsFloat() < -9.0F && cast.Output("x")->AsFloat() > -10.0F,
+        "Navigation.Raycast stops at the platform's edge");
+    const kb::script::ScriptFunctionCallResult nearest = host.Functions().Call("Navigation.NearestPoint", std::vector<kb::script::ScriptFunctionArgument>{
+        { .name = "x", .value = kb::script::ScriptValue{ 5.0F } }, { .name = "y", .value = kb::script::ScriptValue{ 2.0F } },
+        { .name = "z", .value = kb::script::ScriptValue{ 0.0F } } }, call);
+    Check(nearest.Succeeded() && nearest.Output("found")->AsBool() && std::fabs(nearest.Output("y")->AsFloat() - 1.0F) < 0.15F,
+        "Navigation.NearestPoint projects onto the mesh");
+    const kb::script::ScriptFunctionCallResult cost = host.Functions().Call("Navigation.SetAreaCost", std::vector<kb::script::ScriptFunctionArgument>{
+        { .name = "area", .value = kb::script::ScriptValue{ 4 } }, { .name = "cost", .value = kb::script::ScriptValue{ 3.5F } } }, call);
+    Check(cost.Succeeded() && cost.Output("applied")->AsBool() && scene.Navigation().AreaCost(4U) == 3.5F, "Navigation.SetAreaCost sets an area's cost");
+}
+
 void TestPlacedNavigationMesh() {
     const std::filesystem::path root = FreshDirectory("placed");
     std::string error;
@@ -714,6 +756,7 @@ void RunNavigationMeshTests() {
     TestCrowdIsDeterministic();
     TestCrowdLevelOfDetail();
     TestNavLinkPersists();
+    TestNavigationScriptApi();
     TestPlacedNavigationMesh();
     TestTilesStreamWithCells();
 }
