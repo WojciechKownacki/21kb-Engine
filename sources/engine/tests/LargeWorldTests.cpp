@@ -6,6 +6,7 @@
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -508,6 +509,25 @@ void RunFarRegionAndGuideCurveTest() {
             std::abs(tangent.x - 1.0F) <= 1e-6F,
         "A far guide curve was not evaluated to the micrometre");
 }
+
+// Physics debug lines of a 20 cm box 10 000 km out, collected relative to an origin next to it, are exact.
+void RunFarPhysicsDebugLinesTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject box = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Far Debug Box" });
+    scene.Transforms().SetLocalTranslation(box.Entity(), DVec3{ kFar + 0.3, 0.0, kFar });
+    scene.Components().Colliders().Set(box.Entity(), kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box, .boxSize = kb::scene::Vec3{ 0.2F, 0.2F, 0.2F } });
+    scene.Runtime().SynchronizeTransforms();
+    const std::vector<kb::scene::PhysicsDebugLineDesc> lines = kb::scene::PhysicsDebugDraw::CollectLines(scene, DVec3{ kFar, 0.0, kFar });
+    Require(lines.size() == 12U, "A far box collider must draw its twelve edges");
+    for (const kb::scene::PhysicsDebugLineDesc& line : lines) {
+        for (const kb::scene::Vec3& point : { line.from, line.to }) {
+            Require((std::abs(point.x - 0.2F) <= 1e-6F || std::abs(point.x - 0.4F) <= 1e-6F) && std::abs(std::abs(point.y) - 0.1F) <= 1e-6F &&
+                    std::abs(std::abs(point.z) - 0.1F) <= 1e-6F,
+                "A far box collider's debug lines must be exact relative to the given origin");
+        }
+    }
+}
 } // namespace
 
 namespace kb::tests {
@@ -524,6 +544,7 @@ void RunLargeWorldTests() {
     RunFarPhysicsTest();
     RunFarColliderRaycastWithoutBackendTest();
     RunFarRegionAndGuideCurveTest();
+    RunFarPhysicsDebugLinesTest();
 }
 
 } // namespace kb::tests

@@ -603,14 +603,12 @@ void AppendWorldPartitionGrid(
     std::vector<kb::render::PhysicsDebugLine> lines;
     if (kb::scene::PhysicsDebugDraw::IsEnabled(sceneContext.Scene())) {
         const std::vector<kb::scene::PhysicsDebugLineDesc> shapes =
-            kb::scene::PhysicsDebugDraw::CollectLines(sceneContext.Scene());
+            kb::scene::PhysicsDebugDraw::CollectLines(sceneContext.Scene(), origin);
         lines.reserve(shapes.size() + 64U);
         for (const kb::scene::PhysicsDebugLineDesc& shape : shapes) {
-            const kb::scene::Vec3 from = kb::math::RelativeTo(kb::math::ToDVec3(shape.from), origin);
-            const kb::scene::Vec3 to = kb::math::RelativeTo(kb::math::ToDVec3(shape.to), origin);
             lines.push_back(kb::render::PhysicsDebugLine{
-                .from = { from.x, from.y, from.z },
-                .to = { to.x, to.y, to.z },
+                .from = { shape.from.x, shape.from.y, shape.from.z },
+                .to = { shape.to.x, shape.to.y, shape.to.z },
                 .color = { shape.color.x, shape.color.y, shape.color.z },
                 .alpha = shape.alpha,
             });
