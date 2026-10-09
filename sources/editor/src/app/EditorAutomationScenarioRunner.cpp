@@ -6,6 +6,7 @@
 #include "app/EditorPlayModeState.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/core/JsonValue.hpp"
 #include "engine/input/InputActionAsset.hpp"
@@ -105,6 +106,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <ranges>
 #include <chrono>
 #include <cmath>
@@ -4850,15 +4852,21 @@ ReadScriptValue(
             static_cast<const kb::scene::Scene&>(state.context.Scene()).Runtime();
         const std::shared_ptr<const kb::scene::SceneRuntimeReadSnapshot> before =
             workerView.ReadSnapshot();
-        bool queued = false;
-        std::thread worker{ [&state, &queued] {
+        // The command comes from a thread that is not the scene's owner: a background worker.
+        std::atomic<bool> queued{ false };
+        const std::shared_ptr<kb::assets::streaming::BackgroundLoadService> background =
+            kb::assets::streaming::BackgroundLoadService::Shared();
+        const kb::assets::streaming::BackgroundRequestHandle worker = background->Run([&state, &queued](std::string&) {
             queued = state.context.Scene().Runtime().EnqueueCommand(
                 kb::scene::SceneRuntimeCommand{
                     .kind = kb::scene::SceneRuntimeCommandKind::SetTimeScale,
                     .timeScale = 0.5F,
                 });
-        } };
-        worker.join();
+            return true;
+        }, 0);
+        // Like a join: the job uses these locals until it is done.
+        static_cast<void>(kb::assets::streaming::BackgroundLoadService::WaitUntilDone(
+            worker, std::chrono::steady_clock::time_point::max()));
         if (!queued || before == nullptr) {
             return { false, "worker could not enqueue runtime command" };
         }
