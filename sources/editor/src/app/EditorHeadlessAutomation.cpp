@@ -4079,6 +4079,13 @@ bool EditorHeadlessAutomation::VerifyToolbarMenuOverlay() {
     return result.succeeded;
 }
 
+bool EditorHeadlessAutomation::VerifyAddComponentSearchInput() {
+    const EditorHeadlessPopupCheckResult result =
+        EditorHeadlessPopupChecks::VerifyAddComponentSearchInput(context_, impl_->viewport);
+    Trace("verify_add_component_search_input", result.succeeded, result.detail);
+    return result.succeeded;
+}
+
 void EditorHeadlessAutomation::Trace(
     std::string_view operation, bool succeeded,
     std::string_view detail) {

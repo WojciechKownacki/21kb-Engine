@@ -4553,6 +4553,12 @@ ReadScriptValue(
             "world,layout" };
     }
 
+    if (*operation == "verify_add_component_search_input") {
+        return {
+            state.automation.VerifyAddComponentSearchInput(),
+            "click,type-window,type-popup,filtered" };
+    }
+
     if (*operation == "verify_viewport_host_lifecycle") {
         return {
             state.automation.VerifyViewportHostLifecycle(),

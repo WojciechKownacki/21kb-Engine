@@ -30,6 +30,7 @@
     { "op": "redo" },
     { "op": "assert_component", "entity": "player", "component": "Collider" },
     { "op": "verify_toolbar_menu_overlay" },
+    { "op": "verify_add_component_search_input" },
     { "op": "set_plugin", "id": "Editor.Terrain", "enabled": true },
     { "op": "create_entity", "id": "terrain_probe", "name": "AutomationTerrain" },
     { "op": "select_entity", "entity": "terrain_probe" },
