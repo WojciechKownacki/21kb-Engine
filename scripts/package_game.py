@@ -72,6 +72,25 @@ from windows_pe_symbols import (
 )
 
 
+# Content packaging: the zstd level cooked packs are written with (0 stores blocks as baked), the
+# pack set index the Windows player mounts a multi-pack game from, and the names a chunk or patch
+# label may take (the engine's bake-cache name rules).
+DEFAULT_PACK_COMPRESSION_LEVEL = 9
+PACK_SET_INDEX = "Game.kbpackset"
+_PACK_LABEL = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
+_RELEASE_NUMBER_LINE = re.compile(r"^release (0|[1-9][0-9]*)$", re.MULTILINE)
+
+
+@dataclass(frozen=True)
+class PackSet:
+    """The packs one package ships: the ones this job made and must seal, every pack to stage
+    (source file and name in the package), and the pack set index text when there is more than
+    one pack."""
+    new_packs: tuple[Path, ...]
+    staged: tuple[tuple[Path, str], ...]
+    index_text: str | None
+
+
 @dataclass(frozen=True)
 class FirstFrameResult:
     probe: str
@@ -239,6 +258,7 @@ def _validate_arguments(args: argparse.Namespace) -> None:
         args.release_number = int(time.time())
     if not 0 <= args.release_number < 2**63:
         raise PackagingError("release number must be a non-negative 63-bit integer")
+    _validate_content_packaging(args)
     if args.crash_report_url is not None:
         if args.target != "Windows.x64":
             raise PackagingError("crash report upload is available only for Windows packages")
@@ -261,6 +281,117 @@ def _validate_arguments(args: argparse.Namespace) -> None:
                 args.android_signing_broker = _existing_file(args.android_signing_broker, "Android signing broker")
             if not _ANDROID_ALIAS.fullmatch(args.android_key_alias):
                 raise PackagingError("Android signing key alias is invalid")
+
+
+def _is_pack_label(value: str) -> bool:
+    return bool(_PACK_LABEL.fullmatch(value)) and not value.endswith(".")
+
+
+def _parse_chunk_rule(text: str) -> tuple[str, tuple[str, ...]]:
+    label, separator, prefixes = text.partition("=")
+    paths = tuple(prefix for prefix in prefixes.split(",") if prefix)
+    if not separator or not _is_pack_label(label) or not paths:
+        raise PackagingError(f"--pack-chunk expects LABEL=/Game/PREFIX[,/Game/PREFIX...]: {text}")
+    for path in paths:
+        if not path.startswith("/") or "\\" in path or any(part in (".", "..") for part in path.split("/")):
+            raise PackagingError(f"--pack-chunk prefix must be a virtual path such as /Game/Cells/0_0/: {path}")
+    return label, paths
+
+
+def _parse_pack_set_index(text: str) -> list[tuple[str, str, int, str]]:
+    """(role, label, patch level, path) per line of a pack set index, in mount order."""
+    lines = text.split("\n")
+    if not lines or lines[0] != "21kb-pack-set 1" or lines[-1] != "":
+        raise PackagingError("the previous release's pack set index is malformed")
+    entries: list[tuple[str, str, int, str]] = []
+    for line in lines[1:-1]:
+        kind, _, rest = line.partition(" ")
+        if kind == "base":
+            entries.append(("base", "", 0, rest))
+        elif kind == "chunk":
+            label, _, path = rest.partition(" ")
+            entries.append(("chunk", label, 0, path))
+        elif kind == "patch":
+            level, _, rest = rest.partition(" ")
+            label, _, path = rest.partition(" ")
+            if not level.isdigit():
+                raise PackagingError("the previous release's pack set index is malformed")
+            entries.append(("patch", label, int(level), path))
+        else:
+            raise PackagingError("the previous release's pack set index is malformed")
+        path = entries[-1][3]
+        if not path.lower().endswith(".kbpack") or "/" in path or "\\" in path or path.startswith("."):
+            raise PackagingError(f"the previous release's pack set names an unexpected file: {path}")
+    if not entries or entries[0][0] != "base":
+        raise PackagingError("the previous release's pack set index has no base pack")
+    return entries
+
+
+def _encode_pack_set_index(entries: Sequence[tuple[str, str, int, str]]) -> str:
+    lines = ["21kb-pack-set 1"]
+    for role, label, level, path in entries:
+        if role == "base":
+            lines.append(f"base {path}")
+        elif role == "chunk":
+            lines.append(f"chunk {label} {path}")
+        else:
+            lines.append(f"patch {level} {label} {path}")
+    return "\n".join(lines) + "\n"
+
+
+def _validate_content_packaging(args: argparse.Namespace) -> None:
+    """Compression level, chunk rules and the patch base, checked before anything is built."""
+    if not 0 <= args.pack_compression_level <= 19:
+        raise PackagingError("pack compression level must be 0 (off) to 19")
+    args.pack_chunk_rules = [_parse_chunk_rule(text) for text in args.pack_chunk]
+    labels = [label for label, _ in args.pack_chunk_rules]
+    if len(set(labels)) != len(labels):
+        raise PackagingError("every --pack-chunk needs its own label")
+    windows = TARGETS[args.target].platform == "windows"
+    if args.pack_chunk_rules and not windows:
+        raise PackagingError("chunked pack sets are packaged for Windows players only")
+    args.patch_base_entries = None
+    if args.patch_from is None:
+        if args.patch_level is not None:
+            raise PackagingError("--patch-level needs --patch-from")
+        return
+    if not windows:
+        raise PackagingError("patch packs are packaged for Windows players only")
+    if args.pack_chunk_rules:
+        raise PackagingError("a patch keeps the chunks of the release it patches; --pack-chunk does not apply")
+    if args.encrypt_pack:
+        raise PackagingError(
+            "a patch cannot be packaged with --encrypt-pack: every release gets a fresh content key, "
+            "and the packs of the release being patched are encrypted with the previous one"
+        )
+    previous = args.patch_from.expanduser().resolve(strict=True)
+    manifest = previous / "release.kbmanifest"
+    if not (previous / "Game.kbpack").is_file() or not manifest.is_file():
+        raise PackagingError(f"--patch-from must name a signed Windows release: {previous}")
+    match = _RELEASE_NUMBER_LINE.search(manifest.read_text(encoding="utf-8"))
+    if match is None:
+        raise PackagingError("the previous release's manifest has no release number")
+    if args.release_number <= int(match.group(1)):
+        raise PackagingError(
+            f"release number {args.release_number} must be higher than the patched release's {match.group(1)}, "
+            "or anti-rollback would refuse the patch"
+        )
+    index = previous / PACK_SET_INDEX
+    entries = (
+        _parse_pack_set_index(index.read_text(encoding="utf-8"))
+        if index.is_file()
+        else [("base", "", 0, "Game.kbpack")]
+    )
+    for _, _, _, path in entries:
+        if not (previous / path).is_file():
+            raise PackagingError(f"the previous release is missing {path}")
+    highest = max((level for role, _, level, _ in entries if role == "patch"), default=0)
+    if args.patch_level is None:
+        args.patch_level = highest + 1
+    if args.patch_level <= highest:
+        raise PackagingError(f"patch level {args.patch_level} must be higher than the release's patch level {highest}")
+    args.patch_from = previous
+    args.patch_base_entries = entries
 
 
 def _validate_crash_report_url(url: str) -> str:
@@ -521,6 +652,7 @@ def _cook(args: argparse.Namespace, snapshot_project: Path, job: Path, cooker: P
     ]
     if args.target == "Windows.x64":
         command.extend(("--runtime-modules-output", output.parent / "RuntimeModules"))
+    command.extend(("--pack-compression-level", str(args.pack_compression_level)))
     shaderc = _find_optional_build_tool(args.build_root, CONFIGURATIONS[args.configuration], "shaderc")
     if shaderc is not None:
         command.extend(("--shaderc", shaderc))
@@ -617,24 +749,108 @@ def _release_signing(args: argparse.Namespace, kb_cli: Path) -> ReleaseSigning:
     return ReleaseSigning(kb_cli, key, None)
 
 
-def _sign_pack(args: argparse.Namespace, cmake: Path, pack: Path, job: Path) -> None:
-    """Seals the cooked pack with the release key (encrypting it when asked) and writes the trust
-    anchor the player embeds. The anchor is recorded on `args` for the platform stage."""
+def _kb_cli(args: argparse.Namespace, cmake: Path) -> Path:
     configuration = CONFIGURATIONS[args.configuration]
     _build_targets(cmake, args.build_root, configuration, ("kb_cli",), args.engine_root)
-    kb_cli = _build_tool_path(args.build_root, configuration, "kb_cli")
+    return _build_tool_path(args.build_root, configuration, "kb_cli")
+
+
+def _build_pack_set(args: argparse.Namespace, cmake: Path, pack: Path, job: Path) -> PackSet:
+    """Turns the cooked pack into what the package ships: the pack itself; a base pack and chunk
+    packs split off by world cell or data layer (--pack-chunk); or, for a patch release
+    (--patch-from), the packs of the release being patched plus one patch pack carrying what the
+    new cook changed. The new pack set is recorded on `args` for the Windows stage."""
+    chunk_rules = getattr(args, "pack_chunk_rules", None) or []
+    if not chunk_rules and getattr(args, "patch_base_entries", None) is None:
+        pack_set = PackSet((pack,), ((pack, "Game.kbpack"),), None)
+        args.pack_set = pack_set
+        return pack_set
+    kb_cli = _kb_cli(args, cmake)
+    level = str(args.pack_compression_level)
+    if chunk_rules:
+        cooked = pack.parent / "unsplit" / pack.name
+        cooked.parent.mkdir(exist_ok=True)
+        pack.replace(cooked)
+        index = pack.parent / PACK_SET_INDEX
+        command: list[Path | str] = [kb_cli, "pack", "split", "--base", pack, "--level", level, "--index", index]
+        for label, prefixes in chunk_rules:
+            command.extend(("--chunk", f"{label}={','.join(prefixes)}"))
+        command.append(cooked)
+        run_checked(command, cwd=job, timeout_seconds=3600, on_line=lambda line: emit_diagnostic("Info", line))
+        chunks = [pack.with_name(f"Game.{label}.kbpack") for label, _ in chunk_rules]
+        for path in (pack, *chunks, index):
+            if not path.is_file():
+                raise PackagingError(f"pack split did not produce {path.name}")
+        pack_set = PackSet(
+            (pack, *chunks),
+            ((pack, "Game.kbpack"), *((chunk, chunk.name) for chunk in chunks)),
+            index.read_text(encoding="utf-8"),
+        )
+        args.pack_set = pack_set
+        return pack_set
+    previous: Path = args.patch_from
+    label = f"patch-{args.patch_level:04d}"
+    patch = pack.with_name(f"Game.{label}.kbpack")
+    current = previous / PACK_SET_INDEX if (previous / PACK_SET_INDEX).is_file() else previous / "Game.kbpack"
+    run_checked(
+        [kb_cli, "pack", "patch", "--current", current, "--patch-level", str(args.patch_level), "--label", label,
+         "--level", level, "--output", patch, pack],
+        cwd=job,
+        timeout_seconds=3600,
+        on_line=lambda line: emit_diagnostic("Info", line),
+    )
+    if not patch.is_file():
+        raise PackagingError(f"pack patch did not produce {patch.name}")
+    entries = [*args.patch_base_entries, ("patch", label, args.patch_level, patch.name)]
+    pack_set = PackSet(
+        (patch,),
+        (*((previous / path, path) for _, _, _, path in args.patch_base_entries), (patch, patch.name)),
+        _encode_pack_set_index(entries),
+    )
+    args.pack_set = pack_set
+    return pack_set
+
+
+def _sign_pack(args: argparse.Namespace, cmake: Path, pack_set: PackSet | Path, job: Path) -> None:
+    """Seals every pack this job made with the release key (encrypting them when asked) and
+    writes the trust anchor the player embeds. The anchor is recorded on `args` for the platform
+    stage. The packs of a release being patched were sealed when it shipped and stay as they are."""
+    if isinstance(pack_set, Path):
+        pack_set = PackSet((pack_set,), ((pack_set, "Game.kbpack"),), None)
+    kb_cli = _kb_cli(args, cmake)
     signing = _release_signing(args, kb_cli)
     content_key: list[Path | str] = []
     if args.encrypt_pack:
         key_file = job / "pack-content.key"
         run_checked([kb_cli, "keys", "content-key", "--out", key_file], cwd=job, timeout_seconds=60)
         content_key = ["--content-key", key_file]
-    _run_with_release_key(signing, job, ["pack", "sign", *content_key, pack])
+    for pack in pack_set.new_packs:
+        _run_with_release_key(signing, job, ["pack", "sign", *content_key, pack])
     anchor = job / "trust-anchor.bin"
     _run_with_release_key(signing, job, ["keys", "anchor", "--product", args.product_id, *content_key, "--out", anchor])
-    run_checked([kb_cli, "pack", "verify", "--anchor", anchor, pack], cwd=job, timeout_seconds=1800)
+    for pack in pack_set.new_packs:
+        run_checked([kb_cli, "pack", "verify", "--anchor", anchor, pack], cwd=job, timeout_seconds=1800)
     args.release_signing = signing
     args.trust_anchor = anchor
+
+
+def _stage_pack_set(args: argparse.Namespace, pack: Path, stage: Path, job: Path) -> None:
+    """Copies the packs of the package beside the player, writes the pack set index when there is
+    one, and verifies the whole set -- the reused packs of a patched release included -- against
+    this release's trust anchor."""
+    pack_set: PackSet | None = getattr(args, "pack_set", None)
+    if pack_set is None:
+        pack_set = PackSet((pack,), ((pack, "Game.kbpack"),), None)
+    for source, name in pack_set.staged:
+        shutil.copy2(source, stage / name)
+    if pack_set.index_text is None:
+        return
+    index = stage / PACK_SET_INDEX
+    index.write_bytes(pack_set.index_text.encode("utf-8"))
+    signing: ReleaseSigning | None = getattr(args, "release_signing", None)
+    anchor: Path | None = getattr(args, "trust_anchor", None)
+    if signing is not None and anchor is not None:
+        run_checked([signing.kb_cli, "pack", "set-verify", "--anchor", anchor, index], cwd=job, timeout_seconds=3600)
 
 
 def _release_tools(args: argparse.Namespace) -> tuple[Path, ...]:
@@ -762,7 +978,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
         )
     except WindowsResourceError as error:
         raise PackagingError(str(error)) from error
-    shutil.copy2(pack, stage / "Game.kbpack")
+    _stage_pack_set(args, pack, stage, job)
     _write_crash_report_config(stage, args.crash_report_url)
     custom_modules = pack.parent / "RuntimeModules"
     built = {destination: game}
@@ -1955,6 +2171,10 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--signing-key", type=Path)
     parser.add_argument("--signing-broker", type=Path)
     parser.add_argument("--encrypt-pack", action="store_true")
+    parser.add_argument("--pack-compression-level", type=int, default=DEFAULT_PACK_COMPRESSION_LEVEL)
+    parser.add_argument("--pack-chunk", action="append", default=[], metavar="LABEL=/Game/PREFIX[,...]")
+    parser.add_argument("--patch-from", type=Path)
+    parser.add_argument("--patch-level", type=int)
     parser.add_argument("--release-number", type=int)
     parser.add_argument("--anti-rollback", action="store_true")
     parser.add_argument("--symbols-output", type=Path)
@@ -2009,8 +2229,9 @@ def package(args: argparse.Namespace) -> None:
 
             emit_stage("Cook", 25, f"Cooking {target.texture_family} assets and {target.shader_format} shaders")
             pack = _cook(args, snapshot_project, job, cooker, validator)
+            pack_set = _build_pack_set(args, cmake, pack, job)
             emit_stage("Cook", 45, "Signing the runtime asset pack")
-            _sign_pack(args, cmake, pack, job)
+            _sign_pack(args, cmake, pack_set, job)
             emit_stage("Cook", 50, "Runtime asset pack signed and verified")
 
             emit_stage("Stage", 55, f"Building and staging {args.target}")
