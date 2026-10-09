@@ -388,6 +388,23 @@ void RunMigrationAndEditTests() {
     Check(movedFile.succeeded && movedFile.object.header.position.x == 320.0, "an edit made before unloading reaches its file");
     Check(WorldObjectFileIO::List(root / "Level.objects").size() == 4U, "the new object has its own file");
     Check(session.FindObject(added.Entity()).has_value(), "new roots become world objects");
+
+    // A reload that recreates every root in order (play mode restoring the edited
+    // scene) keeps each root bound to its object: saving afterwards writes nothing.
+    const std::vector<std::string> order = session.RootObjectGuids();
+    const scene::SceneDocument snapshot = scene::SceneDocumentService::Capture(editor, "Level");
+    Check(scene::SceneDocumentService::LoadIntoScene(editor, snapshot), "editor scene reload");
+    Check(session.RebindRootObjects(order, error), "objects rebind after a reload: " + error);
+    Check(session.Save(error) && session.LastSaveStats().written == 0U && session.LastSaveStats().deleted == 0U,
+        "a rebound world saves without rewriting or deleting objects");
+    Check(!session.RebindRootObjects({ order.front() }, error), "rebinding a different set of roots is refused");
+
+    Check(session.DeclareDataLayer("night", false, error) && !session.DeclareDataLayer("night", true, error),
+        "data layers are declared once");
+    Check(session.Save(error), "save with a new data layer: " + error);
+    const WorldDescriptorReadResult declared = WorldDescriptorIO::Read(root / "Level.21kbworld");
+    Check(declared.succeeded && declared.descriptor.FindDataLayer("night") != nullptr && !declared.descriptor.FindDataLayer("night")->initiallyActive,
+        "a declared data layer reaches the world file");
     session.Close();
 
     // Reopen: everything round trips.

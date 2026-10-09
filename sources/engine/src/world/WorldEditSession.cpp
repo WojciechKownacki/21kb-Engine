@@ -60,6 +60,7 @@ struct WorldEditSession::Impl {
     std::unordered_map<std::uint64_t, Guid> byEntity;
     std::set<WorldCellCoord> loadedCells;
     WorldSaveStats lastSave;
+    bool descriptorDirty = false;
 
     [[nodiscard]] WorldPartitionGrid Grid() const { return WorldPartitionGrid{ descriptor.cellSize }; }
     [[nodiscard]] std::filesystem::path FileOf(const Guid& guid) const {
@@ -282,6 +283,8 @@ WorldEditSession::WorldEditSession(WorldEditSession&&) noexcept = default;
 WorldEditSession& WorldEditSession::operator=(WorldEditSession&&) noexcept = default;
 
 bool WorldEditSession::Open(scene::Scene& scene, const std::filesystem::path& descriptorPath, std::string& error) {
+    // Callers test the error text after a call, so a stale one is never left behind.
+    error.clear();
     WorldDescriptorReadResult descriptor = WorldDescriptorIO::Read(descriptorPath);
     if (!descriptor.succeeded) {
         error = descriptor.error;
@@ -343,6 +346,7 @@ double WorldEditSession::CellSize() const noexcept {
 }
 
 std::size_t WorldEditSession::LoadRegion(WorldCellCoord min, WorldCellCoord max, std::string& error) {
+    error.clear();
     if (!impl_) {
         error = "no world is open";
         return 0U;
@@ -364,6 +368,7 @@ std::size_t WorldEditSession::LoadRegion(WorldCellCoord min, WorldCellCoord max,
 }
 
 std::size_t WorldEditSession::UnloadRegion(WorldCellCoord min, WorldCellCoord max, std::string& error) {
+    error.clear();
     if (!impl_) {
         error = "no world is open";
         return 0U;
@@ -378,6 +383,7 @@ std::size_t WorldEditSession::UnloadRegion(WorldCellCoord min, WorldCellCoord ma
 }
 
 std::size_t WorldEditSession::LoadAll(std::string& error) {
+    error.clear();
     if (!impl_) {
         error = "no world is open";
         return 0U;
@@ -392,6 +398,7 @@ std::size_t WorldEditSession::LoadAll(std::string& error) {
 }
 
 std::size_t WorldEditSession::UnloadAll(std::string& error) {
+    error.clear();
     if (!impl_) {
         error = "no world is open";
         return 0U;
@@ -457,6 +464,7 @@ std::size_t WorldEditSession::LoadedObjectCount() const {
 }
 
 bool WorldEditSession::SetObjectDataLayer(scene::SceneEntity root, std::string_view layer, std::string& error) {
+    error.clear();
     if (!impl_) {
         error = "no world is open";
         return false;
@@ -480,6 +488,7 @@ bool WorldEditSession::SetObjectDataLayer(scene::SceneEntity root, std::string_v
 }
 
 bool WorldEditSession::SetObjectAlwaysLoaded(scene::SceneEntity root, bool alwaysLoaded, std::string& error) {
+    error.clear();
     if (!impl_) {
         error = "no world is open";
         return false;
@@ -497,6 +506,7 @@ bool WorldEditSession::SetObjectAlwaysLoaded(scene::SceneEntity root, bool alway
 }
 
 bool WorldEditSession::Save(std::string& error) {
+    error.clear();
     if (!impl_) {
         error = "no world is open";
         return false;
@@ -539,13 +549,31 @@ bool WorldEditSession::Save(std::string& error) {
     }
     const auto names = impl_->scene->Tags().Names();
     std::vector<std::string> tags{ names.begin(), names.end() };
-    if (tags != impl_->descriptor.tagDefinitions) {
+    if (tags != impl_->descriptor.tagDefinitions || impl_->descriptorDirty) {
         WorldDescriptor updated = impl_->descriptor;
         updated.tagDefinitions = std::move(tags);
         if (!WorldDescriptorIO::Write(impl_->descriptorPath, updated, error)) return false;
         impl_->descriptor = std::move(updated);
+        impl_->descriptorDirty = false;
     }
     impl_->lastSave = stats;
+    return true;
+}
+
+bool WorldEditSession::DeclareDataLayer(std::string_view name, bool initiallyActive, std::string& error) {
+    error.clear();
+    if (!impl_) {
+        error = "no world is open";
+        return false;
+    }
+    WorldDescriptor updated = impl_->descriptor;
+    updated.dataLayers.push_back({ .name = std::string{ name }, .initiallyActive = initiallyActive });
+    if (std::string invalid = WorldDescriptorIO::Validate(updated); !invalid.empty()) {
+        error = std::move(invalid);
+        return false;
+    }
+    impl_->descriptor = std::move(updated);
+    impl_->descriptorDirty = true;
     return true;
 }
 
@@ -559,6 +587,7 @@ std::vector<std::string> WorldEditSession::RootObjectGuids() {
 }
 
 bool WorldEditSession::RebindRootObjects(const std::vector<std::string>& guidsInRootOrder, std::string& error) {
+    error.clear();
     if (!impl_) {
         error = "no world is open";
         return false;
