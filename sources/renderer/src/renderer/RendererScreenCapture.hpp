@@ -3,14 +3,15 @@
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 #include "kb/render/frame/RenderViewportViewIds.hpp"
 
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
+
 #include <bgfx/bgfx.h>
 
-#include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace kb::scene {
@@ -69,7 +70,8 @@ private:
     };
 
     [[nodiscard]] static bool EncodeAndWritePng(const EncodeJob& job);
-    void WorkerLoop();
+    // A long job of the engine's background service: encodes the pending capture.
+    void EncodePending();
     void StopWorker() noexcept;
     void QueueEncoding();
     void PumpEncodingCompletion();
@@ -93,11 +95,11 @@ private:
     std::vector<std::uint8_t> bytes_;
 
     std::mutex workerMutex_;
-    std::condition_variable workerWake_;
     std::optional<EncodeJob> pendingEncode_;
     std::optional<EncodeCompletion> completedEncode_;
     bool stopWorker_ = false;
-    std::thread worker_;
+    // Opened by the first capture that needs encoding.
+    std::unique_ptr<kb::assets::streaming::BackgroundLane> encodeLane_;
 };
 
 } // namespace kb::render
