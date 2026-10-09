@@ -187,7 +187,7 @@ bool NavMeshRuntime::RemoveTileSet(std::uint64_t handle) {
             continue;
         }
         TileSlot& slot = found->second;
-        const bool active = !slot.owners.empty() && slot.owners.front().handle == handle;
+        const bool active = !slot.rebuilt.has_value() && !slot.owners.empty() && slot.owners.front().handle == handle;
         std::erase_if(slot.owners, [handle](const TileOwner& owner) { return owner.handle == handle; });
         if (active) {
             Unplace(key, slot);
@@ -195,7 +195,7 @@ bool NavMeshRuntime::RemoveTileSet(std::uint64_t handle) {
                 Place(key, slot);
             }
         }
-        if (slot.owners.empty()) {
+        if (!slot.Used()) {
             tiles_.erase(found);
         }
     }
@@ -231,7 +231,7 @@ void NavMeshRuntime::SetOrigin(const kb::math::DVec3& origin) {
 
 void NavMeshRuntime::PlaceAll(std::uint32_t profile) {
     for (auto& [key, slot] : tiles_) {
-        if (key.profile == profile && !slot.owners.empty()) {
+        if (key.profile == profile && slot.Used()) {
             Place(key, slot);
         }
     }
@@ -249,11 +249,10 @@ void NavMeshRuntime::Unplace(const TileKey& key, TileSlot& slot) {
 
 void NavMeshRuntime::Place(const TileKey& key, TileSlot& slot) {
     Unplace(key, slot);
-    if (slot.owners.empty() || key.profile >= meshes_.size() || !meshes_[key.profile].mesh) {
+    if (!slot.Used() || key.profile >= meshes_.size() || !meshes_[key.profile].mesh) {
         return;
     }
-    const TileOwner owner = slot.owners.front();
-    const NavTile& tile = sets_.at(owner.handle)->tiles[owner.index];
+    const NavTile& tile = slot.rebuilt.has_value() ? *slot.rebuilt : sets_.at(slot.owners.front().handle)->tiles[slot.owners.front().index];
     if (std::llabs(tile.coord.x - originTile_.x) >= kMaxRuntimeTile || std::llabs(tile.coord.z - originTile_.z) >= kMaxRuntimeTile) {
         // Too far from the origin to address: the tile waits until the origin comes closer.
         return;
@@ -454,7 +453,7 @@ void NavMeshRuntime::MarkTiles(Vec3 low, Vec3 high, std::set<TileKey>& dirty) co
 void NavMeshRuntime::Rebuild(const std::set<TileKey>& dirty) {
     for (const TileKey& key : dirty) {
         const auto found = tiles_.find(key);
-        if (found == tiles_.end() || found->second.owners.empty()) continue;
+        if (found == tiles_.end() || !found->second.Used()) continue;
         Place(key, found->second);
         ++rebuilds_;
     }
@@ -526,6 +525,44 @@ void NavMeshRuntime::SetLinks(std::vector<NavRuntimeLink> links) {
     std::erase_if(linkUserIds_, [&](const auto& entry) { return !next.contains(entry.second); });
     links_ = std::move(next);
     Rebuild(dirty);
+}
+
+bool NavMeshRuntime::UseRebuiltTile(NavTile tile) {
+    if (!layout_ || tile.profile >= layout_->profiles.size() || tile.layers.size() > NavMeshAsset::MaxLayersPerTile) {
+        return false;
+    }
+    for (const NavTileLayer& layer : tile.layers) {
+        const std::size_t cells = static_cast<std::size_t>(layout_->tileCells) * layout_->tileCells;
+        if (layer.heights.size() != cells || layer.areas.size() != cells || layer.connections.size() != cells) return false;
+    }
+    const TileKey key{ tile.profile, tile.coord };
+    TileSlot& slot = tiles_[key];
+    slot.rebuilt = std::move(tile);
+    Place(key, slot);
+    ++rebuilds_;
+    ++revision_;
+    return true;
+}
+
+std::size_t NavMeshRuntime::DropRebuiltTiles() {
+    std::size_t dropped = 0U;
+    for (auto slot = tiles_.begin(); slot != tiles_.end();) {
+        if (!slot->second.rebuilt.has_value()) {
+            ++slot;
+            continue;
+        }
+        ++dropped;
+        slot->second.rebuilt.reset();
+        Unplace(slot->first, slot->second);
+        if (slot->second.Used()) {
+            Place(slot->first, slot->second);
+            ++slot;
+        } else {
+            slot = tiles_.erase(slot);
+        }
+    }
+    if (dropped != 0U) ++revision_;
+    return dropped;
 }
 
 std::size_t NavMeshRuntime::ActiveTileCount(std::uint32_t profile) const noexcept {

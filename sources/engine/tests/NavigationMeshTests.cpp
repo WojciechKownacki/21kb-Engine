@@ -331,6 +331,40 @@ void TestDynamicObstaclesCarveTiles() {
     Check(std::fabs(Path(scene, from, to).length - 24.0F) < 0.05F, "a disabled obstacle no longer carves");
 }
 
+[[nodiscard]] scene::SceneEntity AddCollider(scene::Scene& target, DVec3 center, Vec3 size) {
+    const scene::SceneObject object = target.Entities().CreateObject(scene::SceneObjectDesc{ .name = "Geometry" });
+    target.Transforms().SetLocalTranslation(object.Entity(), center);
+    target.Components().Colliders().Set(object.Entity(), scene::ColliderComponent{ .shape = scene::ColliderShape::Box, .boxSize = size });
+    target.Runtime().SynchronizeTransforms();
+    return object.Entity();
+}
+
+void TestGeometryChangesRebuildTiles() {
+    // A corridor closed by a wall; the live scene holds the same colliders the mesh was baked from.
+    const std::vector<scene::ScenePrefabNodeDesc> nodes{ Slab(-10.0, 10.0, -3.0, 3.0, 0.0), BoxNode(DVec3{ 0.0, 1.5, 0.0 }, Vec3{ 0.5F, 3.0F, 6.0F }) };
+    scene::Scene scene;
+    static_cast<void>(AddMesh(scene, BakeNodes(nodes)));
+    static_cast<void>(AddCollider(scene, DVec3{ 0.0, -0.25, 0.0 }, Vec3{ 20.0F, 0.5F, 6.0F }));
+    const scene::SceneEntity wall = AddCollider(scene, DVec3{ 0.0, 1.5, 0.0 }, Vec3{ 0.5F, 3.0F, 6.0F });
+    const Vec3 from{ -8.0F, 0.0F, 0.0F };
+    const Vec3 to{ 8.0F, 0.0F, 0.0F };
+    Check(Path(scene, from, to).status == scene::NavPathStatus::Partial, "the baked wall closes the corridor");
+    // The wall is knocked down while the scene runs: the tiles around it are rasterised again.
+    scene.Entities().Destroy(wall);
+    const std::size_t rebuilt = scene.Navigation().RebakeTiles(DVec3{ -1.0, 0.0, -4.0 }, DVec3{ 1.0, 0.0, 4.0 });
+    Check(rebuilt > 0U, "tiles around the changed geometry are rebuilt");
+    const scene::NavPathResult open = Path(scene, from, to);
+    Check(open.status == scene::NavPathStatus::Complete && std::fabs(open.length - 16.0F) < 0.05F, "the rebuilt tiles open the corridor");
+    // A new wall elsewhere closes it again once its tiles are rebuilt.
+    static_cast<void>(AddCollider(scene, DVec3{ 4.0, 1.5, 0.0 }, Vec3{ 0.5F, 3.0F, 6.0F }));
+    Check(Path(scene, from, to).status == scene::NavPathStatus::Complete, "geometry the mesh has not been rebuilt for does not change it");
+    static_cast<void>(scene.Navigation().RebakeTiles(DVec3{ 3.0, 0.0, -4.0 }, DVec3{ 5.0, 0.0, 4.0 }));
+    Check(Path(scene, from, to).status == scene::NavPathStatus::Partial, "a wall built at runtime closes the corridor once its tiles are rebuilt");
+    scene.Navigation().RestoreBakedTiles();
+    Check(Path(scene, from, to).status == scene::NavPathStatus::Partial && Path(scene, from, { -1.0F, 0.0F, 0.0F }).status == scene::NavPathStatus::Complete,
+        "restoring the baked tiles brings the baked wall back");
+}
+
 void TestAreasAndCosts() {
     scene::Scene scene;
     static_cast<void>(AddMesh(scene, BakeNodes({ Slab(-10.0, 10.0, -10.0, 10.0, 0.0) })));
@@ -749,6 +783,7 @@ void RunNavigationMeshTests() {
     TestWalkableAreaOfAFloor();
     TestSlopesAndSteps();
     TestDynamicObstaclesCarveTiles();
+    TestGeometryChangesRebuildTiles();
     TestAreasAndCosts();
     TestMultipleAgentSizes();
     TestOffMeshLinks();
