@@ -1,11 +1,13 @@
 #pragma once
 
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
+
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 namespace kb::editor {
@@ -125,11 +127,13 @@ private:
     void Run(EditorPackageRequest request);
     void ApplyProtocolLine(std::string_view line);
     void Finish(EditorPackageJobState state, std::string status);
-    void JoinFinishedWorker();
+    void ReleaseFinishedJob();
 
     mutable std::mutex mutex_;
     EditorPackageSnapshot snapshot_{};
-    std::thread worker_;
+    // A package job is a long job of the engine's background service.
+    std::unique_ptr<kb::assets::streaming::BackgroundLane> lane_;
+    kb::assets::streaming::BackgroundRequestHandle job_;
     void* processJob_ = nullptr;
     bool cancelRequested_ = false;
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetImportTypes.hpp"
+#include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/assets/TerrainAsset.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 
@@ -1442,7 +1443,10 @@ private:
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
     std::mutex assetImportMutex_;
-    std::thread assetImportWorker_;
+    // Imports run as long jobs of the engine's background service; the job stays set until its
+    // result is pumped.
+    std::unique_ptr<kb::assets::streaming::BackgroundLane> assetImportLane_;
+    kb::assets::streaming::BackgroundRequestHandle assetImportJob_;
     std::optional<kb::assets::AssetImportResult> completedAssetImport_;
     std::atomic_bool assetImportRunning_{ false };
     EditorSceneViewportStateStore viewportState_;
