@@ -79,31 +79,27 @@ struct NavRaycastResult {
     kb::math::Vec3 normal{};
 };
 
-// The scene's navigation graph and what its agents are doing on it. While the scene plays, the
-// navigation system moves every enabled NavAgent along a path planned on this graph toward the agent's
-// destination: carving NavObstacles block the graph nodes and edges they stand on, other obstacles and
-// other agents are avoided by choosing velocities that do not collide (reciprocal velocity obstacles).
-// The system steps at the scene's fixed step rate in entity id order, so equal input replays exactly.
-// An agent with a CharacterController hands its velocity to the physics character; others move their
-// Transform. Without a graph agents stay where they are and report a failed path. Destinations, node
-// positions and path corners are in the graph's space: world positions minus NavMesh::origin.
+// The scene's navigation: Detour polygon meshes made of baked tiles (a scene's mesh, the cells of a
+// streamed world, see docs/navigation.md) and the crowd moving its agents over them. While the scene
+// plays, the navigation system steps at the scene's fixed step rate and moves every enabled NavAgent
+// toward its destination with DetourCrowd: carving NavObstacles cut holes into the tiles they touch,
+// NavObstacles with an area repaint them, other obstacles and agents are avoided, and NavLinks join
+// places the polygons do not. An agent with a CharacterController hands its velocity to the physics
+// character; others move their Transform. Without polygon meshes agents stay where they are and
+// report a failed path.
 //
-// When polygon navigation meshes are present (baked tiles, see docs/navigation.md) they take over:
-// agents follow path corridors over the polygons as a crowd, carving NavObstacles cut holes into the
-// tiles they touch, NavObstacles with an area repaint them, and NavLinks join places the polygons do
-// not. The polygons are placed around NavMesh::origin as well.
+// Detour works in floats relative to Origin(): agent destinations and AgentPath corners are in that
+// space (world position minus the origin); queries take and return world positions.
 class SceneNavigation final {
 public:
     explicit SceneNavigation(Scene& scene) noexcept;
 
-    // Replaces the graph. Its revision is raised above the previous graph's, so every agent re-plans.
-    // The graph's origin also positions the polygon meshes.
-    void SetMesh(NavMesh mesh);
-    void ClearMesh();
-    [[nodiscard]] const NavMesh& Mesh() const noexcept;
-    // The closest node an agent with these areas may stand on; nothing for an empty graph.
-    [[nodiscard]] std::optional<std::uint32_t> NearestNode(kb::math::Vec3 position, NavAreaMask areas = kAllNavAreas) const;
-    // The corners the agent is following (in the graph's space), starting with the next one; empty without a path.
+    // The world position the polygon meshes, agent destinations and agent paths are centred on. Set it
+    // near where a world far from the world origin is played, so agents keep float precision there
+    // (docs/large_worlds.md); changing it places every tile again and restarts the crowds.
+    void SetOrigin(const kb::math::DVec3& origin);
+    [[nodiscard]] kb::math::DVec3 Origin() const noexcept;
+    // The corners the agent is steering through next (in the navigation space); empty without a path.
     [[nodiscard]] std::vector<kb::math::Vec3> AgentPath(SceneEntity agent) const;
 
     // Adds the tiles of a baked navigation mesh; returns a handle for RemoveNavMesh, or 0 with

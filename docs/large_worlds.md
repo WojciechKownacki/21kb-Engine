@@ -19,7 +19,7 @@ an absolute world position far from the origin:
 | Physics bodies, queries, contacts | Jolt built with `JPH_DOUBLE_PRECISION` | double |
 | GPU positions, view matrix, lights | float, relative to the render origin | float precision within the 1 km around the camera |
 | Audio listener, sources, voices | float, relative to the audio origin | idem, around the listener |
-| Navigation graph and agents | float, relative to `NavMesh::origin` | idem, around the graph origin |
+| Navigation meshes and agents | float, relative to `SceneNavigation::Origin` | idem, around the navigation origin |
 | Particles (CPU and GPU) | float, relative to the particle simulation origin | idem, around the camera |
 | Scene files (version 42 and newer) | float64 local translations | double |
 | World partition object files, cells and HLOD proxies | float64 translations | double |
@@ -142,14 +142,14 @@ queries.
 
 ## Navigation
 
-`NavMesh::origin` is the world position a navigation graph is centred on: node positions,
-agent destinations, `SceneNavigation::NearestNode` and `SceneNavigation::AgentPath` are in
-the graph's space (world position minus the origin). Agents read and write their
-transforms in double precision, so a graph built around a far region moves its agents with
-float precision there. The default origin (zero) keeps graphs in world space. Baked polygon
-navigation meshes ([navigation.md](navigation.md)) are placed around the same origin: their tiles
-are stored relative to their own corners and positioned against `NavMesh::origin` when added, so
-agents and queries far out keep float precision near it.
+`SceneNavigation::SetOrigin` sets the world position the scene's navigation is centred on. The
+baked polygon navigation meshes ([navigation.md](navigation.md)) store their tiles relative to
+their own corners and are placed against that origin when added, so Detour's float queries and
+the crowd work with float precision near it. Agent destinations and `SceneNavigation::AgentPath`
+corners are in the navigation space (world position minus the origin); path, raycast and nearest
+point queries take and return world positions. Agents read and write their transforms in double
+precision. The default origin (zero) keeps navigation in world space; changing it places every
+tile again and restarts the crowds.
 
 ## Particles
 

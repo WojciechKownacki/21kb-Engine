@@ -470,9 +470,7 @@ void TestOffMeshLinks() {
 
 [[nodiscard]] DVec3 WalkFar(const DVec3& origin) {
     scene::Scene scene;
-    scene::NavMesh graph;
-    graph.origin = origin;
-    scene.Navigation().SetMesh(graph);
+    scene.Navigation().SetOrigin(origin);
     std::vector<scene::ScenePrefabNodeDesc> nodes{ Slab(origin.x - 10.0, origin.x + 10.0, origin.z - 5.0, origin.z + 5.0, 0.0) };
     static_cast<void>(AddMesh(scene, BakeNodes(nodes)));
     const scene::SceneEntity agent = AddAgent(scene, origin + DVec3{ -6.0, 0.0, 0.0 }, Vec3{ 6.0F, 0.0F, 0.0F }, 0.4F, 2.0F);
@@ -481,7 +479,7 @@ void TestOffMeshLinks() {
 }
 
 void TestFarFromTheWorldOrigin() {
-    // Ten thousand kilometres out; tiles, queries and agents work in the space of NavMesh::origin.
+    // Ten thousand kilometres out; tiles, queries and agents work in the space of the navigation origin.
     const DVec3 far{ 10'000'000.25, 0.0, -10'000'000.5 };
     const DVec3 near = WalkFar({});
     const DVec3 there = WalkFar(far);
@@ -609,29 +607,44 @@ void TestCrowdLevelOfDetail() {
         "a far agent with nothing to avoid covers the same ground as a near one");
 }
 
-void TestNavLinkPersists() {
+void TestNavComponentsPersist() {
     const std::filesystem::path root = FreshDirectory("persist");
     {
         scene::Scene scene;
         static_cast<void>(AddLink(scene, { 1.0F, 2.0F, 3.0F }, scene::NavLink{
             .start = { 0.5F, 0.0F, 0.0F }, .end = { 4.0F, -1.0F, 2.0F }, .radius = 0.75F, .kind = scene::NavLinkKind::Ladder, .area = 7U,
             .bidirectional = false, .enabled = true }));
-        Check(scene::SceneDocumentService::Save(scene, root / "Links.21kbscene", "Links"), "a scene with a link saves");
+        const scene::SceneEntity agent = AddAgent(scene, DVec3{ 2.0, 0.0, 1.0 }, Vec3{ 5.0F, 0.0F, -3.0F }, 0.6F, 4.5F);
+        scene.Components().NavAgents().TryGet(agent)->areaMask = scene::kAllNavAreas & ~scene::NavAreaBit(5U);
+        static_cast<void>(AddObstacle(scene, { -2.0F, 0.0F, 4.0F }, scene::NavObstacle{
+            .shape = scene::NavObstacleShape::Cylinder, .radius = 1.25F, .height = 3.0F, .area = 6U, .carve = false }));
+        Check(scene::SceneDocumentService::Save(scene, root / "Navigation.21kbscene", "Navigation"), "a scene with navigation components saves");
     }
     scene::Scene loaded;
-    Check(scene::SceneDocumentService::LoadFileIntoScene(loaded, root / "Links.21kbscene"), "a scene with a link loads");
+    Check(scene::SceneDocumentService::LoadFileIntoScene(loaded, root / "Navigation.21kbscene"), "a scene with navigation components loads");
     struct Found {
         scene::Scene* scene = nullptr;
         std::vector<scene::NavLink> links;
-    } found{ .scene = &loaded, .links = {} };
+        std::vector<scene::NavAgent> agents;
+        std::vector<scene::NavObstacle> obstacles;
+    } found{ .scene = &loaded, .links = {}, .agents = {}, .obstacles = {} };
     loaded.Transforms().ForEach([](scene::SceneEntity entity, const scene::TransformComponent&, void* context) {
         auto* search = static_cast<Found*>(context);
         if (const scene::NavLink* link = search->scene->Components().NavLinks().TryGet(entity); link != nullptr) search->links.push_back(*link);
+        if (const scene::NavAgent* agent = search->scene->Components().NavAgents().TryGet(entity); agent != nullptr) search->agents.push_back(*agent);
+        if (const scene::NavObstacle* obstacle = search->scene->Components().NavObstacles().TryGet(entity); obstacle != nullptr) {
+            search->obstacles.push_back(*obstacle);
+        }
     }, &found);
     const std::vector<scene::NavLink>& links = found.links;
     Check(links.size() == 1U && links[0].end.x == 4.0F && links[0].end.y == -1.0F && links[0].radius == 0.75F &&
         links[0].kind == scene::NavLinkKind::Ladder && links[0].area == 7U && !links[0].bidirectional,
         "a link keeps every field through a save and a load");
+    Check(found.agents.size() == 1U && found.agents[0].radius == 0.6F && found.agents[0].maxSpeed == 4.5F && found.agents[0].destination.z == -3.0F &&
+        found.agents[0].areaMask == (scene::kAllNavAreas & ~scene::NavAreaBit(5U)), "an agent keeps its fields through a save and a load");
+    Check(found.obstacles.size() == 1U && found.obstacles[0].shape == scene::NavObstacleShape::Cylinder && found.obstacles[0].radius == 1.25F &&
+        found.obstacles[0].height == 3.0F && found.obstacles[0].area == 6U && !found.obstacles[0].carve,
+        "an obstacle keeps its fields through a save and a load");
     std::filesystem::remove_all(root);
 }
 
@@ -816,7 +829,7 @@ void RunNavigationMeshTests() {
     TestFarFromTheWorldOrigin();
     TestCrowdIsDeterministic();
     TestCrowdLevelOfDetail();
-    TestNavLinkPersists();
+    TestNavComponentsPersist();
     TestNavigationScriptApi();
     TestPlacedNavigationMesh();
     TestTilesStreamWithCells();
