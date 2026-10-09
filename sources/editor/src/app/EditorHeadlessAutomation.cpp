@@ -1,4 +1,5 @@
 #include "app/EditorHeadlessAutomation.hpp"
+#include "app/EditorHeadlessPopupChecks.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorWorkspaceSession.hpp"
@@ -4069,6 +4070,13 @@ void EditorHeadlessAutomation::SnapshotConsole(
                << entry.category << '\t' << entry.message << '\n';
     }
     Trace("snapshot_console", output.good(), path.filename().string());
+}
+
+bool EditorHeadlessAutomation::VerifyToolbarMenuOverlay() {
+    const EditorHeadlessPopupCheckResult result =
+        EditorHeadlessPopupChecks::VerifyToolbarMenuOverlay(context_, impl_->viewport);
+    Trace("verify_toolbar_menu_overlay", result.succeeded, result.detail);
+    return result.succeeded;
 }
 
 void EditorHeadlessAutomation::Trace(

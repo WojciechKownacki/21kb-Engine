@@ -21,10 +21,6 @@ constexpr int kDropdownItemHeight = 24;
     return tool.brushMenuOpen || tool.brushShapeMenuOpen;
 }
 
-[[nodiscard]] bool SameRect(const RECT& left, const RECT& right) noexcept {
-    return left.left == right.left && left.top == right.top && left.right == right.right && left.bottom == right.bottom;
-}
-
 [[nodiscard]] bool EmptyRect(const RECT& rect) noexcept {
     return rect.right <= rect.left || rect.bottom <= rect.top;
 }
@@ -47,16 +43,11 @@ constexpr int kDropdownItemHeight = 24;
 
 } // namespace
 
-SceneViewportToolbarDropdownOverlayWindow::~SceneViewportToolbarDropdownOverlayWindow() {
-    if (window_ != nullptr && IsWindow(window_) != 0) {
-        const HWND window = window_;
-        window_ = nullptr;
-        DestroyWindow(window);
-    }
-}
+SceneViewportToolbarDropdownOverlayWindow::SceneViewportToolbarDropdownOverlayWindow() noexcept
+    : popup_(kSceneViewportToolbarDropdownOverlayClassName, *this) {}
 
 void SceneViewportToolbarDropdownOverlayWindow::Show(HWND parent, const RECT& sceneContent, std::uint64_t panelId, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
-    if (parent == nullptr || !EnsureWindow(parent)) {
+    if (parent == nullptr || !popup_.Ensure(parent)) {
         Hide();
         return;
     }
@@ -67,7 +58,6 @@ void SceneViewportToolbarDropdownOverlayWindow::Show(HWND parent, const RECT& sc
         return;
     }
 
-    parent_ = parent;
     sceneContent_ = sceneContent;
     panelId_ = panelId;
     theme_ = theme;
@@ -79,65 +69,19 @@ void SceneViewportToolbarDropdownOverlayWindow::Show(HWND parent, const RECT& sc
         return;
     }
 
-    const bool movedOrResized = !SameRect(screenBounds_, nextBounds);
-    const bool firstShow = !shown_;
-    if (movedOrResized || firstShow) {
-        static_cast<void>(MoveToCurrentBounds(true));
-    }
-    if (movedOrResized || firstShow) {
-        InvalidateRect(window_, nullptr, FALSE);
+    if (popup_.ShowAt(nextBounds)) {
+        popup_.Invalidate();
     }
 }
 
 void SceneViewportToolbarDropdownOverlayWindow::Hide() noexcept {
-    if (window_ != nullptr && IsWindow(window_) != 0) {
-        ShowWindow(window_, SW_HIDE);
-    }
-    shown_ = false;
+    popup_.Hide();
     hoveredItem_ = -1;
 }
 
-bool SceneViewportToolbarDropdownOverlayWindow::EnsureWindow(HWND parent) {
-    if (window_ != nullptr && IsWindow(window_) != 0) {
-        if (GetWindow(window_, GW_OWNER) != parent) {
-            static_cast<void>(SetWindowLongPtrW(
-                window_,
-                GWLP_HWNDPARENT,
-                reinterpret_cast<LONG_PTR>(parent)));
-        }
-        return true;
-    }
-
-    WNDCLASSEXW windowClass{};
-    windowClass.cbSize = sizeof(windowClass);
-    windowClass.style = CS_HREDRAW | CS_VREDRAW;
-    windowClass.lpfnWndProc = &SceneViewportToolbarDropdownOverlayWindow::WindowProc;
-    windowClass.hInstance = GetModuleHandleW(nullptr);
-    windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
-    windowClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-    windowClass.lpszClassName = kSceneViewportToolbarDropdownOverlayClassName;
-    if (RegisterClassExW(&windowClass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-        return false;
-    }
-
-    window_ = CreateWindowExW(
-        WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-        kSceneViewportToolbarDropdownOverlayClassName,
-        L"",
-        WS_POPUP,
-        0,
-        0,
-        1,
-        1,
-        parent,
-        nullptr,
-        windowClass.hInstance,
-        this);
-    return window_ != nullptr;
-}
-
 RECT SceneViewportToolbarDropdownOverlayWindow::ResolveScreenBounds() const noexcept {
-    if (parent_ == nullptr || sceneContext_ == nullptr || IsWindow(parent_) == 0) {
+    const HWND owner = popup_.Owner();
+    if (owner == nullptr || sceneContext_ == nullptr || IsWindow(owner) == 0) {
         return {};
     }
 
@@ -155,49 +99,14 @@ RECT SceneViewportToolbarDropdownOverlayWindow::ResolveScreenBounds() const noex
         return {};
     }
 
-    POINT screen{ popup.left, popup.top };
-    ClientToScreen(parent_, &screen);
-    return RECT{
-        screen.x,
-        screen.y,
-        screen.x + popup.right - popup.left,
-        screen.y + popup.bottom - popup.top,
-    };
+    return EditorOverlayPopupWindow::OwnerClientToScreen(owner, popup);
 }
 
-bool SceneViewportToolbarDropdownOverlayWindow::MoveToCurrentBounds(bool showWindow) noexcept {
-    if (window_ == nullptr || IsWindow(window_) == 0) {
-        return false;
-    }
-
-    const RECT nextBounds = ResolveScreenBounds();
-    if (EmptyRect(nextBounds)) {
-        return false;
-    }
-    if (SameRect(screenBounds_, nextBounds) && shown_) {
-        return false;
-    }
-
-    screenBounds_ = nextBounds;
-    SetWindowPos(
-        window_,
-        HWND_TOP,
-        screenBounds_.left,
-        screenBounds_.top,
-        screenBounds_.right - screenBounds_.left,
-        screenBounds_.bottom - screenBounds_.top,
-        SWP_NOACTIVATE | (showWindow ? SWP_SHOWWINDOW : 0U));
-    shown_ = shown_ || showWindow;
-    return true;
-}
-
-void SceneViewportToolbarDropdownOverlayWindow::Paint(HDC dc) const {
+void SceneViewportToolbarDropdownOverlayWindow::PaintOverlay(HDC dc, const RECT& client) {
     if (sceneContext_ == nullptr) {
         return;
     }
 
-    RECT client{};
-    GetClientRect(window_, &client);
     if (TerrainPopupOpen()) {
         SceneViewportToolbarRenderer::PaintTerrainPopup(dc, client, theme_, *sceneContext_, hoveredItem_);
         return;
@@ -234,11 +143,10 @@ void SceneViewportToolbarDropdownOverlayWindow::Paint(HDC dc) const {
 }
 
 int SceneViewportToolbarDropdownOverlayWindow::ItemIndexAt(int clientX, int clientY) const noexcept {
-    if (sceneContext_ == nullptr || window_ == nullptr || IsWindow(window_) == 0) {
+    if (sceneContext_ == nullptr || popup_.Window() == nullptr) {
         return -1;
     }
-    RECT client{};
-    GetClientRect(window_, &client);
+    const RECT client = popup_.ClientBounds();
     if (TerrainPopupOpen()) {
         const bool shapes = EditorTerrainService::ToolState().brushShapeMenuOpen;
         const int headerHeight = shapes ? 38 : 34;
@@ -276,87 +184,38 @@ int SceneViewportToolbarDropdownOverlayWindow::ItemIndexAt(int clientX, int clie
     return -1;
 }
 
-void SceneViewportToolbarDropdownOverlayWindow::ForwardMouseMessage(UINT message, WPARAM wparam, LPARAM lparam) const {
-    if (parent_ == nullptr || IsWindow(parent_) == 0) {
-        return;
-    }
-    POINT point{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
-    ClientToScreen(window_, &point);
-    ScreenToClient(parent_, &point);
-    SendMessageW(parent_, message, wparam, MAKELPARAM(point.x, point.y));
-}
-
-LRESULT CALLBACK SceneViewportToolbarDropdownOverlayWindow::WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
-    auto* overlay = reinterpret_cast<SceneViewportToolbarDropdownOverlayWindow*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+bool SceneViewportToolbarDropdownOverlayWindow::HandleOverlayMessage(UINT message, WPARAM wparam, LPARAM lparam) {
     switch (message) {
-    case WM_NCCREATE: {
-        auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
-        SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
-        return TRUE;
-    }
-    case WM_ERASEBKGND:
-        return 1;
-    case WM_PAINT: {
-        PAINTSTRUCT paint{};
-        HDC dc = BeginPaint(window, &paint);
-        if (overlay != nullptr) {
-            overlay->Paint(dc);
-        }
-        EndPaint(window, &paint);
-        return 0;
-    }
     case WM_LBUTTONDOWN:
     case WM_RBUTTONDOWN:
-        if (overlay != nullptr) {
-            overlay->ForwardMouseMessage(message, wparam, lparam);
-            if (overlay->sceneContext_ == nullptr ||
-                (overlay->sceneContext_->ViewportPreview(overlay->panelId_).ToolbarDropdown() == EditorViewportToolbarDropdown::None &&
-                 !TerrainPopupOpen())) {
-                ShowWindow(window, SW_HIDE);
-                overlay->shown_ = false;
-            } else {
-                InvalidateRect(window, nullptr, FALSE);
-            }
-            return 0;
+        popup_.ForwardToOwner(message, wparam, lparam);
+        if (sceneContext_ == nullptr ||
+            (sceneContext_->ViewportPreview(panelId_).ToolbarDropdown() == EditorViewportToolbarDropdown::None &&
+             !TerrainPopupOpen())) {
+            Hide();
+        } else {
+            popup_.Invalidate();
         }
-        break;
-    case WM_MOUSEMOVE:
-        if (overlay != nullptr) {
-            const int index = overlay->ItemIndexAt(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
-            if (overlay->hoveredItem_ != index) {
-                overlay->hoveredItem_ = index;
-                InvalidateRect(window, nullptr, FALSE);
-            }
-            TRACKMOUSEEVENT track{ sizeof(TRACKMOUSEEVENT), TME_LEAVE, window, 0U };
-            static_cast<void>(TrackMouseEvent(&track));
-            return 0;
+        return true;
+    case WM_MOUSEMOVE: {
+        const int index = ItemIndexAt(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+        if (hoveredItem_ != index) {
+            hoveredItem_ = index;
+            popup_.Invalidate();
         }
-        break;
-    case WM_MOUSELEAVE:
-        if (overlay != nullptr && overlay->hoveredItem_ != -1) {
-            overlay->hoveredItem_ = -1;
-            InvalidateRect(window, nullptr, FALSE);
-        }
-        return 0;
-    case WM_SETCURSOR:
-        SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)));
-        return TRUE;
-    case WM_NCDESTROY:
-        if (overlay != nullptr && overlay->window_ == window) {
-            overlay->window_ = nullptr;
-            overlay->parent_ = nullptr;
-            overlay->sceneContext_ = nullptr;
-            overlay->shown_ = false;
-            overlay->hoveredItem_ = -1;
-            overlay->screenBounds_ = RECT{};
-            overlay->sceneContent_ = RECT{};
-            overlay->panelId_ = 0U;
-        }
-        break;
-    default:
-        break;
+        TRACKMOUSEEVENT track{ sizeof(TRACKMOUSEEVENT), TME_LEAVE, popup_.Window(), 0U };
+        static_cast<void>(TrackMouseEvent(&track));
+        return true;
     }
-    return DefWindowProcW(window, message, wparam, lparam);
+    case WM_MOUSELEAVE:
+        if (hoveredItem_ != -1) {
+            hoveredItem_ = -1;
+            popup_.Invalidate();
+        }
+        return true;
+    default:
+        return false;
+    }
 }
 
 } // namespace kb::editor

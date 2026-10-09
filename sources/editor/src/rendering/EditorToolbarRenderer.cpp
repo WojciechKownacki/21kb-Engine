@@ -27,6 +27,8 @@ constexpr int kTransportIconInset = 6;
 constexpr int kToolbarButtonRadius = 6;
 constexpr int kSaveButtonRadius = 6;
 constexpr int kDropdownRadius = 7;
+constexpr int kDropdownShadowOffsetX = 2;
+constexpr int kDropdownShadowOffsetY = 3;
 constexpr int kToolbarStatusGap = 10;
 
 [[nodiscard]] COLORREF Blend(COLORREF a, COLORREF b, int numerator, int denominator) noexcept {
@@ -179,6 +181,18 @@ bool EditorToolbarRenderer::HitTestSave(const EditorToolbarRects& rects, int x, 
     return EditorToolbarLayout::HitTestSave(rects, x, y);
 }
 
+RECT EditorToolbarRenderer::MenuDropdownPaintBounds(const EditorMenuRects& menu) noexcept {
+    if (menu.dropdown.right <= menu.dropdown.left || menu.dropdown.bottom <= menu.dropdown.top) {
+        return RECT{};
+    }
+    return RECT{
+        menu.dropdown.left,
+        menu.dropdown.top,
+        menu.dropdown.right + kDropdownShadowOffsetX,
+        menu.dropdown.bottom + kDropdownShadowOffsetY,
+    };
+}
+
 namespace {
 
 [[nodiscard]] HeroIconKind LayoutRowIcon(const EditorLayoutMenuRow& row) noexcept {
@@ -218,7 +232,9 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
         }
         DrawMenuText(dc, item, descriptor.label, open || hovered ? textPrimary : textSecondary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
+}
 
+void EditorToolbarRenderer::PaintMenuDropdown(HDC dc, const EditorMenuRects& menu, const EditorTheme& theme, const EditorShellInteractionState& interaction) const {
     if (interaction.OpenMenu() == EditorMenuCommand::None) {
         return;
     }
@@ -228,7 +244,7 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
         return;
     }
 
-    const RECT shadow = OffsetRectCopy(menu.dropdown, 2, 3);
+    const RECT shadow = OffsetRectCopy(menu.dropdown, kDropdownShadowOffsetX, kDropdownShadowOffsetY);
     FillRound(dc, shadow, RGB(0, 0, 0), RGB(0, 0, 0), kDropdownRadius);
     EditorDialogStyle::PaintSurface(dc, menu.dropdown, theme);
 

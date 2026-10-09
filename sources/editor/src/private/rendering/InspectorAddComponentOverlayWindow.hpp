@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorOverlayPopupWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <string>
@@ -13,11 +14,15 @@
 
 namespace kb::editor {
 
-class InspectorAddComponentOverlayWindow {
+class InspectorAddComponentOverlayWindow final
+#if defined(_WIN32)
+    : private EditorOverlayPopupWindow::Client
+#endif
+{
 public:
 #if defined(_WIN32)
-    InspectorAddComponentOverlayWindow() = default;
-    ~InspectorAddComponentOverlayWindow();
+    InspectorAddComponentOverlayWindow() noexcept;
+    ~InspectorAddComponentOverlayWindow() = default;
 
     InspectorAddComponentOverlayWindow(const InspectorAddComponentOverlayWindow&) = delete;
     InspectorAddComponentOverlayWindow& operator=(const InspectorAddComponentOverlayWindow&) = delete;
@@ -29,19 +34,14 @@ public:
 
 private:
 #if defined(_WIN32)
-    [[nodiscard]] bool EnsureWindow(HWND owner);
-    void Paint(HDC dc) const;
+    void PaintOverlay(HDC dc, const RECT& client) override;
+    bool HandleOverlayMessage(UINT message, WPARAM wparam, LPARAM lparam) override;
     void HandlePointerDown(int x, int y);
     void HandlePointerMove(int x, int y);
     void HandlePointerUp() noexcept;
     void HandleMouseWheel(int screenX, int screenY, int delta);
 
-    static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
-
-    HWND window_ = nullptr;
-    HWND owner_ = nullptr;
-    RECT screenBounds_{};
-    bool shown_ = false;
+    EditorOverlayPopupWindow popup_;
     EditorTheme theme_{};
     EditorSceneContext* sceneContext_ = nullptr;
     std::string renderedSearch_;

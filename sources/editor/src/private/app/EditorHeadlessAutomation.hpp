@@ -171,6 +171,9 @@ public:
     [[nodiscard]] bool CapturePanelScreenshotMatrix(
         std::string_view panel, std::string_view checkpoint);
     [[nodiscard]] bool VerifyViewportHostLifecycle();
+    // A toolbar menu opened on a real editor window drops down in a popup above the
+    // window and its scene viewport, paints its rows and passes clicks back.
+    [[nodiscard]] bool VerifyToolbarMenuOverlay();
     [[nodiscard]] bool CaptureEditorScene(std::string_view checkpoint, bool editorOverlaysEnabled = true);
     // The Scene panel's viewport exactly as the editor presents it: its own camera and the
     // production present settings, editor overlays included (grid lines, the world cell grid).

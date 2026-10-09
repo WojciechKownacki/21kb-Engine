@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorOverlayPopupWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -11,11 +12,15 @@
 
 namespace kb::editor {
 
-class ProjectFilesFilterMenuOverlayWindow {
+class ProjectFilesFilterMenuOverlayWindow final
+#if defined(_WIN32)
+    : private EditorOverlayPopupWindow::Client
+#endif
+{
 public:
 #if defined(_WIN32)
-    ProjectFilesFilterMenuOverlayWindow() = default;
-    ~ProjectFilesFilterMenuOverlayWindow();
+    ProjectFilesFilterMenuOverlayWindow() noexcept;
+    ~ProjectFilesFilterMenuOverlayWindow() = default;
 
     ProjectFilesFilterMenuOverlayWindow(const ProjectFilesFilterMenuOverlayWindow&) = delete;
     ProjectFilesFilterMenuOverlayWindow& operator=(const ProjectFilesFilterMenuOverlayWindow&) = delete;
@@ -26,17 +31,11 @@ public:
 
 private:
 #if defined(_WIN32)
-    [[nodiscard]] bool EnsureWindow(HWND parent);
-    void Paint(HDC dc) const;
-    void ForwardMouseMessage(UINT message, WPARAM wparam, LPARAM lparam) const;
+    void PaintOverlay(HDC dc, const RECT& client) override;
+    bool HandleOverlayMessage(UINT message, WPARAM wparam, LPARAM lparam) override;
     void HandleMouseMove(int x, int y);
 
-    static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
-
-    HWND window_ = nullptr;
-    HWND parent_ = nullptr;
-    RECT screenBounds_{};
-    bool shown_ = false;
+    EditorOverlayPopupWindow popup_;
     bool lastShowFolders_ = true;
     bool lastShowTemplates_ = true;
     int hoveredIndex_ = -1;

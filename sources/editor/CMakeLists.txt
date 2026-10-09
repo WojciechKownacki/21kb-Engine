@@ -533,6 +533,9 @@ add_executable(kb_editor WIN32
     src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/InspectorAudioMixerAssetView.hpp
     src/private/rendering/InspectorSceneAudioView.hpp
+    src/private/rendering/EditorOverlayPopupWindow.hpp
+    src/private/app/EditorHeadlessPopupChecks.hpp
+    src/private/rendering/EditorToolbarMenuOverlayWindow.hpp
     src/private/rendering/InspectorAddComponentOverlayWindow.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/material_graph/EditorMaterialGraphPinPresentation.hpp
@@ -765,6 +768,9 @@ add_executable(kb_editor WIN32
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/InspectorAudioMixerAssetView.cpp
     src/rendering/InspectorSceneAudioView.cpp
+    src/rendering/EditorOverlayPopupWindow.cpp
+    src/app/EditorHeadlessPopupChecks.cpp
+    src/rendering/EditorToolbarMenuOverlayWindow.cpp
     src/rendering/InspectorAddComponentOverlayWindow.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
     src/rendering/EditorMaterialThumbnailService.cpp

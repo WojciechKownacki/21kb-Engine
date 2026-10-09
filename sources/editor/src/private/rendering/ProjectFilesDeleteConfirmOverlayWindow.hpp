@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorOverlayPopupWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -11,11 +12,15 @@
 
 namespace kb::editor {
 
-class ProjectFilesDeleteConfirmOverlayWindow {
+class ProjectFilesDeleteConfirmOverlayWindow final
+#if defined(_WIN32)
+    : private EditorOverlayPopupWindow::Client
+#endif
+{
 public:
 #if defined(_WIN32)
-    ProjectFilesDeleteConfirmOverlayWindow() = default;
-    ~ProjectFilesDeleteConfirmOverlayWindow();
+    ProjectFilesDeleteConfirmOverlayWindow() noexcept;
+    ~ProjectFilesDeleteConfirmOverlayWindow() = default;
 
     ProjectFilesDeleteConfirmOverlayWindow(const ProjectFilesDeleteConfirmOverlayWindow&) = delete;
     ProjectFilesDeleteConfirmOverlayWindow& operator=(const ProjectFilesDeleteConfirmOverlayWindow&) = delete;
@@ -33,21 +38,15 @@ private:
         int listScroll = 0;
     };
 
-    [[nodiscard]] bool EnsureWindow(HWND parent);
     [[nodiscard]] RECT ResolveScreenBounds() const noexcept;
-    [[nodiscard]] bool MoveToCurrentBounds(bool showWindow) noexcept;
-    void Paint(HDC dc) const;
-    void ForwardMouseMessage(UINT message, WPARAM wparam, LPARAM lparam) const;
+    bool MoveToCurrentBounds() noexcept;
+    void PaintOverlay(HDC dc, const RECT& client) override;
+    bool HandleOverlayMessage(UINT message, WPARAM wparam, LPARAM lparam) override;
     void ForwardMouseWheel(WPARAM wparam, LPARAM lparam) const;
     [[nodiscard]] StateSnapshot SnapshotState() const noexcept;
     [[nodiscard]] static bool SameSnapshot(const StateSnapshot& left, const StateSnapshot& right) noexcept;
 
-    static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
-
-    HWND window_ = nullptr;
-    HWND parent_ = nullptr;
-    RECT screenBounds_{};
-    bool shown_ = false;
+    EditorOverlayPopupWindow popup_;
     EditorTheme theme_{};
     const EditorSceneContext* sceneContext_ = nullptr;
 #endif
