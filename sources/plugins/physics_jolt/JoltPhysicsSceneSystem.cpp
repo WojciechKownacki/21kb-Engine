@@ -219,7 +219,7 @@ struct BodySignature {
 struct BodyRecord {
     JPH::BodyID bodyId{};
     BodySignature signature{};
-    Vec3 synchronizedPosition{};
+    kb::math::DVec3 synchronizedPosition{};
     Quat synchronizedRotation{};
     // MoveKinematic writes a velocity directly into the live Jolt body. The
     // next fixed-step ECS synchronization must not immediately replace that
@@ -257,6 +257,12 @@ struct BodyRecord {
     return JPH::RVec3(value.x, value.y, value.z);
 }
 
+// Jolt is built with JPH_DOUBLE_PRECISION (CMakeLists.txt): RVec3 is double, so a world position keeps its full
+// precision on the way into and out of the simulation.
+[[nodiscard]] JPH::RVec3 ToJoltPosition(const kb::math::DVec3& value) noexcept {
+    return JPH::RVec3(value.x, value.y, value.z);
+}
+
 [[nodiscard]] JPH::Quat ToJolt(Quat value) noexcept {
     return JPH::Quat(value.x, value.y, value.z, value.w);
 }
@@ -269,16 +275,12 @@ struct BodyRecord {
     return Vec3{ static_cast<float>(value.GetX()), static_cast<float>(value.GetY()), static_cast<float>(value.GetZ()) };
 }
 
+[[nodiscard]] kb::math::DVec3 FromJoltWorldPosition(JPH::RVec3 value) noexcept {
+    return kb::math::DVec3{ static_cast<double>(value.GetX()), static_cast<double>(value.GetY()), static_cast<double>(value.GetZ()) };
+}
+
 [[nodiscard]] Quat FromJolt(JPH::Quat value) noexcept {
     return Quat{ value.GetX(), value.GetY(), value.GetZ(), value.GetW() };
-}
-
-[[nodiscard]] Vec3 Add(Vec3 lhs, Vec3 rhs) noexcept {
-    return Vec3{ lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z };
-}
-
-[[nodiscard]] Vec3 Subtract(Vec3 lhs, Vec3 rhs) noexcept {
-    return Vec3{ lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z };
 }
 
 [[nodiscard]] Vec3 ColliderWorldOffset(Vec3 center, Vec3 scale, Quat rotation) noexcept {
@@ -294,6 +296,10 @@ struct BodyRecord {
 }
 
 [[nodiscard]] bool IsFinite(Vec3 value) noexcept {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+[[nodiscard]] bool IsFinite(const kb::math::DVec3& value) noexcept {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
@@ -322,8 +328,8 @@ struct BodyRecord {
     return std::isfinite(lengthSquared) && std::fabs(lengthSquared - 1.0F) <= 0.001F;
 }
 
-[[nodiscard]] float SafeDivide(float value, float divisor) noexcept {
-    return std::fabs(divisor) < MinimumShapeExtent ? value : value / divisor;
+[[nodiscard]] double SafeDivide(double value, float divisor) noexcept {
+    return std::fabs(divisor) < MinimumShapeExtent ? value : value / static_cast<double>(divisor);
 }
 
 // LIB-133: WriteBack/WriteBackCharacters write a Jolt body's real WORLD-space result - for a
@@ -335,10 +341,12 @@ struct BodyRecord {
 // TransformMath.hpp is a private kb_engine header this plugin (a separate library) cannot
 // include - mirrors the same math kb::script::ScriptTransformApi.cpp's own WorldPoseToLocal
 // already uses for Transform.SetWorldPose/SetParent.
-[[nodiscard]] Vec3 WorldToLocalPosition(const TransformComponent& parentTransform, Vec3 worldPosition) noexcept {
+// In double precision: the parent and the body may both lie far from the origin. `parentWorldPosition` is the
+// parent's double-precision world translation.
+[[nodiscard]] kb::math::DVec3 WorldToLocalPosition(const TransformComponent& parentTransform, const kb::math::DVec3& parentWorldPosition, const kb::math::DVec3& worldPosition) noexcept {
     const Quat parentRotationInverse = kb::math::Inverse(parentTransform.worldRotation);
-    const Vec3 unrotatedDelta = kb::math::Rotate(parentRotationInverse, Subtract(worldPosition, parentTransform.worldPosition));
-    return Vec3{
+    const kb::math::DVec3 unrotatedDelta = kb::math::RotateDouble(parentRotationInverse, worldPosition - parentWorldPosition);
+    return kb::math::DVec3{
         SafeDivide(unrotatedDelta.x, parentTransform.worldScale.x),
         SafeDivide(unrotatedDelta.y, parentTransform.worldScale.y),
         SafeDivide(unrotatedDelta.z, parentTransform.worldScale.z),
@@ -353,12 +361,14 @@ struct BodyRecord {
 // its NEW world pose from this same Jolt step. Only then may a child derive its local pose from
 // its parent's world pose. A one-pass unordered_map traversal made dynamic parent+child results
 // depend on which record happened to be visited first.
-void StageWriteBackWorldPose(TransformComponent& transform, Vec3 worldPosition, Quat worldRotation) noexcept {
+// `previousWorldPosition` is the double-precision world translation the row had: a body far from the origin can
+// move by less than the float spacing there.
+void StageWriteBackWorldPose(TransformComponent& transform, const kb::math::DVec3& previousWorldPosition, const kb::math::DVec3& worldPosition, Quat worldRotation) noexcept {
     transform.worldDirty = transform.worldDirty ||
-        !SameVec3(transform.worldPosition, worldPosition) || transform.worldRotation.x != worldRotation.x ||
+        previousWorldPosition != worldPosition || transform.worldRotation.x != worldRotation.x ||
         transform.worldRotation.y != worldRotation.y || transform.worldRotation.z != worldRotation.z ||
         transform.worldRotation.w != worldRotation.w;
-    transform.worldPosition = worldPosition;
+    transform.worldPosition = kb::math::ToVec3(worldPosition);
     transform.worldRotation = worldRotation;
 }
 
@@ -366,20 +376,20 @@ void StageWriteBackWorldPose(TransformComponent& transform, Vec3 worldPosition, 
 // TransformComponent cannot be found (matches TransformMath::ComposeRoot's own contract; a
 // vanished parent mid-frame is the same shape of edge case CreateBody/SynchronizeBody already
 // treats as "not simulated this step", not a crash).
-void FinalizeWriteBackLocalPose(SceneSystemContext& context, SceneEntity entity, TransformComponent& transform) {
-    const SceneEntity parent = context.GetScene().Hierarchy().Parent(entity);
-    const TransformComponent* parentTransform = parent.IsValid() ? context.Transforms().TryGet(parent) : nullptr;
-    const Vec3 localPosition = parentTransform != nullptr
-        ? WorldToLocalPosition(*parentTransform, transform.worldPosition) : transform.worldPosition;
+// `worldPosition` is the staged double-precision world translation of the body; `parentWorldPosition` the one
+// of its parent (staged this step too when the parent is simulated).
+void FinalizeWriteBackLocalPose(SceneSystemContext& context, SceneEntity entity, TransformComponent& transform,
+    const kb::math::DVec3& worldPosition, const TransformComponent* parentTransform, const kb::math::DVec3& parentWorldPosition) {
+    const kb::math::DVec3 localPosition = parentTransform != nullptr
+        ? WorldToLocalPosition(*parentTransform, parentWorldPosition, worldPosition) : worldPosition;
     const Quat localRotation = parentTransform != nullptr
         ? WorldToLocalRotation(*parentTransform, transform.worldRotation) : transform.worldRotation;
-    if (transform.worldDirty || !SameVec3(transform.localPosition, localPosition) ||
+    if (transform.worldDirty || context.Transforms().LocalTranslation(entity, transform) != localPosition ||
         transform.localRotation.x != localRotation.x || transform.localRotation.y != localRotation.y ||
         transform.localRotation.z != localRotation.z || transform.localRotation.w != localRotation.w) {
-        transform.localPosition = localPosition;
         transform.localRotation = localRotation;
-        transform.worldDirty = true;
-        context.Transforms().MarkModified(entity);
+        // Writes the local translation with its part below float precision, as a transform write.
+        context.Transforms().SetLocalTranslation(entity, localPosition);
     }
 }
 
@@ -836,6 +846,7 @@ public:
             .distance = hit.mFraction * distance_,
             .point = FromJoltPosition(point),
             .normal = FromJolt(GetContext()->GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, point)),
+            .worldPoint = FromJoltWorldPosition(point),
         }, [](const auto& a, const auto& b) {
             return a.distance < b.distance || (a.distance == b.distance && a.entity.Id() < b.entity.Id());
         });
@@ -856,7 +867,7 @@ class NonAllocCastShapeCollector final : public JPH::CastShapeCollector {
 public:
     NonAllocCastShapeCollector(
         const std::unordered_map<JPH::BodyID, SceneEntity>& entityByBodyId,
-        Vec3 origin,
+        const kb::math::DVec3& origin,
         float maxDistance,
         kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) noexcept
         : entityByBodyId_(entityByBodyId)
@@ -869,14 +880,17 @@ public:
         if (entityIt == entityByBodyId_.end()) {
             return;
         }
+        // mContactPointOn2 is relative to the base offset the cast was given: the cast origin.
+        const kb::math::DVec3 point = origin_ + FromJolt(hit.mContactPointOn2);
         InsertUniqueBounded(
             results_,
             kb::scene::PhysicsCastResult{
                 .hit = true,
                 .entity = entityIt->second,
                 .distance = hit.mFraction * maxDistance_,
-                .point = Add(origin_, FromJolt(hit.mContactPointOn2)),
+                .point = kb::math::ToVec3(point),
                 .normal = FromJolt(-hit.mPenetrationAxis.NormalizedOr(JPH::Vec3::sZero())),
+                .worldPoint = point,
             },
             [](const kb::scene::PhysicsCastResult& lhs, const kb::scene::PhysicsCastResult& rhs) {
                 return lhs.distance < rhs.distance ||
@@ -886,7 +900,7 @@ public:
 
 private:
     const std::unordered_map<JPH::BodyID, SceneEntity>& entityByBodyId_;
-    Vec3 origin_{};
+    kb::math::DVec3 origin_{};
     float maxDistance_ = 0.0F;
     kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results_;
 };
@@ -965,7 +979,7 @@ struct RawContactEvent {
     bool isSensor1 = false;
     bool isSensor2 = false;
     RawContactPhase phase = RawContactPhase::Added;
-    Vec3 point{};
+    kb::math::DVec3 point{};
     Vec3 normal{};
 };
 
@@ -979,7 +993,7 @@ struct BodyContactKey {
 };
 
 struct ContactPayload {
-    Vec3 point{};
+    kb::math::DVec3 point{};
     Vec3 normal{};
     bool isTrigger = false;
 };
@@ -1050,9 +1064,9 @@ public:
 private:
     void Record(const JPH::Body& body1, const JPH::Body& body2, const JPH::ContactManifold& manifold, RawContactPhase phase) {
         if (!Enabled()) return;
-        Vec3 point{};
+        kb::math::DVec3 point{};
         if (!manifold.mRelativeContactPointsOn1.empty()) {
-            point = FromJoltPosition(manifold.GetWorldSpaceContactPointOn1(0));
+            point = FromJoltWorldPosition(manifold.GetWorldSpaceContactPointOn1(0));
         }
         std::lock_guard<std::mutex> lock(mutex_);
         pending_.push_back(RawContactEvent{
@@ -1251,8 +1265,8 @@ public:
             const RootMotionSegment motion = ConsumeRootMotion(it->second, deltaSeconds);
             const Vec3 worldTranslation = kb::math::Rotate(transform->worldRotation, motion.localTranslation);
             const Quat targetRotation = kb::math::Normalize(transform->worldRotation * motion.localRotation);
-            const Vec3 targetPosition = transform->worldPosition + worldTranslation;
-            if (!MoveKinematic(entity, targetPosition, targetRotation, deltaSeconds)) {
+            const kb::math::DVec3 targetPosition = context.Transforms().WorldTranslation(entity, *transform) + worldTranslation;
+            if (!MoveKinematicTo(entity, targetPosition, targetRotation, deltaSeconds)) {
                 ++it;
                 continue;
             }
@@ -1355,12 +1369,16 @@ public:
     }
 
     bool MoveKinematic(SceneEntity entity, Vec3 targetPosition, Quat targetRotation, float deltaSeconds) noexcept override {
+        return MoveKinematicTo(entity, kb::math::ToDVec3(targetPosition), targetRotation, deltaSeconds);
+    }
+
+    bool MoveKinematicTo(SceneEntity entity, const kb::math::DVec3& targetPosition, Quat targetRotation, float deltaSeconds) noexcept {
         JoinStep();
         BodyRecord* existing = FindKinematicBody(entity);
         if (existing == nullptr || !IsFinite(targetPosition) || !IsNormalized(targetRotation) || !std::isfinite(deltaSeconds) || deltaSeconds <= 0.0F) {
             return false;
         }
-        const Vec3 targetBodyPosition = Add(targetPosition, ColliderWorldOffset(existing->signature.center, existing->signature.scale, targetRotation));
+        const kb::math::DVec3 targetBodyPosition = targetPosition + ColliderWorldOffset(existing->signature.center, existing->signature.scale, targetRotation);
         physicsSystem_.GetBodyInterface().MoveKinematic(existing->bodyId, ToJoltPosition(targetBodyPosition), ToJolt(targetRotation), deltaSeconds);
         existing->pendingKinematicMove = true;
         return true;
@@ -1556,22 +1574,34 @@ public:
     }
 
     [[nodiscard]] kb::scene::PhysicsCastResult CastShape(const kb::scene::PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept override {
+        return CastShapePrecise(shape, kb::math::ToDVec3(origin), direction, maxDistance, layerMask);
+    }
+
+    [[nodiscard]] kb::scene::PhysicsCastResult CastShapePrecise(const kb::scene::PhysicsShapeDesc& shape, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask) const noexcept override {
         JoinStep();
         std::array<kb::scene::PhysicsCastResult, 1U> storage{};
         kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult> results(storage);
-        CastShapeAll(shape, origin, direction, maxDistance, layerMask, results);
+        CastShapeAllPrecise(shape, origin, direction, maxDistance, layerMask, results);
         return results.Empty() ? kb::scene::PhysicsCastResult{} : *results.GetAt(0U);
     }
 
     [[nodiscard]] kb::scene::PhysicsOverlapResult OverlapShape(const kb::scene::PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask) const noexcept override {
+        return OverlapShapePrecise(shape, kb::math::ToDVec3(center), layerMask);
+    }
+
+    [[nodiscard]] kb::scene::PhysicsOverlapResult OverlapShapePrecise(const kb::scene::PhysicsShapeDesc& shape, const kb::math::DVec3& center, std::uint32_t layerMask) const noexcept override {
         JoinStep();
         std::array<kb::scene::PhysicsOverlapResult, 1U> storage{};
         kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult> results(storage);
-        OverlapShapeAll(shape, center, layerMask, results);
+        OverlapShapeAllPrecise(shape, center, layerMask, results);
         return results.Empty() ? kb::scene::PhysicsOverlapResult{} : *results.GetAt(0U);
     }
 
     [[nodiscard]] kb::scene::PhysicsClosestPointResult ClosestPoint(SceneEntity entity, Vec3 point, std::uint32_t layerMask) const noexcept override {
+        return ClosestPointPrecise(entity, kb::math::ToDVec3(point), layerMask);
+    }
+
+    [[nodiscard]] kb::scene::PhysicsClosestPointResult ClosestPointPrecise(SceneEntity entity, const kb::math::DVec3& point, std::uint32_t layerMask) const noexcept override {
         JoinStep();
         if (!IsFinite(point) || layerMask == 0U || scene_ == nullptr || !scene_->Entities().IsAlive(entity)) {
             return {};
@@ -1599,11 +1629,12 @@ public:
             }
             const JPH::AABox& bounds = bodyLock.GetBody().GetWorldSpaceBounds();
             targetShape = bodyLock.GetBody().GetTransformedShape();
-            const JPH::Vec3 queryPoint = ToJolt(point);
-            const float extentX = std::max(std::abs(queryPoint.GetX() - bounds.mMin.GetX()), std::abs(queryPoint.GetX() - bounds.mMax.GetX()));
-            const float extentY = std::max(std::abs(queryPoint.GetY() - bounds.mMin.GetY()), std::abs(queryPoint.GetY() - bounds.mMax.GetY()));
-            const float extentZ = std::max(std::abs(queryPoint.GetZ() - bounds.mMin.GetZ()), std::abs(queryPoint.GetZ() - bounds.mMax.GetZ()));
-            maxSearchDistance = std::hypot(extentX, extentY, extentZ) + PointRadius;
+            // The world-space bounds are float (rounded outwards by Jolt); the extents are measured from the
+            // double-precision point so the search radius stays tight far from the origin.
+            const double extentX = std::max(std::abs(point.x - double(bounds.mMin.GetX())), std::abs(point.x - double(bounds.mMax.GetX())));
+            const double extentY = std::max(std::abs(point.y - double(bounds.mMin.GetY())), std::abs(point.y - double(bounds.mMax.GetY())));
+            const double extentZ = std::max(std::abs(point.z - double(bounds.mMin.GetZ())), std::abs(point.z - double(bounds.mMax.GetZ())));
+            maxSearchDistance = static_cast<float>(std::hypot(extentX, extentY, extentZ)) + PointRadius;
         }
         if (!std::isfinite(maxSearchDistance)) {
             return {};
@@ -1619,12 +1650,13 @@ public:
         }
         // mContactPointOn2 is relative to inBaseOffset (point, as passed to
         // CollideShape above) - add it back for the absolute world position.
-        const Vec3 closest = Add(point, FromJolt(collector.mHit.mContactPointOn2));
-        const Vec3 delta = Subtract(closest, point);
+        const Vec3 delta = FromJolt(collector.mHit.mContactPointOn2);
+        const kb::math::DVec3 closest = point + delta;
         return kb::scene::PhysicsClosestPointResult{
             .found = true,
-            .point = closest,
+            .point = kb::math::ToVec3(closest),
             .distance = std::sqrt((delta.x * delta.x) + (delta.y * delta.y) + (delta.z * delta.z)),
+            .worldPoint = closest,
         };
     }
 
@@ -1633,6 +1665,11 @@ public:
     // the stack and the collectors retain only the best Capacity() hits, so
     // neither query creates Jolt's allocating AllHitCollisionCollector array.
     void RaycastAll(Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
+        kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
+        RaycastAllPrecise(kb::math::ToDVec3(origin), direction, maxDistance, layerMask, results);
+    }
+
+    void RaycastAllPrecise(const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask,
         kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
         JoinStep();
         results.Clear();
@@ -1656,6 +1693,10 @@ public:
     }
 
     void CastShapeAll(const kb::scene::PhysicsShapeDesc& shape, Vec3 origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
+        CastShapeAllPrecise(shape, kb::math::ToDVec3(origin), direction, maxDistance, layerMask, results);
+    }
+
+    void CastShapeAllPrecise(const kb::scene::PhysicsShapeDesc& shape, const kb::math::DVec3& origin, Vec3 direction, float maxDistance, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsCastResult>& results) const noexcept override {
         JoinStep();
         results.Clear();
         if (results.Capacity() == 0U || !IsValidQueryShape(shape) || !IsFinite(origin) || !IsFinite(direction) ||
@@ -1678,6 +1719,10 @@ public:
     }
 
     void OverlapShapeAll(const kb::scene::PhysicsShapeDesc& shape, Vec3 center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult>& results) const noexcept override {
+        OverlapShapeAllPrecise(shape, kb::math::ToDVec3(center), layerMask, results);
+    }
+
+    void OverlapShapeAllPrecise(const kb::scene::PhysicsShapeDesc& shape, const kb::math::DVec3& center, std::uint32_t layerMask, kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult>& results) const noexcept override {
         JoinStep();
         results.Clear();
         if (results.Capacity() == 0U || !IsValidQueryShape(shape) || !IsFinite(center) ||
@@ -1730,7 +1775,8 @@ public:
                 existing->pendingKinematicMove = false;
                 return *existing;
             }
-            SynchronizeKinematicOrStaticBody(*existing, rigidbody, collider, transform, context.DeltaSeconds(), wakeSurvivingDynamicBodies);
+            SynchronizeKinematicOrStaticBody(*existing, rigidbody, collider, transform, context.Transforms().WorldTranslation(entity, transform),
+                context.DeltaSeconds(), wakeSurvivingDynamicBodies);
             return *existing;
         }
 
@@ -1738,9 +1784,10 @@ public:
             RemoveBody(existing->bodyId, wakeSurvivingDynamicBodies);
             bodies_.erase(entity.Id());
         }
-        const JPH::BodyID bodyId = CreateBody(rigidbody, collider, transform);
+        const kb::math::DVec3 worldPosition = context.Transforms().WorldTranslation(entity, transform);
+        const JPH::BodyID bodyId = CreateBody(rigidbody, collider, transform, worldPosition);
         const auto inserted = bodies_.emplace(entity.Id(), BodyRecord{ .bodyId = bodyId, .signature = signature,
-            .synchronizedPosition = transform.worldPosition, .synchronizedRotation = transform.worldRotation, .seenEpoch = bodySyncEpoch_ });
+            .synchronizedPosition = worldPosition, .synchronizedRotation = transform.worldRotation, .seenEpoch = bodySyncEpoch_ });
         bodySyncCache_[cacheIndex].body = &inserted.first->second;
         entityByBodyId_.emplace(bodyId, entity);
         if (rigidbody.bodyType == RigidbodyBodyType::Static && wakeSurvivingDynamicBodies) {
@@ -2147,7 +2194,7 @@ private:
         characterSettings.mMaxSlopeAngle = JPH::DegreesToRadians(component.slopeLimitDegrees);
 
         const JPH::Ref<JPH::CharacterVirtual> character = new JPH::CharacterVirtual(
-            &characterSettings, ToJoltPosition(transform.worldPosition), ToJolt(transform.worldRotation), &physicsSystem_);
+            &characterSettings, ToJoltPosition(scene_->Transforms().WorldTranslation(entity, transform)), ToJolt(transform.worldRotation), &physicsSystem_);
         characters_.emplace(entity.Id(), CharacterRecord{
                                               .character = character,
                                               .signature = signature,
@@ -2274,10 +2321,10 @@ private:
             if (transform == nullptr) {
                 continue;
             }
-            const Vec3 position = FromJoltPosition(record.character->GetPosition());
+            const kb::math::DVec3 position = FromJoltWorldPosition(record.character->GetPosition());
             const Quat rotation = FromJolt(record.character->GetRotation());
-            StageWriteBackWorldPose(*transform, position, rotation);
-            writeBackPoses_.push_back({entity, transform, context.EcsWorld().NativeStorage().StructuralVersion()});
+            StageWriteBackWorldPose(*transform, context.Transforms().WorldTranslation(entity, *transform), position, rotation);
+            writeBackPoses_.push_back({entity, transform, context.EcsWorld().NativeStorage().StructuralVersion(), position});
         }
     }
 
@@ -2356,7 +2403,8 @@ private:
         return scaled.Get();
     }
 
-    [[nodiscard]] JPH::BodyID CreateBody(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform) {
+    [[nodiscard]] JPH::BodyID CreateBody(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform,
+        const kb::math::DVec3& worldPosition) {
         // A scene replacement can fill the backend with old bodies before the
         // synchronization tail retires them. Reclaim only records absent from ECS.
         if (physicsSystem_.GetNumBodies() >= MaxBodies && scene_ != nullptr) {
@@ -2377,7 +2425,7 @@ private:
         }
         JPH::RefConst<JPH::Shape> shape = collider.shape == ColliderShape::Mesh
             ? CreateMeshShape(collider, transform.worldScale) : CreateShape(collider, transform.worldScale);
-        const Vec3 bodyPosition = Add(transform.worldPosition, ColliderWorldOffset(collider.center, transform.worldScale, transform.worldRotation));
+        const kb::math::DVec3 bodyPosition = worldPosition + ColliderWorldOffset(collider.center, transform.worldScale, transform.worldRotation);
         if (!IsFinite(bodyPosition)) {
             throw std::invalid_argument("Physics body position overflowed");
         }
@@ -2422,20 +2470,21 @@ private:
         return bounds;
     }
 
-    void SynchronizeKinematicOrStaticBody(BodyRecord& record, const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform, float fixedDeltaSeconds, bool wakeSurvivingDynamicBodies) {
+    void SynchronizeKinematicOrStaticBody(BodyRecord& record, const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform,
+        const kb::math::DVec3& worldPosition, float fixedDeltaSeconds, bool wakeSurvivingDynamicBodies) {
         if (rigidbody.bodyType == RigidbodyBodyType::Dynamic) {
             return;
         }
         const bool isStatic = rigidbody.bodyType == RigidbodyBodyType::Static;
         const auto& rotation = transform.worldRotation;
-        if (isStatic && SameVec3(record.synchronizedPosition, transform.worldPosition) &&
+        if (isStatic && record.synchronizedPosition == worldPosition &&
             record.synchronizedRotation.x == rotation.x && record.synchronizedRotation.y == rotation.y &&
             record.synchronizedRotation.z == rotation.z && record.synchronizedRotation.w == rotation.w) {
             return;
         }
 
         JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
-        const Vec3 bodyPosition = Add(transform.worldPosition, ColliderWorldOffset(collider.center, transform.worldScale, transform.worldRotation));
+        const kb::math::DVec3 bodyPosition = worldPosition + ColliderWorldOffset(collider.center, transform.worldScale, transform.worldRotation);
         if (!IsFinite(bodyPosition)) {
             throw std::invalid_argument("Physics body position overflowed");
         }
@@ -2446,7 +2495,7 @@ private:
         const JPH::AABox previousBounds = isStatic && wakeSurvivingDynamicBodies ? BodyNeighborhood(record.bodyId) : JPH::AABox{};
         bodyInterface.SetPositionAndRotationWhenChanged(record.bodyId, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), JPH::EActivation::DontActivate);
         if (isStatic) {
-            record.synchronizedPosition = transform.worldPosition;
+            record.synchronizedPosition = worldPosition;
             record.synchronizedRotation = transform.worldRotation;
             if (wakeSurvivingDynamicBodies) {
                 if (previousBounds.IsValid()) bodyInterface.ActivateBodiesInAABox(previousBounds, {}, {});
@@ -2542,7 +2591,8 @@ private:
             // A single read lock supplies one coherent pose/velocity snapshot.
             // Four separate BodyInterface getters acquired this same lock four times.
             Quat rotation{};
-            Vec3 position{}, linearVelocity{}, angularVelocity{};
+            kb::math::DVec3 position{};
+            Vec3 linearVelocity{}, angularVelocity{};
             {
                 JPH::BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), body.bodyId);
                 if (!lock.Succeeded()) continue;
@@ -2551,12 +2601,12 @@ private:
                 if (asleep && entry.body->writeBackSettled) continue;
                 entry.body->writeBackSettled = asleep;
                 rotation = FromJolt(simulated.GetRotation());
-                position = Subtract(FromJoltPosition(simulated.GetPosition()), ColliderWorldOffset(body.signature.center, body.signature.scale, rotation));
+                position = FromJoltWorldPosition(simulated.GetPosition()) - ColliderWorldOffset(body.signature.center, body.signature.scale, rotation);
                 linearVelocity = FromJolt(simulated.GetLinearVelocity());
                 angularVelocity = FromJolt(simulated.GetAngularVelocity());
             }
-            StageWriteBackWorldPose(*transform, position, rotation);
-            writeBackPoses_.push_back({entity, transform, context.EcsWorld().NativeStorage().StructuralVersion()});
+            StageWriteBackWorldPose(*transform, context.Transforms().WorldTranslation(entity, *transform), position, rotation);
+            writeBackPoses_.push_back({entity, transform, context.EcsWorld().NativeStorage().StructuralVersion(), position});
 
             if (!SameVec3(rigidbody->linearVelocity, linearVelocity) || !SameVec3(rigidbody->angularVelocity, angularVelocity)) {
                 rigidbody->linearVelocity = linearVelocity;
@@ -2571,14 +2621,25 @@ private:
         // world poses before this compact scratch list is consumed. Local conversion is
         // therefore independent of bodies_/characters_ hash order, including dynamic
         // parent+child and mixed rigidbody/character hierarchies.
+        // A parent simulated in this step has its new world translation staged here, not yet in the scene.
+        stagedWorldPositions_.clear();
+        for (const auto& pose : writeBackPoses_) {
+            if (context.GetScene().Hierarchy().ChildCount(pose.entity) != 0U) stagedWorldPositions_.emplace(pose.entity.Id(), pose.worldPosition);
+        }
         for (const auto& pose : writeBackPoses_) {
             // A borrowed row belongs to this fixed step only. Modified
             // observers may still change the archetype before the next row.
             TransformComponent* transform = pose.storageVersion == context.EcsWorld().NativeStorage().StructuralVersion()
                 ? pose.transform : context.Transforms().TryGet(pose.entity);
-            if (transform != nullptr) {
-                FinalizeWriteBackLocalPose(context, pose.entity, *transform);
+            if (transform == nullptr) continue;
+            const SceneEntity parent = context.GetScene().Hierarchy().Parent(pose.entity);
+            const TransformComponent* parentTransform = parent.IsValid() ? context.Transforms().TryGet(parent) : nullptr;
+            kb::math::DVec3 parentWorldPosition{};
+            if (parentTransform != nullptr) {
+                const auto staged = stagedWorldPositions_.find(parent.Id());
+                parentWorldPosition = staged != stagedWorldPositions_.end() ? staged->second : context.Transforms().WorldTranslation(parent, *parentTransform);
             }
+            FinalizeWriteBackLocalPose(context, pose.entity, *transform, pose.worldPosition, parentTransform, parentWorldPosition);
         }
     }
 
@@ -2701,15 +2762,16 @@ private:
                 kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
                                                                            .target = entity1It->second,
                                                                            .other = entity2It->second,
-                                                                           .point = dispatch.payload.point,
+                                                                           .point = kb::math::ToVec3(dispatch.payload.point),
                                                                            .normal = dispatch.payload.normal,
                                                                            .isTrigger = dispatch.payload.isTrigger,
                                                                            .phase = dispatch.phase,
+                                                                           .worldPoint = dispatch.payload.point,
                                                                        });
                 kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
                                                                            .target = entity2It->second,
                                                                            .other = entity1It->second,
-                                                                           .point = dispatch.payload.point,
+                                                                           .point = kb::math::ToVec3(dispatch.payload.point),
                                                                            .normal = Vec3{
                                                                                -dispatch.payload.normal.x,
                                                                                -dispatch.payload.normal.y,
@@ -2717,6 +2779,7 @@ private:
                                                                            },
                                                                            .isTrigger = dispatch.payload.isTrigger,
                                                                            .phase = dispatch.phase,
+                                                                           .worldPoint = dispatch.payload.point,
                                                                        });
             }
 
@@ -2839,8 +2902,10 @@ private:
         SceneEntity entity{};
         TransformComponent* transform = nullptr;
         std::uint64_t storageVersion = 0U;
+        kb::math::DVec3 worldPosition{};
     };
     std::vector<WriteBackPoseView> writeBackPoses_;
+    std::unordered_map<std::uint64_t, kb::math::DVec3> stagedWorldPositions_;
     JoltCollisionContactListener contactListener_;
     // LIB-127: authoritative active sub-shape sets, aggregated by body pair.
     // Besides preventing duplicate entity callbacks for compound shapes,
