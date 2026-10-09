@@ -45,9 +45,9 @@ public:
     void Shutdown() noexcept;
     [[nodiscard]] bool IsReady() const noexcept;
 
-    // The render origin of the scene's frame: records, owner matrices and planes are kept relative to it. When it
-    // moves, the live particles of world-space emitters (whose records cannot be moved on the GPU) are cleared;
-    // their emitters go on emitting.
+    // The render origin of the scene's frame: owner matrices and mesh emitter origins are kept relative to it, and
+    // so are the birth and collision records of world-space emitters once the next Dispatch has moved them there
+    // (cs_particle_gpu_rebase), so live particles stay where they are in the world when the origin moves.
     void SetRenderOrigin(std::uint64_t sceneId, const kb::math::DVec3& renderOrigin) noexcept;
     // Applies one frame of drained commands for a scene: creates emitters, uploads spawn records,
     // releases emitters. Positions are carried from each command's simulation origin to the render origin.
@@ -120,6 +120,9 @@ private:
         double latest = 0.0;
         double now = 0.0;
         kb::math::DVec3 renderOrigin{};
+        // The origin the GPU records of world-space emitters (and their collision planes) are relative to: the
+        // render origin as of the last Dispatch. Records uploaded before the next Dispatch are converted to it.
+        kb::math::DVec3 recordOrigin{};
         std::vector<Draw> draws;
     };
 
@@ -132,6 +135,8 @@ private:
     // Creates the sort buffers of an alpha-blended emitter; false when the budget or a kernel is missing.
     [[nodiscard]] bool EnsureSort(Emitter& emitter) noexcept;
     void SortInstances(bgfx::ViewId viewId, const Emitter& emitter, const std::array<float, 4>& cameraPosition) noexcept;
+    // Moves the records of the scene's world-space emitters from the record origin to the render origin.
+    void Rebase(bgfx::ViewId viewId, std::uint64_t sceneId, SceneClock& clock) noexcept;
     // Whether the draw order of this emitter's instances matters: alpha-blended billboards, and mesh particles
     // whose material is translucent (an opaque mesh is depth-tested and needs no order).
     [[nodiscard]] static bool NeedsSort(const kb::particles::ParticleGpuEmitterParams& params, bool translucentMaterial) noexcept;
@@ -140,6 +145,9 @@ private:
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     // Optional: without it (e.g. no variant for this backend) colliding emitters use the closed-form kernel.
     bgfx::ProgramHandle collideProgram_ = BGFX_INVALID_HANDLE;
+    // Optional: without it the live particles of world-space emitters are cleared when the render origin moves.
+    bgfx::ProgramHandle rebaseProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle rebaseUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle worldUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle worldInverseUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle localUniform_ = BGFX_INVALID_HANDLE;
