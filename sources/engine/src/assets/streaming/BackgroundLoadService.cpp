@@ -338,6 +338,25 @@ void BackgroundLoadService::WaitForLane(BackgroundLaneId lane) noexcept {
     });
 }
 
+void BackgroundLoadService::DrainLane(BackgroundLaneId lane) noexcept {
+    if (lane == kNoBackgroundLane) {
+        return;
+    }
+    const auto queuedOfLane = [lane](const QueueEntry& entry) {
+        return entry.request->lane_ == lane && IsLive(entry);
+    };
+    std::unique_lock lock{ mutex_ };
+    laneIdle_.wait(lock, [&] {
+        const auto found = lanes_.find(lane);
+        if (found == lanes_.end()) {
+            return true;
+        }
+        const std::vector<QueueEntry>& queue = JobQueue(found->second.jobClass);
+        return found->second.running == 0U && std::ranges::none_of(queue, queuedOfLane) &&
+            std::ranges::none_of(found->second.parked, queuedOfLane);
+    });
+}
+
 void BackgroundLoadService::Forget(const std::filesystem::path& path) {
     std::scoped_lock lock{ filesMutex_ };
     files_.erase(path.native());
@@ -785,6 +804,10 @@ BackgroundRequestHandle BackgroundLane::Run(BackgroundJob job, BackgroundPriorit
 void BackgroundLane::CancelAndWait() noexcept {
     static_cast<void>(service_->CancelLane(id_));
     service_->WaitForLane(id_);
+}
+
+void BackgroundLane::Drain() noexcept {
+    service_->DrainLane(id_);
 }
 
 } // namespace kb::assets::streaming
