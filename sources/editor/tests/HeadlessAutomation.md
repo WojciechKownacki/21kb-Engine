@@ -155,6 +155,20 @@ scenario-local aliases.
 | `attach_script` | `entity`, `asset` |
 | `open_asset` | `asset` alias or virtual path |
 | `new_scene`, `reload_scene` | none |
+| `world_convert_scene` | optional `cell_size` (metres, default 128); converts the saved scene being edited into `<scene>.21kbworld` with one file per object and opens it |
+| `open_world` | project-relative `path` of a `.21kbworld`; opens it with only its always-loaded objects |
+| `world_load_region`, `world_unload_region` | integer `min_x`, `min_z`, `max_x`, `max_z` cell coordinates (inclusive); unloading keeps unsaved edits for the next save |
+| `world_load_near_camera`, `world_load_all`, `world_unload_all` | none; the World menu's region commands |
+| `world_build` | none; saves pending edits and builds the open world's cells and HLOD proxies |
+| `world_set_grid_visible` | `visible`; shows or hides the cell grid overlay |
+| `world_declare_data_layer` | `name`; optional `initially_active` (default `true`) |
+| `world_bind_object` | result `id`, `name` of a loaded world object |
+| `world_cycle_layer`, `world_toggle_always_loaded` | `entity`; the World menu's selection commands |
+| `assert_world` | optional `open` (default `true`), `loaded_objects`, `loaded_cells`, `occupied_cells`, `grid_lines`, `object_files` |
+| `assert_world_object` | `entity` or `name`; optional `layer`, `always_loaded`, `loaded`, `x`, `z` |
+| `assert_world_build` | project-relative world `path`; optional `cells`, `hlods`, `persistent`, `layered` counts read from the built cell index |
+| `assign_world` | `entity` with a Content Instance, `world` alias or virtual path; places the partitioned world through that component |
+| `assert_world_cell` | world owner `entity`, `state` (`unloaded`, `loading`, `loaded`, `unloading`, `failed`), integer `x`,`z` or `persistent`; optional `layer`, `hlod_visible`, `timeout_ms` (keeps Play mode ticking until the state arrives) |
 | `save_scene`, `open_scene` | optional `path`; `save_scene` also accepts a positive `max_ms` budget |
 | `advance_autosave` | positive `seconds`; advances the production autosave clock and requires a dirty scene to be persisted with a visible success notification |
 | `undo`, `redo` | optional `restore_entity` alias refreshed from the selected restored entity |

@@ -79,6 +79,8 @@
 #include "rendering/EditorMeshThumbnailService.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "engine/visual/VisualGraphDebugSession.hpp"
+#include "engine/world/WorldCellIndex.hpp"
+#include "engine/world/WorldPartitionRuntime.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -694,6 +696,243 @@ ReadScriptValue(
     return std::nullopt;
 }
 
+[[nodiscard]] std::optional<kb::world::WorldCellCoord> CellMember(
+    const JsonValue& step, std::string_view xName, std::string_view zName, std::string& error) {
+    const auto x = NumberMember(step, xName, error);
+    const auto z = NumberMember(step, zName, error);
+    if (!x || !z || std::floor(*x) != *x || std::floor(*z) != *z ||
+        std::fabs(*x) > 9.0e15 || std::fabs(*z) > 9.0e15) {
+        if (error.empty()) error = "cell coordinates must be integers";
+        return std::nullopt;
+    }
+    return kb::world::WorldCellCoord{ static_cast<std::int64_t>(*x), static_cast<std::int64_t>(*z) };
+}
+
+[[nodiscard]] std::optional<kb::world::WorldEditObjectInfo> FindWorldObject(
+    const ScenarioState& state, const JsonValue& step, std::string& error) {
+    const auto alias = StringMember(step, "entity", error, false);
+    const auto name = StringMember(step, "name", error, false);
+    if (!error.empty()) return std::nullopt;
+    const kb::world::WorldEditSession& session = state.context.WorldPartition().Session();
+    if (alias.has_value()) {
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        std::optional<kb::world::WorldEditObjectInfo> object = session.FindObject(entity);
+        if (!object.has_value()) error = "entity is not a loaded world object";
+        return object;
+    }
+    if (name.has_value()) {
+        for (kb::world::WorldEditObjectInfo& object : session.Objects()) {
+            if (object.name == *name) return std::move(object);
+        }
+        error = "the world has no object named " + *name;
+        return std::nullopt;
+    }
+    error = "missing 'entity' or 'name'";
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<kb::world::WorldCellState> ParseCellState(std::string_view text) {
+    if (text == "unloaded") return kb::world::WorldCellState::Unloaded;
+    if (text == "loading") return kb::world::WorldCellState::Loading;
+    if (text == "loaded") return kb::world::WorldCellState::Loaded;
+    if (text == "unloading") return kb::world::WorldCellState::Unloading;
+    if (text == "failed") return kb::world::WorldCellState::Failed;
+    return std::nullopt;
+}
+
+// Partitioned world operations: editing a world one region at a time, building
+// it and checking that a placed world streams in Play mode.
+[[nodiscard]] std::optional<StepOutcome> ExecuteWorldStep(
+    ScenarioState& state, const JsonValue& step, std::string_view operation) {
+    std::string error;
+    EditorSceneContext& context = state.context;
+    if (operation == "world_convert_scene") {
+        const double cellSize = NumberMember(step, "cell_size", error, false).value_or(128.0);
+        if (!error.empty()) return StepOutcome{ false, error };
+        const bool converted = context.ConvertCurrentSceneToWorld(cellSize, EditorDirtySceneResolution::Save);
+        return StepOutcome{ converted && context.IsWorldOpen(), "converted to " + context.CurrentScenePath().generic_string() };
+    }
+    if (operation == "open_world") {
+        const auto path = StringMember(step, "path", error);
+        if (!path) return StepOutcome{ false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return StepOutcome{ false, error };
+        return StepOutcome{ context.OpenWorld(*resolved, EditorDirtySceneResolution::Discard), resolved->generic_string() };
+    }
+    if (operation == "world_load_region" || operation == "world_unload_region") {
+        const auto min = CellMember(step, "min_x", "min_z", error);
+        const auto max = min ? CellMember(step, "max_x", "max_z", error) : std::nullopt;
+        if (!min || !max) return StepOutcome{ false, error };
+        const bool changed = operation == "world_load_region" ? context.LoadWorldRegion(*min, *max) : context.UnloadWorldRegion(*min, *max);
+        return StepOutcome{ changed, std::to_string(context.WorldPartition().Session().LoadedObjectCount()) + " object(s) loaded" };
+    }
+    if (operation == "world_load_near_camera") {
+        return StepOutcome{ context.LoadWorldCellsNearCamera(), std::to_string(context.WorldPartition().Session().LoadedObjectCount()) + " object(s) loaded" };
+    }
+    if (operation == "world_load_all") {
+        return StepOutcome{ context.LoadAllWorldCells(), std::to_string(context.WorldPartition().Session().LoadedObjectCount()) + " object(s) loaded" };
+    }
+    if (operation == "world_unload_all") {
+        return StepOutcome{ context.UnloadAllWorldCells(), std::to_string(context.WorldPartition().Session().LoadedObjectCount()) + " object(s) loaded" };
+    }
+    if (operation == "world_build") {
+        return StepOutcome{ context.BuildOpenWorld(), "world built" };
+    }
+    if (operation == "world_set_grid_visible") {
+        const auto visible = BoolMember(step, "visible", error);
+        if (!visible) return StepOutcome{ false, error };
+        context.WorldPartition().SetGridVisible(*visible);
+        return StepOutcome{ context.WorldPartition().GridVisible() == *visible, *visible ? "grid shown" : "grid hidden" };
+    }
+    if (operation == "world_declare_data_layer") {
+        const auto name = StringMember(step, "name", error);
+        const bool active = BoolMember(step, "initially_active", error, false).value_or(true);
+        if (!name || !error.empty()) return StepOutcome{ false, error };
+        return StepOutcome{ context.DeclareWorldDataLayer(*name, active), *name };
+    }
+    if (operation == "world_bind_object") {
+        const auto alias = StringMember(step, "id", error);
+        const auto name = StringMember(step, "name", error);
+        if (!alias || !name) return StepOutcome{ false, error };
+        for (const kb::world::WorldEditObjectInfo& object : context.WorldPartition().Session().Objects()) {
+            if (object.name == *name && object.loaded && context.Scene().Entities().IsAlive(object.root)) {
+                state.entities.insert_or_assign(*alias, EntityAlias{ .entity = object.root, .name = *name });
+                return StepOutcome{ true, *alias + '=' + std::to_string(object.root.Id()) };
+            }
+        }
+        return StepOutcome{ false, "no loaded world object is named " + *name };
+    }
+    if (operation == "world_cycle_layer" || operation == "world_toggle_always_loaded") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return StepOutcome{ false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!context.Scene().Entities().IsAlive(entity)) return StepOutcome{ false, "entity alias is not alive" };
+        context.SelectEntity(entity);
+        return StepOutcome{ operation == "world_cycle_layer" ? context.CycleSelectedObjectDataLayer() : context.ToggleSelectedObjectAlwaysLoaded(), *alias };
+    }
+    if (operation == "assert_world") {
+        const kb::world::WorldEditSession& session = context.WorldPartition().Session();
+        const bool open = BoolMember(step, "open", error, false).value_or(true);
+        if (!error.empty()) return StepOutcome{ false, error };
+        if (context.IsWorldOpen() != open) return StepOutcome{ false, open ? "no world is open" : "a world is open" };
+        const kb::scene::Vec3& camera = context.ViewportCamera().Position();
+        const std::size_t loadedObjects = session.LoadedObjectCount();
+        const std::size_t loadedCells = session.LoadedCells().size();
+        const std::size_t occupiedCells = session.OccupiedCells().size();
+        const std::size_t gridLines = context.WorldPartition().GridLines(camera.x, 0.0, camera.z).size();
+        const std::size_t objectFiles = open
+            ? kb::world::WorldObjectFileIO::List(kb::world::WorldPaths::ObjectsDirectory(session.DescriptorPath(), session.Descriptor())).size()
+            : 0U;
+        const std::string detail = "objects=" + std::to_string(loadedObjects) + " loaded_cells=" + std::to_string(loadedCells) +
+            " occupied_cells=" + std::to_string(occupiedCells) + " grid_lines=" + std::to_string(gridLines) +
+            " object_files=" + std::to_string(objectFiles);
+        const auto expect = [&](std::string_view name, std::size_t actual) {
+            const auto expected = UInt32Member(step, name, error, false);
+            return !expected.has_value() || *expected == actual;
+        };
+        const bool matched = expect("loaded_objects", loadedObjects) && expect("loaded_cells", loadedCells) &&
+            expect("occupied_cells", occupiedCells) && expect("grid_lines", gridLines) && expect("object_files", objectFiles);
+        return StepOutcome{ matched && error.empty(), error.empty() ? detail : error };
+    }
+    if (operation == "assert_world_object") {
+        const std::optional<kb::world::WorldEditObjectInfo> object = FindWorldObject(state, step, error);
+        if (!object) return StepOutcome{ false, error };
+        const auto layer = StringMember(step, "layer", error, false);
+        const auto alwaysLoaded = BoolMember(step, "always_loaded", error, false);
+        const auto loaded = BoolMember(step, "loaded", error, false);
+        const auto x = NumberMember(step, "x", error, false);
+        const auto z = NumberMember(step, "z", error, false);
+        if (!error.empty()) return StepOutcome{ false, error };
+        const bool matched = (!layer || object->dataLayer == *layer) && (!alwaysLoaded || object->alwaysLoaded == *alwaysLoaded) &&
+            (!loaded || object->loaded == *loaded) && (!x || std::fabs(object->position.x - *x) < 0.01) &&
+            (!z || std::fabs(object->position.z - *z) < 0.01);
+        return StepOutcome{ matched, object->name + " layer='" + object->dataLayer + "' always_loaded=" +
+            (object->alwaysLoaded ? "true" : "false") + " loaded=" + (object->loaded ? "true" : "false") +
+            " x=" + std::to_string(object->position.x) + " z=" + std::to_string(object->position.z) };
+    }
+    if (operation == "assert_world_build") {
+        const auto path = StringMember(step, "path", error);
+        if (!path) return StepOutcome{ false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return StepOutcome{ false, error };
+        const kb::world::WorldCellIndexReadResult index = kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(*resolved));
+        if (!index.succeeded) return StepOutcome{ false, index.error };
+        std::size_t persistent = 0U;
+        std::size_t layered = 0U;
+        for (const kb::world::WorldCellUnit& unit : index.index.units) {
+            persistent += unit.persistent ? 1U : 0U;
+            layered += unit.dataLayer.empty() ? 0U : 1U;
+        }
+        const std::string detail = "cells=" + std::to_string(index.index.units.size()) + " hlods=" + std::to_string(index.index.hlods.size()) +
+            " persistent=" + std::to_string(persistent) + " layered=" + std::to_string(layered);
+        const auto expect = [&](std::string_view name, std::size_t actual) {
+            const auto expected = UInt32Member(step, name, error, false);
+            return !expected.has_value() || *expected == actual;
+        };
+        const bool matched = expect("cells", index.index.units.size()) && expect("hlods", index.index.hlods.size()) &&
+            expect("persistent", persistent) && expect("layered", layered);
+        return StepOutcome{ matched && error.empty(), error.empty() ? detail : error };
+    }
+    if (operation == "assign_world") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto world = StringMember(step, "world", error);
+        if (!alias || !world) return StepOutcome{ false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::assets::AssetId worldId = ResolveAsset(state, *world);
+        if (!context.Scene().Entities().IsAlive(entity) || !worldId.IsValid()) {
+            return StepOutcome{ false, "entity or world asset was not found" };
+        }
+        const auto asset = kb::script::ScriptSceneComponentApi::SetProperty(context.Scene(), entity, "ContentInstance", "assetId",
+            kb::script::ScriptValue{ worldId.value, kb::script::ScriptValueType::Hash });
+        const auto kind = asset.succeeded
+            ? kb::script::ScriptSceneComponentApi::SetProperty(context.Scene(), entity, "ContentInstance", "kind",
+                kb::script::ScriptValue{ static_cast<int>(kb::scene::ContentInstanceKind::PartitionedWorld) })
+            : asset;
+        if (kind.succeeded) {
+            context.MarkSceneDocumentDirty();
+        }
+        return StepOutcome{ kind.succeeded, kind.succeeded ? *world : kind.error };
+    }
+    if (operation == "assert_world_cell") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto expectedText = StringMember(step, "state", error);
+        const auto layer = StringMember(step, "layer", error, false);
+        const bool persistent = BoolMember(step, "persistent", error, false).value_or(false);
+        const double timeout = NumberMember(step, "timeout_ms", error, false).value_or(0.0);
+        const auto hlod = BoolMember(step, "hlod_visible", error, false);
+        if (!alias || !expectedText || !error.empty()) return StepOutcome{ false, error };
+        const std::optional<kb::world::WorldCellState> expected = ParseCellState(*expectedText);
+        if (!expected) return StepOutcome{ false, "state must be unloaded, loading, loaded, unloading or failed" };
+        kb::world::WorldCellCoord cell{};
+        if (!persistent) {
+            const auto parsed = CellMember(step, "x", "z", error);
+            if (!parsed) return StepOutcome{ false, error };
+            cell = *parsed;
+        }
+        const kb::scene::SceneEntity owner = ResolveEntity(state, *alias);
+        if (!context.Scene().Entities().IsAlive(owner)) return StepOutcome{ false, "world owner alias is not alive" };
+        kb::world::WorldPartitionRuntime runtime{ context.Scene() };
+        const auto current = [&] {
+            return persistent ? runtime.PersistentState(owner, layer.value_or("")) : runtime.CellState(owner, cell, layer.value_or(""));
+        };
+        const auto matches = [&] {
+            return current() == *expected && (!hlod.has_value() || runtime.IsHlodVisible(owner, cell) == *hlod);
+        };
+        // Cells decode on worker threads: keep Play ticking until the state arrives or time runs out.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(timeout);
+        while (!matches() && state.playMode.IsPlaying() && std::chrono::steady_clock::now() < deadline) {
+            if (!state.automation.StepRuntime(1U, 1.0F / 60.0F, false, false, false)) {
+                return StepOutcome{ false, "Play mode could not advance" };
+            }
+        }
+        const std::vector<kb::world::WorldInstanceInfo> worlds = runtime.Worlds();
+        const std::string diagnostic = worlds.empty() ? std::string{ "no world is streaming" }
+            : (worlds.front().error.empty() ? worlds.front().lastFailure : worlds.front().error);
+        return StepOutcome{ matches(), "state=" + std::to_string(static_cast<int>(current())) + (diagnostic.empty() ? "" : " " + diagnostic) };
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] StepOutcome ExecuteStep(
     ScenarioState& state, const JsonValue& step) {
     std::string error;
@@ -702,6 +941,9 @@ ReadScriptValue(
     }
     const auto operation = StringMember(step, "op", error);
     if (!operation.has_value()) return { false, error };
+    if (std::optional<StepOutcome> world = ExecuteWorldStep(state, step, *operation)) {
+        return *world;
+    }
 
     if (*operation == "verify_prefab_round_trip") {
         return {state.automation.VerifyPrefabRoundTrip(), "Prefab create, place, override, apply, save, reopen, play, stop and undo keep the asset link"};

@@ -153,7 +153,7 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
         }
         return HandleMaterialAssetDoubleClick(*metadata, state, manager);
     }
-    if (!EditorAssetOpenPolicy::IsSceneDocument(*metadata)) {
+    if (!EditorAssetOpenPolicy::IsSceneDocument(*metadata) && !EditorAssetOpenPolicy::IsWorldDocument(*metadata)) {
         return EditorAssetBrowserDoubleClickResult::None;
     }
     const std::optional<EditorDirtySceneResolution> resolution =

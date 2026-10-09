@@ -14,6 +14,7 @@
 #include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/script/ScriptModule.hpp"
+#include "engine/world/WorldDescriptor.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
@@ -222,6 +223,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     playModeSelectionSnapshot_.CaptureAuthoredHierarchy(*scene_);
     playModeRenderTopologyVersion_ = 0U;
     playModeRenderTopologyVersionInitialized_ = false;
+    worldPartition_.PrepareSceneReload();
     if (!playModeSceneSession_.Begin(*scene_, name)) {
         playModeSelectionSnapshot_.Clear();
         console_.Error("Play Mode", "Scene snapshot could not be captured.");
@@ -276,6 +278,8 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
         console_.Error("Play Mode", "Editor scene snapshot could not be restored.");
         return false;
     }
+    // The restore recreated every root in order; keep each one bound to its world object.
+    worldPartition_.CompleteSceneReload();
     trace.Phase(phaseStarted, "transition=restore phase=restore-snapshot");
     phaseStarted = std::chrono::steady_clock::now();
     ReleaseRenderedSceneResources();
@@ -344,7 +348,19 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     }
 
     kb::scene::SceneDocumentLoadResult loaded;
-    if (!currentScenePath_.empty()) {
+    if (worldPartition_.IsOpen()) {
+        // The world was saved above; reopen it in the new scene with the same cells loaded.
+        const std::vector<kb::world::WorldCellCoord> cells = worldPartition_.Session().LoadedCells();
+        std::string error;
+        worldPartition_.Close();
+        if (!worldPartition_.Open(*nextScene, currentScenePath_, error)) {
+            console_.Error("World", "World could not be reopened: " + error);
+            return false;
+        }
+        for (const kb::world::WorldCellCoord& cell : cells) {
+            static_cast<void>(worldPartition_.Session().LoadRegion(cell, cell, error));
+        }
+    } else if (!currentScenePath_.empty()) {
         loaded = kb::scene::SceneDocumentService::Load(currentScenePath_);
         if (!loaded.succeeded || !kb::scene::SceneDocumentService::LoadIntoScene(*nextScene, loaded.document)) {
             console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string());
@@ -374,6 +390,7 @@ bool EditorSceneContext::NewScene(EditorDirtySceneResolution dirtyResolution) {
     if (!PrepareDirtySceneTransition("creating a new scene", dirtyResolution)) {
         return false;
     }
+    worldPartition_.Close();
 
     const std::vector<kb::scene::SceneEntity> roots = scene_->Hierarchy().RootEntities();
     for (const kb::scene::SceneEntity root : roots) {
@@ -396,6 +413,9 @@ bool EditorSceneContext::OpenDefaultScene() {
 }
 
 bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution) {
+    if (path.extension() == kb::world::WorldDescriptor::Extension) {
+        return OpenWorld(path, dirtyResolution);
+    }
     if (RejectWhilePrefabEditing() || !RestorePlayModeSceneSession()) {
         return false;
     }
@@ -410,6 +430,7 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
         console_.Error("Project", "Scene could not be opened: " + scenePath.generic_string() + ": " + loaded.error);
         return false;
     }
+    worldPartition_.Close();
     if (!kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
         console_.Error("Project", "Scene could not be instantiated: " + scenePath.generic_string());
         return false;
@@ -555,6 +576,28 @@ bool EditorSceneContext::SaveCurrentSceneAs(const std::filesystem::path& path) {
 bool EditorSceneContext::SaveSceneToPath(const std::filesystem::path& path) {
     if (RejectWhilePrefabEditing()) {
         return false;
+    }
+    if (worldPartition_.IsOpen()) {
+        if (!path.empty() && path != currentScenePath_) {
+            console_.Warning("World", "A world is saved as its object files; Save As is not available while a world is open.");
+            return false;
+        }
+        std::string error;
+        if (!worldPartition_.Session().Save(error)) {
+            console_.Error("World", "World could not be saved: " + error);
+            return false;
+        }
+        kb::assets::AssetManager& assets = scene_->Assets().Manager();
+        const std::optional<std::filesystem::path> virtualPath = assets.Mounts().ToVirtual(currentScenePath_);
+        if (const kb::assets::AssetMetadata* descriptor = virtualPath.has_value() ? assets.Registry().FindByPath(*virtualPath) : nullptr) {
+            static_cast<void>(assets.RefreshAsset(descriptor->id));
+        }
+        const kb::world::WorldSaveStats stats = worldPartition_.Session().LastSaveStats();
+        ClearSceneDocumentDirty();
+        autosave_.ResetInterval();
+        console_.Info("World", "Saved world " + currentScenePath_.generic_string() + ": " + std::to_string(stats.written) + " object file(s) written, " +
+            std::to_string(stats.deleted) + " deleted, " + std::to_string(stats.unchanged) + " unchanged.");
+        return true;
     }
     const std::filesystem::path scenePath = EnsureSceneDocumentExtension(path.empty() ? EditorProjectPaths::DefaultScenePath() : path);
     ScopedSceneSaveTrace trace{

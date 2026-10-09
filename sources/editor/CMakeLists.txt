@@ -890,6 +890,9 @@ add_executable(kb_editor WIN32
     src/private/scene/ParticleEditorBakeHostCommand.hpp
     src/scene/ParticleEditorBakeHostCommand.cpp
     src/scene/EditorSceneDocumentLifecycle.cpp
+    src/private/scene/EditorWorldPartition.hpp
+    src/scene/EditorWorldPartition.cpp
+    src/scene/EditorSceneWorldPartition.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorSceneMaterialAssetActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp
@@ -1441,6 +1444,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-UI-Anchors")
     set_tests_properties(kb_editor_ui_anchors_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;ui")
+    add_test(NAME kb_editor_world_partition_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorldPartitionScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-World-Partition")
+    set_tests_properties(kb_editor_world_partition_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;world" TIMEOUT 180)
 
     add_test(
         NAME kb_editor_headless_automation_scenario
