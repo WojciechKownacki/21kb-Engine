@@ -14,7 +14,9 @@ class EditorSceneViewportMeshPicker {
 public:
     EditorSceneViewportMeshPicker() = delete;
 
-    [[nodiscard]] static EditorSceneViewportPickResult PickNearest(kb::scene::Scene& scene, const EditorSceneViewportRay& ray);
+    // `ray` is relative to `origin` (a hit's viewport origin; zero for a world-space ray).
+    [[nodiscard]] static EditorSceneViewportPickResult PickNearest(
+        kb::scene::Scene& scene, const EditorSceneViewportRay& ray, const kb::math::DVec3& origin = {});
     [[nodiscard]] static EditorSceneViewportPickResult PickNearest(
         kb::scene::Scene& scene,
         const EditorViewportCameraState& camera,

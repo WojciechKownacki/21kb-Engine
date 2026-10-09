@@ -11,15 +11,16 @@
 namespace kb::editor {
 namespace {
 
+// The drag's delta is measured in viewport space; the edited entities move by it from where the edit started, and
+// snapping happens on their world position, all in double precision (docs/large_worlds.md).
 [[nodiscard]] bool ApplyTranslateAxisDrag(
     EditorSceneContext& sceneContext,
     const EditorSceneViewportHit& hit,
-    kb::scene::Vec3 dragStartTarget,
     kb::scene::Vec3 delta) {
     const EditorSceneGizmoState& gizmo = sceneContext.Gizmo();
-    const kb::scene::Vec3 unsnappedPosition = EditorSceneViewportMath::Add(dragStartTarget, delta);
-    static_cast<void>(sceneContext.ApplyActiveTransformEditPrimaryPosition(
-        sceneContext.ViewportPreview(hit.panelId).SnapPositionAxis(unsnappedPosition, gizmo.draggedAxis)));
+    const kb::math::DVec3& start = sceneContext.ActiveTransformEditTargetStart();
+    const kb::math::DVec3 snapped = sceneContext.ViewportPreview(hit.panelId).SnapPositionAxis(start + delta, gizmo.draggedAxis);
+    static_cast<void>(sceneContext.ApplyActiveTransformEditPositionDelta(snapped - start));
     return true;
 }
 
@@ -66,10 +67,10 @@ bool EditorSceneViewportGizmoDragUpdater::UpdateCenterDrag(
     const kb::scene::Vec3 planeNormal{gizmo.centerPlaneNx, gizmo.centerPlaneNy, gizmo.centerPlaneNz};
     const kb::scene::Vec3 startPoint{gizmo.centerStartPx, gizmo.centerStartPy, gizmo.centerStartPz};
     if (EditorSceneViewportGizmoDragSolver::PlaneDragPosition(hit.ray, dragStartTarget, planeNormal, currentPoint)) {
-        const kb::scene::Vec3 unsnappedPosition =
-            EditorSceneViewportMath::Add(dragStartTarget, EditorSceneViewportMath::Sub(currentPoint, startPoint));
-        static_cast<void>(sceneContext.ApplyActiveTransformEditPrimaryPosition(
-            sceneContext.ViewportPreview(hit.panelId).SnapPosition(unsnappedPosition)));
+        const kb::math::DVec3& start = sceneContext.ActiveTransformEditTargetStart();
+        const kb::math::DVec3 snapped = sceneContext.ViewportPreview(hit.panelId).SnapPosition(
+            start + EditorSceneViewportMath::Sub(currentPoint, startPoint));
+        static_cast<void>(sceneContext.ApplyActiveTransformEditPositionDelta(snapped - start));
     }
     return true;
 }
@@ -88,7 +89,7 @@ bool EditorSceneViewportGizmoDragUpdater::UpdateAxisDrag(
         return true;
     }
     if (gizmo.toolMode == EditorTransformToolMode::Translate) {
-        return ApplyTranslateAxisDrag(sceneContext, hit, dragStartTarget, delta);
+        return ApplyTranslateAxisDrag(sceneContext, hit, delta);
     }
     if (gizmo.toolMode == EditorTransformToolMode::Scale) {
         return ApplyScaleAxisDrag(sceneContext, hit, dragStartTarget, delta);

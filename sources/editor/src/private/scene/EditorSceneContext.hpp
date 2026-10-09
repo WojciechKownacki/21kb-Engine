@@ -1174,6 +1174,18 @@ public:
     [[nodiscard]] kb::scene::SceneEntity CreateParticleEffectEntity(kb::assets::AssetId assetId);
     [[nodiscard]] kb::scene::SceneEntity CreateParticleEffectEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
+    // The same placements at world positions given in double precision (docs/large_worlds.md).
+    [[nodiscard]] bool InstantiatePrefabAssetAt(
+        const std::filesystem::path& path,
+        const std::filesystem::path& virtualPath,
+        const kb::math::DVec3& position);
+    [[nodiscard]] kb::scene::SceneEntity CreatePrefabAssetEntity(
+        const std::filesystem::path& path,
+        const std::filesystem::path& virtualPath,
+        const kb::math::DVec3& position,
+        bool logCreation);
+    [[nodiscard]] kb::scene::SceneEntity CreateParticleEffectEntity(kb::assets::AssetId assetId, const kb::math::DVec3& position, bool logCreation);
+    [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, const kb::math::DVec3& position, bool logCreation);
     [[nodiscard]] bool SetMeshRendererMeshAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
     [[nodiscard]] bool SetMeshRendererMaterialAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
@@ -1289,6 +1301,10 @@ public:
     [[nodiscard]] bool RemoveAnimatorFromEntity(kb::scene::SceneEntity entity);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
+    // Moves the edited entities by `delta` from where the edit started, in double precision.
+    [[nodiscard]] bool ApplyActiveTransformEditPositionDelta(const kb::math::DVec3& delta);
+    // The pivot the active edit started from, in double precision.
+    [[nodiscard]] const kb::math::DVec3& ActiveTransformEditTargetStart() const noexcept;
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryRotation(kb::scene::Vec3 rotation);
     [[nodiscard]] bool ApplyActiveTransformEditRotationDelta(kb::scene::Quat delta);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryScale(kb::scene::Vec3 scale);

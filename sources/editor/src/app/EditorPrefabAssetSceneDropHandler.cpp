@@ -27,7 +27,7 @@ bool EditorPrefabAssetSceneDropHandler::Drop(
     return sceneContext.InstantiatePrefabAssetAt(
         assetPath,
         assetVirtualPath,
-        sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition));
+        sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->origin + hit->groundPosition));
 }
 
 } // namespace kb::editor

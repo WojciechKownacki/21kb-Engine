@@ -816,7 +816,7 @@ ReadScriptValue(
         const bool open = BoolMember(step, "open", error, false).value_or(true);
         if (!error.empty()) return StepOutcome{ false, error };
         if (context.IsWorldOpen() != open) return StepOutcome{ false, open ? "no world is open" : "a world is open" };
-        const kb::scene::Vec3& camera = context.ViewportCamera().Position();
+        const kb::math::DVec3& camera = context.ViewportCamera().PrecisePosition();
         const std::size_t loadedObjects = session.LoadedObjectCount();
         const std::size_t loadedCells = session.LoadedCells().size();
         const std::size_t occupiedCells = session.OccupiedCells().size();

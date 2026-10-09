@@ -1859,7 +1859,64 @@ void RunTexturePreviewLockBitsDecodeTest() {
 
 namespace kb::editor::tests {
 
+// Ten thousand kilometres out a float holds whole metres only. The editor camera keeps its position in double
+// precision and works relative to a viewport origin next to it, so its view, picking and gizmo drags stay exact.
+constexpr double kFarFromOrigin = 1.0e7;
+
+void RunViewportCameraFarFromOriginTest() {
+    kb::editor::EditorViewportCameraState camera;
+    const kb::math::DVec3 target{ kFarFromOrigin + 0.3, 2.0, kFarFromOrigin - 0.2 };
+    camera.FocusOn(target, 1.0F, 0.0F);
+    const kb::math::DVec3& origin = camera.ViewportOrigin();
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    kb::editor::tests::Require(origin != kb::math::DVec3{} &&
+            std::abs(camera.PrecisePosition().x - origin.x) <= kb::editor::EditorViewportCameraState::kViewportRebaseDistance &&
+            std::abs(camera.PrecisePosition().z - origin.z) <= kb::editor::EditorViewportCameraState::kViewportRebaseDistance,
+        "A far camera must work relative to a viewport origin next to it");
+    kb::editor::tests::Require(kb::math::Length((origin + axes.position) - camera.PrecisePosition()) <= 1.0e-4,
+        "The camera's viewport-space position must be its precise position relative to the viewport origin");
+    const kb::math::DVec3 toTarget = target - camera.PrecisePosition();
+    const kb::math::DVec3 forward = kb::math::ToDVec3(axes.forward);
+    const kb::math::DVec3 across{ toTarget.y * forward.z - toTarget.z * forward.y, toTarget.z * forward.x - toTarget.x * forward.z,
+        toTarget.x * forward.y - toTarget.y * forward.x };
+    kb::editor::tests::Require(kb::math::Length(across) <= 1.0e-5, "A far camera must frame its target exactly");
+    const kb::math::DVec3 beforeDolly = camera.PrecisePosition();
+    static_cast<void>(camera.ApplyWheel(1.0F, false));
+    kb::editor::tests::Require(std::abs(kb::math::Length(camera.PrecisePosition() - beforeDolly) - 0.9) <= 1.0e-5,
+        "A far camera must move by exactly what it is asked to");
+}
+
+void RunViewportPickerFarFromOriginTest() {
+    kb::scene::Scene scene;
+    // Rounded to float both entities would stand at the same point and the first one created would win.
+    const kb::scene::SceneEntity other = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Far Neighbour" });
+    const kb::scene::SceneEntity aimed = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Far Target" });
+    scene.Transforms().SetLocalTranslation(other, kb::math::DVec3{ kFarFromOrigin + 1.0, 0.0, kFarFromOrigin });
+    scene.Transforms().SetLocalTranslation(aimed, kb::math::DVec3{ kFarFromOrigin + 0.6, 0.0, kFarFromOrigin });
+    scene.Runtime().SynchronizeTransforms();
+    kb::editor::EditorViewportCameraState camera;
+    camera.FocusOn(kb::math::DVec3{ kFarFromOrigin + 0.6, 0.0, kFarFromOrigin }, 1.0F, 0.0F);
+    const RECT renderArea{ 0, 0, 960, 540 };
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    kb::editor::tests::Require(kb::editor::EditorSceneViewportMath::WorldToScreen(camera, renderArea,
+            kb::editor::EditorSceneViewportMath::ViewportPosition(scene, aimed, scene.Transforms().Get(aimed), camera.ViewportOrigin()),
+            screenX, screenY),
+        "A far entity must project into the viewport");
+    kb::editor::tests::Require(std::abs(screenX - 480.0F) <= 0.5F && std::abs(screenY - 270.0F) <= 0.5F,
+        "A far entity the camera is framed on must project to the screen centre");
+    const kb::editor::EditorSceneViewportPickResult pick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+        scene, camera, renderArea, screenX, screenY, BuildViewportRay(camera, renderArea, screenX, screenY));
+    kb::editor::tests::Require(pick.IsValid() && pick.entity == aimed, "Clicking a far entity must pick it, not its neighbour 40 cm away");
+    const std::vector<kb::scene::SceneEntity> boxed = kb::editor::EditorSceneViewportMeshPicker::PickInsideRect(
+        scene, camera, renderArea, RECT{ static_cast<LONG>(screenX) - 10, static_cast<LONG>(screenY) - 10,
+                                          static_cast<LONG>(screenX) + 10, static_cast<LONG>(screenY) + 10 });
+    kb::editor::tests::Require(boxed.size() == 1U && boxed.front() == aimed, "A box around a far entity must select it alone");
+}
+
 void RunEditorViewportPreviewTests() {
+    RunViewportCameraFarFromOriginTest();
+    RunViewportPickerFarFromOriginTest();
     RunSceneViewportPresentationPolicyTest();
     RunSceneViewportSceneSyncPolicyTest();
     RunParticleThumbnailTimelineTest();

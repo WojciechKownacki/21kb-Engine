@@ -17,7 +17,8 @@ namespace {
 
 } // namespace
 
-bool EditorSceneViewportGizmoAltDuplicate::DuplicateForTranslateDrag(EditorSceneContext& sceneContext, std::optional<kb::scene::Vec3>& targetPosition) {
+bool EditorSceneViewportGizmoAltDuplicate::DuplicateForTranslateDrag(
+    EditorSceneContext& sceneContext, const kb::math::DVec3& viewportOrigin, std::optional<kb::scene::Vec3>& targetPosition) {
     if (sceneContext.Gizmo().toolMode != EditorTransformToolMode::Translate || !LeftAltDown()) {
         return true;
     }
@@ -26,7 +27,7 @@ bool EditorSceneViewportGizmoAltDuplicate::DuplicateForTranslateDrag(EditorScene
         return true;
     }
 
-    targetPosition = EditorSceneViewportGizmoTargetResolver::SelectedTarget(sceneContext);
+    targetPosition = EditorSceneViewportGizmoTargetResolver::SelectedTarget(sceneContext, viewportOrigin);
     return targetPosition.has_value();
 }
 

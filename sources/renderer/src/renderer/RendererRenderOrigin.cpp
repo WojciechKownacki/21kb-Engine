@@ -39,27 +39,29 @@ std::array<float, 16> RendererRenderOrigin::RebaseViewProjection(const std::arra
     return rebased;
 }
 
-std::array<float, 3> RendererRenderOrigin::Relative(const std::array<float, 3>& world, const kb::math::DVec3& origin) noexcept {
-    const kb::math::Vec3 relative = kb::math::RelativeTo(kb::math::ToDVec3(kb::math::Vec3{ world[0], world[1], world[2] }), origin);
+std::array<float, 3> RendererRenderOrigin::Relative(
+    const std::array<float, 3>& position, const kb::math::DVec3& from, const kb::math::DVec3& origin) noexcept {
+    const kb::math::Vec3 relative = kb::math::RelativeTo(from + kb::math::Vec3{ position[0], position[1], position[2] }, origin);
     return { relative.x, relative.y, relative.z };
 }
 
 void RendererRelativeOverlays::Apply(RenderSceneSubmitDesc& desc, const kb::math::DVec3& origin) {
-    desc.editorGizmo.targetPosition = RendererRenderOrigin::Relative(desc.editorGizmo.targetPosition, origin);
+    const kb::math::DVec3 from = desc.overlayOrigin;
+    desc.editorGizmo.targetPosition = RendererRenderOrigin::Relative(desc.editorGizmo.targetPosition, from, origin);
     desc.editorGrid.worldOffset = origin;
     cameraWireframes_.assign(desc.editorCameraWireframes.begin(), desc.editorCameraWireframes.end());
-    for (EditorCameraWireframeDesc& camera : cameraWireframes_) camera.position = RendererRenderOrigin::Relative(camera.position, origin);
+    for (EditorCameraWireframeDesc& camera : cameraWireframes_) camera.position = RendererRenderOrigin::Relative(camera.position, from, origin);
     desc.editorCameraWireframes = cameraWireframes_;
     lightWireframes_.assign(desc.editorLightWireframes.begin(), desc.editorLightWireframes.end());
-    for (EditorLightWireframeDesc& light : lightWireframes_) light.position = RendererRenderOrigin::Relative(light.position, origin);
+    for (EditorLightWireframeDesc& light : lightWireframes_) light.position = RendererRenderOrigin::Relative(light.position, from, origin);
     desc.editorLightWireframes = lightWireframes_;
     particleIcons_.assign(desc.editorParticleIcons.begin(), desc.editorParticleIcons.end());
-    for (EditorParticleIconDesc& icon : particleIcons_) icon.position = RendererRenderOrigin::Relative(icon.position, origin);
+    for (EditorParticleIconDesc& icon : particleIcons_) icon.position = RendererRenderOrigin::Relative(icon.position, from, origin);
     desc.editorParticleIcons = particleIcons_;
     physicsDebugLines_.assign(desc.physicsDebugLines.begin(), desc.physicsDebugLines.end());
     for (PhysicsDebugLine& line : physicsDebugLines_) {
-        line.from = RendererRenderOrigin::Relative(line.from, origin);
-        line.to = RendererRenderOrigin::Relative(line.to, origin);
+        line.from = RendererRenderOrigin::Relative(line.from, from, origin);
+        line.to = RendererRenderOrigin::Relative(line.to, from, origin);
     }
     desc.physicsDebugLines = physicsDebugLines_;
 }

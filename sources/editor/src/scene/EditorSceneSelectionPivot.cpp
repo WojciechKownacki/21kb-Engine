@@ -89,4 +89,28 @@ std::optional<kb::scene::Vec3> EditorSceneSelectionPivot::Resolve(
     return kb::scene::Vec3{sum.x * invCount, sum.y * invCount, sum.z * invCount};
 }
 
+std::optional<kb::math::DVec3> EditorSceneSelectionPivot::ResolvePrecise(
+    const kb::scene::Scene& scene,
+    std::span<const kb::scene::SceneEntity> selected,
+    kb::scene::SceneEntity fallback) noexcept {
+    const auto translation = [&scene](kb::scene::SceneEntity entity) -> std::optional<kb::math::DVec3> {
+        if (!entity.IsValid() || !scene.Entities().IsAlive(entity) || scene.Transforms().TryGet(entity) == nullptr) {
+            return std::nullopt;
+        }
+        return scene.Transforms().LocalTranslation(entity);
+    };
+    kb::math::DVec3 sum{};
+    std::size_t count = 0U;
+    for (const kb::scene::SceneEntity entity : TopLevelAliveSelection(scene, selected)) {
+        if (const std::optional<kb::math::DVec3> position = translation(entity)) {
+            sum = sum + *position;
+            ++count;
+        }
+    }
+    if (count == 0U) {
+        return translation(fallback);
+    }
+    return count == 1U ? sum : sum * (1.0 / static_cast<double>(count));
+}
+
 } // namespace kb::editor

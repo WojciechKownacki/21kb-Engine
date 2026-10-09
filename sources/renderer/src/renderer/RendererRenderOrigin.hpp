@@ -24,7 +24,8 @@ public:
     // A view-projection of positions relative to an origin, re-expressed for positions relative to an origin moved
     // by `delta` (the new origin minus the old one).
     [[nodiscard]] static std::array<float, 16> RebaseViewProjection(const std::array<float, 16>& viewProjection, const kb::math::DVec3& delta) noexcept;
-    [[nodiscard]] static std::array<float, 3> Relative(const std::array<float, 3>& world, const kb::math::DVec3& origin) noexcept;
+    // A position relative to `from` (zero for a world position), re-expressed relative to `origin`.
+    [[nodiscard]] static std::array<float, 3> Relative(const std::array<float, 3>& position, const kb::math::DVec3& from, const kb::math::DVec3& origin) noexcept;
 };
 
 // Render-space copies of the world-space editor overlays of a submit; the spans of the adjusted description point

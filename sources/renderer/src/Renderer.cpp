@@ -863,7 +863,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         temporalState.previousViewProjection = RendererRenderOrigin::RebaseViewProjection(temporalState.previousViewProjection, origin - temporalState.renderOrigin);
         temporalState.renderOrigin = origin;
     }
-    if (origin == kb::math::DVec3{} && !originMoved) {
+    if (origin == kb::math::DVec3{} && !originMoved && desc.overlayOrigin == kb::math::DVec3{}) {
         return SubmitSceneToViewportInRenderSpace(scene, desc, viewportPlan);
     }
     RenderSceneSubmitDesc relative = desc;

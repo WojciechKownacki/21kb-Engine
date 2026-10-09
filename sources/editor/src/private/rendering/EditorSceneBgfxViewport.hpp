@@ -47,6 +47,10 @@ public:
         EditorViewportFitMode fitMode = EditorViewportFitMode::Fit;
         EditorViewportSafeArea safeArea{};
         std::optional<render::SceneRenderCamera> cameraOverride{};
+        // The double-precision world position of cameraOverride's eye, and the world position the editor overlays
+        // below are relative to (the editor camera's viewport origin; docs/large_worlds.md).
+        std::optional<kb::math::DVec3> cameraOverrideEye{};
+        kb::math::DVec3 overlayOrigin{};
         std::vector<std::uint64_t> selectedEntityIds;
         std::uint64_t viewportKey = 0;
         bool editorSceneOverlaysEnabled = true;

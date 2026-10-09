@@ -190,6 +190,10 @@ struct RenderSceneSubmitDesc {
     // The double-precision world position of cameraOverride's eye. Far from the origin the view matrix alone carries
     // its translation in float; with this the render-space view is rebuilt exactly (docs/large_worlds.md).
     std::optional<kb::math::DVec3> cameraOverrideEye{};
+    // The world position the editor overlay positions of this submit (gizmo target, camera and light wireframes,
+    // particle icons, physics debug lines) are relative to; zero for world-space overlays. A host working relative
+    // to an origin near its camera hands its overlays over without leaving that space.
+    kb::math::DVec3 overlayOrigin{};
     std::optional<ScenePostProcessSettings> postProcessSettings{};
     SceneRenderDrawBudget drawBudget{};
     SceneRenderLightingConfig lightingConfig{};

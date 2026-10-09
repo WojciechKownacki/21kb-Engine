@@ -128,6 +128,19 @@ SceneRenderBounds SceneRenderFeedback::WorldBounds(const Scene& scene, SceneEnti
     return bounds;
 }
 
+SceneRenderBounds SceneRenderFeedback::BoundsRelativeTo(const Scene& scene, SceneEntity entity, const kb::math::DVec3& origin) noexcept {
+    const SceneRenderVisibilityEntry* entry = FindEntry(scene, entity);
+    if (entry == nullptr) {
+        return SceneRenderBounds{};
+    }
+    SceneRenderBounds bounds = entry->worldBounds;
+    const SceneState& state = SceneAccess::State(scene);
+    const auto frameIt = state.renderVisibilityFrames.find(state.lastRenderVisibilityLocalUserId);
+    const kb::math::DVec3 renderOrigin = frameIt != state.renderVisibilityFrames.end() ? frameIt->second.renderOrigin : kb::math::DVec3{};
+    bounds.center = kb::math::RelativeTo(renderOrigin + bounds.center, origin);
+    return bounds;
+}
+
 bool SceneRenderFeedback::TestFrustum(const Scene& scene, const kb::math::Vec3& center, float radius) noexcept {
     const SceneState& state = SceneAccess::State(scene);
     const auto frameIt =
