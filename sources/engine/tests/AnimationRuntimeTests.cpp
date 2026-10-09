@@ -785,6 +785,52 @@ end
                     kb::scene::Vec3{ 3.0F, 2.0F, 1.0F }) <= 0.001F &&
                 std::abs(followerTransform.worldRotation.y - 0.70710678F) <= 0.001F,
             "CopyTransform rig constraint did not consume the typed world target");
+        {
+            // The same rig ten thousand kilometres out, given double-precision targets, solves as precisely as
+            // near the origin (a float position there is only good to a metre).
+            const kb::math::DVec3 far{ 1.0e7 + 0.25, 0.0, 1.0e7 - 0.125 };
+            // The clip animates the owner's own position, so the owner stands under a far anchor.
+            const kb::scene::SceneObject farAnchor = scene.Entities().CreateObject({ .name = "Far Anchor" });
+            const kb::scene::SceneObject farOwner = scene.Entities().CreateObject({ .name = "Far Rig Character" });
+            const kb::scene::SceneObject farArm = scene.Entities().CreateObject({ .name = "Left Arm" });
+            const kb::scene::SceneObject farUpper = scene.Entities().CreateObject({ .name = "Upper" });
+            const kb::scene::SceneObject farLower = scene.Entities().CreateObject({
+                .name = "Lower", .transform = kb::scene::TransformComponent{ .localPosition = { 1.0F, 0.0F, 0.0F } } });
+            const kb::scene::SceneObject farHand = scene.Entities().CreateObject({
+                .name = "Hand", .transform = kb::scene::TransformComponent{ .localPosition = { 1.0F, 0.0F, 0.0F } } });
+            const kb::scene::SceneObject farLook = scene.Entities().CreateObject({ .name = "Look" });
+            const kb::scene::SceneObject farFollower = scene.Entities().CreateObject({ .name = "Follower" });
+            Require(farOwner.SetParent(farAnchor) && farArm.SetParent(farOwner) && farUpper.SetParent(farOwner) && farLower.SetParent(farUpper) &&
+                    farHand.SetParent(farLower) && farLook.SetParent(farOwner) && farFollower.SetParent(farOwner),
+                "Far rig hierarchy could not be authored");
+            scene.Transforms().SetLocalTranslation(farAnchor.Entity(), far);
+            scene.Components().Animators().Set(farOwner.Entity(), kb::scene::Animator{
+                .controllerAssetId = rigMetadata->id.value,
+                .speed = 1.0F,
+                .enabled = true,
+            });
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            Require(scene.Animators().SetIkTarget(farOwner.Entity(), "HandTarget", kb::scene::AnimatorIkTarget{
+                        .rotationWeight = 0.0F, .preciseWorldPosition = far + kb::math::DVec3{ 1.0, 1.0, 0.0 } }) &&
+                    scene.Animators().SetIkTarget(farOwner.Entity(), "ElbowPole", kb::scene::AnimatorIkTarget{
+                        .preciseWorldPosition = far + kb::math::DVec3{ 0.0, 0.0, 1.0 } }) &&
+                    scene.Animators().SetIkTarget(farOwner.Entity(), "LookTarget", kb::scene::AnimatorIkTarget{
+                        .preciseWorldPosition = far + kb::math::DVec3{ 0.0, 0.0, 5.0 } }) &&
+                    scene.Animators().SetIkTarget(farOwner.Entity(), "CopyTarget", kb::scene::AnimatorIkTarget{
+                        .worldRotation = { 0.0F, 0.70710678F, 0.0F, 0.70710678F },
+                        .preciseWorldPosition = far + kb::math::DVec3{ 3.0, 2.0, 1.0 } }),
+                "Double-precision IK targets were not accepted");
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            scene.Runtime().SynchronizeTransforms();
+            Require(kb::math::Length(scene.Transforms().WorldTranslation(farHand.Entity()) - (far + kb::math::DVec3{ 1.0, 1.0, 0.0 })) <= 0.01,
+                "TwoBoneIK far from the origin did not reach its double-precision target");
+            const kb::scene::Vec3 farLookForward = kb::math::Rotate(
+                scene.Transforms().Get(farLook.Entity()).worldRotation, kb::scene::Vec3{ 0.0F, 0.0F, 1.0F });
+            Require(farLookForward.z >= 0.999F, "Aim far from the origin did not orient its Transform");
+            Require(kb::math::Length(scene.Transforms().WorldTranslation(farFollower.Entity()) - (far + kb::math::DVec3{ 3.0, 2.0, 1.0 })) <= 0.001 &&
+                    std::abs(scene.Transforms().Get(farFollower.Entity()).worldRotation.y - 0.70710678F) <= 0.001F,
+                "CopyTransform far from the origin did not reach its double-precision target");
+        }
         Require(scene.Animators().SetIkTarget(
                     rigOwner.Entity(), "HandTarget",
                     kb::scene::AnimatorIkTarget{
@@ -1980,6 +2026,24 @@ end
                 scene.Entities().Count() ==
                     entityCountBeforeConstraintEvaluation,
             "Skeletal TwoBoneIK/Aim/CopyTransform did not evaluate on compact poses without bone entities or extra hierarchy solves");
+        {
+            // The same IK 10 000 km out: a double-precision target reaches animator space exactly.
+            const kb::math::DVec3 far{ 1.0e7 + 0.25, 0.0, 1.0e7 - 0.125 };
+            const kb::scene::SceneObject farIkOwner = authorConstraintOwner(
+                "Far Skeletal IK", controllerIdAt("/Game/Animation/SkeletalIk.kbanimcontroller"));
+            scene.Transforms().SetLocalTranslation(farIkOwner.Entity(), far);
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            Require(scene.Animators().SetIkTarget(farIkOwner.Entity(), "HandTarget", kb::scene::AnimatorIkTarget{
+                        .preciseWorldPosition = far + kb::math::DVec3{ 4.0, 2.0, 1.0 } }) &&
+                    scene.Animators().SetIkTarget(farIkOwner.Entity(), "ElbowPole", kb::scene::AnimatorIkTarget{
+                        .preciseWorldPosition = far + kb::math::DVec3{ 3.0, 0.0, 2.0 } }),
+                "Double-precision skeletal IK targets were not accepted");
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            const auto farIkPose = scene.Animators().InstanceSkeleton(farIkOwner.Entity());
+            Require(farIkPose.has_value() &&
+                    kb::math::Length(farIkPose->currentComponentPose.positions[2] - kb::math::Vec3{ 4.0F, 2.0F, 1.0F }) <= 1.0e-3F,
+                "Skeletal TwoBoneIK far from the origin did not reach its double-precision target");
+        }
 
         const std::uint64_t instanceControllerId =
             scene.Animators().Controller(owner.Entity());

@@ -16,11 +16,14 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityCounter.hpp"
+#include "scene/transform/SceneTransformPrecision.hpp"
+#include "scene/transform/SceneTransformResiduals.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <exception>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -1544,6 +1547,9 @@ bool ConditionMatches(
                 target.worldRotation.z * target.worldRotation.z +
                 target.worldRotation.w * target.worldRotation.w >
             1.0e-8F &&
+        (!target.preciseWorldPosition.has_value() ||
+            (std::isfinite(target.preciseWorldPosition->x) && std::isfinite(target.preciseWorldPosition->y) &&
+                std::isfinite(target.preciseWorldPosition->z))) &&
         std::isfinite(target.positionWeight) &&
         std::isfinite(target.rotationWeight) &&
         target.positionWeight >= 0.0F && target.positionWeight <= 1.0F &&
@@ -1588,6 +1594,77 @@ void SetWorldPose(
     scene.Transforms().MarkModified(entity);
 }
 
+// The world position of an IK target in double precision.
+[[nodiscard]] kb::math::DVec3 TargetWorldPosition(const AnimatorIkTarget& target) noexcept {
+    return target.preciseWorldPosition.has_value() ? *target.preciseWorldPosition : kb::math::ToDVec3(target.worldPosition);
+}
+
+// Where the transform-driven constraints solve. While the scene keeps double-precision translations or a target
+// is given in double precision (docs/large_worlds.md), positions are taken relative to an origin at the
+// constrained transform, so a rig far from the world origin solves with float precision; otherwise the float
+// world positions are used, as they always were (origin zero).
+struct SolveSpace {
+    kb::math::DVec3 origin{};
+    bool precise = false;
+};
+
+[[nodiscard]] SolveSpace MakeSolveSpace(const Scene& scene, SceneEntity anchor, const TransformComponent& transform,
+    std::initializer_list<const AnimatorIkTarget*> targets) noexcept {
+    SolveSpace space;
+    space.precise = scene.Transforms().HasDoublePrecisionTranslations();
+    for (const AnimatorIkTarget* target : targets) {
+        space.precise = space.precise || (target != nullptr && target->preciseWorldPosition.has_value());
+    }
+    if (space.precise) space.origin = scene.Transforms().WorldTranslation(anchor, transform);
+    return space;
+}
+
+[[nodiscard]] Vec3 SolvePosition(const Scene& scene, const SolveSpace& space, SceneEntity entity, const TransformComponent& transform) noexcept {
+    return space.precise ? kb::math::RelativeTo(scene.Transforms().WorldTranslation(entity, transform), space.origin) : transform.worldPosition;
+}
+
+[[nodiscard]] Vec3 SolveTarget(const SolveSpace& space, const AnimatorIkTarget& target) noexcept {
+    return space.precise ? kb::math::RelativeTo(TargetWorldPosition(target), space.origin) : target.worldPosition;
+}
+
+// SetWorldPose with a position in the solve space.
+void SetWorldPose(
+    Scene& scene, SceneEntity entity, const SolveSpace& space, Vec3 solvePosition, Quat worldRotation,
+    bool setPosition) {
+    if (!space.precise || !setPosition) {
+        SetWorldPose(scene, entity, solvePosition, worldRotation, setPosition);
+        return;
+    }
+    TransformComponent* transform = scene.Transforms().TryGet(entity);
+    if (transform == nullptr) {
+        throw std::runtime_error("Animator rig constraint target has no Transform");
+    }
+    const kb::math::DVec3 world = space.origin + solvePosition;
+    kb::math::DVec3 local = world;
+    Quat localRotation = kb::math::Normalize(worldRotation);
+    const SceneEntity parent = scene.Hierarchy().Parent(entity);
+    if (parent.IsValid()) {
+        const TransformComponent* parentTransform = scene.Transforms().TryGet(parent);
+        if (parentTransform == nullptr) {
+            throw std::runtime_error("Animator rig constraint parent has no Transform");
+        }
+        const Quat inverseParent = kb::math::Inverse(parentTransform->worldRotation);
+        const kb::math::DVec3 unrotated = kb::math::RotateDouble(
+            inverseParent, world - scene.Transforms().WorldTranslation(parent, *parentTransform));
+        const auto divide = [](double numerator, float denominator) noexcept {
+            return std::abs(denominator) <= 1.0e-6F ? numerator : numerator / static_cast<double>(denominator);
+        };
+        local = kb::math::DVec3{ divide(unrotated.x, parentTransform->worldScale.x),
+            divide(unrotated.y, parentTransform->worldScale.y), divide(unrotated.z, parentTransform->worldScale.z) };
+        localRotation = kb::math::Normalize(inverseParent * worldRotation);
+    }
+    Vec3 residual{};
+    SplitTranslation(local, transform->localPosition, residual);
+    transform->localRotation = localRotation;
+    scene.Transforms().MarkModified(entity);
+    SceneTransformPrecision::StoreLocalResidual(SceneAccess::State(scene), entity, residual);
+}
+
 [[nodiscard]] Vec3 StableBendDirection(
     Vec3 direction, Vec3 poleDirection, Vec3 currentBoneDirection) {
     Vec3 normal = kb::math::Cross(direction, poleDirection);
@@ -1615,9 +1692,11 @@ void ApplyTwoBoneIk(
     if (root == nullptr || mid == nullptr || tip == nullptr) {
         throw std::runtime_error("TwoBoneIK lost a bound Transform");
     }
-    const Vec3 rootPosition = root->worldPosition;
-    const Vec3 midPosition = mid->worldPosition;
-    const Vec3 tipPosition = tip->worldPosition;
+    const SolveSpace space = MakeSolveSpace(scene, constraint.constrained, *root, { &target, pole });
+    const Vec3 rootPosition = SolvePosition(scene, space, constraint.constrained, *root);
+    const Vec3 midPosition = SolvePosition(scene, space, constraint.mid, *mid);
+    const Vec3 tipPosition = SolvePosition(scene, space, constraint.tip, *tip);
+    const Vec3 targetPosition = SolveTarget(space, target);
     const float upperLength = kb::math::Length(midPosition - rootPosition);
     const float lowerLength = kb::math::Length(tipPosition - midPosition);
     if (upperLength <= 1.0e-5F || lowerLength <= 1.0e-5F) {
@@ -1625,7 +1704,7 @@ void ApplyTwoBoneIk(
     }
     const float positionWeight = definition.weight * target.positionWeight;
     if (positionWeight > 0.0F) {
-        Vec3 targetDelta = target.worldPosition - rootPosition;
+        Vec3 targetDelta = targetPosition - rootPosition;
         float targetDistance = kb::math::Length(targetDelta);
         if (targetDistance <= 1.0e-5F) {
             throw std::runtime_error(
@@ -1637,7 +1716,7 @@ void ApplyTwoBoneIk(
             std::abs(upperLength - lowerLength) + 1.0e-5F,
             upperLength + lowerLength - 1.0e-5F);
         const Vec3 poleDirection = pole != nullptr
-            ? pole->worldPosition - rootPosition
+            ? SolveTarget(space, *pole) - rootPosition
             : midPosition - rootPosition;
         const Vec3 bendDirection = StableBendDirection(
             targetDirection, poleDirection, midPosition - rootPosition);
@@ -1656,7 +1735,7 @@ void ApplyTwoBoneIk(
                 midPosition - rootPosition, desiredMid - rootPosition) *
             root->worldRotation);
         SetWorldPose(
-            scene, constraint.constrained, rootPosition,
+            scene, constraint.constrained, space, rootPosition,
             kb::math::Slerp(
                 root->worldRotation, desiredRootRotation, positionWeight),
             false);
@@ -1664,13 +1743,14 @@ void ApplyTwoBoneIk(
 
         mid = scene.Transforms().TryGet(constraint.mid);
         tip = scene.Transforms().TryGet(constraint.tip);
+        const Vec3 solvedMid = SolvePosition(scene, space, constraint.mid, *mid);
         const Quat desiredMidRotation = kb::math::Normalize(
             kb::math::FromToRotation(
-                tip->worldPosition - mid->worldPosition,
-                target.worldPosition - mid->worldPosition) *
+                SolvePosition(scene, space, constraint.tip, *tip) - solvedMid,
+                targetPosition - solvedMid) *
             mid->worldRotation);
         SetWorldPose(
-            scene, constraint.mid, mid->worldPosition,
+            scene, constraint.mid, space, solvedMid,
             kb::math::Slerp(
                 mid->worldRotation, desiredMidRotation, positionWeight),
             false);
@@ -1681,7 +1761,7 @@ void ApplyTwoBoneIk(
     const float rotationWeight = definition.weight * target.rotationWeight;
     if (rotationWeight > 0.0F) {
         SetWorldPose(
-            scene, constraint.tip, tip->worldPosition,
+            scene, constraint.tip, space, SolvePosition(scene, space, constraint.tip, *tip),
             kb::math::Slerp(
                 tip->worldRotation, target.worldRotation, rotationWeight),
             false);
@@ -1772,6 +1852,23 @@ void SetBoneComponentPose(
     const Vec3 unrotated = kb::math::Rotate(
         kb::math::Inverse(owner.worldRotation),
         worldPosition - owner.worldPosition);
+    return {
+        SafeDivide(unrotated.x, owner.worldScale.x),
+        SafeDivide(unrotated.y, owner.worldScale.y),
+        SafeDivide(unrotated.z, owner.worldScale.z),
+    };
+}
+
+// An IK target in animator space; in double precision while the scene keeps double-precision translations or the
+// target is given in double precision (docs/large_worlds.md).
+[[nodiscard]] Vec3 TargetToAnimatorPosition(
+    const Scene& scene, SceneEntity ownerEntity, const TransformComponent& owner, const AnimatorIkTarget& target) {
+    if (!target.preciseWorldPosition.has_value() && !scene.Transforms().HasDoublePrecisionTranslations()) {
+        return WorldToAnimatorPosition(owner, target.worldPosition);
+    }
+    const Vec3 unrotated = kb::math::Rotate(
+        kb::math::Inverse(owner.worldRotation),
+        kb::math::RelativeTo(TargetWorldPosition(target), scene.Transforms().WorldTranslation(ownerEntity, owner)));
     return {
         SafeDivide(unrotated.x, owner.worldScale.x),
         SafeDivide(unrotated.y, owner.worldScale.y),
@@ -1882,7 +1979,7 @@ void ApplySkeletalRigConstraints(
         if (targetIt == record.ikTargets.end()) continue;
         const AnimatorIkTarget& target = targetIt->second;
         const Vec3 targetPosition =
-            WorldToAnimatorPosition(*owner, target.worldPosition);
+            TargetToAnimatorPosition(scene, record.entity, *owner, target);
         const Quat targetRotation =
             WorldToAnimatorRotation(*owner, target.worldRotation);
         const std::size_t constrained = constraint.constrainedBoneIndex;
@@ -1896,8 +1993,8 @@ void ApplySkeletalRigConstraints(
                 constraint.tipBoneIndex, targetPosition, targetRotation,
                 poleIt == record.ikTargets.end()
                     ? std::optional<Vec3>{}
-                    : std::optional<Vec3>{ WorldToAnimatorPosition(
-                          *owner, poleIt->second.worldPosition) },
+                    : std::optional<Vec3>{ TargetToAnimatorPosition(
+                          scene, record.entity, *owner, poleIt->second) },
                 definition.weight * target.positionWeight,
                 definition.weight * target.rotationWeight);
             break;
@@ -2015,7 +2112,7 @@ void ApplyMotionSkeletonRule(
         if (owner == nullptr) {
             throw std::runtime_error("Skeletal Animator owner has no Transform");
         }
-        targetPosition = WorldToAnimatorPosition(*owner, target->worldPosition);
+        targetPosition = TargetToAnimatorPosition(scene, record.entity, *owner, *target);
         targetRotation = WorldToAnimatorRotation(*owner, target->worldRotation);
     }
 
@@ -2052,8 +2149,8 @@ void ApplyMotionSkeletonRule(
         if (rule.poleTargetLength != 0U) {
             const auto poleTarget = record.ikTargets.find(MotionSkeletonRulePoleTargetText(rule));
             if (poleTarget != record.ikTargets.end()) {
-                pole = WorldToAnimatorPosition(
-                    *scene.Transforms().TryGet(record.entity), poleTarget->second.worldPosition);
+                pole = TargetToAnimatorPosition(
+                    scene, record.entity, *scene.Transforms().TryGet(record.entity), poleTarget->second);
             }
         }
         SolveSkeletalTwoBoneIk(
@@ -2160,8 +2257,9 @@ void ApplyRigConstraints(Scene& scene, AnimatorRuntimeRecord& record) {
             if (transform == nullptr) {
                 throw std::runtime_error("Aim constraint lost its Transform");
             }
-            const Vec3 direction =
-                target.worldPosition - transform->worldPosition;
+            const SolveSpace space = MakeSolveSpace(scene, constraint.constrained, *transform, { &target });
+            const Vec3 position = SolvePosition(scene, space, constraint.constrained, *transform);
+            const Vec3 direction = SolveTarget(space, target) - position;
             if (kb::math::Dot(direction, direction) <= 1.0e-8F) {
                 throw std::runtime_error(
                     "Aim target cannot coincide with its constrained Transform");
@@ -2171,7 +2269,7 @@ void ApplyRigConstraints(Scene& scene, AnimatorRuntimeRecord& record) {
                 kb::math::Rotate(
                     target.worldRotation, Vec3{ 0.0F, 1.0F, 0.0F }));
             SetWorldPose(
-                scene, constraint.constrained, transform->worldPosition,
+                scene, constraint.constrained, space, position,
                 kb::math::Slerp(
                     transform->worldRotation, desired,
                     aimWeight),
@@ -2191,11 +2289,11 @@ void ApplyRigConstraints(Scene& scene, AnimatorRuntimeRecord& record) {
                 throw std::runtime_error(
                     "CopyTransform constraint lost its Transform");
             }
+            const SolveSpace space = MakeSolveSpace(scene, constraint.constrained, *transform, { &target });
+            const Vec3 position = SolvePosition(scene, space, constraint.constrained, *transform);
             SetWorldPose(
-                scene, constraint.constrained,
-                transform->worldPosition +
-                    (target.worldPosition - transform->worldPosition) *
-                        positionWeight,
+                scene, constraint.constrained, space,
+                position + (SolveTarget(space, target) - position) * positionWeight,
                 kb::math::Slerp(
                     transform->worldRotation, target.worldRotation,
                     rotationWeight),

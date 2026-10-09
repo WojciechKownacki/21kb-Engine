@@ -12,7 +12,11 @@
 #include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneGuideCurveComponents.hpp"
+#include "engine/scene/SceneGuideCurveQueries.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneRegionShapeComponents.hpp"
+#include "engine/scene/SceneRegionShapeQueries.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
@@ -474,6 +478,36 @@ void RunFarColliderRaycastWithoutBackendTest() {
             hits.GetAt(0U)->point.x == 3.25F && hits.GetAt(0U)->point.y == 0.5F,
         "A ray at a near collider without a physics backend missed it");
 }
+
+// A 20 cm region and a one-metre guide curve 10 000 km out answer double-precision queries as they would near the
+// origin (where a float position is good to a metre, the region would be a metre off and the curve points would
+// snap to whole metres).
+void RunFarRegionAndGuideCurveTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject region = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Far Region" });
+    scene.Transforms().SetLocalTranslation(region.Entity(), DVec3{ kFar + 0.3, 0.0, kFar });
+    scene.Components().RegionShapes().Set(region.Entity(), kb::scene::RegionShapeComponent{
+        .kind = kb::scene::RegionShapeKind::Box, .size = kb::scene::Vec3{ 0.2F, 0.2F, 0.2F } });
+    const kb::scene::SceneObject curve = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Far Curve" });
+    scene.Transforms().SetLocalTranslation(curve.Entity(), DVec3{ kFar + 0.25, 1.0, kFar });
+    scene.Components().GuideCurves().Set(curve.Entity(), kb::scene::GuideCurveComponent{
+        .controlPoints = { kb::scene::Vec3{ 0.0F, 0.0F, 0.0F }, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F } },
+        .controlPointCount = 2U, .interpolation = kb::scene::GuideCurveInterpolation::Linear });
+    scene.Runtime().SynchronizeTransforms();
+
+    Require(kb::scene::SceneRegionShapeContains(scene, region.Entity(), DVec3{ kFar + 0.35, 0.05, kFar - 0.05 }),
+        "A point inside a far region was not contained");
+    Require(!kb::scene::SceneRegionShapeContains(scene, region.Entity(), DVec3{ kFar + 0.45, 0.0, kFar }) &&
+            !kb::scene::SceneRegionShapeContains(scene, region.Entity(), DVec3{ kFar, 0.0, kFar }),
+        "A point outside a far region was contained");
+
+    DVec3 position{};
+    kb::scene::Vec3 tangent{};
+    Require(kb::scene::SceneGuideCurveEvaluate(scene, curve.Entity(), 0.5F, position, tangent) &&
+            std::abs(position.x - (kFar + 0.75)) <= 1e-6 && std::abs(position.y - 1.0) <= 1e-6 && std::abs(position.z - kFar) <= 1e-6 &&
+            std::abs(tangent.x - 1.0F) <= 1e-6F,
+        "A far guide curve was not evaluated to the micrometre");
+}
 } // namespace
 
 namespace kb::tests {
@@ -489,6 +523,7 @@ void RunLargeWorldTests() {
     RunVersion41SceneMigrationTest();
     RunFarPhysicsTest();
     RunFarColliderRaycastWithoutBackendTest();
+    RunFarRegionAndGuideCurveTest();
 }
 
 } // namespace kb::tests

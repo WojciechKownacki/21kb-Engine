@@ -36,6 +36,11 @@ bool SceneVisibilityCellContains(const Scene& scene, SceneEntity entity, kb::mat
     return cell != nullptr && cell->enabled && IsVisibilityCellComponentValid(*cell) && SceneRegionShapeContains(scene, entity, worldPoint);
 }
 
+bool SceneVisibilityCellContains(const Scene& scene, SceneEntity entity, const kb::math::DVec3& worldPoint) noexcept {
+    const VisibilityCellComponent* cell = scene.Components().VisibilityCells().TryGet(entity);
+    return cell != nullptr && cell->enabled && IsVisibilityCellComponentValid(*cell) && SceneRegionShapeContains(scene, entity, worldPoint);
+}
+
 bool SceneVisibilityCellApplies(const VisibilityCellComponent& cell, std::uint32_t membershipMask) noexcept {
     return cell.enabled && IsVisibilityCellComponentValid(cell) && (cell.membershipMask & membershipMask) != 0U;
 }

@@ -36,6 +36,11 @@ bool SceneRegionPortalContains(const Scene& scene, SceneEntity portal, kb::math:
     return component != nullptr && component->enabled && IsSceneRegionPortalComponentValid(*component) && SceneRegionShapeContains(scene, portal, worldPoint);
 }
 
+bool SceneRegionPortalContains(const Scene& scene, SceneEntity portal, const kb::math::DVec3& worldPoint) noexcept {
+    const SceneRegionPortalComponent* component = scene.Components().RegionPortals().TryGet(portal);
+    return component != nullptr && component->enabled && IsSceneRegionPortalComponentValid(*component) && SceneRegionShapeContains(scene, portal, worldPoint);
+}
+
 bool SceneRegionPortalAllows(const Scene& scene, SceneEntity portal, SceneEntity sourceCell, SceneEntity targetCell, RegionPortalPurpose purpose) noexcept {
     const SceneRegionPortalComponent* component = scene.Components().RegionPortals().TryGet(portal);
     const RegionPortalPurposeMask purposeMask = static_cast<RegionPortalPurposeMask>(purpose);

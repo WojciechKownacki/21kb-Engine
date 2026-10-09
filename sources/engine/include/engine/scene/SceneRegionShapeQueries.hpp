@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/math/DVec3.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
 
@@ -15,5 +16,8 @@ class Scene;
 // point into the shape's local space and delegates to the canonical local
 // primitive implementation.
 [[nodiscard]] bool SceneRegionShapeContains(const Scene& scene, SceneEntity entity, Vec3 worldPoint) noexcept;
+// The same for a double-precision world point, measured from the shape's double-precision translation, so a
+// region far from the world origin keeps float precision around itself (docs/large_worlds.md).
+[[nodiscard]] bool SceneRegionShapeContains(const Scene& scene, SceneEntity entity, const kb::math::DVec3& worldPoint) noexcept;
 
 } // namespace kb::scene
