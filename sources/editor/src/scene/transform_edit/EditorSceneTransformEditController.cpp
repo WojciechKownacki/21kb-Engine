@@ -18,8 +18,9 @@ namespace {
     };
 }
 
+// The rotation as the Inspector shows it: degrees.
 [[nodiscard]] kb::scene::Vec3 RotationVector(kb::scene::Quat rotation) noexcept {
-    return kb::scene::Vec3{ rotation.x, rotation.y, rotation.z };
+    return kb::math::ToEulerDegrees(rotation);
 }
 
 // The change's transform with only `next` replacing it, at its starting translation.
@@ -86,9 +87,9 @@ EditorSceneTransformEditApplyResult EditorSceneTransformEditController::ApplyPri
     const kb::scene::Vec3 delta = Difference(rotation, RotationVector(primaryChange->before.localRotation));
     return EditorSceneTransformEditApplier::Apply(scene_, session_, [delta](const EditorSceneObjectTransformChange& change) {
         kb::scene::TransformComponent next = change.before;
-        next.localRotation.x = change.before.localRotation.x + delta.x;
-        next.localRotation.y = change.before.localRotation.y + delta.y;
-        next.localRotation.z = change.before.localRotation.z + delta.z;
+        const kb::scene::Vec3 before = RotationVector(change.before.localRotation);
+        next.localRotation = kb::math::FromEulerDegrees(
+            kb::scene::Vec3{ before.x + delta.x, before.y + delta.y, before.z + delta.z });
         return Unmoved(change, next);
     });
 }

@@ -409,6 +409,14 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 // resolution the conventional implementation of this uses.
 [[nodiscard]] Quat FromToRotation(Vec3 from, Vec3 to) noexcept;
 
+// Rotation as three angles in degrees - the form people type and read (Inspector, kb_cli).
+// x pitches (positive tips local +Z down), y turns (positive turns +Z toward +X), z rolls.
+// Applied Z first, then X, then Y: FromEulerDegrees(e) = Y(e.y) * X(e.x) * Z(e.z).
+// ToEulerDegrees returns x in -90..90, y and z in -180..180; the two are inverse for every
+// rotation away from x = +-90 (there z folds into y).
+[[nodiscard]] Quat FromEulerDegrees(Vec3 degrees) noexcept;
+[[nodiscard]] Vec3 ToEulerDegrees(Quat rotation) noexcept;
+
 // Rotates from `from` toward `to` by at most `maxDelta`, without
 // overshooting (the Quat analog of MoveTowards). Uses the shortest-path
 // angle between the two rotations (q and -q are the same rotation, so the
