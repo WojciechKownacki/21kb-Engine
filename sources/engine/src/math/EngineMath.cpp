@@ -1,5 +1,6 @@
 #include "engine/math/EngineMath.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -161,6 +162,31 @@ Quat LookRotation(Vec3 forward, Vec3 up) noexcept {
     }
     const float s = std::sqrt(1.0F + m22 - m00 - m11) * 2.0F;
     return Normalize(Quat{ (m02 + m20) / s, (m12 + m21) / s, 0.25F * s, (m10 - m01) / s });
+}
+
+Quat FromEulerDegrees(Vec3 degrees) noexcept {
+    const float halfX = degrees.x * kPi / 360.0F;
+    const float halfY = degrees.y * kPi / 360.0F;
+    const float halfZ = degrees.z * kPi / 360.0F;
+    const Quat aroundX{ std::sin(halfX), 0.0F, 0.0F, std::cos(halfX) };
+    const Quat aroundY{ 0.0F, std::sin(halfY), 0.0F, std::cos(halfY) };
+    const Quat aroundZ{ 0.0F, 0.0F, std::sin(halfZ), std::cos(halfZ) };
+    return Normalize(aroundY * aroundX * aroundZ);
+}
+
+Vec3 ToEulerDegrees(Quat rotation) noexcept {
+    const Quat q = Normalize(rotation);
+    constexpr float kToDegrees = 180.0F / kPi;
+    const float sinX = std::clamp(2.0F * (q.w * q.x - q.y * q.z), -1.0F, 1.0F);
+    if (std::fabs(sinX) > 0.99999F) {
+        // Looking straight up or down: roll and turn act on the same axis, all of it goes to y.
+        return Vec3{ std::copysign(90.0F, sinX), 2.0F * std::atan2(q.y, q.w) * kToDegrees, 0.0F };
+    }
+    return Vec3{
+        std::asin(sinX) * kToDegrees,
+        std::atan2(2.0F * (q.w * q.y + q.x * q.z), 1.0F - 2.0F * (q.x * q.x + q.y * q.y)) * kToDegrees,
+        std::atan2(2.0F * (q.w * q.z + q.x * q.y), 1.0F - 2.0F * (q.x * q.x + q.z * q.z)) * kToDegrees,
+    };
 }
 
 Quat FromToRotation(Vec3 from, Vec3 to) noexcept {

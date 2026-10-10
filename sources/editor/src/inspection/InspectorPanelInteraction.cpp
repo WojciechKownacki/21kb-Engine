@@ -300,7 +300,7 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::RotationX:
     case InspectorPropertyId::RotationY:
     case InspectorPropertyId::RotationZ:
-        return 0.05F;
+        return 1.0F; // degrees
     case InspectorPropertyId::ScaleX:
     case InspectorPropertyId::ScaleY:
     case InspectorPropertyId::ScaleZ:

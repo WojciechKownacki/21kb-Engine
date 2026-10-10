@@ -48,11 +48,10 @@ float EditorTransformProperty::Read(const kb::scene::TransformComponent& transfo
     case InspectorPropertyId::PositionZ:
         return transform.localPosition.z;
     case InspectorPropertyId::RotationX:
-        return transform.localRotation.x;
     case InspectorPropertyId::RotationY:
-        return transform.localRotation.y;
     case InspectorPropertyId::RotationZ:
-        return transform.localRotation.z;
+        // Rotation is read and written in degrees, never as quaternion components.
+        return ReadAxis(kb::math::ToEulerDegrees(transform.localRotation), property);
     case InspectorPropertyId::ScaleX:
         return transform.localScale.x;
     case InspectorPropertyId::ScaleY:
@@ -118,13 +117,10 @@ void EditorTransformProperty::Write(kb::scene::TransformComponent& transform, In
         transform.localPosition.z = value;
         break;
     case InspectorPropertyId::RotationX:
-        transform.localRotation.x = value;
-        break;
     case InspectorPropertyId::RotationY:
-        transform.localRotation.y = value;
-        break;
     case InspectorPropertyId::RotationZ:
-        transform.localRotation.z = value;
+        transform.localRotation =
+            kb::math::FromEulerDegrees(WithAxis(kb::math::ToEulerDegrees(transform.localRotation), property, value));
         break;
     case InspectorPropertyId::ScaleX:
         transform.localScale.x = std::max(0.01F, value);
