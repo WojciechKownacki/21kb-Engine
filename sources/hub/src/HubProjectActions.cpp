@@ -1,8 +1,7 @@
 #include "HubProjectActions.hpp"
 
 #include "HubText.hpp"
-#include "engine/project/ProjectSettings.hpp"
-#include "engine/project/ProjectManager.hpp"
+#include "engine/project/ProjectCreator.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -34,23 +33,6 @@ namespace {
         return std::filesystem::current_path();
     }
     return std::filesystem::path{ buffer };
-}
-
-[[nodiscard]] kb::project::ProjectDescriptor MakeDescriptor() {
-    kb::project::ProjectDescriptor descriptor;
-    descriptor.contentRoot = "Assets";
-    descriptor.targetPlatforms = { "Windows" };
-    return descriptor;
-}
-
-[[nodiscard]] kb::project::ProjectSettings MakeSettings(std::wstring_view name) {
-    kb::project::ProjectSettings settings;
-    settings.name = HubText::WideToUtf8(name);
-    settings.gameName = settings.name;
-    settings.category = "Game";
-    settings.description = "21kb project";
-    settings.defaultMap = "/Game/Scenes/Main.21kbscene";
-    return settings;
 }
 
 [[nodiscard]] std::wstring Quote(std::wstring value) {
@@ -198,72 +180,10 @@ HubCreateProjectResult HubProjectActions::CreateProjectFile(const std::filesyste
     }
 
     const std::wstring projectName = HubText::SanitizeProjectName(projectFile.stem().wstring());
-    if (projectName.empty()) {
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = projectFile, .error = L"Project name is invalid." };
-    }
-
-    const std::filesystem::path projectRoot = projectParent / projectName;
-    const std::filesystem::path descriptorFile = projectRoot / (projectName + L".21kbproject");
-    // Refused before anything is created: a project the engine could not open afterwards must not
-    // be left on disk for the user to find out later.
-    if (std::string budget = kb::project::ProjectManager::PathBudgetError(descriptorFile); !budget.empty()) {
-        return HubCreateProjectResult{
-            .succeeded = false, .projectFile = descriptorFile, .error = HubText::Utf8ToWide(budget) };
-    }
-
-    std::error_code error;
-    if (std::filesystem::exists(descriptorFile, error) && !error) {
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project descriptor already exists in this folder." };
-    }
-
-    std::filesystem::create_directories(projectRoot, error);
-    if (error) {
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project folder could not be created." };
-    }
-
-    const std::filesystem::directory_iterator firstEntry(projectRoot, error);
-    if (error) {
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project folder could not be inspected." };
-    }
-    for (std::filesystem::directory_iterator entry = firstEntry; entry != std::filesystem::directory_iterator{}; entry.increment(error)) {
-        if (error) {
-            return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project folder could not be inspected." };
-        }
-        const std::filesystem::path existing = entry->path();
-        if (existing.filename() != L"Assets" && existing != descriptorFile) {
-            return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Choose an empty project name or remove the existing folder first." };
-        }
-    }
-
-    std::filesystem::create_directories(projectRoot / "Assets" / "Scenes", error);
-    if (error) {
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Scene folder could not be created." };
-    }
-    std::filesystem::create_directories(projectRoot / "Assets" / "Prefabs", error);
-    if (error) {
-        std::filesystem::remove_all(projectRoot / "Assets", error);
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Prefab folder could not be created." };
-    }
-
-    kb::project::ProjectDescriptor descriptor = MakeDescriptor();
-    if (!kb::project::ProjectManager::CreateProject(descriptorFile, descriptor)) {
-        std::filesystem::remove_all(projectRoot / "Assets", error);
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project descriptor could not be written." };
-    }
-
-    // A new project starts with the settings file the editor and the game both read,
-    // rather than waiting for the editor to seed it on first open.
-    std::string settingsError;
-    if (!kb::project::ProjectSettingsStore::Save(
-            kb::project::ProjectSettingsStore::FilePath(projectRoot),
-            MakeSettings(projectName),
-            settingsError)) {
-        std::filesystem::remove_all(projectRoot / "Assets", error);
-        std::filesystem::remove(descriptorFile, error);
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project settings could not be written." };
-    }
-
-    return HubCreateProjectResult{ .succeeded = true, .projectFile = descriptorFile, .error = {} };
+    const kb::project::NewProjectResult created =
+        kb::project::ProjectCreator::Create(projectParent, HubText::WideToUtf8(projectName));
+    return HubCreateProjectResult{
+        .succeeded = created.succeeded, .projectFile = created.projectFile, .error = HubText::Utf8ToWide(created.error) };
 }
 
 bool HubProjectActions::LaunchEditor(HWND owner, const std::filesystem::path& projectFile, std::wstring& error) {

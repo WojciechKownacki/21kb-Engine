@@ -2027,6 +2027,25 @@ void RunProjectileTemplateTests() {
         "LIB-129 CLI failure-path test did not restore the valid production fixture settings");
 }
 
+// `kb_cli new` makes the project the Hub makes, without a window.
+void RunNewCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "new_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    const CommandRun created = Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Gra" });
+    Require(created.exitCode == 0, "new failed");
+    const std::filesystem::path project = parent / "Gra" / "Gra.21kbproject";
+    Require(kb::project::ProjectManager::LoadProject(project).succeeded, "new did not write a loadable project");
+    Require(std::filesystem::is_directory(parent / "Gra" / "Assets" / "Scenes"), "new did not create Assets/Scenes");
+    Require(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(parent / "Gra")).found,
+        "new did not write the project settings");
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Gra" }).exitCode != 0,
+        "new over an existing project must be refused");
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "zla nazwa" }).exitCode != 0,
+        "new with an invalid name must be refused");
+    std::filesystem::remove_all(parent, error);
+}
+
 void RunApiCommandTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -2987,6 +3006,7 @@ int main() {
     RunSceneCommandTests();
     RunRunCommandTests();
     RunPlayerControllerTemplateTests();
+    RunNewCommandTests();
     RunApiCommandTests();
     RunApiCheckCommandTests();
     RunMcpCommandTests();
