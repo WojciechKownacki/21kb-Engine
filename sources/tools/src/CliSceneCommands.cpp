@@ -171,7 +171,7 @@ int RunSceneListCommand(const ArgumentList& arguments, CommandIo io) {
 
     const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(resolved.path);
     if (!loaded.succeeded) {
-        io.err << "error: could not load scene: " << loaded.error << '\n';
+        io.err << "error: could not load scene " << resolved.path.generic_string() << ": " << loaded.error << '\n';
         return 1;
     }
 
@@ -265,7 +265,7 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
 
     kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(resolved.path);
     if (!loaded.succeeded) {
-        io.err << "error: could not load scene: " << loaded.error << '\n';
+        io.err << "error: could not load scene " << resolved.path.generic_string() << ": " << loaded.error << '\n';
         return 1;
     }
 
