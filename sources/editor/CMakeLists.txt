@@ -851,6 +851,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorAudioScrubController.cpp
     src/inspection/InspectorColliderTextBuilder.cpp
     src/inspection/InspectorComponentCatalog.cpp
+    src/inspection/InspectorSceneColor.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
     src/inspection/InspectorPhysicsModel.cpp
     src/inspection/ui/InspectorUIComponentModel.cpp
@@ -1387,6 +1388,7 @@ if(BUILD_TESTING)
         src/inspection/InspectorAudioComponentModel.cpp
         src/inspection/InspectorAudioScrubController.cpp
         src/inspection/InspectorComponentCatalog.cpp
+        src/inspection/InspectorSceneColor.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
         src/inspection/InspectorPhysicsModel.cpp
         src/inspection/ui/InspectorUIComponentModel.cpp

@@ -92,6 +92,8 @@ namespace kb::editor {
 namespace {
 
 using inspector_panel_rows::AssetPickerButtonRect;
+using inspector_panel_rows::DrawColorSwatch;
+using inspector_panel_rows::InspectorLabelColumnRight;
 using inspector_panel_rows::AssetPickerTextRect;
 using inspector_panel_rows::CheckboxRectForRow;
 using inspector_panel_rows::ComponentRemoveButtonRect;
@@ -1353,7 +1355,7 @@ constexpr std::array<std::string_view, kValueTypeOptionCount> kValueTypeLabels{ 
 
 [[nodiscard]] RECT ValueTypeOptionRect(const RECT& content, int index) noexcept {
     const RECT row = ValueTypeRowRect(content);
-    const int labelRight = row.left + ((row.right - row.left) * 36 / 100);
+    const int labelRight = InspectorLabelColumnRight(row);
     const int top = row.bottom + index * kFieldRowHeight;
     return Rect(labelRight, top, row.right - kValueRightInset, top + kFieldRowHeight);
 }
@@ -1821,21 +1823,18 @@ void PaintStreamFocusSection(HDC dc, RECT content, int& y, const EditorTheme& th
 // The rows a backdrop mode uses, shared by painting, section height and hit testing. Like
 // Unity's skybox materials, every mode shows only its own settings.
 [[nodiscard]] std::span<const InspectorPropertyId> WorldBackdropRows(kb::scene::WorldBackdropMode mode) noexcept {
-    static constexpr std::array<InspectorPropertyId, 6> kSolidColor{ InspectorPropertyId::WorldBackdropMode,
-        InspectorPropertyId::WorldBackdropColorR, InspectorPropertyId::WorldBackdropColorG, InspectorPropertyId::WorldBackdropColorB,
-        InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
-    static constexpr std::array<InspectorPropertyId, 11> kVerticalGradient{ InspectorPropertyId::WorldBackdropMode,
-        InspectorPropertyId::WorldBackdropHorizonColorR, InspectorPropertyId::WorldBackdropHorizonColorG, InspectorPropertyId::WorldBackdropHorizonColorB,
-        InspectorPropertyId::WorldBackdropZenithColorR, InspectorPropertyId::WorldBackdropZenithColorG, InspectorPropertyId::WorldBackdropZenithColorB,
+    static constexpr std::array<InspectorPropertyId, 4> kSolidColor{ InspectorPropertyId::WorldBackdropMode,
+        InspectorPropertyId::WorldBackdropColor, InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
+    static constexpr std::array<InspectorPropertyId, 7> kVerticalGradient{ InspectorPropertyId::WorldBackdropMode,
+        InspectorPropertyId::WorldBackdropHorizonColor, InspectorPropertyId::WorldBackdropZenithColor,
         InspectorPropertyId::WorldBackdropHorizonHeight, InspectorPropertyId::WorldBackdropGradientExponent,
         InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
     static constexpr std::array<InspectorPropertyId, 4> kEnvironmentMap{ InspectorPropertyId::WorldBackdropMode,
         InspectorPropertyId::WorldBackdropEnvironmentAssetId, InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
-    static constexpr std::array<InspectorPropertyId, 14> kProceduralSky{ InspectorPropertyId::WorldBackdropMode,
+    static constexpr std::array<InspectorPropertyId, 10> kProceduralSky{ InspectorPropertyId::WorldBackdropMode,
         InspectorPropertyId::WorldBackdropSunDisk, InspectorPropertyId::WorldBackdropSunSize, InspectorPropertyId::WorldBackdropSunSizeConvergence,
         InspectorPropertyId::WorldBackdropAtmosphereThickness,
-        InspectorPropertyId::WorldBackdropSkyTintR, InspectorPropertyId::WorldBackdropSkyTintG, InspectorPropertyId::WorldBackdropSkyTintB,
-        InspectorPropertyId::WorldBackdropGroundColorR, InspectorPropertyId::WorldBackdropGroundColorG, InspectorPropertyId::WorldBackdropGroundColorB,
+        InspectorPropertyId::WorldBackdropSkyTint, InspectorPropertyId::WorldBackdropGroundColor,
         InspectorPropertyId::WorldBackdropExposure, InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
     switch (mode) {
     case kb::scene::WorldBackdropMode::SolidColor: return kSolidColor;
@@ -1851,15 +1850,9 @@ void PaintWorldBackdropSection(HDC dc, RECT content, int& y, const EditorTheme& 
     for (const InspectorPropertyId property : WorldBackdropRows(backdrop.mode)) {
         switch (property) {
         case InspectorPropertyId::WorldBackdropMode: section.Field("Mode", WorldBackdropModeName(backdrop.mode), property); break;
-        case InspectorPropertyId::WorldBackdropColorR: section.Field("Color R", FormatFloat(backdrop.color.x, 3), property); break;
-        case InspectorPropertyId::WorldBackdropColorG: section.Field("Color G", FormatFloat(backdrop.color.y, 3), property); break;
-        case InspectorPropertyId::WorldBackdropColorB: section.Field("Color B", FormatFloat(backdrop.color.z, 3), property); break;
-        case InspectorPropertyId::WorldBackdropHorizonColorR: section.Field("Horizon R", FormatFloat(backdrop.horizonColor.x, 3), property); break;
-        case InspectorPropertyId::WorldBackdropHorizonColorG: section.Field("Horizon G", FormatFloat(backdrop.horizonColor.y, 3), property); break;
-        case InspectorPropertyId::WorldBackdropHorizonColorB: section.Field("Horizon B", FormatFloat(backdrop.horizonColor.z, 3), property); break;
-        case InspectorPropertyId::WorldBackdropZenithColorR: section.Field("Zenith R", FormatFloat(backdrop.zenithColor.x, 3), property); break;
-        case InspectorPropertyId::WorldBackdropZenithColorG: section.Field("Zenith G", FormatFloat(backdrop.zenithColor.y, 3), property); break;
-        case InspectorPropertyId::WorldBackdropZenithColorB: section.Field("Zenith B", FormatFloat(backdrop.zenithColor.z, 3), property); break;
+        case InspectorPropertyId::WorldBackdropColor: section.Color(backdrop.color, property); break;
+        case InspectorPropertyId::WorldBackdropHorizonColor: section.Color(backdrop.horizonColor, property); break;
+        case InspectorPropertyId::WorldBackdropZenithColor: section.Color(backdrop.zenithColor, property); break;
         case InspectorPropertyId::WorldBackdropEnvironmentAssetId: section.Field("Environment Asset", std::to_string(backdrop.environmentAssetId), property); break;
         case InspectorPropertyId::WorldBackdropHorizonHeight: section.Field("Horizon Height", FormatFloat(backdrop.horizonHeight, 3), property); break;
         case InspectorPropertyId::WorldBackdropGradientExponent: section.Field("Gradient Exponent", FormatFloat(backdrop.gradientExponent, 3), property); break;
@@ -1867,12 +1860,8 @@ void PaintWorldBackdropSection(HDC dc, RECT content, int& y, const EditorTheme& 
         case InspectorPropertyId::WorldBackdropSunSize: section.Field("Sun Size", FormatFloat(backdrop.sunSize, 3), property); break;
         case InspectorPropertyId::WorldBackdropSunSizeConvergence: section.Field("Sun Size Convergence", FormatFloat(backdrop.sunSizeConvergence, 2), property); break;
         case InspectorPropertyId::WorldBackdropAtmosphereThickness: section.Field("Atmosphere Thickness", FormatFloat(backdrop.atmosphereThickness, 2), property); break;
-        case InspectorPropertyId::WorldBackdropSkyTintR: section.Field("Sky Tint R", FormatFloat(backdrop.skyTint.x, 3), property); break;
-        case InspectorPropertyId::WorldBackdropSkyTintG: section.Field("Sky Tint G", FormatFloat(backdrop.skyTint.y, 3), property); break;
-        case InspectorPropertyId::WorldBackdropSkyTintB: section.Field("Sky Tint B", FormatFloat(backdrop.skyTint.z, 3), property); break;
-        case InspectorPropertyId::WorldBackdropGroundColorR: section.Field("Ground R", FormatFloat(backdrop.groundColor.x, 3), property); break;
-        case InspectorPropertyId::WorldBackdropGroundColorG: section.Field("Ground G", FormatFloat(backdrop.groundColor.y, 3), property); break;
-        case InspectorPropertyId::WorldBackdropGroundColorB: section.Field("Ground B", FormatFloat(backdrop.groundColor.z, 3), property); break;
+        case InspectorPropertyId::WorldBackdropSkyTint: section.Color(backdrop.skyTint, property); break;
+        case InspectorPropertyId::WorldBackdropGroundColor: section.Color(backdrop.groundColor, property); break;
         case InspectorPropertyId::WorldBackdropExposure: section.Field("Exposure", FormatFloat(backdrop.exposure, 2), property); break;
         case InspectorPropertyId::WorldBackdropPriority: section.Field("Priority", std::to_string(backdrop.priority), property); break;
         case InspectorPropertyId::WorldBackdropEnabled: section.Bool("Enabled", backdrop.enabled, property); break;
@@ -1894,18 +1883,15 @@ void PaintWorldBackdropSection(HDC dc, RECT content, int& y, const EditorTheme& 
     return "Invalid";
 }
 
+// Mode, three colours, environment, three intensities, priority, enabled.
+constexpr int kAmbientRadianceRows = 10;
+
 void PaintAmbientRadianceSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::AmbientRadianceComponent& ambient) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AmbientRadiance, HeroIconKind::Bolt, "Ambient Radiance", true);
     section.Field("Mode", AmbientRadianceModeName(ambient.mode), InspectorPropertyId::AmbientRadianceMode);
-    section.Field("Color R", FormatFloat(ambient.color.x, 3), InspectorPropertyId::AmbientRadianceColorR);
-    section.Field("Color G", FormatFloat(ambient.color.y, 3), InspectorPropertyId::AmbientRadianceColorG);
-    section.Field("Color B", FormatFloat(ambient.color.z, 3), InspectorPropertyId::AmbientRadianceColorB);
-    section.Field("Horizon R", FormatFloat(ambient.horizonColor.x, 3), InspectorPropertyId::AmbientRadianceHorizonColorR);
-    section.Field("Horizon G", FormatFloat(ambient.horizonColor.y, 3), InspectorPropertyId::AmbientRadianceHorizonColorG);
-    section.Field("Horizon B", FormatFloat(ambient.horizonColor.z, 3), InspectorPropertyId::AmbientRadianceHorizonColorB);
-    section.Field("Zenith R", FormatFloat(ambient.zenithColor.x, 3), InspectorPropertyId::AmbientRadianceZenithColorR);
-    section.Field("Zenith G", FormatFloat(ambient.zenithColor.y, 3), InspectorPropertyId::AmbientRadianceZenithColorG);
-    section.Field("Zenith B", FormatFloat(ambient.zenithColor.z, 3), InspectorPropertyId::AmbientRadianceZenithColorB);
+    section.Color(ambient.color, InspectorPropertyId::AmbientRadianceColor);
+    section.Color(ambient.horizonColor, InspectorPropertyId::AmbientRadianceHorizonColor);
+    section.Color(ambient.zenithColor, InspectorPropertyId::AmbientRadianceZenithColor);
     section.Field("Environment Asset", std::to_string(ambient.environmentAssetId), InspectorPropertyId::AmbientRadianceEnvironmentAssetId);
     section.Field("Intensity", FormatFloat(ambient.intensity, 3), InspectorPropertyId::AmbientRadianceIntensity);
     section.Field("Diffuse Intensity", FormatFloat(ambient.diffuseIntensity, 3), InspectorPropertyId::AmbientRadianceDiffuseIntensity);
@@ -2050,7 +2036,7 @@ void PaintHistoryRibbonSection(HDC dc, RECT content, int& y, const EditorTheme& 
     y = section.Bottom() + kSectionGap;
 }
 
-constexpr int kCameraSectionRows = 13;
+constexpr int kCameraSectionRows = 11;
 
 void PaintCameraSection(
     HDC dc,
@@ -2105,18 +2091,7 @@ void PaintCameraSection(
         "Clear Mode",
         InspectorComponentLabelFormatter::CameraClearModeName(camera.clearMode),
         InspectorPropertyId::CameraClearMode);
-    section.Float(
-        "Clear Color R",
-        FormatFloat(camera.clearColor.x, 3),
-        InspectorPropertyId::CameraClearColorR);
-    section.Float(
-        "Clear Color G",
-        FormatFloat(camera.clearColor.y, 3),
-        InspectorPropertyId::CameraClearColorG);
-    section.Float(
-        "Clear Color B",
-        FormatFloat(camera.clearColor.z, 3),
-        InspectorPropertyId::CameraClearColorB);
+    section.Color(camera.clearColor, InspectorPropertyId::CameraClearColor);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2133,7 +2108,7 @@ void PaintCameraSection(
 }
 
 [[nodiscard]] int LightSectionRows(const kb::scene::LightComponent& light) noexcept {
-    int rows = 11;
+    int rows = 9;
     if (LightUsesRange(light.kind)) {
         ++rows;
     }
@@ -2155,9 +2130,7 @@ void PaintLightSection(
     const kb::scene::LightComponent& light) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, "Light");
     section.Field("Type", InspectorComponentLabelFormatter::LightKindName(light.kind), InspectorPropertyId::LightKind);
-    section.Float("Color R", FormatFloat(light.color.x, 2), InspectorPropertyId::LightColorR);
-    section.Float("Color G", FormatFloat(light.color.y, 2), InspectorPropertyId::LightColorG);
-    section.Float("Color B", FormatFloat(light.color.z, 2), InspectorPropertyId::LightColorB);
+    section.Color(light.color, InspectorPropertyId::LightColor);
     section.Float("Intensity", FormatFloat(light.intensity, 2), InspectorPropertyId::LightIntensity);
     if (LightUsesRange(light.kind)) {
         section.Float("Range", FormatFloat(light.range, 2), InspectorPropertyId::LightRange);
@@ -2609,21 +2582,7 @@ void PaintUICompactRow(HDC dc, RECT bounds, const EditorTheme& theme,
     const RECT value = ValueRectForRow(bounds);
     Text(dc, Rect(bounds.left + kRowPadX, bounds.top, value.left, bounds.bottom), row.label, Color(theme.textSecondary));
     if (row.color) {
-        DrawValueBox(dc, value, theme, {}, state.IsHovered(InspectorHitKind::ColorField, section, property, index));
-        RECT fill = value;
-        InflateRect(&fill, -2, -2);
-        const float alpha = std::clamp(row.rgba[3], 0.0F, 1.0F);
-        for (int y = fill.top; y < fill.bottom; y += 6) {
-            for (int x = fill.left; x < fill.right; x += 6) {
-                const float background = ((x - fill.left) / 6 + (y - fill.top) / 6) % 2 == 0 ? 0.65F : 0.4F;
-                const auto channel = [&](int lane) {
-                    return static_cast<BYTE>(std::lround(255.0F *
-                        (std::clamp(row.rgba[lane], 0.0F, 1.0F) * alpha + background * (1.0F - alpha))));
-                };
-                GdiDrawing::FillRectColor(dc, Rect(x, y, std::min(x + 6, static_cast<int>(fill.right)),
-                    std::min(y + 6, static_cast<int>(fill.bottom))), RGB(channel(0), channel(1), channel(2)));
-            }
-        }
+        DrawColorSwatch(dc, value, theme, row.rgba, state.IsHovered(InspectorHitKind::ColorField, section, property, index));
     } else {
         const auto labels = row.name == "cornerRadius.x" ? std::array{"TL", "TR", "BR", "BL"}
             : row.name.ends_with(".left") ? std::array{"L", "T", "R", "B"}
@@ -3097,7 +3056,7 @@ void DrawTerrainMaterialLayers(
     }
     const int tagsRowTop = InspectorBodyTop(content) + uiHeight + kSectionHeaderHeight + kDividerHeight
         + 2 * (kFieldRowHeight + kDividerHeight);
-    const int labelRight = content.left + ((content.right - content.left) * 36 / 100);
+    const int labelRight = InspectorLabelColumnRight(content);
     const int top = tagsRowTop + (kFieldRowHeight - kValueHeight) / 2;
     return Rect(labelRight, top, content.right - kValueRightInset, top + kValueHeight);
 }
@@ -3447,7 +3406,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         if (y < content.bottom && y + h > content.top) PaintWorldBackdropSection(dc, content, y, theme, inspector, *backdrop); else y += h + kSectionGap;
     }
     if (const kb::scene::AmbientRadianceComponent* ambient = scene.Components().AmbientRadiances().TryGet(selected); ambient != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::AmbientRadiance, 16);
+        const int h = SectionHeight(inspector, InspectorSectionId::AmbientRadiance, kAmbientRadianceRows);
         if (y < content.bottom && y + h > content.top) PaintAmbientRadianceSection(dc, content, y, theme, inspector, *ambient); else y += h + kSectionGap;
     }
     if (const kb::scene::SceneDetailSwitchComponent* detailSwitch = scene.Components().DetailSwitches().TryGet(selected); detailSwitch != nullptr) {
@@ -3793,7 +3752,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::WorldBackdropComponent* backdrop = scene.Components().WorldBackdrops().TryGet(selected); backdrop != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::WorldBackdrop, static_cast<int>(WorldBackdropRows(backdrop->mode).size())) + kSectionGap;
     }
-    if (scene.Components().AmbientRadiances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::AmbientRadiance, 16) + kSectionGap;
+    if (scene.Components().AmbientRadiances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::AmbientRadiance, kAmbientRadianceRows) + kSectionGap;
     if (scene.Components().DetailSwitches().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::DetailSwitch, 6) + kSectionGap;
     if (scene.Components().VisibilityBlockers().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityBlocker, 7) + kSectionGap;
     if (scene.Components().VisibilityCells().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityCell, 4) + kSectionGap;
@@ -3894,7 +3853,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
 }
 
 [[nodiscard]] RECT ValueRectForRow(RECT row) noexcept {
-    RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     const int top = CenteredY(row, kValueHeight);
     return Rect(labelRect.right, top, row.right - kValueRightInset, top + kValueHeight);
 }
@@ -3917,6 +3876,14 @@ void AdvanceRow(int& y) noexcept;
     RECT value = ValueRectForRow(row);
     if (Contains(value, x, y)) {
         return MakeHit(InspectorHitKind::FloatField, section, property, value);
+    }
+    return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitColorRow(RECT row, InspectorSectionId section, InspectorPropertyId property, int x, int y) noexcept {
+    RECT value = ValueRectForRow(row);
+    if (Contains(value, x, y)) {
+        return MakeHit(InspectorHitKind::ColorField, section, property, value);
     }
     return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
 }
@@ -4114,7 +4081,7 @@ void AdvanceRow(int& y) noexcept;
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitVec3(RECT row, InspectorSectionId section, InspectorPropertyId px, InspectorPropertyId py, InspectorPropertyId pz, int x, int y) noexcept {
-    RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     const int valueWidth = static_cast<int>(valueRect.right - valueRect.left);
     const int available = std::max(0, valueWidth - (kLaneGap * 2));
@@ -4145,7 +4112,7 @@ void AdvanceRow(int& y) noexcept;
     InspectorPropertyId secondProperty,
     int x,
     int y) noexcept {
-    const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     const int laneWidth = std::max(66, (static_cast<int>(valueRect.right - valueRect.left) - kLaneGap) / 2);
     const std::array<RECT, 2U> lanes{
@@ -4174,7 +4141,7 @@ void AdvanceRow(int& y) noexcept;
     InspectorPropertyId secondProperty,
     int x,
     int y) noexcept {
-    const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     const int laneWidth = std::max(66, (static_cast<int>(valueRect.right - valueRect.left) - kLaneGap) / 2);
     const std::array<RECT, 2U> lanes{
@@ -4194,7 +4161,7 @@ void AdvanceRow(int& y) noexcept;
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitRotation(RECT row, int x, int y) noexcept {
-    RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    RECT labelRect = Rect(row.left + kRowPadX, row.top, InspectorLabelColumnRight(row), row.bottom);
     RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     const int valueWidth = static_cast<int>(valueRect.right - valueRect.left);
     const int available = std::max(0, valueWidth - (kLaneGap * 2));
@@ -4474,23 +4441,12 @@ void AdvanceGroup(int& y) noexcept {
         }
         AdvanceRow(y);
     }
-    for (const InspectorPropertyId property : {
-             InspectorPropertyId::CameraClearColorR,
-             InspectorPropertyId::CameraClearColorG,
-             InspectorPropertyId::CameraClearColorB,
-         }) {
-        if (InspectorPanelRenderer::Hit hit =
-                HitFloatRow(
-                    RowRect(content, y),
-                    InspectorSectionId::Camera,
-                    property,
-                    x,
-                    yPoint);
-            hit.kind != InspectorHitKind::None) {
-            return hit;
-        }
-        AdvanceRow(y);
+    if (InspectorPanelRenderer::Hit hit =
+            HitColorRow(RowRect(content, y), InspectorSectionId::Camera, InspectorPropertyId::CameraClearColor, x, yPoint);
+        hit.kind != InspectorHitKind::None) {
+        return hit;
     }
+    AdvanceRow(y);
     return {};
 }
 
@@ -4544,15 +4500,10 @@ void AdvanceGroup(int& y) noexcept {
         return hit;
     }
     AdvanceRow(y);
-    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightColorR, x, yPoint); hit.kind != InspectorHitKind::None) {
+    if (InspectorPanelRenderer::Hit hit = HitColorRow(RowRect(content, y), InspectorSectionId::Light, InspectorPropertyId::LightColor, x, yPoint); hit.kind != InspectorHitKind::None) {
         return hit;
     }
-    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightColorG, x, yPoint); hit.kind != InspectorHitKind::None) {
-        return hit;
-    }
-    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightColorB, x, yPoint); hit.kind != InspectorHitKind::None) {
-        return hit;
-    }
+    AdvanceRow(y);
     if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightIntensity, x, yPoint); hit.kind != InspectorHitKind::None) {
         return hit;
     }
@@ -5296,6 +5247,8 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             for (const InspectorPropertyId property : WorldBackdropRows(backdrop->mode)) {
                 const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::WorldBackdropEnabled
                     ? HitBool(RowRect(viewport, y), InspectorSectionId::WorldBackdrop, property, x, scrolledY)
+                    : InspectorSceneColor::IsColorProperty(property)
+                    ? HitColorRow(RowRect(viewport, y), InspectorSectionId::WorldBackdrop, property, x, scrolledY)
                     : HitTextRow(RowRect(viewport, y), InspectorSectionId::WorldBackdrop, property, x, scrolledY);
                 if (hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);
@@ -5306,10 +5259,12 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     if (sceneContext.Scene().Components().AmbientRadiances().Has(selected)) {
         if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AmbientRadiance, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
         if (!state.IsCollapsed(InspectorSectionId::AmbientRadiance)) {
-            constexpr std::array<InspectorPropertyId, 16> properties{ InspectorPropertyId::AmbientRadianceMode, InspectorPropertyId::AmbientRadianceColorR, InspectorPropertyId::AmbientRadianceColorG, InspectorPropertyId::AmbientRadianceColorB, InspectorPropertyId::AmbientRadianceHorizonColorR, InspectorPropertyId::AmbientRadianceHorizonColorG, InspectorPropertyId::AmbientRadianceHorizonColorB, InspectorPropertyId::AmbientRadianceZenithColorR, InspectorPropertyId::AmbientRadianceZenithColorG, InspectorPropertyId::AmbientRadianceZenithColorB, InspectorPropertyId::AmbientRadianceEnvironmentAssetId, InspectorPropertyId::AmbientRadianceIntensity, InspectorPropertyId::AmbientRadianceDiffuseIntensity, InspectorPropertyId::AmbientRadianceSpecularIntensity, InspectorPropertyId::AmbientRadiancePriority, InspectorPropertyId::AmbientRadianceEnabled };
+            constexpr std::array<InspectorPropertyId, kAmbientRadianceRows> properties{ InspectorPropertyId::AmbientRadianceMode, InspectorPropertyId::AmbientRadianceColor, InspectorPropertyId::AmbientRadianceHorizonColor, InspectorPropertyId::AmbientRadianceZenithColor, InspectorPropertyId::AmbientRadianceEnvironmentAssetId, InspectorPropertyId::AmbientRadianceIntensity, InspectorPropertyId::AmbientRadianceDiffuseIntensity, InspectorPropertyId::AmbientRadianceSpecularIntensity, InspectorPropertyId::AmbientRadiancePriority, InspectorPropertyId::AmbientRadianceEnabled };
             for (const InspectorPropertyId property : properties) {
                 const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::AmbientRadianceEnabled
                     ? HitBool(RowRect(viewport, y), InspectorSectionId::AmbientRadiance, property, x, scrolledY)
+                    : InspectorSceneColor::IsColorProperty(property)
+                    ? HitColorRow(RowRect(viewport, y), InspectorSectionId::AmbientRadiance, property, x, scrolledY)
                     : HitTextRow(RowRect(viewport, y), InspectorSectionId::AmbientRadiance, property, x, scrolledY);
                 if (hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);

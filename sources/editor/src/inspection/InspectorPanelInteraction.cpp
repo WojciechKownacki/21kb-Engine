@@ -348,9 +348,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool IsLightFloatProperty(InspectorPropertyId property) noexcept {
     switch (property) {
-    case InspectorPropertyId::LightColorR:
-    case InspectorPropertyId::LightColorG:
-    case InspectorPropertyId::LightColorB:
     case InspectorPropertyId::LightIntensity:
     case InspectorPropertyId::LightRange:
     case InspectorPropertyId::LightInnerCone:
@@ -372,9 +369,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::CameraOrthographicHeight:
     case InspectorPropertyId::CameraNearClip:
     case InspectorPropertyId::CameraFarClip:
-    case InspectorPropertyId::CameraClearColorR:
-    case InspectorPropertyId::CameraClearColorG:
-    case InspectorPropertyId::CameraClearColorB:
         return true;
     default:
         return false;
@@ -397,15 +391,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
         return true;
     case InspectorPropertyId::CameraFarClip:
         value = camera.farClip;
-        return true;
-    case InspectorPropertyId::CameraClearColorR:
-        value = camera.clearColor.x;
-        return true;
-    case InspectorPropertyId::CameraClearColorG:
-        value = camera.clearColor.y;
-        return true;
-    case InspectorPropertyId::CameraClearColorB:
-        value = camera.clearColor.z;
         return true;
     default:
         return false;
@@ -445,15 +430,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
         }
         destination = &camera.farClip;
         break;
-    case InspectorPropertyId::CameraClearColorR:
-        destination = &camera.clearColor.x;
-        break;
-    case InspectorPropertyId::CameraClearColorG:
-        destination = &camera.clearColor.y;
-        break;
-    case InspectorPropertyId::CameraClearColorB:
-        destination = &camera.clearColor.z;
-        break;
     default:
         return false;
     }
@@ -466,15 +442,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool ReadLightFloat(const kb::scene::LightComponent& light, InspectorPropertyId property, float& value) noexcept {
     switch (property) {
-    case InspectorPropertyId::LightColorR:
-        value = light.color.x;
-        return true;
-    case InspectorPropertyId::LightColorG:
-        value = light.color.y;
-        return true;
-    case InspectorPropertyId::LightColorB:
-        value = light.color.z;
-        return true;
     case InspectorPropertyId::LightIntensity:
         value = light.intensity;
         return true;
@@ -513,15 +480,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool WriteLightFloat(kb::scene::LightComponent& light, InspectorPropertyId property, float value) noexcept {
     switch (property) {
-    case InspectorPropertyId::LightColorR:
-        light.color.x = std::clamp(value, 0.0F, 1.0F);
-        return true;
-    case InspectorPropertyId::LightColorG:
-        light.color.y = std::clamp(value, 0.0F, 1.0F);
-        return true;
-    case InspectorPropertyId::LightColorB:
-        light.color.z = std::clamp(value, 0.0F, 1.0F);
-        return true;
     case InspectorPropertyId::LightIntensity:
         light.intensity = std::max(0.0F, value);
         return true;
@@ -1940,27 +1898,12 @@ template <typename Mutator>
 [[nodiscard]] std::string WorldBackdropFieldText(const kb::scene::WorldBackdropComponent& value, InspectorPropertyId property) {
     switch (property) {
     case InspectorPropertyId::WorldBackdropMode: return std::to_string(static_cast<int>(value.mode));
-    case InspectorPropertyId::WorldBackdropColorR: return FormatCompactFloat(value.color.x);
-    case InspectorPropertyId::WorldBackdropColorG: return FormatCompactFloat(value.color.y);
-    case InspectorPropertyId::WorldBackdropColorB: return FormatCompactFloat(value.color.z);
-    case InspectorPropertyId::WorldBackdropHorizonColorR: return FormatCompactFloat(value.horizonColor.x);
-    case InspectorPropertyId::WorldBackdropHorizonColorG: return FormatCompactFloat(value.horizonColor.y);
-    case InspectorPropertyId::WorldBackdropHorizonColorB: return FormatCompactFloat(value.horizonColor.z);
-    case InspectorPropertyId::WorldBackdropZenithColorR: return FormatCompactFloat(value.zenithColor.x);
-    case InspectorPropertyId::WorldBackdropZenithColorG: return FormatCompactFloat(value.zenithColor.y);
-    case InspectorPropertyId::WorldBackdropZenithColorB: return FormatCompactFloat(value.zenithColor.z);
     case InspectorPropertyId::WorldBackdropEnvironmentAssetId: return std::to_string(value.environmentAssetId);
     case InspectorPropertyId::WorldBackdropHorizonHeight: return FormatCompactFloat(value.horizonHeight);
     case InspectorPropertyId::WorldBackdropGradientExponent: return FormatCompactFloat(value.gradientExponent);
     case InspectorPropertyId::WorldBackdropSunSize: return FormatCompactFloat(value.sunSize);
     case InspectorPropertyId::WorldBackdropSunSizeConvergence: return FormatCompactFloat(value.sunSizeConvergence);
     case InspectorPropertyId::WorldBackdropAtmosphereThickness: return FormatCompactFloat(value.atmosphereThickness);
-    case InspectorPropertyId::WorldBackdropSkyTintR: return FormatCompactFloat(value.skyTint.x);
-    case InspectorPropertyId::WorldBackdropSkyTintG: return FormatCompactFloat(value.skyTint.y);
-    case InspectorPropertyId::WorldBackdropSkyTintB: return FormatCompactFloat(value.skyTint.z);
-    case InspectorPropertyId::WorldBackdropGroundColorR: return FormatCompactFloat(value.groundColor.x);
-    case InspectorPropertyId::WorldBackdropGroundColorG: return FormatCompactFloat(value.groundColor.y);
-    case InspectorPropertyId::WorldBackdropGroundColorB: return FormatCompactFloat(value.groundColor.z);
     case InspectorPropertyId::WorldBackdropExposure: return FormatCompactFloat(value.exposure);
     case InspectorPropertyId::WorldBackdropPriority: return std::to_string(value.priority);
     default: return {};
@@ -2013,15 +1956,6 @@ template <typename Mutator>
 [[nodiscard]] std::string AmbientRadianceFieldText(const kb::scene::AmbientRadianceComponent& value, InspectorPropertyId property) {
     switch (property) {
     case InspectorPropertyId::AmbientRadianceMode: return std::to_string(static_cast<int>(value.mode));
-    case InspectorPropertyId::AmbientRadianceColorR: return FormatCompactFloat(value.color.x);
-    case InspectorPropertyId::AmbientRadianceColorG: return FormatCompactFloat(value.color.y);
-    case InspectorPropertyId::AmbientRadianceColorB: return FormatCompactFloat(value.color.z);
-    case InspectorPropertyId::AmbientRadianceHorizonColorR: return FormatCompactFloat(value.horizonColor.x);
-    case InspectorPropertyId::AmbientRadianceHorizonColorG: return FormatCompactFloat(value.horizonColor.y);
-    case InspectorPropertyId::AmbientRadianceHorizonColorB: return FormatCompactFloat(value.horizonColor.z);
-    case InspectorPropertyId::AmbientRadianceZenithColorR: return FormatCompactFloat(value.zenithColor.x);
-    case InspectorPropertyId::AmbientRadianceZenithColorG: return FormatCompactFloat(value.zenithColor.y);
-    case InspectorPropertyId::AmbientRadianceZenithColorB: return FormatCompactFloat(value.zenithColor.z);
     case InspectorPropertyId::AmbientRadianceEnvironmentAssetId: return std::to_string(value.environmentAssetId);
     case InspectorPropertyId::AmbientRadianceIntensity: return FormatCompactFloat(value.intensity);
     case InspectorPropertyId::AmbientRadianceDiffuseIntensity: return FormatCompactFloat(value.diffuseIntensity);
@@ -2409,26 +2343,11 @@ template <typename Mutator>
     return EditWorldBackdrop(sceneContext, entity, "Edit World Backdrop", [property, number](kb::scene::WorldBackdropComponent& value) {
         kb::scene::WorldBackdropComponent candidate = value;
         switch (property) {
-        case InspectorPropertyId::WorldBackdropColorR: candidate.color.x = number; break;
-        case InspectorPropertyId::WorldBackdropColorG: candidate.color.y = number; break;
-        case InspectorPropertyId::WorldBackdropColorB: candidate.color.z = number; break;
-        case InspectorPropertyId::WorldBackdropHorizonColorR: candidate.horizonColor.x = number; break;
-        case InspectorPropertyId::WorldBackdropHorizonColorG: candidate.horizonColor.y = number; break;
-        case InspectorPropertyId::WorldBackdropHorizonColorB: candidate.horizonColor.z = number; break;
-        case InspectorPropertyId::WorldBackdropZenithColorR: candidate.zenithColor.x = number; break;
-        case InspectorPropertyId::WorldBackdropZenithColorG: candidate.zenithColor.y = number; break;
-        case InspectorPropertyId::WorldBackdropZenithColorB: candidate.zenithColor.z = number; break;
         case InspectorPropertyId::WorldBackdropHorizonHeight: candidate.horizonHeight = number; break;
         case InspectorPropertyId::WorldBackdropGradientExponent: candidate.gradientExponent = number; break;
         case InspectorPropertyId::WorldBackdropSunSize: candidate.sunSize = number; break;
         case InspectorPropertyId::WorldBackdropSunSizeConvergence: candidate.sunSizeConvergence = number; break;
         case InspectorPropertyId::WorldBackdropAtmosphereThickness: candidate.atmosphereThickness = number; break;
-        case InspectorPropertyId::WorldBackdropSkyTintR: candidate.skyTint.x = number; break;
-        case InspectorPropertyId::WorldBackdropSkyTintG: candidate.skyTint.y = number; break;
-        case InspectorPropertyId::WorldBackdropSkyTintB: candidate.skyTint.z = number; break;
-        case InspectorPropertyId::WorldBackdropGroundColorR: candidate.groundColor.x = number; break;
-        case InspectorPropertyId::WorldBackdropGroundColorG: candidate.groundColor.y = number; break;
-        case InspectorPropertyId::WorldBackdropGroundColorB: candidate.groundColor.z = number; break;
         case InspectorPropertyId::WorldBackdropExposure: candidate.exposure = number; break;
         default: return false;
         }
@@ -2459,15 +2378,6 @@ template <typename Mutator>
     return EditAmbientRadiance(sceneContext, entity, "Edit Ambient Radiance", [property, number](kb::scene::AmbientRadianceComponent& value) {
         auto candidate = value;
         switch (property) {
-        case InspectorPropertyId::AmbientRadianceColorR: candidate.color.x = number; break;
-        case InspectorPropertyId::AmbientRadianceColorG: candidate.color.y = number; break;
-        case InspectorPropertyId::AmbientRadianceColorB: candidate.color.z = number; break;
-        case InspectorPropertyId::AmbientRadianceHorizonColorR: candidate.horizonColor.x = number; break;
-        case InspectorPropertyId::AmbientRadianceHorizonColorG: candidate.horizonColor.y = number; break;
-        case InspectorPropertyId::AmbientRadianceHorizonColorB: candidate.horizonColor.z = number; break;
-        case InspectorPropertyId::AmbientRadianceZenithColorR: candidate.zenithColor.x = number; break;
-        case InspectorPropertyId::AmbientRadianceZenithColorG: candidate.zenithColor.y = number; break;
-        case InspectorPropertyId::AmbientRadianceZenithColorB: candidate.zenithColor.z = number; break;
         case InspectorPropertyId::AmbientRadianceIntensity: candidate.intensity = number; break;
         case InspectorPropertyId::AmbientRadianceDiffuseIntensity: candidate.diffuseIntensity = number; break;
         case InspectorPropertyId::AmbientRadianceSpecularIntensity: candidate.specularIntensity = number; break;

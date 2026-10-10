@@ -28,6 +28,7 @@
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
+#include "inspection/InspectorSceneColor.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
@@ -1207,7 +1208,7 @@ void RunCameraInspectorSuite(Report& report) {
         actorRow != cameraRows.end() && actorRow->hasCamera,
         "LIB-135 Camera entity exposes the camera icon in Hierarchy");
 
-    const std::array<InspectorPropertyId, 13> properties{
+    const std::array<InspectorPropertyId, 11> properties{
         InspectorPropertyId::CameraProjection,
         InspectorPropertyId::CameraVerticalFov,
         InspectorPropertyId::CameraOrthographicHeight,
@@ -1218,9 +1219,7 @@ void RunCameraInspectorSuite(Report& report) {
         InspectorPropertyId::CameraPriority,
         InspectorPropertyId::CameraCullingMask,
         InspectorPropertyId::CameraClearMode,
-        InspectorPropertyId::CameraClearColorR,
-        InspectorPropertyId::CameraClearColorG,
-        InspectorPropertyId::CameraClearColorB,
+        InspectorPropertyId::CameraClearColor,
     };
     std::array<InspectorPanelRenderer::Hit, properties.size()> hits{};
     const auto expectedKind = [](InspectorPropertyId property) {
@@ -1229,10 +1228,9 @@ void RunCameraInspectorSuite(Report& report) {
         case InspectorPropertyId::CameraOrthographicHeight:
         case InspectorPropertyId::CameraNearClip:
         case InspectorPropertyId::CameraFarClip:
-        case InspectorPropertyId::CameraClearColorR:
-        case InspectorPropertyId::CameraClearColorG:
-        case InspectorPropertyId::CameraClearColorB:
             return InspectorHitKind::FloatField;
+        case InspectorPropertyId::CameraClearColor:
+            return InspectorHitKind::ColorField;
         case InspectorPropertyId::CameraPrimary:
             return InspectorHitKind::BoolField;
         default:
@@ -1368,10 +1366,11 @@ void RunCameraInspectorSuite(Report& report) {
         camera() != nullptr &&
             camera()->clearMode == kb::scene::CameraClearMode::DepthOnly,
         "LIB-136 Camera clear mode reaches the live component");
+    // The clear colour is one swatch; the picker hands its choice to InspectorSceneColor.
     report.Check(
-        editText(
-            hitFor(InspectorPropertyId::CameraClearColorG), "0.25", true),
-        "LIB-136 Camera clear-color edit is committed");
+        hitFor(InspectorPropertyId::CameraClearColor).kind == InspectorHitKind::ColorField &&
+            InspectorSceneColor::Apply(context, actor, InspectorPropertyId::CameraClearColor, { 0.1F, 0.25F, 0.5F }),
+        "LIB-136 Camera clear-color swatch edit is committed");
     report.Check(
         camera() != nullptr && std::abs(camera()->clearColor.y - 0.25F) < 0.001F,
         "LIB-136 Camera clear color reaches the live component");

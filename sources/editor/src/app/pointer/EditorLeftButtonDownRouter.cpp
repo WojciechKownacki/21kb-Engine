@@ -41,6 +41,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
+#include "inspection/InspectorSceneColor.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelLayout.hpp"
@@ -1637,6 +1638,23 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     return;
                 }
             }
+        }
+        if (hit.kind == InspectorHitKind::ColorField && InspectorSceneColor::IsColorProperty(hit.property)) {
+            // Scene colours are linear; the picker shows and returns sRGB, as Unity's does.
+            const auto entity = sceneContext_.SelectedEntity();
+            if (const auto linear = InspectorSceneColor::Read(sceneContext_, entity, hit.property)) {
+                POINT anchor{x, y};
+                ClientToScreen(messageWindow, &anchor);
+                const std::array<float, 4U> shown{ InspectorSceneColor::LinearToSrgb((*linear)[0]),
+                    InspectorSceneColor::LinearToSrgb((*linear)[1]), InspectorSceneColor::LinearToSrgb((*linear)[2]), 1.0F };
+                if (const auto picked = EditorMaterialColorPickerDialog::Show(mainWindow_, InspectorSceneColor::Label(hit.property), shown, &anchor)) {
+                    const std::array<float, 3U> chosen{ InspectorSceneColor::SrgbToLinear((*picked)[0]),
+                        InspectorSceneColor::SrgbToLinear((*picked)[1]), InspectorSceneColor::SrgbToLinear((*picked)[2]) };
+                    if (InspectorSceneColor::Apply(sceneContext_, entity, hit.property, chosen)) sceneViewport_.RequestPresent();
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
         }
         if (hit.kind == InspectorHitKind::ColorField) {
             const auto component = InspectorUIComponentModel::Component(hit.section);
