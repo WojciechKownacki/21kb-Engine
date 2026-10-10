@@ -1132,11 +1132,10 @@ struct CookerToolInputSnapshot {
         error = "project path could not be resolved";
         return {};
     }
-    if (std::filesystem::is_directory(path, pathError) && !pathError) {
-        path /= "Project.21kbproject";
-    }
-    if (pathError || !std::filesystem::is_regular_file(path, pathError) || pathError) {
-        error = "project descriptor was not found: " + path.generic_string();
+    std::string projectError;
+    path = kb::project::ProjectManager::FindProjectFile(path, projectError);
+    if (path.empty()) {
+        error = "project descriptor was not found: " + projectError;
         return {};
     }
     return path;
