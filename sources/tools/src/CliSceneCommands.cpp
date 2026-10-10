@@ -3,6 +3,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
@@ -75,32 +76,14 @@ namespace {
         }
         summary += name;
     };
-    if (node.components.camera.has_value()) {
-        append("Camera");
-    }
-    if (node.components.meshRenderer.has_value()) {
-        append("MeshRenderer");
-    }
-    if (node.components.light.has_value()) {
-        append("Light");
+    // The same component table the Inspector and `kb_cli component` use.
+    for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
+        if (kb::scene::SceneComponentAuthoring::InPrefabNode(node.components, kind.id)) {
+            append(kind.id);
+        }
     }
     if (node.components.input.has_value()) {
         append("Input");
-    }
-    if (node.components.rigidbody.has_value()) {
-        append("Rigidbody");
-    }
-    if (node.components.collider.has_value()) {
-        append("Collider");
-    }
-    if (node.components.tags.has_value()) {
-        append("Tags");
-    }
-    if (node.components.audioSource.has_value()) {
-        append("AudioSource");
-    }
-    if (node.components.audioListener.has_value()) {
-        append("AudioListener");
     }
     for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
         if (kb::scene::HasUIComponent(node.components.ui, descriptor.type)) {

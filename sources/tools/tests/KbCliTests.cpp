@@ -2051,6 +2051,42 @@ void RunNewCommandTests() {
     std::filesystem::remove_all(parent, error);
 }
 
+// An agent builds a scene without the editor: entities, transform in degrees, components and
+// their properties land in the project's startup scene.
+void RunEntityComponentCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "entity_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Scena" }).exitCode == 0, "new failed");
+    const std::string project = (parent / "Scena").string();
+
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--name", "Sun", "--position", "0,3,0",
+        "--rotation", "35,30,0" }).exitCode == 0, "entity add failed");
+    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "Light",
+        "--set", "intensity=2.5", "--set", "color=1,0.5,0.25" }).exitCode == 0, "component add with settings failed");
+    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "Light" }).exitCode != 0,
+        "a second Light must be refused");
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "Light",
+        "--set", "nosuch=1" }).exitCode != 0, "an unknown property must be refused");
+    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Nobody", "--type", "Camera" }).exitCode != 0,
+        "a missing entity must be refused");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneDocumentLoadResult loaded =
+        kb::scene::SceneDocumentService::Load(parent / "Scena" / "Assets" / "Scenes" / "Main.21kbscene");
+    Require(loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(scene, loaded.document), "scene could not be reloaded");
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    Require(roots.size() == 1U && scene.Entities().Name(roots.front()) == "Sun", "the scene must hold exactly the Sun");
+    const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(roots.front());
+    Require(transform != nullptr && std::abs(transform->localPosition.y - 3.0F) < 0.0001F, "position was not written");
+    const kb::math::Vec3 degrees = kb::math::ToEulerDegrees(transform->localRotation);
+    Require(std::abs(degrees.x - 35.0F) < 0.01F && std::abs(degrees.y - 30.0F) < 0.01F, "rotation was not written in degrees");
+    const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(roots.front());
+    Require(light != nullptr && std::abs(light->intensity - 2.5F) < 0.0001F && std::abs(light->color.y - 0.5F) < 0.0001F,
+        "light properties were not written");
+    std::filesystem::remove_all(parent, error);
+}
+
 void RunApiCommandTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -3012,6 +3048,7 @@ int main() {
     RunRunCommandTests();
     RunPlayerControllerTemplateTests();
     RunNewCommandTests();
+    RunEntityComponentCommandTests();
     RunApiCommandTests();
     RunApiCheckCommandTests();
     RunMcpCommandTests();

@@ -15,6 +15,16 @@ Usage: kb_cli <command> [options]
 Commands:
   new          Create an empty project, the same one the Hub creates.
                  --parent <dir> --name <Name>
+  entity       Add or remove a scene entity (the project's startup scene unless --scene).
+                 add --project <dir> [--scene <path>] --name <Name> [--parent <Name>]
+                     [--position x,y,z] [--rotation x,y,z (degrees)] [--scale x,y,z]
+                 remove --project <dir> [--scene <path>] --name <Name>
+  component    Add, set or remove a component of an entity.
+                 add|set|remove --project <dir> [--scene <path>] --entity <Name>
+                     --type <Component> [--set name=value ...]
+                 (vectors at once: --set localPosition=0,2,-8; Transform rotation in
+                 degrees: --set rotation=35,30,0)
+  schema       List components and their properties.
   api          Generate the script API contract (Lua stubs, Markdown, JSON).
                  --project <dir> | --out <dir> | --print markdown|json|lua
   api-check    Compare the current API surface against a committed baseline
@@ -128,6 +138,15 @@ int main(int argc, char** argv) {
     }
     if (command == "api-check") {
         return kb::cli::RunApiCheckCommand(arguments, io);
+    }
+    if (command == "entity") {
+        return kb::cli::RunEntityCommand(arguments, io);
+    }
+    if (command == "component") {
+        return kb::cli::RunComponentCommand(arguments, io);
+    }
+    if (command == "schema") {
+        return kb::cli::RunSchemaCommand(arguments, io);
     }
     if (command == "new") {
         return kb::cli::RunNewCommand(arguments, io);
