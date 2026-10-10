@@ -1,5 +1,6 @@
 #include "scene/EditorSceneContext.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/scene/SceneCreateMenu.hpp"
 #include "scene/EditorPlayCameraResolver.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
@@ -2412,18 +2413,7 @@ bool EditorSceneContext::ToggleEntityVisibility(kb::scene::SceneEntity entity) {
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateHierarchyObject() {
-    kb::scene::SceneEntity created{};
-    if (ExecuteSceneCommand("Create Entity", [this, &created]() {
-            created = EditorSceneHierarchyActions::CreateObject(*scene_);
-            if (!created.IsValid()) {
-                return false;
-            }
-            SelectEntity(created);
-            return true;
-        })) {
-        console_.Info("Hierarchy", "Entity created.");
-    }
-    return created;
+    return CreateMenuObject("Empty");
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateUIObject(kb::scene::UIComponentType type, kb::scene::SceneEntity parent) {
@@ -2467,37 +2457,39 @@ kb::scene::SceneEntity EditorSceneContext::CreateUIObject(kb::scene::UIComponent
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateLightObject(kb::scene::LightKind kind) {
-    const char* name = "Point Light";
-    const char* label = "Create Point Light";
     switch (kind) {
-    case kb::scene::LightKind::Directional:
-        name = "Directional Light";
-        label = "Create Directional Light";
-        break;
-    case kb::scene::LightKind::Spot:
-        name = "Spot Light";
-        label = "Create Spot Light";
-        break;
+    case kb::scene::LightKind::Directional: return CreateMenuObject("Directional Light");
+    case kb::scene::LightKind::Spot: return CreateMenuObject("Spot Light");
+    case kb::scene::LightKind::AreaRect: return CreateMenuObject("Area Light");
     case kb::scene::LightKind::Point:
-    default:
-        break;
+    default: return CreateMenuObject("Point Light");
     }
+}
 
+kb::scene::SceneEntity EditorSceneContext::CreateMenuObject(std::string_view id, kb::scene::SceneEntity parent) {
+    const kb::scene::SceneCreateItem* item = kb::scene::SceneCreateMenu::Find(id);
+    if (item == nullptr || (parent.IsValid() && !scene_->Entities().IsAlive(parent))) {
+        console_.Warning("Hierarchy", "Create ignored: unknown item '" + std::string{ id } + "' or missing parent.");
+        return {};
+    }
     kb::scene::SceneEntity created{};
-    if (ExecuteSceneCommand(label, [this, &created, kind, name]() {
-            kb::scene::SceneObjectDesc desc{};
-            desc.name = name;
-            created = scene_->Entities().CreateEntity(std::move(desc));
-            if (!created.IsValid()) {
+    std::string error;
+    if (ExecuteSceneCommand("Create " + std::string{ item->name }, [this, item, parent, &created, &error]() {
+            kb::scene::SceneCreateResult result = kb::scene::SceneCreateMenu::Create(*scene_, item->id,
+                EditorHierarchyObjectFactory::MakeUniqueName(*scene_, item->name), project_, parent);
+            if (!result.entity.IsValid()) {
+                error = std::move(result.error);
                 return false;
             }
-            kb::scene::LightComponent light{};
-            light.kind = kind;
-            scene_->Components().Lights().Set(created, light);
+            created = result.entity;
+            for (auto ancestor = scene_->Hierarchy().Parent(created); ancestor.IsValid(); ancestor = scene_->Hierarchy().Parent(ancestor))
+                hierarchyExpansion_.SetExpanded(ancestor, true);
             SelectEntity(created);
             return true;
         })) {
-        console_.Info("Hierarchy", std::string{ name } + " created.");
+        console_.Info("Hierarchy", std::string{ item->name } + " created.");
+    } else if (!error.empty()) {
+        console_.Warning("Hierarchy", "Create " + std::string{ item->name } + " refused: " + error);
     }
     return created;
 }

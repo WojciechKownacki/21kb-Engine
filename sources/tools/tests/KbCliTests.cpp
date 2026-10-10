@@ -23,6 +23,7 @@
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
+#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/security/ReleaseKeys.hpp"
 #include "engine/world/WorldCellIndex.hpp"
@@ -2107,6 +2108,25 @@ void RunEntityComponentCommandTests() {
             std::abs(sky->skyTint.y - 0.2F) < 0.0001F && std::abs(sky->exposure - 2.0F) < 0.0001F &&
             std::abs(sky->atmosphereThickness - 1.0F) < 0.0001F,
         "procedural sky settings were not saved");
+
+    // --create makes what the editor's Create menu makes: a Cube is the engine cube with a fitted collider.
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Cube", "--parent", "Sun" }).exitCode == 0,
+        "entity add --create Cube failed");
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Teapot" }).exitCode != 0,
+        "an unknown Create item must be refused");
+    kb::scene::Scene withCube;
+    const kb::scene::SceneDocumentLoadResult reloaded =
+        kb::scene::SceneDocumentService::Load(parent / "Scena" / "Assets" / "Scenes" / "Main.21kbscene");
+    Require(reloaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(withCube, reloaded.document), "scene could not be reloaded");
+    const std::vector<kb::scene::SceneEntity> sunRoots = withCube.Hierarchy().RootEntities();
+    Require(sunRoots.size() == 1U, "the Cube must be created under the Sun");
+    const auto cubes = withCube.Hierarchy().Children(withCube.Entities().Object(sunRoots.front()));
+    Require(cubes.size() == 1U && withCube.Entities().Name(cubes.front().Entity()) == "Cube", "the Cube was not created");
+    const kb::scene::MeshRendererComponent* cubeMesh = withCube.Components().MeshRenderers().TryGet(cubes.front().Entity());
+    const kb::scene::ColliderComponent* cubeCollider = withCube.Components().Colliders().TryGet(cubes.front().Entity());
+    Require(cubeMesh != nullptr && cubeMesh->meshAssetId == kb::assets::BuiltInShapeId(kb::assets::BuiltInShape::Cube).value &&
+            cubeCollider != nullptr && cubeCollider->shape == kb::scene::ColliderShape::Box,
+        "the Cube must be the engine cube with a box collider");
     std::filesystem::remove_all(parent, error);
 }
 

@@ -8,7 +8,7 @@
 #include "app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp"
 #include "app/project_files/EditorProjectFilesTransientUiController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
-#include "engine/scene/LightComponent.hpp"
+#include "engine/scene/SceneCreateMenu.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
@@ -16,18 +16,19 @@
 
 #include <algorithm>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace kb::editor {
 namespace {
 
 constexpr UINT_PTR kHierarchyMenuCreateUI = 2000;
-constexpr UINT_PTR kHierarchyMenuCreateEmpty = 1001;
+// + index into kb::scene::SceneCreateMenu::Items().
+constexpr UINT_PTR kHierarchyMenuCreateItem = 3000;
 constexpr UINT_PTR kHierarchyMenuDelete = 1002;
 constexpr UINT_PTR kHierarchyMenuDuplicate = 1003;
 constexpr UINT_PTR kHierarchyMenuRename = 1004;
-constexpr UINT_PTR kHierarchyMenuDirectionalLight = 1101;
-constexpr UINT_PTR kHierarchyMenuPointLight = 1102;
-constexpr UINT_PTR kHierarchyMenuSpotLight = 1103;
 constexpr UINT_PTR kSkeletonTreeMenuAddSocket = 1201;
 constexpr UINT_PTR kSkeletonTreeMenuRenameSocket = 1202;
 constexpr UINT_PTR kSkeletonTreeMenuDeleteSocket = 1203;
@@ -98,21 +99,39 @@ void AppendSeparator(HMENU menu) {
 HMENU EditorRightButtonDownRouter::CreateHierarchyMenu() {
     HMENU menu = CreatePopupMenu();
     HMENU create = CreatePopupMenu();
-    HMENU lights = CreatePopupMenu();
     HMENU widgets = CreatePopupMenu();
     HMENU layouts = CreatePopupMenu();
     HMENU effects = CreatePopupMenu();
     HMENU advanced = CreatePopupMenu();
-    if (!menu || !create || !lights || !widgets || !layouts || !effects || !advanced) {
-        for (const auto handle : {menu, create, lights, widgets, layouts, effects, advanced})
+    if (!menu || !create || !widgets || !layouts || !effects || !advanced) {
+        for (const auto handle : {menu, create, widgets, layouts, effects, advanced})
             if (handle) DestroyMenu(handle);
         return nullptr;
     }
-    AppendMenuA(create, MF_STRING, kHierarchyMenuCreateEmpty, "Entity\tCtrl+Shift+N");
-    AppendMenuA(lights, MF_STRING, kHierarchyMenuDirectionalLight, "Directional Light");
-    AppendMenuA(lights, MF_STRING, kHierarchyMenuPointLight, "Point Light");
-    AppendMenuA(lights, MF_STRING, kHierarchyMenuSpotLight, "Spot Light");
-    AppendMenuA(create, MF_POPUP, reinterpret_cast<UINT_PTR>(lights), "Lighting");
+    // The scene objects, in the order and grouping of kb::scene::SceneCreateMenu.
+    std::vector<std::pair<std::string_view, HMENU>> submenus;
+    const auto items = kb::scene::SceneCreateMenu::Items();
+    for (std::size_t index = 0U; index < items.size(); ++index) {
+        const kb::scene::SceneCreateItem& item = items[index];
+        std::string label{ item.label };
+        if (!item.hint.empty()) label += "\t" + std::string{ item.hint };
+        HMENU destination = create;
+        if (!item.submenu.empty()) {
+            auto found = std::ranges::find_if(submenus, [&item](const auto& entry) { return entry.first == item.submenu; });
+            if (found == submenus.end()) {
+                HMENU submenu = CreatePopupMenu();
+                if (!submenu) {
+                    // Destroying a menu destroys the submenus already appended to it.
+                    for (const auto handle : {menu, create, widgets, layouts, effects, advanced}) DestroyMenu(handle);
+                    return nullptr;
+                }
+                AppendMenuA(create, MF_POPUP, reinterpret_cast<UINT_PTR>(submenu), std::string{ item.submenu }.c_str());
+                found = submenus.insert(submenus.end(), { item.submenu, submenu });
+            }
+            destination = found->second;
+        }
+        AppendMenuA(destination, MF_STRING, kHierarchyMenuCreateItem + index, label.c_str());
+    }
     for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
         using enum kb::scene::UIComponentType;
         HMENU destination = widgets;
@@ -130,7 +149,7 @@ HMENU EditorRightButtonDownRouter::CreateHierarchyMenu() {
     AppendMenuA(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(layouts), "Layout");
     AppendMenuA(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(effects), "Effects");
     AppendMenuA(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(advanced), "Advanced");
-    AppendMenuA(create, MF_POPUP, reinterpret_cast<UINT_PTR>(widgets), "User Widget");
+    AppendMenuA(create, MF_POPUP, reinterpret_cast<UINT_PTR>(widgets), "User Interface");
     AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(create), "Create");
     AppendSeparator(menu);
     AppendMenuA(menu, MF_STRING, kHierarchyMenuDelete, "Delete\tDel");
@@ -148,21 +167,16 @@ bool EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(UINT command, Edit
         if (command == kHierarchyMenuCreateUI + static_cast<UINT>(descriptor.type))
             return sceneContext.CreateUIObject(descriptor.type, parent).IsValid();
     }
+    const auto items = kb::scene::SceneCreateMenu::Items();
+    if (command >= kHierarchyMenuCreateItem && command < kHierarchyMenuCreateItem + items.size())
+        return sceneContext.CreateMenuObject(items[command - kHierarchyMenuCreateItem].id, parent).IsValid();
     switch (command) {
-    case kHierarchyMenuCreateEmpty:
-        return sceneContext.CreateHierarchyObject().IsValid();
     case kHierarchyMenuDelete:
         return sceneContext.DeleteSelectedHierarchyEntity();
     case kHierarchyMenuDuplicate:
         return sceneContext.DuplicateSelectedHierarchyEntities();
     case kHierarchyMenuRename:
         return sceneContext.BeginHierarchyRename();
-    case kHierarchyMenuDirectionalLight:
-        return sceneContext.CreateLightObject(kb::scene::LightKind::Directional).IsValid();
-    case kHierarchyMenuPointLight:
-        return sceneContext.CreateLightObject(kb::scene::LightKind::Point).IsValid();
-    case kHierarchyMenuSpotLight:
-        return sceneContext.CreateLightObject(kb::scene::LightKind::Spot).IsValid();
     default:
         return false;
     }
