@@ -11,7 +11,7 @@ namespace {
 [[nodiscard]] std::vector<InspectorComponentTile> BuildTiles() {
     std::vector<InspectorComponentTile> tiles{
         InspectorComponentTile{ .id = "Camera", .category = "Rendering", .label = "Camera", .icon = HeroIconKind::Eye },
-        InspectorComponentTile{ .id = "3D Radiance Emitter", .category = "Rendering", .label = "3D Radiance Emitter", .icon = HeroIconKind::Bolt },
+        InspectorComponentTile{ .id = "Light", .category = "Rendering", .label = "Light", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "MeshRenderer", .category = "Rendering", .label = "Mesh Renderer", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Particle Effect", .category = "Rendering", .label = "Particle Effect", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "TerrainEditor", .category = "World", .label = "Terrain Editor", .icon = HeroIconKind::Cube },
@@ -25,8 +25,8 @@ namespace {
         InspectorComponentTile{ .id = "Geometry Swarm", .category = "Rendering", .label = "Geometry Swarm", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Surface Cast", .category = "Rendering", .label = "Surface Cast", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Facing Panel", .category = "Rendering", .label = "Facing Panel", .icon = HeroIconKind::Eye },
-        InspectorComponentTile{ .id = "Kreska przestrzenna", .category = "Rendering", .label = "Kreska przestrzenna", .icon = HeroIconKind::Cube },
-        InspectorComponentTile{ .id = "Wst\xC4\x99" "ga historii", .category = "Rendering", .label = "Wst\xC4\x99" "ga historii", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "Line Renderer", .category = "Rendering", .label = "Line Renderer", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "Trail Renderer", .category = "Rendering", .label = "Trail Renderer", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Tags", .category = "Scene", .label = "Object Classification", .icon = HeroIconKind::AdjustmentsHorizontal },
         InspectorComponentTile{ .id = "RegionShape", .category = "Scene", .label = "Region Shape", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "GuideCurve", .category = "Scene", .label = "Guide Curve", .icon = HeroIconKind::Cube },
@@ -142,6 +142,7 @@ std::vector<const InspectorComponentTile*> InspectorComponentCatalog::Search(std
 }
 
 const InspectorComponentTile* InspectorComponentCatalog::Find(std::string_view id) {
+    id = kb::scene::SceneComponentAuthoring::CanonicalName(id); // older names keep working
     const std::span<const InspectorComponentTile> tiles = Tiles();
     const auto iter = std::ranges::find_if(tiles, [id](const InspectorComponentTile& tile) {
         return tile.id == id;

@@ -42,6 +42,10 @@ public:
     SceneComponentAuthoring() = delete;
 
     [[nodiscard]] static std::span<const SceneComponentKind> Kinds() noexcept;
+    // The current name for an older one ("3D Radiance Emitter" -> "Light", the first Polish
+    // names -> "Line Renderer", "Trail Renderer", "Lens Flare"); other names come back as given.
+    // Scenes and scripts written with an older name keep working.
+    [[nodiscard]] static std::string_view CanonicalName(std::string_view id) noexcept;
     [[nodiscard]] static const SceneComponentKind* Find(std::string_view id) noexcept;
     [[nodiscard]] static bool Has(const Scene& scene, SceneEntity entity, std::string_view id);
     // Whether a saved scene/prefab node carries the component (no live scene needed).

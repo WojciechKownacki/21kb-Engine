@@ -3290,7 +3290,9 @@ void RunComponentInspectorDescCatalogTest() {
     const std::span<const std::string_view> scriptComponentNames = kb::script::ScriptSceneComponentApi::ComponentNames();
     const std::vector<kb::library::LibraryComponentInspectorDesc>& catalog = kb::library::EngineLibraryComponentInspectorRegistry::Catalog();
 
-    constexpr std::size_t compatibilityAliasCount = 1U;
+    // Older names still accepted: 3D Radiance Emitter (Light) and the first Polish names of
+    // Line Renderer, Trail Renderer and Lens Flare.
+    constexpr std::size_t compatibilityAliasCount = 4U;
     kb::tests::Require(catalog.size() + compatibilityAliasCount == scriptComponentNames.size(),
         "Engine21kbLibrary component inspector catalog plus its compatibility aliases must cover exactly the components ScriptSceneComponentApi.cpp gates Lua/VisualGraph access behind");
 
@@ -3325,11 +3327,13 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    // Light remains a public compatibility alias for 3D Radiance Emitter and
-    // intentionally reuses the canonical inspector metadata for its 16 fields.
+    // 3D Radiance Emitter remains a public compatibility alias for Light and
+    // intentionally reuses the canonical inspector metadata for its 16 fields; the
+    // older names of Line Renderer (10), Trail Renderer (9) and Lens Flare (7) do too.
+    // WorldBackdrop grew eleven procedural sky fields (Unity Skybox/Procedural).
     // Particle Effect contributes nine authoring and playback fields.
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
-    kb::tests::Require(fieldsChecked == 628U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (628, including the collision mesh and Light compatibility alias) across all components");
+    kb::tests::Require(fieldsChecked == 665U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (665, including the collision mesh and the compatibility aliases) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

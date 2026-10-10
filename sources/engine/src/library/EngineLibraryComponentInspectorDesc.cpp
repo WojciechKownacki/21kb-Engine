@@ -1,4 +1,5 @@
 #include "engine/library/EngineLibraryComponentInspectorDesc.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 
@@ -66,8 +67,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
-            .componentName = "3D Radiance Emitter",
-            .displayName = "3D Radiance Emitter",
+            .componentName = "Light",
+            .displayName = "Light",
             .category = "Rendering",
             .fields = {
                 LibraryComponentInspectorFieldDesc{ "kind", "Kind", "Directional, point, spot, rectangular, disk, or tube emitter type." },
@@ -469,8 +470,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
-            .componentName = "Kreska przestrzenna",
-            .displayName = "Kreska przestrzenna",
+            .componentName = "Line Renderer",
+            .displayName = "Line Renderer",
             .category = "Rendering",
             .fields = {
                 LibraryComponentInspectorFieldDesc{ "meshAssetId", "Mesh Asset", "Mesh expanded along the attached Guide Curve." },
@@ -486,8 +487,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
-            .componentName = "Wst\xC4\x99" "ga historii",
-            .displayName = "Wst\xC4\x99" "ga historii",
+            .componentName = "Trail Renderer",
+            .displayName = "Trail Renderer",
             .category = "Rendering",
             .fields = {
                 LibraryComponentInspectorFieldDesc{ "meshAssetId", "Mesh Asset", "Mesh used for generated ribbon segments." },
@@ -518,8 +519,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
-            .componentName = "Echo soczewki",
-            .displayName = "Echo soczewki",
+            .componentName = "Lens Flare",
+            .displayName = "Lens Flare",
             .category = "Rendering",
             .fields = {
                 LibraryComponentInspectorFieldDesc{ "sourceEntityId", "Source Entity", "Entity that defines the optical source position." },
@@ -554,9 +555,7 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
 }
 
 const LibraryComponentInspectorDesc* EngineLibraryComponentInspectorRegistry::Find(std::string_view componentName) noexcept {
-    if (componentName == "Light") {
-        componentName = "3D Radiance Emitter";
-    }
+    componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
     const std::vector<LibraryComponentInspectorDesc>& catalog = Catalog();
     const auto iterator = std::ranges::find_if(catalog, [componentName](const LibraryComponentInspectorDesc& desc) { return desc.componentName == componentName; });
     return iterator == catalog.end() ? nullptr : &*iterator;

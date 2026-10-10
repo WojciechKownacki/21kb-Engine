@@ -3,6 +3,7 @@
 #include "script/ScriptUIComponentApi.hpp"
 
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
@@ -278,7 +279,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 33> kComponentNames{
+constexpr std::array<std::string_view, 36> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -308,9 +309,13 @@ constexpr std::array<std::string_view, 33> kComponentNames{
     "Geometry Swarm",
     "Surface Cast",
     "Facing Panel",
+    "Line Renderer",
+    "Trail Renderer",
+    "Particle Effect",
+    "Lens Flare",
+    // Older names, still accepted (SceneComponentAuthoring::CanonicalName).
     "Kreska przestrzenna",
     "Wst\xC4\x99" "ga historii",
-    "Particle Effect",
     "Echo soczewki",
 };
 
@@ -1223,7 +1228,7 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
         kb::scene::CameraComponent* component = scene.Components().Cameras().TryGet(entity);
         return ComponentAccess{ component, component, kCameraFields, &MarkCameraModified };
     }
-    if (componentName == "3D Radiance Emitter" || componentName == "Light") {
+    if (componentName == "Light") {
         kb::scene::LightComponent* component = scene.Components().Lights().TryGet(entity);
         return ComponentAccess{ component, component, kLightFields, &MarkLightModified };
     }
@@ -1323,11 +1328,11 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
         kb::scene::FacingPanelComponent* component = scene.Components().FacingPanels().TryGet(entity);
         return ComponentAccess{ component, component, kFacingPanelFields, &MarkFacingPanelModified };
     }
-    if (componentName == "Kreska przestrzenna") {
+    if (componentName == "Line Renderer") {
         kb::scene::SpaceStrokeComponent* component = scene.Components().SpaceStrokes().TryGet(entity);
         return ComponentAccess{ component, component, kSpaceStrokeFields, &MarkSpaceStrokeModified };
     }
-    if (componentName == "Wst\xC4\x99" "ga historii") {
+    if (componentName == "Trail Renderer") {
         kb::scene::HistoryRibbonComponent* component = scene.Components().HistoryRibbons().TryGet(entity);
         return ComponentAccess{ component, component, kHistoryRibbonFields, &MarkHistoryRibbonModified };
     }
@@ -1335,7 +1340,7 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
         kb::scene::ParticleEffectComponent* component = scene.Components().ParticleEffects().TryGet(entity);
         return ComponentAccess{ component, component, kParticleEffectFields, &MarkParticleEffectModified };
     }
-    if (componentName == "Echo soczewki") {
+    if (componentName == "Lens Flare") {
         kb::scene::LensEchoComponent* component = scene.Components().LensEchoes().TryGet(entity);
         return ComponentAccess{ component, component, kLensEchoFields, &MarkLensEchoModified };
     }
@@ -1355,6 +1360,7 @@ std::span<const std::string_view> ScriptSceneComponentApi::ComponentNames() noex
 }
 
 std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::ComponentProperties(std::string_view componentName) noexcept {
+    componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
     if (ScriptUIComponentApi::IsComponent(componentName)) {
         return ScriptUIComponentApi::ComponentProperties(componentName);
     }
@@ -1380,14 +1386,14 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Geometry Swarm") return kGeometrySwarmPropertyDescs;
     if (componentName == "Surface Cast") return kSurfaceCastPropertyDescs;
     if (componentName == "Facing Panel") return kFacingPanelPropertyDescs;
-    if (componentName == "Kreska przestrzenna") return kSpaceStrokePropertyDescs;
-    if (componentName == "Wst\xC4\x99" "ga historii") return kHistoryRibbonPropertyDescs;
+    if (componentName == "Line Renderer") return kSpaceStrokePropertyDescs;
+    if (componentName == "Trail Renderer") return kHistoryRibbonPropertyDescs;
     if (componentName == "Particle Effect") return kParticleEffectPropertyDescs;
-    if (componentName == "Echo soczewki") return kLensEchoPropertyDescs;
+    if (componentName == "Lens Flare") return kLensEchoPropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }
-    if (componentName == "3D Radiance Emitter" || componentName == "Light") {
+    if (componentName == "Light") {
         return kLightPropertyDescs;
     }
     if (componentName == "MeshRenderer") {
@@ -1416,6 +1422,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
 }
 
 bool ScriptSceneComponentApi::HasComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
+    componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
     if (ScriptUIComponentApi::IsComponent(componentName)) {
         return ScriptUIComponentApi::HasComponent(scene, entity, componentName);
     }
@@ -1427,6 +1434,7 @@ ScriptSceneComponentPropertyResult ScriptSceneComponentApi::GetProperty(
     kb::scene::SceneEntity entity,
     std::string_view componentName,
     std::string_view propertyName) {
+    componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
     if (ScriptUIComponentApi::IsComponent(componentName)) {
         return ScriptUIComponentApi::GetProperty(scene, entity, componentName, propertyName);
     }
@@ -1453,6 +1461,7 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
     std::string_view componentName,
     std::string_view propertyName,
     const ScriptValue& value) {
+    componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
     if (ScriptUIComponentApi::IsComponent(componentName)) {
         return ScriptUIComponentApi::SetProperty(scene, entity, componentName, propertyName, value);
     }
@@ -1518,17 +1527,17 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
         if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
         if (!kb::scene::IsFacingPanelComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Facing Panel values must remain valid" };
     }
-    if (componentName == "Kreska przestrzenna") {
+    if (componentName == "Line Renderer") {
         const kb::scene::SpaceStrokeComponent& stroke = *static_cast<const kb::scene::SpaceStrokeComponent*>(component.immutable);
         kb::scene::SpaceStrokeComponent candidate = stroke;
         if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
-        if (!kb::scene::IsSpaceStrokeComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Kreska przestrzenna values must remain valid" };
+        if (!kb::scene::IsSpaceStrokeComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Line Renderer values must remain valid" };
     }
-    if (componentName == "Wst\xC4\x99" "ga historii") {
+    if (componentName == "Trail Renderer") {
         const kb::scene::HistoryRibbonComponent& ribbon = *static_cast<const kb::scene::HistoryRibbonComponent*>(component.immutable);
         kb::scene::HistoryRibbonComponent candidate = ribbon;
         if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
-        if (!kb::scene::IsHistoryRibbonComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Wst\xC4\x99" "ga historii values must remain valid" };
+        if (!kb::scene::IsHistoryRibbonComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Trail Renderer values must remain valid" };
     }
     if (componentName == "WorldBackdrop") {
         kb::scene::WorldBackdropComponent candidate = *static_cast<const kb::scene::WorldBackdropComponent*>(component.immutable);
@@ -1544,11 +1553,11 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
         if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
         if (!kb::scene::IsParticleEffectComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Particle Effect values must remain valid" };
     }
-    if (componentName == "Echo soczewki") {
+    if (componentName == "Lens Flare") {
         const kb::scene::LensEchoComponent& echo = *static_cast<const kb::scene::LensEchoComponent*>(component.immutable);
         kb::scene::LensEchoComponent candidate = echo;
         if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
-        if (!kb::scene::IsLensEchoComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Echo soczewki values must remain valid" };
+        if (!kb::scene::IsLensEchoComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Lens Flare values must remain valid" };
     }
 
     if (!field->write(component.mutableComponent, value)) {
