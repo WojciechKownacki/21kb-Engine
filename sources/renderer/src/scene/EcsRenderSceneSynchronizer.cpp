@@ -198,6 +198,13 @@ namespace {
                 .environmentAssetId = backdrop.environmentAssetId,
                 .horizonHeight = backdrop.horizonHeight,
                 .gradientExponent = backdrop.gradientExponent,
+                .sunDisk = static_cast<std::uint32_t>(backdrop.sunDisk),
+                .sunSize = backdrop.sunSize,
+                .sunSizeConvergence = backdrop.sunSizeConvergence,
+                .atmosphereThickness = backdrop.atmosphereThickness,
+                .skyTint = { backdrop.skyTint.x, backdrop.skyTint.y, backdrop.skyTint.z },
+                .groundColor = { backdrop.groundColor.x, backdrop.groundColor.y, backdrop.groundColor.z },
+                .exposure = backdrop.exposure,
             };
             if (!selected.has_value() || backdrop.priority > selected->priority ||
                 (backdrop.priority == selected->priority && candidate.entityId < selected->desc.entityId)) {

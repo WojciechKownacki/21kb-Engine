@@ -27,8 +27,10 @@ uniform vec4 u_deferredEnvironmentGround;
 uniform vec4 u_deferredEnvironmentParams;
 uniform mat4 u_deferredShadowViewProj;
 uniform vec4 u_deferredShadowParams;
-// x: 1 vertical gradient, 2 equirectangular environment map, 3 procedural sky;
-// y: horizon offset (sine of the elevation), z: gradient exponent.
+// x: 1 vertical gradient, 2 equirectangular environment map, 3 procedural sky.
+// Gradient: horizon/zenith colours, y = horizon offset (sine of the elevation), z = exponent.
+// Procedural sky: horizon = ground colour + sun disc (0 none, 1 simple, 2 high quality),
+// zenith = sky tint + exposure, y = sun size, z = sun size convergence, w = atmosphere thickness.
 uniform vec4 u_deferredBackdropHorizon;
 uniform vec4 u_deferredBackdropZenith;
 uniform vec4 u_deferredBackdropParams;
@@ -36,9 +38,7 @@ uniform vec4 u_deferredBackdropParams;
 uniform vec4 u_deferredBackdropSun;
 uniform vec4 u_deferredBackdropSunColor;
 
-// Procedural sky after Unity's Skybox/Procedural (O'Neil, GPU Gems 2, ch. 16), with its default
-// settings: sky tint 0.5, ground (0.369, 0.349, 0.341), exposure 1.3, sun size 0.04, convergence 5,
-// atmosphere thickness 1.
+// Procedural sky after Unity's Skybox/Procedural (O'Neil, GPU Gems 2, ch. 16).
 float KbSkyScale(float inCos)
 {
     float x = 1.0 - inCos;
@@ -52,26 +52,32 @@ vec3 KbProceduralSky(vec3 eyeRay, vec3 sunDirection, vec3 sunLight, float hasSun
     const float kInnerRadius = 1.0;
     const float kInnerRadius2 = 1.0;
     const float kCameraHeight = 0.0001;
-    const float kRayleigh = 0.0025;
     const float kMie = 0.0010;
     const float kSunBrightness = 20.0;
     const float kMaxScatter = 50.0;
     const float kScale = 40.0;               // 1 / (kOuterRadius - 1)
     const float kScaleDepth = 0.25;
     const float kScaleOverScaleDepth = 160.0; // kScale / kScaleDepth
-    const float kExposure = 1.3;
-    const float kSunSize = 0.04;
-    const float kSunSizeConvergence = 5.0;
     const float kMieG = -0.990;
     const float kMieG2 = 0.9801;
     const float kPi = 3.14159265;
+    vec3 groundColor = u_deferredBackdropHorizon.rgb;
+    float sunDisk = u_deferredBackdropHorizon.w;
+    vec3 skyTint = u_deferredBackdropZenith.rgb;
+    float exposure = u_deferredBackdropZenith.w;
+    float sunSize = u_deferredBackdropParams.y;
+    float sunSizeConvergence = u_deferredBackdropParams.z;
+    float kRayleigh = mix(0.0, 0.0025, pow(max(u_deferredBackdropParams.w, 0.0), 2.5));
 
-    vec3 invWavelength = vec3(1.0, 1.0, 1.0) / pow(vec3(0.65, 0.57, 0.475), vec3(4.0, 4.0, 4.0));
+    // The tint steers the scattering wavelengths in gamma space, so 0.5 keeps the default sky.
+    vec3 tintInGamma = pow(max(skyTint, vec3_splat(0.0)), vec3_splat(1.0 / 2.2));
+    vec3 wavelength = mix(vec3(0.65, 0.57, 0.475) - vec3_splat(0.15), vec3(0.65, 0.57, 0.475) + vec3_splat(0.15),
+        vec3_splat(1.0) - tintInGamma);
+    vec3 invWavelength = vec3_splat(1.0) / pow(max(wavelength, vec3_splat(0.001)), vec3_splat(4.0));
     float krESun = kRayleigh * kSunBrightness;
     float kr4Pi = kRayleigh * 4.0 * kPi;
     float kmESun = kMie * kSunBrightness;
     float km4Pi = kMie * 4.0 * kPi;
-    vec3 groundColor = vec3(0.1119, 0.0999, 0.0953); // sRGB (0.369, 0.349, 0.341)
     vec3 cameraPos = vec3(0.0, kInnerRadius + kCameraHeight, 0.0);
     vec3 cIn;
     vec3 cOut;
@@ -115,16 +121,23 @@ vec3 KbProceduralSky(vec3 eyeRay, vec3 sunDirection, vec3 sunLight, float hasSun
         cOut = clamp(attenuate, 0.0, 1.0);
     }
     float eyeCos = dot(sunDirection, eyeRay);
-    vec3 sky = kExposure * (cIn * (0.75 + 0.75 * eyeCos * eyeCos));
-    vec3 ground = kExposure * (cIn + groundColor * cOut);
+    vec3 sky = exposure * (cIn * (0.75 + 0.75 * eyeCos * eyeCos));
+    vec3 ground = exposure * (cIn + groundColor * cOut);
     vec3 color = mix(sky, ground, clamp(-eyeRay.y / 0.02, 0.0, 1.0));
-    if (eyeRay.y > 0.0 && hasSun > 0.5) {
+    if (eyeRay.y > 0.0 && hasSun > 0.5 && sunDisk > 0.5) {
+        // Bright even under a dim light, matching a specular highlight of the same sun.
         float lightIntensity = clamp(length(sunLight), 0.25, 1.0);
-        vec3 sunColor = 15.0 * clamp(cOut, 0.0, 1.0) * sunLight / lightIntensity;
-        float focused = pow(clamp(eyeCos, 0.0, 1.0), kSunSizeConvergence);
-        float mie = 1.0 + kMieG2 - 2.0 * kMieG * (-focused);
-        mie = max(pow(mie, pow(kSunSize, 0.65) * 10.0), 0.0001);
-        color += sunColor * (1.5 * ((1.0 - kMieG2) / (2.0 + kMieG2)) * (1.0 + focused * focused) / mie);
+        if (sunDisk < 1.5) {
+            vec3 sunColor = 27.0 * clamp(cOut * 8000.0, 0.0, 1.0) * sunLight / lightIntensity;
+            float spot = 1.0 - smoothstep(0.0, sunSize, length(sunDirection - eyeRay));
+            color += sunColor * (spot * spot);
+        } else {
+            vec3 sunColor = 15.0 * clamp(cOut, 0.0, 1.0) * sunLight / lightIntensity;
+            float focused = pow(clamp(eyeCos, 0.0, 1.0), sunSizeConvergence);
+            float mie = max(1.0 + kMieG2 - 2.0 * kMieG * (-focused), 0.0001);
+            mie = max(pow(mie, pow(max(sunSize, 0.0), 0.65) * 10.0), 0.0001);
+            color += sunColor * (1.5 * ((1.0 - kMieG2) / (2.0 + kMieG2)) * (1.0 + focused * focused) / mie);
+        }
     }
     return color;
 }

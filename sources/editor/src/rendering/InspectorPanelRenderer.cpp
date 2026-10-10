@@ -1809,23 +1809,76 @@ void PaintStreamFocusSection(HDC dc, RECT content, int& y, const EditorTheme& th
     return "Invalid";
 }
 
+[[nodiscard]] const char* WorldBackdropSunDiskName(kb::scene::WorldBackdropSunDisk sunDisk) noexcept {
+    switch (sunDisk) {
+    case kb::scene::WorldBackdropSunDisk::None: return "None";
+    case kb::scene::WorldBackdropSunDisk::Simple: return "Simple";
+    case kb::scene::WorldBackdropSunDisk::HighQuality: return "High Quality";
+    }
+    return "Unknown";
+}
+
+// The rows a backdrop mode uses, shared by painting, section height and hit testing. Like
+// Unity's skybox materials, every mode shows only its own settings.
+[[nodiscard]] std::span<const InspectorPropertyId> WorldBackdropRows(kb::scene::WorldBackdropMode mode) noexcept {
+    static constexpr std::array<InspectorPropertyId, 6> kSolidColor{ InspectorPropertyId::WorldBackdropMode,
+        InspectorPropertyId::WorldBackdropColorR, InspectorPropertyId::WorldBackdropColorG, InspectorPropertyId::WorldBackdropColorB,
+        InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
+    static constexpr std::array<InspectorPropertyId, 11> kVerticalGradient{ InspectorPropertyId::WorldBackdropMode,
+        InspectorPropertyId::WorldBackdropHorizonColorR, InspectorPropertyId::WorldBackdropHorizonColorG, InspectorPropertyId::WorldBackdropHorizonColorB,
+        InspectorPropertyId::WorldBackdropZenithColorR, InspectorPropertyId::WorldBackdropZenithColorG, InspectorPropertyId::WorldBackdropZenithColorB,
+        InspectorPropertyId::WorldBackdropHorizonHeight, InspectorPropertyId::WorldBackdropGradientExponent,
+        InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
+    static constexpr std::array<InspectorPropertyId, 4> kEnvironmentMap{ InspectorPropertyId::WorldBackdropMode,
+        InspectorPropertyId::WorldBackdropEnvironmentAssetId, InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
+    static constexpr std::array<InspectorPropertyId, 14> kProceduralSky{ InspectorPropertyId::WorldBackdropMode,
+        InspectorPropertyId::WorldBackdropSunDisk, InspectorPropertyId::WorldBackdropSunSize, InspectorPropertyId::WorldBackdropSunSizeConvergence,
+        InspectorPropertyId::WorldBackdropAtmosphereThickness,
+        InspectorPropertyId::WorldBackdropSkyTintR, InspectorPropertyId::WorldBackdropSkyTintG, InspectorPropertyId::WorldBackdropSkyTintB,
+        InspectorPropertyId::WorldBackdropGroundColorR, InspectorPropertyId::WorldBackdropGroundColorG, InspectorPropertyId::WorldBackdropGroundColorB,
+        InspectorPropertyId::WorldBackdropExposure, InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
+    switch (mode) {
+    case kb::scene::WorldBackdropMode::SolidColor: return kSolidColor;
+    case kb::scene::WorldBackdropMode::VerticalGradient: return kVerticalGradient;
+    case kb::scene::WorldBackdropMode::EnvironmentMap: return kEnvironmentMap;
+    case kb::scene::WorldBackdropMode::ProceduralSky: return kProceduralSky;
+    }
+    return kSolidColor;
+}
+
 void PaintWorldBackdropSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::WorldBackdropComponent& backdrop) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::WorldBackdrop, HeroIconKind::Eye, "World Backdrop", true);
-    section.Field("Mode", WorldBackdropModeName(backdrop.mode), InspectorPropertyId::WorldBackdropMode);
-    section.Field("Color R", FormatFloat(backdrop.color.x, 3), InspectorPropertyId::WorldBackdropColorR);
-    section.Field("Color G", FormatFloat(backdrop.color.y, 3), InspectorPropertyId::WorldBackdropColorG);
-    section.Field("Color B", FormatFloat(backdrop.color.z, 3), InspectorPropertyId::WorldBackdropColorB);
-    section.Field("Horizon R", FormatFloat(backdrop.horizonColor.x, 3), InspectorPropertyId::WorldBackdropHorizonColorR);
-    section.Field("Horizon G", FormatFloat(backdrop.horizonColor.y, 3), InspectorPropertyId::WorldBackdropHorizonColorG);
-    section.Field("Horizon B", FormatFloat(backdrop.horizonColor.z, 3), InspectorPropertyId::WorldBackdropHorizonColorB);
-    section.Field("Zenith R", FormatFloat(backdrop.zenithColor.x, 3), InspectorPropertyId::WorldBackdropZenithColorR);
-    section.Field("Zenith G", FormatFloat(backdrop.zenithColor.y, 3), InspectorPropertyId::WorldBackdropZenithColorG);
-    section.Field("Zenith B", FormatFloat(backdrop.zenithColor.z, 3), InspectorPropertyId::WorldBackdropZenithColorB);
-    section.Field("Environment Asset", std::to_string(backdrop.environmentAssetId), InspectorPropertyId::WorldBackdropEnvironmentAssetId);
-    section.Field("Horizon Height", FormatFloat(backdrop.horizonHeight, 3), InspectorPropertyId::WorldBackdropHorizonHeight);
-    section.Field("Gradient Exponent", FormatFloat(backdrop.gradientExponent, 3), InspectorPropertyId::WorldBackdropGradientExponent);
-    section.Field("Priority", std::to_string(backdrop.priority), InspectorPropertyId::WorldBackdropPriority);
-    section.Bool("Enabled", backdrop.enabled, InspectorPropertyId::WorldBackdropEnabled);
+    for (const InspectorPropertyId property : WorldBackdropRows(backdrop.mode)) {
+        switch (property) {
+        case InspectorPropertyId::WorldBackdropMode: section.Field("Mode", WorldBackdropModeName(backdrop.mode), property); break;
+        case InspectorPropertyId::WorldBackdropColorR: section.Field("Color R", FormatFloat(backdrop.color.x, 3), property); break;
+        case InspectorPropertyId::WorldBackdropColorG: section.Field("Color G", FormatFloat(backdrop.color.y, 3), property); break;
+        case InspectorPropertyId::WorldBackdropColorB: section.Field("Color B", FormatFloat(backdrop.color.z, 3), property); break;
+        case InspectorPropertyId::WorldBackdropHorizonColorR: section.Field("Horizon R", FormatFloat(backdrop.horizonColor.x, 3), property); break;
+        case InspectorPropertyId::WorldBackdropHorizonColorG: section.Field("Horizon G", FormatFloat(backdrop.horizonColor.y, 3), property); break;
+        case InspectorPropertyId::WorldBackdropHorizonColorB: section.Field("Horizon B", FormatFloat(backdrop.horizonColor.z, 3), property); break;
+        case InspectorPropertyId::WorldBackdropZenithColorR: section.Field("Zenith R", FormatFloat(backdrop.zenithColor.x, 3), property); break;
+        case InspectorPropertyId::WorldBackdropZenithColorG: section.Field("Zenith G", FormatFloat(backdrop.zenithColor.y, 3), property); break;
+        case InspectorPropertyId::WorldBackdropZenithColorB: section.Field("Zenith B", FormatFloat(backdrop.zenithColor.z, 3), property); break;
+        case InspectorPropertyId::WorldBackdropEnvironmentAssetId: section.Field("Environment Asset", std::to_string(backdrop.environmentAssetId), property); break;
+        case InspectorPropertyId::WorldBackdropHorizonHeight: section.Field("Horizon Height", FormatFloat(backdrop.horizonHeight, 3), property); break;
+        case InspectorPropertyId::WorldBackdropGradientExponent: section.Field("Gradient Exponent", FormatFloat(backdrop.gradientExponent, 3), property); break;
+        case InspectorPropertyId::WorldBackdropSunDisk: section.Field("Sun Disk", WorldBackdropSunDiskName(backdrop.sunDisk), property); break;
+        case InspectorPropertyId::WorldBackdropSunSize: section.Field("Sun Size", FormatFloat(backdrop.sunSize, 3), property); break;
+        case InspectorPropertyId::WorldBackdropSunSizeConvergence: section.Field("Sun Size Convergence", FormatFloat(backdrop.sunSizeConvergence, 2), property); break;
+        case InspectorPropertyId::WorldBackdropAtmosphereThickness: section.Field("Atmosphere Thickness", FormatFloat(backdrop.atmosphereThickness, 2), property); break;
+        case InspectorPropertyId::WorldBackdropSkyTintR: section.Field("Sky Tint R", FormatFloat(backdrop.skyTint.x, 3), property); break;
+        case InspectorPropertyId::WorldBackdropSkyTintG: section.Field("Sky Tint G", FormatFloat(backdrop.skyTint.y, 3), property); break;
+        case InspectorPropertyId::WorldBackdropSkyTintB: section.Field("Sky Tint B", FormatFloat(backdrop.skyTint.z, 3), property); break;
+        case InspectorPropertyId::WorldBackdropGroundColorR: section.Field("Ground R", FormatFloat(backdrop.groundColor.x, 3), property); break;
+        case InspectorPropertyId::WorldBackdropGroundColorG: section.Field("Ground G", FormatFloat(backdrop.groundColor.y, 3), property); break;
+        case InspectorPropertyId::WorldBackdropGroundColorB: section.Field("Ground B", FormatFloat(backdrop.groundColor.z, 3), property); break;
+        case InspectorPropertyId::WorldBackdropExposure: section.Field("Exposure", FormatFloat(backdrop.exposure, 2), property); break;
+        case InspectorPropertyId::WorldBackdropPriority: section.Field("Priority", std::to_string(backdrop.priority), property); break;
+        case InspectorPropertyId::WorldBackdropEnabled: section.Bool("Enabled", backdrop.enabled, property); break;
+        default: break;
+        }
+    }
     y = section.Bottom() + kSectionGap;
 }
 
@@ -3390,7 +3443,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         if (y < content.bottom && y + h > content.top) PaintStreamFocusSection(dc, content, y, theme, inspector, *streamFocus); else y += h + kSectionGap;
     }
     if (const kb::scene::WorldBackdropComponent* backdrop = scene.Components().WorldBackdrops().TryGet(selected); backdrop != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::WorldBackdrop, 15);
+        const int h = SectionHeight(inspector, InspectorSectionId::WorldBackdrop, static_cast<int>(WorldBackdropRows(backdrop->mode).size()));
         if (y < content.bottom && y + h > content.top) PaintWorldBackdropSection(dc, content, y, theme, inspector, *backdrop); else y += h + kSectionGap;
     }
     if (const kb::scene::AmbientRadianceComponent* ambient = scene.Components().AmbientRadiances().TryGet(selected); ambient != nullptr) {
@@ -3737,7 +3790,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().GuideCurves().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::GuideCurve, 4) + kSectionGap;
     if (scene.Components().ContentInstances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::ContentInstance, 4) + kSectionGap;
     if (scene.Components().StreamFocuses().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::StreamFocus, 5) + kSectionGap;
-    if (scene.Components().WorldBackdrops().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::WorldBackdrop, 15) + kSectionGap;
+    if (const kb::scene::WorldBackdropComponent* backdrop = scene.Components().WorldBackdrops().TryGet(selected); backdrop != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::WorldBackdrop, static_cast<int>(WorldBackdropRows(backdrop->mode).size())) + kSectionGap;
+    }
     if (scene.Components().AmbientRadiances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::AmbientRadiance, 16) + kSectionGap;
     if (scene.Components().DetailSwitches().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::DetailSwitch, 6) + kSectionGap;
     if (scene.Components().VisibilityBlockers().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityBlocker, 7) + kSectionGap;
@@ -5235,11 +5290,10 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
         }
     }
-    if (sceneContext.Scene().Components().WorldBackdrops().Has(selected)) {
+    if (const kb::scene::WorldBackdropComponent* backdrop = sceneContext.Scene().Components().WorldBackdrops().TryGet(selected); backdrop != nullptr) {
         if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::WorldBackdrop, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
         if (!state.IsCollapsed(InspectorSectionId::WorldBackdrop)) {
-            constexpr std::array<InspectorPropertyId, 15> properties{ InspectorPropertyId::WorldBackdropMode, InspectorPropertyId::WorldBackdropColorR, InspectorPropertyId::WorldBackdropColorG, InspectorPropertyId::WorldBackdropColorB, InspectorPropertyId::WorldBackdropHorizonColorR, InspectorPropertyId::WorldBackdropHorizonColorG, InspectorPropertyId::WorldBackdropHorizonColorB, InspectorPropertyId::WorldBackdropZenithColorR, InspectorPropertyId::WorldBackdropZenithColorG, InspectorPropertyId::WorldBackdropZenithColorB, InspectorPropertyId::WorldBackdropEnvironmentAssetId, InspectorPropertyId::WorldBackdropHorizonHeight, InspectorPropertyId::WorldBackdropGradientExponent, InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
-            for (const InspectorPropertyId property : properties) {
+            for (const InspectorPropertyId property : WorldBackdropRows(backdrop->mode)) {
                 const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::WorldBackdropEnabled
                     ? HitBool(RowRect(viewport, y), InspectorSectionId::WorldBackdrop, property, x, scrolledY)
                     : HitTextRow(RowRect(viewport, y), InspectorSectionId::WorldBackdrop, property, x, scrolledY);

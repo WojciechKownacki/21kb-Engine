@@ -1,5 +1,7 @@
 #include "scene/asset/io/SceneAssetComponentCodec.hpp"
 
+#include "engine/scene/SceneDocument.hpp"
+
 #include "scene/asset/io/SceneAssetPrimitiveCodec.hpp"
 
 #include "scene/asset/io/components/SceneAssetAudioComponentCodec.hpp"
@@ -374,6 +376,13 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
             !input.ReadUInt64(backdrop.environmentAssetId) || !input.ReadFloat(backdrop.horizonHeight) ||
             !input.ReadFloat(backdrop.gradientExponent) || !input.ReadInt32(backdrop.priority) ||
             !input.ReadBool(backdrop.enabled)) return false;
+        if (fileVersion >= SceneDocument::ProceduralSkySettingsFileVersion) {
+            std::uint32_t sunDisk = 0U;
+            if (!input.ReadUInt32(sunDisk) || !input.ReadFloat(backdrop.sunSize) || !input.ReadFloat(backdrop.sunSizeConvergence) ||
+                !input.ReadFloat(backdrop.atmosphereThickness) || !SceneAssetPrimitiveCodec::ReadVec3(input, backdrop.skyTint) ||
+                !SceneAssetPrimitiveCodec::ReadVec3(input, backdrop.groundColor) || !input.ReadFloat(backdrop.exposure)) return false;
+            backdrop.sunDisk = static_cast<WorldBackdropSunDisk>(sunDisk);
+        }
         backdrop.mode = static_cast<WorldBackdropMode>(mode);
         if (!IsWorldBackdropComponentValid(backdrop)) return false;
         output.worldBackdrop = backdrop;
@@ -699,6 +708,13 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteFloat(output, backdrop.gradientExponent);
         SceneAssetBinaryIO::WriteInt32(output, backdrop.priority);
         SceneAssetBinaryIO::WriteBool(output, backdrop.enabled);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(backdrop.sunDisk));
+        SceneAssetBinaryIO::WriteFloat(output, backdrop.sunSize);
+        SceneAssetBinaryIO::WriteFloat(output, backdrop.sunSizeConvergence);
+        SceneAssetBinaryIO::WriteFloat(output, backdrop.atmosphereThickness);
+        SceneAssetPrimitiveCodec::WriteVec3(output, backdrop.skyTint);
+        SceneAssetPrimitiveCodec::WriteVec3(output, backdrop.groundColor);
+        SceneAssetBinaryIO::WriteFloat(output, backdrop.exposure);
     }
     if (components.ambientRadiance.has_value()) {
         const AmbientRadianceComponent& ambient = *components.ambientRadiance;

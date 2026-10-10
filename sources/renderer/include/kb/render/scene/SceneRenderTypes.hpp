@@ -73,6 +73,14 @@ struct SceneRenderWorldBackdrop {
     std::uint64_t environmentAssetId = 0U;
     float horizonHeight = 0.0F;
     float gradientExponent = 1.0F;
+    // ProceduralSky only; mirrors WorldBackdropComponent (0 no sun disc, 1 simple, 2 high quality).
+    std::uint32_t sunDisk = 2U;
+    float sunSize = 0.04F;
+    float sunSizeConvergence = 5.0F;
+    float atmosphereThickness = 1.0F;
+    std::array<float, 3> skyTint{ 0.2140F, 0.2140F, 0.2140F };
+    std::array<float, 3> groundColor{ 0.1119F, 0.0999F, 0.0953F };
+    float exposure = 1.3F;
 };
 
 enum class SceneRenderAmbientRadianceMode : std::uint8_t {

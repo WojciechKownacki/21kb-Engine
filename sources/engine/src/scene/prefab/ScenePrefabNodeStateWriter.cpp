@@ -109,7 +109,10 @@ namespace {
     return lhs.mode == rhs.mode && Equals(lhs.color, rhs.color) && Equals(lhs.horizonColor, rhs.horizonColor) &&
         Equals(lhs.zenithColor, rhs.zenithColor) && lhs.environmentAssetId == rhs.environmentAssetId &&
         lhs.horizonHeight == rhs.horizonHeight && lhs.gradientExponent == rhs.gradientExponent &&
-        lhs.priority == rhs.priority && lhs.enabled == rhs.enabled;
+        lhs.priority == rhs.priority && lhs.enabled == rhs.enabled && lhs.sunDisk == rhs.sunDisk &&
+        lhs.sunSize == rhs.sunSize && lhs.sunSizeConvergence == rhs.sunSizeConvergence &&
+        lhs.atmosphereThickness == rhs.atmosphereThickness && Equals(lhs.skyTint, rhs.skyTint) &&
+        Equals(lhs.groundColor, rhs.groundColor) && lhs.exposure == rhs.exposure;
 }
 
 [[nodiscard]] bool Equals(const AmbientRadianceComponent& lhs, const AmbientRadianceComponent& rhs) noexcept {

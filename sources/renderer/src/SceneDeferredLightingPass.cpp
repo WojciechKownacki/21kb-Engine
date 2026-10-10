@@ -416,17 +416,24 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     const bool environmentBackdrop = desc.worldBackdrop != nullptr &&
         desc.worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap &&
         bgfx::isValid(desc.worldBackdropEnvironment);
-    const std::array<float, 4> backdropHorizon = gradientBackdrop
-        ? std::array<float, 4>{ desc.worldBackdrop->horizonColor[0], desc.worldBackdrop->horizonColor[1], desc.worldBackdrop->horizonColor[2], 1.0F }
-        : std::array<float, 4>{};
-    const std::array<float, 4> backdropZenith = gradientBackdrop
-        ? std::array<float, 4>{ desc.worldBackdrop->zenithColor[0], desc.worldBackdrop->zenithColor[1], desc.worldBackdrop->zenithColor[2], 1.0F }
-        : std::array<float, 4>{};
     // x: 1 gradient, 2 environment map, 3 procedural sky (Unity's Skybox/Procedural model).
+    // The procedural sky reuses the gradient slots: horizon = ground colour + sun disc,
+    // zenith = sky tint + exposure, params = sun size, convergence, atmosphere thickness.
     const bool proceduralSky = gradientBackdrop && desc.worldBackdrop->mode == SceneRenderWorldBackdropMode::ProceduralSky;
-    const std::array<float, 4> backdropParams = gradientBackdrop
-        ? std::array<float, 4>{ proceduralSky ? 3.0F : 1.0F, desc.worldBackdrop->horizonHeight, desc.worldBackdrop->gradientExponent, 0.0F }
-        : environmentBackdrop ? std::array<float, 4>{ 2.0F, 0.0F, 0.0F, 0.0F } : std::array<float, 4>{};
+    std::array<float, 4> backdropHorizon{};
+    std::array<float, 4> backdropZenith{};
+    std::array<float, 4> backdropParams = environmentBackdrop ? std::array<float, 4>{ 2.0F, 0.0F, 0.0F, 0.0F } : std::array<float, 4>{};
+    if (proceduralSky) {
+        const SceneRenderWorldBackdrop& sky = *desc.worldBackdrop;
+        backdropHorizon = { sky.groundColor[0], sky.groundColor[1], sky.groundColor[2], static_cast<float>(sky.sunDisk) };
+        backdropZenith = { sky.skyTint[0], sky.skyTint[1], sky.skyTint[2], sky.exposure };
+        backdropParams = { 3.0F, sky.sunSize, sky.sunSizeConvergence, sky.atmosphereThickness };
+    } else if (gradientBackdrop) {
+        const SceneRenderWorldBackdrop& gradient = *desc.worldBackdrop;
+        backdropHorizon = { gradient.horizonColor[0], gradient.horizonColor[1], gradient.horizonColor[2], 1.0F };
+        backdropZenith = { gradient.zenithColor[0], gradient.zenithColor[1], gradient.zenithColor[2], 1.0F };
+        backdropParams = { 1.0F, gradient.horizonHeight, gradient.gradientExponent, 0.0F };
+    }
     // The sky's sun is the brightest directional light, as Unity's Sun Source defaults to.
     std::array<float, 4> backdropSun{ 0.0F, 1.0F, 0.0F, 0.0F };
     std::array<float, 4> backdropSunColor{};

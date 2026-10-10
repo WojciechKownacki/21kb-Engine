@@ -1952,6 +1952,16 @@ template <typename Mutator>
     case InspectorPropertyId::WorldBackdropEnvironmentAssetId: return std::to_string(value.environmentAssetId);
     case InspectorPropertyId::WorldBackdropHorizonHeight: return FormatCompactFloat(value.horizonHeight);
     case InspectorPropertyId::WorldBackdropGradientExponent: return FormatCompactFloat(value.gradientExponent);
+    case InspectorPropertyId::WorldBackdropSunSize: return FormatCompactFloat(value.sunSize);
+    case InspectorPropertyId::WorldBackdropSunSizeConvergence: return FormatCompactFloat(value.sunSizeConvergence);
+    case InspectorPropertyId::WorldBackdropAtmosphereThickness: return FormatCompactFloat(value.atmosphereThickness);
+    case InspectorPropertyId::WorldBackdropSkyTintR: return FormatCompactFloat(value.skyTint.x);
+    case InspectorPropertyId::WorldBackdropSkyTintG: return FormatCompactFloat(value.skyTint.y);
+    case InspectorPropertyId::WorldBackdropSkyTintB: return FormatCompactFloat(value.skyTint.z);
+    case InspectorPropertyId::WorldBackdropGroundColorR: return FormatCompactFloat(value.groundColor.x);
+    case InspectorPropertyId::WorldBackdropGroundColorG: return FormatCompactFloat(value.groundColor.y);
+    case InspectorPropertyId::WorldBackdropGroundColorB: return FormatCompactFloat(value.groundColor.z);
+    case InspectorPropertyId::WorldBackdropExposure: return FormatCompactFloat(value.exposure);
     case InspectorPropertyId::WorldBackdropPriority: return std::to_string(value.priority);
     default: return {};
     }
@@ -1967,6 +1977,15 @@ template <typename Mutator>
     return kb::scene::WorldBackdropMode::SolidColor;
 }
 
+[[nodiscard]] kb::scene::WorldBackdropSunDisk NextWorldBackdropSunDisk(kb::scene::WorldBackdropSunDisk sunDisk) noexcept {
+    switch (sunDisk) {
+    case kb::scene::WorldBackdropSunDisk::None: return kb::scene::WorldBackdropSunDisk::Simple;
+    case kb::scene::WorldBackdropSunDisk::Simple: return kb::scene::WorldBackdropSunDisk::HighQuality;
+    case kb::scene::WorldBackdropSunDisk::HighQuality: return kb::scene::WorldBackdropSunDisk::None;
+    }
+    return kb::scene::WorldBackdropSunDisk::HighQuality;
+}
+
 [[nodiscard]] bool HandleWorldBackdropClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     const kb::scene::WorldBackdropComponent* backdrop = sceneContext.Scene().Components().WorldBackdrops().TryGet(entity);
     if (backdrop == nullptr) return false;
@@ -1976,6 +1995,12 @@ template <typename Mutator>
     if (hit.property == InspectorPropertyId::WorldBackdropMode) {
         return EditWorldBackdrop(sceneContext, entity, "Set World Backdrop Mode", [](kb::scene::WorldBackdropComponent& value) {
             value.mode = NextWorldBackdropMode(value.mode);
+            return true;
+        });
+    }
+    if (hit.property == InspectorPropertyId::WorldBackdropSunDisk) {
+        return EditWorldBackdrop(sceneContext, entity, "Set World Backdrop Sun Disk", [](kb::scene::WorldBackdropComponent& value) {
+            value.sunDisk = NextWorldBackdropSunDisk(value.sunDisk);
             return true;
         });
     }
@@ -2395,6 +2420,16 @@ template <typename Mutator>
         case InspectorPropertyId::WorldBackdropZenithColorB: candidate.zenithColor.z = number; break;
         case InspectorPropertyId::WorldBackdropHorizonHeight: candidate.horizonHeight = number; break;
         case InspectorPropertyId::WorldBackdropGradientExponent: candidate.gradientExponent = number; break;
+        case InspectorPropertyId::WorldBackdropSunSize: candidate.sunSize = number; break;
+        case InspectorPropertyId::WorldBackdropSunSizeConvergence: candidate.sunSizeConvergence = number; break;
+        case InspectorPropertyId::WorldBackdropAtmosphereThickness: candidate.atmosphereThickness = number; break;
+        case InspectorPropertyId::WorldBackdropSkyTintR: candidate.skyTint.x = number; break;
+        case InspectorPropertyId::WorldBackdropSkyTintG: candidate.skyTint.y = number; break;
+        case InspectorPropertyId::WorldBackdropSkyTintB: candidate.skyTint.z = number; break;
+        case InspectorPropertyId::WorldBackdropGroundColorR: candidate.groundColor.x = number; break;
+        case InspectorPropertyId::WorldBackdropGroundColorG: candidate.groundColor.y = number; break;
+        case InspectorPropertyId::WorldBackdropGroundColorB: candidate.groundColor.z = number; break;
+        case InspectorPropertyId::WorldBackdropExposure: candidate.exposure = number; break;
         default: return false;
         }
         if (!kb::scene::IsWorldBackdropComponentValid(candidate)) return false;

@@ -216,7 +216,18 @@ template <typename T>
         !ParseOptionalField(fields, "worldBackdrop.horizonHeight", backdrop.horizonHeight) ||
         !ParseOptionalField(fields, "worldBackdrop.gradientExponent", backdrop.gradientExponent) ||
         !ParseOptionalField(fields, "worldBackdrop.priority", backdrop.priority) ||
-        !ParseOptionalBool(fields, "worldBackdrop.enabled", backdrop.enabled)) return false;
+        !ParseOptionalBool(fields, "worldBackdrop.enabled", backdrop.enabled) ||
+        !ParseOptionalField(fields, "worldBackdrop.sunSize", backdrop.sunSize) ||
+        !ParseOptionalField(fields, "worldBackdrop.sunSizeConvergence", backdrop.sunSizeConvergence) ||
+        !ParseOptionalField(fields, "worldBackdrop.atmosphereThickness", backdrop.atmosphereThickness) ||
+        !ParseOptionalField(fields, "worldBackdrop.exposure", backdrop.exposure)) return false;
+    if (fields.contains("worldBackdrop.skyTint.x") &&
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "worldBackdrop.skyTint", backdrop.skyTint)) return false;
+    if (fields.contains("worldBackdrop.groundColor.x") &&
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "worldBackdrop.groundColor", backdrop.groundColor)) return false;
+    std::uint32_t sunDisk = static_cast<std::uint32_t>(backdrop.sunDisk);
+    if (!ParseOptionalField(fields, "worldBackdrop.sunDisk", sunDisk)) return false;
+    backdrop.sunDisk = static_cast<WorldBackdropSunDisk>(sunDisk);
     backdrop.mode = static_cast<WorldBackdropMode>(mode);
     if (!IsWorldBackdropComponentValid(backdrop)) return false;
     components.worldBackdrop = backdrop;

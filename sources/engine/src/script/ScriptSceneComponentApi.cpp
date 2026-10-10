@@ -349,7 +349,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 5> kStreamFocusPropertyDe
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 15> kWorldBackdropPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kWorldBackdropPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "mode", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "color.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "color.y", ScriptValueType::Float },
@@ -365,6 +365,17 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 15> kWorldBackdropPropert
     ScriptSceneComponentPropertyDesc{ "gradientExponent", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "sunDisk", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "sunSize", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "sunSizeConvergence", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "atmosphereThickness", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "skyTint.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "skyTint.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "skyTint.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "groundColor.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "groundColor.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "groundColor.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "exposure", ScriptValueType::Float },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 16> kAmbientRadiancePropertyDescs{
@@ -918,7 +929,7 @@ constexpr std::array<FieldBinding, 5> kStreamFocusFields{
     KB_BOOL(kb::scene::StreamFocusComponent, enabled),
 };
 
-constexpr std::array<FieldBinding, 15> kWorldBackdropFields{
+constexpr std::array<FieldBinding, 26> kWorldBackdropFields{
     FieldBinding{ "mode", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::WorldBackdropComponent*>(component)->mode) }; },
         [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; const auto mode = static_cast<kb::scene::WorldBackdropMode>(value.AsInt()); if (!kb::scene::IsWorldBackdropModeValid(mode)) return false; static_cast<kb::scene::WorldBackdropComponent*>(component)->mode = mode; return true; } },
     KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, color, x),
@@ -939,6 +950,18 @@ constexpr std::array<FieldBinding, 15> kWorldBackdropFields{
     FieldBinding{ "priority", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::WorldBackdropComponent*>(component)->priority) }; },
         [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; static_cast<kb::scene::WorldBackdropComponent*>(component)->priority = value.AsInt(); return true; } },
     KB_BOOL(kb::scene::WorldBackdropComponent, enabled),
+    FieldBinding{ "sunDisk", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::WorldBackdropComponent*>(component)->sunDisk) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > 255) return false; static_cast<kb::scene::WorldBackdropComponent*>(component)->sunDisk = static_cast<kb::scene::WorldBackdropSunDisk>(value.AsInt()); return true; } },
+    KB_FLOAT(kb::scene::WorldBackdropComponent, sunSize),
+    KB_FLOAT(kb::scene::WorldBackdropComponent, sunSizeConvergence),
+    KB_FLOAT(kb::scene::WorldBackdropComponent, atmosphereThickness),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, skyTint, x),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, skyTint, y),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, skyTint, z),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, groundColor, x),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, groundColor, y),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, groundColor, z),
+    KB_FLOAT(kb::scene::WorldBackdropComponent, exposure),
 };
 
 constexpr std::array<FieldBinding, 16> kAmbientRadianceFields{
@@ -1506,6 +1529,14 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
         kb::scene::HistoryRibbonComponent candidate = ribbon;
         if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
         if (!kb::scene::IsHistoryRibbonComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Wst\xC4\x99" "ga historii values must remain valid" };
+    }
+    if (componentName == "WorldBackdrop") {
+        kb::scene::WorldBackdropComponent candidate = *static_cast<const kb::scene::WorldBackdropComponent*>(component.immutable);
+        if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        if (!kb::scene::IsWorldBackdropComponentValid(candidate)) {
+            return ScriptSceneComponentMutationResult{ .error = "World Backdrop value out of range (mode 0..3, gradientExponent > 0, sunDisk 0..2, "
+                "sunSize 0..1, sunSizeConvergence 1..10, atmosphereThickness 0..5, exposure 0..8)" };
+        }
     }
     if (componentName == "Particle Effect") {
         const kb::scene::ParticleEffectComponent& particleEffect = *static_cast<const kb::scene::ParticleEffectComponent*>(component.immutable);
