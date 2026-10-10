@@ -11,11 +11,12 @@
 namespace kb::project {
 namespace {
 
-[[nodiscard]] ProjectDescriptor MakeDescriptor() {
-    ProjectDescriptor descriptor;
-    descriptor.contentRoot = "Assets";
-    descriptor.targetPlatforms = { "Windows" };
-    return descriptor;
+[[nodiscard]] std::string PluginFileName(std::string_view stem) {
+#if defined(_WIN32)
+    return std::string{ stem } + ".dll";
+#else
+    return "lib" + std::string{ stem } + ".so";
+#endif
 }
 
 [[nodiscard]] ProjectSettings MakeSettings(std::string_view name) {
@@ -38,6 +39,19 @@ namespace {
 }
 
 } // namespace
+
+ProjectDescriptor ProjectCreator::DefaultDescriptor() {
+    ProjectDescriptor descriptor;
+    descriptor.contentRoot = "Assets";
+    descriptor.targetPlatforms = { "Windows" };
+    for (const auto& [name, stem] : { std::pair{ "Physics.Jolt", "kb_physics_jolt_plugin" },
+             std::pair{ "Audio.Miniaudio", "kb_audio_miniaudio_plugin" },
+             std::pair{ "Rendering.BasicLighting", "kb_basic_lighting_plugin" },
+             std::pair{ "Rendering.21kbParticle", "kb_21kb_particle_plugin" } }) {
+        descriptor.plugins.push_back(ProjectPluginReference{ .name = name, .binaryPath = PluginFileName(stem), .enabled = true });
+    }
+    return descriptor;
+}
 
 bool ProjectCreator::IsValidName(std::string_view name) noexcept {
     if (name.empty()) {
@@ -105,7 +119,7 @@ NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirec
         return Refuse(descriptorFile, "Prefab folder could not be created.");
     }
 
-    ProjectDescriptor descriptor = MakeDescriptor();
+    ProjectDescriptor descriptor = DefaultDescriptor();
     if (!ProjectManager::CreateProject(descriptorFile, descriptor)) {
         std::filesystem::remove_all(projectRoot / "Assets", error);
         return Refuse(descriptorFile, "Project descriptor could not be written.");

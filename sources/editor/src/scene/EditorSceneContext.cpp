@@ -1,4 +1,5 @@
 #include "scene/EditorSceneContext.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
 #include "scene/EditorPlayCameraResolver.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
@@ -343,7 +344,9 @@ EditorSceneContext::EditorSceneContext()
     : projectBootstrap_(EditorProjectBootstrap::BootstrapDefaultProject())
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
     , projectConfig_(projectBootstrap_.settings)
-    , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : EditorProjectPaths::ProjectFile())
+    // A project that failed to load has no file to write back to: saving the empty fallback
+    // descriptor over it would erase its plugins and settings.
+    , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : std::filesystem::path{})
     , documentScene_(std::make_unique<kb::scene::Scene>(project_))
     , scene_(documentScene_.get())
     , inspectorMaterialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
@@ -4140,156 +4143,6 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         });
     }
 
-    if (componentId == "Camera") {
-        if (scene_->Components().Cameras().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Camera component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Camera Component", [this, entity]() {
-            scene_->Components().Cameras().Set(
-                entity, kb::scene::CameraComponent{ .primary = true });
-            return true;
-        });
-    }
-    if (componentId == "3D Radiance Emitter" || componentId == "Light") {
-        if (scene_->Components().Lights().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a 3D Radiance Emitter component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add 3D Radiance Emitter", [this, entity]() {
-            scene_->Components().Lights().Set(entity, kb::scene::LightComponent{});
-            return true;
-        });
-    }
-    if (componentId == "MeshRenderer") {
-        if (scene_->Components().MeshRenderers().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Mesh Renderer component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Mesh Renderer Component", [this, entity]() {
-            scene_->Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Particle Effect") {
-        if (!IsProjectPluginEnabled("Rendering.21kbParticle")) {
-            console_.Warning("Particles", "Enable 21kb Particle System in Edit > Plugins before adding the component.");
-            return false;
-        }
-        if (scene_->Components().ParticleEffects().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Particle Effect component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Particle Effect Component", [this, entity]() {
-            kb::scene::ParticleEffectComponent component{};
-            component.enabled = false;
-            scene_->Components().ParticleEffects().Set(entity, component);
-            return true;
-        });
-    }
-    if (componentId == "AudioSource") {
-        if (scene_->Components().AudioSources().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has an Audio Source component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Audio Source Component", [this, entity]() {
-            scene_->Components().AudioSources().Set(entity, kb::scene::AudioSourceComponent{});
-            return true;
-        });
-    }
-    if (componentId == "AudioListener") {
-        if (scene_->Components().AudioListeners().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has an Audio Listener component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Audio Listener Component", [this, entity]() {
-            scene_->Components().AudioListeners().Set(entity, kb::scene::AudioListenerComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Animator") {
-        if (scene_->Components().Animators().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has an Animator component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Animator Component", [this, entity]() {
-            scene_->Components().Animators().Set(entity, kb::scene::Animator{});
-            return true;
-        });
-    }
-    if (componentId == "Rigidbody") {
-        if (scene_->Components().Rigidbodies().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Rigidbody component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Rigidbody Component", [this, entity]() {
-            scene_->Components().Rigidbodies().Set(entity, kb::scene::RigidbodyComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Collider") {
-        if (scene_->Components().Colliders().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Collider component.");
-            return false;
-        }
-        // Auto-fit the new collider to the entity's mesh so it matches the visible
-        // geometry out of the box, instead of a default 0.5 sphere.
-        // Per-axis, so a plane/quad becomes a thin slab rather than a cube.
-        EntityMeshBounds bounds;
-        std::string reason;
-        const bool fitToMesh = TryLoadEntityMeshBounds(*scene_, entity, bounds, reason);
-        if (fitToMesh) {
-            console_.Info("Physics", "Collider auto-fit to mesh: " + reason + ".");
-        } else {
-            console_.Warning("Physics", "Collider added with default size — auto-fit skipped: " + reason + ".");
-        }
-        return ExecuteSceneCommand("Add Collider Component", [this, entity, fitToMesh, bounds]() {
-            kb::scene::ColliderComponent collider{};
-            if (fitToMesh) {
-                ApplyMeshBoundsToCollider(collider, bounds);
-            }
-            scene_->Components().Colliders().Set(entity, collider);
-            return true;
-        });
-    }
-    if (componentId == "CharacterController") {
-        if (scene_->Components().CharacterControllers().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Character Controller component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Character Controller Component", [this, entity]() {
-            scene_->Components().CharacterControllers().Set(entity, kb::scene::CharacterControllerComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Joint") {
-        if (scene_->Components().Joints().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Joint component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Joint Component", [this, entity]() {
-            scene_->Components().Joints().Set(entity, kb::scene::JointComponent{});
-            return true;
-        });
-    }
-    if (componentId == "SkeletonBinding") {
-        if (scene_->Components().SkeletonBindings().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Skeleton Binding component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Skeleton Binding Component", [this, entity]() {
-            return scene_->Components().SkeletonBindings().Set(entity, kb::scene::SkeletonBindingComponent{});
-        });
-    }
-    if (componentId == "DeformedGeometry") {
-        if (scene_->Components().DeformedGeometries().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Deformed Geometry component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Deformed Geometry Component", [this, entity]() {
-            return scene_->Components().DeformedGeometries().Set(entity, kb::scene::DrawD3DeformedGeometryComponent{});
-        });
-    }
     if (componentId == "TerrainEditor") {
         if (!IsProjectPluginEnabled("Editor.Terrain")) {
             console_.Warning("Terrain", "Enable Terrain Editor in Edit > Plugins before adding the component.");
@@ -4311,223 +4164,51 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         console_.Info("Terrain", "Created a chunked 129 x 129 terrain with four LOD levels.");
         return true;
     }
-    if (componentId == "Tags") {
-        if (scene_->Components().Tags().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has an Object Classification component.");
-            return false;
+    // Every other component: one table shared with kb_cli and automation.
+    const kb::scene::SceneComponentKind* kind = kb::scene::SceneComponentAuthoring::Find(componentId);
+    if (kind == nullptr) {
+        console_.Warning("Inspector", "Unknown component: " + std::string{ componentId });
+        return false;
+    }
+    const std::string displayName{ kind->displayName };
+    if (kb::scene::SceneComponentAuthoring::Has(*scene_, entity, componentId)) {
+        console_.Warning("Inspector", "Entity already has a " + displayName + " component.");
+        return false;
+    }
+    if (!kb::scene::SceneComponentAuthoring::PluginEnabled(project_, *kind)) {
+        console_.Warning("Plugins", "Enable the " + std::string{ kind->requiredPlugin } +
+            " plugin in Edit > Plugins before adding " + displayName + ".");
+        return false;
+    }
+    if (kind->id == "Collider") {
+        // Auto-fit the new collider to the entity's mesh so it matches the visible
+        // geometry out of the box, instead of a default 0.5 sphere.
+        // Per-axis, so a plane/quad becomes a thin slab rather than a cube.
+        EntityMeshBounds bounds;
+        std::string reason;
+        const bool fitToMesh = TryLoadEntityMeshBounds(*scene_, entity, bounds, reason);
+        if (fitToMesh) {
+            console_.Info("Physics", "Collider auto-fit to mesh: " + reason + ".");
+        } else {
+            console_.Warning("Physics", "Collider added with default size — auto-fit skipped: " + reason + ".");
         }
-        return ExecuteSceneCommand("Add Object Classification", [this, entity]() {
-            scene_->Components().Tags().Set(entity, kb::scene::TagsComponent{});
+        return ExecuteSceneCommand("Add Collider", [this, entity, fitToMesh, bounds]() {
+            if (kb::scene::SceneComponentAuthoring::Add(*scene_, entity, "Collider", project_).status !=
+                kb::scene::SceneComponentAddStatus::Added) {
+                return false;
+            }
+            if (fitToMesh) {
+                kb::scene::ColliderComponent collider = *scene_->Components().Colliders().TryGet(entity);
+                ApplyMeshBoundsToCollider(collider, bounds);
+                scene_->Components().Colliders().Set(entity, collider);
+            }
             return true;
         });
     }
-    if (componentId == "RegionShape") {
-        if (scene_->Components().RegionShapes().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Region Shape component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Region Shape Component", [this, entity]() {
-            scene_->Components().RegionShapes().Set(entity, kb::scene::RegionShapeComponent{});
-            return true;
-        });
-    }
-    if (componentId == "GuideCurve") {
-        if (scene_->Components().GuideCurves().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Guide Curve component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Guide Curve Component", [this, entity]() {
-            scene_->Components().GuideCurves().Set(entity, kb::scene::GuideCurveComponent{});
-            return true;
-        });
-    }
-    if (componentId == "ContentInstance") {
-        if (scene_->Components().ContentInstances().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Content Instance component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Content Instance Component", [this, entity]() {
-            scene_->Components().ContentInstances().Set(entity, kb::scene::ContentInstanceComponent{});
-            return true;
-        });
-    }
-    if (componentId == "StreamFocus") {
-        if (scene_->Components().StreamFocuses().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Stream Focus component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Stream Focus Component", [this, entity]() {
-            scene_->Components().StreamFocuses().Set(entity, kb::scene::StreamFocusComponent{});
-            return true;
-        });
-    }
-    if (componentId == "WorldBackdrop") {
-        if (scene_->Components().WorldBackdrops().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a World Backdrop component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add World Backdrop Component", [this, entity]() {
-            scene_->Components().WorldBackdrops().Set(entity, kb::scene::WorldBackdropComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Ambient Radiance") {
-        if (scene_->Components().AmbientRadiances().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has an Ambient Radiance component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Ambient Radiance Component", [this, entity]() {
-            scene_->Components().AmbientRadiances().Set(entity, kb::scene::AmbientRadianceComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Detail Switch") {
-        if (scene_->Components().DetailSwitches().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Detail Switch component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Detail Switch Component", [this, entity]() {
-            scene_->Components().DetailSwitches().Set(entity, kb::scene::SceneDetailSwitchComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Visibility Blocker") {
-        if (scene_->Components().VisibilityBlockers().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Visibility Blocker component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Visibility Blocker Component", [this, entity]() {
-            scene_->Components().VisibilityBlockers().Set(entity, kb::scene::SceneVisibilityBlockerComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Visibility Cell") {
-        if (scene_->Components().VisibilityCells().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Visibility Cell component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Visibility Cell Component", [this, entity]() {
-            if (!scene_->Components().RegionShapes().Has(entity)) scene_->Components().RegionShapes().Set(entity, kb::scene::RegionShapeComponent{});
-            scene_->Components().VisibilityCells().Set(entity, kb::scene::VisibilityCellComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Region Portal") {
-        if (scene_->Components().RegionPortals().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Region Portal component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Region Portal Component", [this, entity]() {
-            if (!scene_->Components().RegionShapes().Has(entity)) scene_->Components().RegionShapes().Set(entity, kb::scene::RegionShapeComponent{});
-            scene_->Components().RegionPortals().Set(entity, kb::scene::SceneRegionPortalComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Secondary Frame") {
-        if (scene_->Components().AuxFrames().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Secondary Frame component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Secondary Frame Component", [this, entity]() {
-            if (!scene_->Components().Cameras().Has(entity)) scene_->Components().Cameras().Set(entity, kb::scene::CameraComponent{});
-            scene_->Components().AuxFrames().Set(entity, kb::scene::AuxFrameComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Geometry Swarm") {
-        if (scene_->Components().GeometrySwarms().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Geometry Swarm component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Geometry Swarm Component", [this, entity]() {
-            scene_->Components().GeometrySwarms().Set(entity, kb::scene::GeometrySwarmComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Surface Cast") {
-        if (scene_->Components().SurfaceCasts().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Surface Cast component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Surface Cast Component", [this, entity]() {
-            scene_->Components().SurfaceCasts().Set(entity, kb::scene::SurfaceCastComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Facing Panel") {
-        if (scene_->Components().FacingPanels().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Facing Panel component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Facing Panel Component", [this, entity]() {
-            scene_->Components().FacingPanels().Set(entity, kb::scene::FacingPanelComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Kreska przestrzenna") {
-        if (scene_->Components().SpaceStrokes().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Kreska przestrzenna component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Kreska przestrzenna", [this, entity]() {
-            if (!scene_->Components().GuideCurves().Has(entity)) scene_->Components().GuideCurves().Set(entity, kb::scene::GuideCurveComponent{});
-            scene_->Components().SpaceStrokes().Set(entity, kb::scene::SpaceStrokeComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Wst\xC4\x99" "ga historii") {
-        if (scene_->Components().HistoryRibbons().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Wst\xC4\x99" "ga historii component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Wst\xC4\x99" "ga historii", [this, entity]() {
-            scene_->Components().HistoryRibbons().Set(entity, kb::scene::HistoryRibbonComponent{});
-            return true;
-        });
-    }
-    if (componentId == "Echo soczewki") {
-        if (scene_->Components().LensEchoes().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has an Echo soczewki component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Echo soczewki", [this, entity]() {
-            scene_->Components().LensEchoes().Set(entity, kb::scene::LensEchoComponent{});
-            return true;
-        });
-    }
-    if (componentId == "NavAgent") {
-        if (scene_->Components().NavAgents().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Nav Agent component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Nav Agent Component", [this, entity]() {
-            scene_->Components().NavAgents().Set(entity, kb::scene::NavAgent{});
-            return true;
-        });
-    }
-    if (componentId == "NavObstacle") {
-        if (scene_->Components().NavObstacles().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Nav Obstacle component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Nav Obstacle Component", [this, entity]() {
-            scene_->Components().NavObstacles().Set(entity, kb::scene::NavObstacle{});
-            return true;
-        });
-    }
-    if (componentId == "NavLink") {
-        if (scene_->Components().NavLinks().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Nav Link component.");
-            return false;
-        }
-        return ExecuteSceneCommand("Add Nav Link Component", [this, entity]() {
-            scene_->Components().NavLinks().Set(entity, kb::scene::NavLink{});
-            return true;
-        });
-    }
-
-    console_.Warning("Inspector", "Unknown component: " + std::string{ componentId });
-    return false;
+    return ExecuteSceneCommand("Add " + displayName, [this, entity, id = std::string{ kind->id }]() {
+        return kb::scene::SceneComponentAuthoring::Add(*scene_, entity, id, project_).status ==
+            kb::scene::SceneComponentAddStatus::Added;
+    });
 }
 
 bool EditorSceneContext::RemoveUIComponentFromEntity(

@@ -1,6 +1,7 @@
 add_library(kb_cli_core STATIC
     src/CliApiCommands.cpp
     src/CliCommon.cpp
+    src/CliEntityCommands.cpp
     src/CliImportCommand.cpp
     src/CliMcpCommand.cpp
     src/CliNavMeshCommands.cpp

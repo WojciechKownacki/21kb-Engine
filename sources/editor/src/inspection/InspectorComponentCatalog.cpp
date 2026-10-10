@@ -1,4 +1,5 @@
 #include "inspection/InspectorComponentCatalog.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
 #include "scene/ui/EditorUIComponentAuthoring.hpp"
 
 #include <algorithm>
@@ -149,19 +150,10 @@ const InspectorComponentTile* InspectorComponentCatalog::Find(std::string_view i
 }
 
 std::string_view InspectorComponentCatalog::RequiredPluginId(std::string_view componentId) noexcept {
-    if (componentId == "TerrainEditor") return "Editor.Terrain";
-    if (componentId == "Rigidbody" || componentId == "Collider" ||
-        componentId == "CharacterController" || componentId == "Joint") {
-        return "Physics.Jolt";
-    }
-    if (componentId == "AudioSource" || componentId == "AudioListener") {
-        return "Audio.Miniaudio";
-    }
-    if (componentId == "3D Radiance Emitter" || componentId == "Ambient Radiance") {
-        return "Rendering.BasicLighting";
-    }
-    if (componentId == "Particle Effect") return "Rendering.21kbParticle";
-    return {};
+    if (componentId == "TerrainEditor") return "Editor.Terrain"; // editor-only component
+    // Every scene component's plugin lives in the engine table the CLI uses too.
+    const kb::scene::SceneComponentKind* kind = kb::scene::SceneComponentAuthoring::Find(componentId);
+    return kind == nullptr ? std::string_view{} : kind->requiredPlugin;
 }
 
 } // namespace kb::editor

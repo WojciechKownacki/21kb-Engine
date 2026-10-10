@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/project/ProjectDescriptor.hpp"
+
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -22,6 +24,10 @@ public:
     ProjectCreator() = delete;
 
     [[nodiscard]] static bool IsValidName(std::string_view name) noexcept;
+    // What every new project starts with - the editor's default project, the Hub and `kb_cli new`
+    // alike: content under Assets, Windows target, and the built-in plugins enabled (physics,
+    // audio, lighting, particles), referenced by their file name next to the executables.
+    [[nodiscard]] static ProjectDescriptor DefaultDescriptor();
     [[nodiscard]] static NewProjectResult Create(const std::filesystem::path& parentDirectory, std::string_view name);
 };
 

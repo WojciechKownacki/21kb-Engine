@@ -881,7 +881,10 @@ bool EditorHeadlessAutomation::AddComponent(
             option.index >= 0;
     }
     if (!foundOption) {
-        Trace("add_component", false, "result-not-found");
+        const InspectorPanelState& inspector = context_.Inspector();
+        Trace("add_component", false, "result-not-found: query '" +
+            (inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch ? inspector.EditBuffer() : std::string{}) +
+            "' for '" + std::string{ componentId } + "'");
         return false;
     }
     const POINT optionPoint = Center(option.rect);
