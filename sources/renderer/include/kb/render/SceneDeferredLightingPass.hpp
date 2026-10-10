@@ -79,6 +79,8 @@ private:
     bgfx::UniformHandle backdropHorizonUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropZenithUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle backdropSunUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle backdropSunColorUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropEnvironmentSampler_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackShadowTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackBackdropEnvironmentTexture_ = BGFX_INVALID_HANDLE;
