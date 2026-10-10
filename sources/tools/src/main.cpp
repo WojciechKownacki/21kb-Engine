@@ -13,6 +13,8 @@ constexpr std::string_view kUsage = R"(kb_cli — 21kb Engine headless tooling f
 Usage: kb_cli <command> [options]
 
 Commands:
+  new          Create an empty project, the same one the Hub creates.
+                 --parent <dir> --name <Name>
   api          Generate the script API contract (Lua stubs, Markdown, JSON).
                  --project <dir> | --out <dir> | --print markdown|json|lua
   api-check    Compare the current API surface against a committed baseline
@@ -126,6 +128,9 @@ int main(int argc, char** argv) {
     }
     if (command == "api-check") {
         return kb::cli::RunApiCheckCommand(arguments, io);
+    }
+    if (command == "new") {
+        return kb::cli::RunNewCommand(arguments, io);
     }
     if (command == "init-agent") {
         return kb::cli::RunInitAgentCommand(arguments, io);

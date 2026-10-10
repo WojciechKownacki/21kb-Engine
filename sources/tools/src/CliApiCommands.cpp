@@ -3,6 +3,7 @@
 
 #include "engine/library/EngineLibraryManifest.hpp"
 #include "engine/library/EngineLibraryManifestComparison.hpp"
+#include "engine/project/ProjectCreator.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
@@ -263,6 +264,25 @@ int RunApiCommand(const ArgumentList& arguments, CommandIo io) {
         }
         io.out << "wrote " << path.generic_string() << '\n';
     }
+    return 0;
+}
+
+int RunNewCommand(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> parent = arguments.Option("--parent");
+    const std::optional<std::string> name = arguments.Option("--name");
+    if (!parent.has_value() || !name.has_value()) {
+        io.err << "error: new requires --parent <dir> --name <Name>\n";
+        return 1;
+    }
+    const std::filesystem::path parentDirectory{
+        std::u8string{ reinterpret_cast<const char8_t*>(parent->data()), parent->size() } };
+    const kb::project::NewProjectResult created = kb::project::ProjectCreator::Create(parentDirectory, *name);
+    if (!created.succeeded) {
+        io.err << "error: " << created.error << '\n';
+        return 1;
+    }
+    const std::u8string file = created.projectFile.generic_u8string();
+    io.out << "created " << std::string{ reinterpret_cast<const char*>(file.data()), file.size() } << '\n';
     return 0;
 }
 
