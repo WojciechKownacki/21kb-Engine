@@ -1,10 +1,21 @@
 #include "CliCommands.hpp"
 
 #include <array>
+#include <exception>
 #include <iostream>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -13,8 +24,14 @@ constexpr std::string_view kUsage = R"(kb_cli — 21kb Engine headless tooling f
 Usage: kb_cli <command> [options]
 
 Commands:
-  new          Create an empty project, the same one the Hub creates.
-                 --parent <dir> --name <Name>
+  new          Create a project, the same one the Hub creates, in a new or empty
+               folder. Its startup scene Assets/Scenes/Main.21kbscene is made from
+               a template: Basic (camera, sun, sky, floor; default) or Empty.
+                 --parent <dir> --name <Name> [--template Basic|Empty]
+  scene-new    Create a scene from a template, as File > New Scene does.
+                 --project <dir> --name <Name> [--folder Assets/Scenes]
+                 [--template Basic|Empty] [--default yes|no]
+               (--default yes makes it the scene the game starts in)
   entity       Add or remove a scene entity (the project's startup scene unless --scene).
                  add --project <dir> [--scene <path>] --name <Name> [--parent <Name>]
                      [--create <Item>] [--position x,y,z] [--rotation x,y,z (degrees)] [--scale x,y,z]
@@ -23,6 +40,11 @@ Commands:
                  Area Light, Camera, Environment, Particle System, Audio Source, Audio Listener;
                  --name then defaults to the item)
                  remove --project <dir> [--scene <path>] --name <Name>
+                 rename --project <dir> [--scene <path>] --name <Name> --to <NewName>
+                        [--occurrence <n>]
+                 (--name, --parent and --entity take a name or a path: Parent/Child;
+                 names are unique among siblings, --occurrence picks one of several
+                 same-named entities made elsewhere)
   component    Add, set or remove a component of an entity.
                  add|set|remove --project <dir> [--scene <path>] --entity <Name>
                      --type <Component> [--set name=value ...]
@@ -47,8 +69,9 @@ Commands:
   scene-attach Attach a behaviour asset to a scene node and save the scene.
                  --project <dir> --scene <path> --node <name> --script <path>
                  [--tick-group <group>] [--execution-order <n>] [--disabled]
-  run          Run a scene headless and report logs, events, and errors.
-                 --project <dir> --scene <path> [--frames <n>] [--dt <seconds>]
+  run          Run a scene headless and report logs, events, and errors (the
+               project's startup scene unless --scene). Exits 1 on any error.
+                 --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>]
                  [--quiet]
   mcp          Serve the commands above as MCP tools over stdio (newline-
                delimited JSON-RPC), for use from MCP-compatible clients.
@@ -115,7 +138,48 @@ constexpr std::array<std::string_view, 4> kFlagNames{ "--anti-rollback", "--disa
 
 } // namespace
 
+int Dispatch(int argc, char** argv);
+
+// kb_cli talks UTF-8: arguments arrive in UTF-8 (kb_cli.manifest sets the process code page on
+// Windows; Linux is UTF-8 already) and names with any letters are printed as such. The console's
+// own code page is restored on exit.
+class Utf8Console final {
+public:
+    Utf8Console() {
+#if defined(_WIN32)
+        previous_ = GetConsoleOutputCP();
+        if (previous_ != 0U) {
+            static_cast<void>(SetConsoleOutputCP(CP_UTF8));
+        }
+#endif
+    }
+    ~Utf8Console() {
+#if defined(_WIN32)
+        if (previous_ != 0U) {
+            static_cast<void>(SetConsoleOutputCP(previous_));
+        }
+#endif
+    }
+    Utf8Console(const Utf8Console&) = delete;
+    Utf8Console& operator=(const Utf8Console&) = delete;
+
+private:
+    unsigned int previous_ = 0U;
+};
+
 int main(int argc, char** argv) {
+    const Utf8Console console;
+    try {
+        return Dispatch(argc, argv);
+    } catch (const std::exception& exception) {
+        std::cerr << "error: " << exception.what() << '\n';
+    } catch (...) {
+        std::cerr << "error: unexpected failure\n";
+    }
+    return 1;
+}
+
+int Dispatch(int argc, char** argv) {
     if (argc < 2) {
         std::cout << kUsage;
         return 0;
@@ -169,6 +233,9 @@ int main(int argc, char** argv) {
     }
     if (command == "scene-attach") {
         return kb::cli::RunSceneAttachCommand(arguments, io);
+    }
+    if (command == "scene-new") {
+        return kb::cli::RunSceneNewCommand(arguments, io);
     }
     if (command == "run") {
         return kb::cli::RunRunCommand(arguments, io);

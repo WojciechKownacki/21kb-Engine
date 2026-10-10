@@ -57,11 +57,20 @@ namespace {
         return 1;
     }
     const std::optional<std::string> project = arguments.Option("--project");
-    const std::filesystem::path scene = ResolveInputPath(*sceneOption, project.value_or(""));
+    std::string pathError;
+    const std::filesystem::path scene = ResolveProjectFile(*sceneOption, project.value_or(""), pathError);
+    if (scene.empty()) {
+        io.err << "error: " << pathError << '\n';
+        return 1;
+    }
     std::filesystem::path out = kb::navigation::SceneNavMeshPath(scene);
     if (const std::optional<std::string> outOption = arguments.Option("--out"); outOption.has_value()) {
         out = std::filesystem::path{ *outOption };
         if (out.is_relative() && project.has_value()) out = std::filesystem::path{ *project } / out;
+        if (project.has_value() && ResolveProjectFile(out, *project, pathError).empty()) {
+            io.err << "error: --out: " << pathError << '\n';
+            return 1;
+        }
     }
     // The settings of the mesh being replaced, else the defaults; options override them.
     kb::navigation::NavMeshBuildSettings settings;

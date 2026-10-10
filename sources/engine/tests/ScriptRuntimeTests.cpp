@@ -4051,19 +4051,21 @@ void RunScriptHostDisablesFailingBehaviourTest() {
             }
         }
         const kb::scene::BehaviourComponent* failingBehaviour = scene.Components().Behaviours().TryGet(failing);
-        const std::string identity = "entity #" + std::to_string(failing.Id()) + ", script asset #" + std::to_string(kFailing.value);
+        const std::string entity = "entity #" + std::to_string(failing.Id());
+        const std::string script = kb::assets::ToString(kFailing);
         const auto reported = [&](std::string_view text) {
             return std::ranges::any_of(diagnostics, [&](const std::string& line) {
-                return line.find(text) != std::string::npos && line.find(identity) != std::string::npos;
+                return line.find(text) != std::string::npos && line.find(entity) != std::string::npos &&
+                    line.find(script) != std::string::npos;
             });
         };
         kb::tests::Require(healthyTicks >= 3 && reported("deliberate behaviour failure"),
             "A failing behaviour must be reported with its entity and asset while the other behaviours keep ticking");
         if (disableFailing) {
-            kb::tests::Require(failingTicks == 1 && failingBehaviour != nullptr && !failingBehaviour->enabled && reported("behaviour disabled"),
+            kb::tests::Require(failingTicks == 1 && failingBehaviour != nullptr && !failingBehaviour->enabled && reported("was disabled"),
                 "A host that disables failing behaviours must stop only the failing instance after its first error");
         } else {
-            kb::tests::Require(failingTicks >= 3 && failingBehaviour != nullptr && failingBehaviour->enabled && !reported("behaviour disabled"),
+            kb::tests::Require(failingTicks >= 3 && failingBehaviour != nullptr && failingBehaviour->enabled && !reported("was disabled"),
                 "A host that keeps failing behaviours must leave them enabled");
         }
     }

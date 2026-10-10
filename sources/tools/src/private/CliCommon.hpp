@@ -59,6 +59,15 @@ private:
     const std::filesystem::path& input,
     const std::filesystem::path& projectRoot);
 
+// A scene, world or output file of the project given by --project: relative paths are anchored as
+// ResolveInputPath does, and the result must lie inside the project - kb_cli never writes into
+// another project or elsewhere on disk through a project command. Without a project the path is
+// taken as given. Empty with `error` set when the path leaves the project.
+[[nodiscard]] std::filesystem::path ResolveProjectFile(
+    const std::filesystem::path& input,
+    const std::filesystem::path& projectRoot,
+    std::string& error);
+
 // Finds an asset by virtual path ("/Game/...") or by physical file path.
 [[nodiscard]] const kb::assets::AssetMetadata* FindAssetByFlexiblePath(
     const kb::assets::AssetRegistry& registry,

@@ -60,6 +60,10 @@ void Require(bool condition, const char* message) {
     }
 }
 
+void Require(bool condition, const std::string& message) {
+    Require(condition, message.c_str());
+}
+
 [[nodiscard]] std::filesystem::path TestRoot() {
     return std::filesystem::temp_directory_path() / "21kb_engine_kb_cli_tests";
 }
@@ -2051,6 +2055,99 @@ void RunNewCommandTests() {
         "new over an existing project must be refused");
     Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "zla nazwa" }).exitCode != 0,
         "new with an invalid name must be refused");
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "CON" }).exitCode != 0,
+        "new with a name Windows reserves must be refused");
+
+    // The startup scene is made from the Basic template: camera, sun, sky and floor, ready for Play.
+    const auto rootNames = [](const std::filesystem::path& scenePath) {
+        kb::scene::Scene scene;
+        const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(scenePath);
+        Require(loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(scene, loaded.document),
+            "a new scene could not be reloaded");
+        std::vector<std::string> names;
+        for (const kb::scene::SceneEntity root : scene.Hierarchy().RootEntities()) {
+            names.emplace_back(scene.Entities().Name(root));
+        }
+        return names;
+    };
+    Require(rootNames(parent / "Gra" / "Assets" / "Scenes" / "Main.21kbscene") ==
+            std::vector<std::string>{ "Main Camera", "Sun", "Environment", "Plane" },
+        "a new project's startup scene must hold the Basic template's camera, sun, sky and floor");
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Pusty", "--template", "Empty" }).exitCode == 0 &&
+            rootNames(parent / "Pusty" / "Assets" / "Scenes" / "Main.21kbscene").empty(),
+        "new --template Empty must start from an empty scene");
+
+    // Nothing the user already has is overwritten: a folder holding an Assets folder is refused
+    // and left exactly as it was.
+    const std::filesystem::path busy = parent / "Zajety";
+    std::filesystem::create_directories(busy / "Assets" / "Scenes");
+    {
+        std::ofstream keep{ busy / "Assets" / "Scenes" / "Main.21kbscene" };
+        keep << "user scene";
+    }
+    const CommandRun refused = Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Zajety" });
+    Require(refused.exitCode != 0 && Contains(refused.output, "already exists and is not empty"),
+        "new into a folder that is not empty must be refused by name");
+    std::ifstream kept{ busy / "Assets" / "Scenes" / "Main.21kbscene" };
+    Require(std::string{ std::istreambuf_iterator<char>{ kept }, {} } == "user scene" &&
+            !std::filesystem::exists(busy / "Zajety.21kbproject"),
+        "a refused new must leave the user's files untouched");
+
+    // Polish letters: the name reaches the disk as the same UTF-8 name.
+    const std::string race = "Wy\xC5\x9B" "cig";
+    const CommandRun polish = Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", race });
+    Require(polish.exitCode == 0, "new with a Polish name failed: " + polish.output);
+    const std::u8string raceUtf8{ reinterpret_cast<const char8_t*>(race.data()), race.size() };
+    Require(std::filesystem::exists(parent / std::filesystem::path{ raceUtf8 } / std::filesystem::path{ raceUtf8 + u8".21kbproject" }),
+        "a Polish project name must be written in UTF-8");
+    std::filesystem::remove_all(parent, error);
+}
+
+// File > New Scene without the editor: templates, names, folders and the startup scene.
+void RunSceneNewCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "scene_new_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Sceny", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path root = parent / "Sceny";
+    const std::string project = root.string();
+
+    const CommandRun created = Run(&kb::cli::RunSceneNewCommand, { "--project", project, "--name", "Level1" });
+    Require(created.exitCode == 0 && Contains(created.output, "Scene created: /Game/Scenes/Level1.21kbscene (template Basic)."),
+        "scene-new did not create the Basic scene: " + created.output);
+    kb::scene::Scene level;
+    const kb::scene::SceneDocumentLoadResult loaded =
+        kb::scene::SceneDocumentService::Load(root / "Assets" / "Scenes" / "Level1.21kbscene");
+    Require(loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(level, loaded.document) &&
+            level.Hierarchy().RootEntities().size() == 4U,
+        "scene-new must write the Basic template's four objects");
+
+    const auto refusedWith = [&](std::vector<std::string> arguments, std::string_view reason) {
+        arguments.insert(arguments.begin(), { "--project", project });
+        const CommandRun run = Run(&kb::cli::RunSceneNewCommand, arguments);
+        Require(run.exitCode != 0 && Contains(run.output, reason), "scene-new must refuse with '" + std::string{ reason } +
+            "', got: " + run.output);
+    };
+    refusedWith({ "--name", "Level1" }, "already exists");
+    refusedWith({ "--name", "Lev:el" }, "can't contain the character ':'");
+    refusedWith({ "--name", "NUL" }, "reserves for devices");
+    refusedWith({ "--name", "Level2." }, "can't end with a space or a dot");
+    refusedWith({ "--name", "Level2", "--folder", "Saved" }, "must be inside Assets");
+    refusedWith({ "--name", "Level2", "--folder", "Assets/../Saved" }, "reserved names");
+    refusedWith({ "--name", "Level2", "--template", "Fancy" }, "unknown template 'Fancy'");
+
+    const CommandRun startup = Run(&kb::cli::RunSceneNewCommand, { "--project", project, "--name", "Arena",
+        "--folder", "/Game/Levels", "--template", "empty", "--default", "yes" });
+    Require(startup.exitCode == 0 && std::filesystem::exists(root / "Assets" / "Levels" / "Arena.21kbscene"),
+        "scene-new into a virtual folder failed: " + startup.output);
+    Require(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root)).settings.defaultMap ==
+            "/Game/Levels/Arena.21kbscene",
+        "scene-new --default yes must make the scene the one the game starts in");
+
+    const std::string meadow = "\xC5\x81\xC4\x85ka";
+    Require(Run(&kb::cli::RunSceneNewCommand, { "--project", project, "--name", meadow }).exitCode == 0,
+        "scene-new with a Polish name failed");
     std::filesystem::remove_all(parent, error);
 }
 
@@ -2060,7 +2157,8 @@ void RunEntityComponentCommandTests() {
     const std::filesystem::path parent = TestRoot() / "entity_project";
     std::error_code error;
     std::filesystem::remove_all(parent, error);
-    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Scena" }).exitCode == 0, "new failed");
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Scena", "--template", "Empty" }).exitCode == 0,
+        "new failed");
     const std::string project = (parent / "Scena").string();
 
     Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--name", "Sun", "--position", "0,3,0",
@@ -2127,6 +2225,29 @@ void RunEntityComponentCommandTests() {
     Require(cubeMesh != nullptr && cubeMesh->meshAssetId == kb::assets::BuiltInShapeId(kb::assets::BuiltInShape::Cube).value &&
             cubeCollider != nullptr && cubeCollider->shape == kb::scene::ColliderShape::Box,
         "the Cube must be the engine cube with a box collider");
+
+    // Names stay addressable: a second 'Sun' is refused, a path picks a child, rename renames.
+    const CommandRun twin = Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--name", "Sun" });
+    Require(twin.exitCode != 0 && Contains(twin.output, "already exists at the scene root"),
+        "a second entity with the same name must be refused: " + twin.output);
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun/Cube", "--type", "Transform",
+        "--set", "localPosition=0,1,0" }).exitCode == 0, "a child must be addressable by its path");
+    Require(Run(&kb::cli::RunEntityCommand, { "rename", "--project", project, "--name", "Sun/Cube", "--to", "Crate" }).exitCode == 0 &&
+            Run(&kb::cli::RunEntityCommand, { "remove", "--project", project, "--name", "Crate" }).exitCode == 0,
+        "entity rename failed");
+
+    // A project command never writes into another project.
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Obcy", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path foreign = parent / "Obcy" / "Assets" / "Scenes" / "Main.21kbscene";
+    const auto foreignSize = std::filesystem::file_size(foreign);
+    for (const std::string& scenePath : { foreign.string(), std::string{ "../Obcy/Assets/Scenes/Main.21kbscene" } }) {
+        const CommandRun outside = Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--scene", scenePath,
+            "--name", "Intruder" });
+        Require(outside.exitCode != 0 && Contains(outside.output, "is outside the project"),
+            "a scene outside the project must be refused: " + outside.output);
+    }
+    Require(std::filesystem::file_size(foreign) == foreignSize, "another project's scene must stay untouched");
     std::filesystem::remove_all(parent, error);
 }
 
@@ -3091,6 +3212,7 @@ int main() {
     RunRunCommandTests();
     RunPlayerControllerTemplateTests();
     RunNewCommandTests();
+    RunSceneNewCommandTests();
     RunEntityComponentCommandTests();
     RunApiCommandTests();
     RunApiCheckCommandTests();

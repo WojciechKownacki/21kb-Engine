@@ -17,6 +17,17 @@ bool ProjectManager::IsProjectFile(const std::filesystem::path& path) {
     return path.extension() == ProjectDescriptorFormat::Extension;
 }
 
+namespace {
+
+// For messages: UTF-8 never fails, where generic_string() throws on a name the system code page
+// cannot spell.
+[[nodiscard]] std::string Utf8(const std::filesystem::path& path) {
+    const std::u8string text = path.generic_u8string();
+    return std::string{ reinterpret_cast<const char*>(text.data()), text.size() };
+}
+
+} // namespace
+
 std::filesystem::path ProjectManager::FindProjectFile(const std::filesystem::path& fileOrDirectory, std::string& error) {
     error.clear();
     std::error_code pathError;
@@ -24,11 +35,11 @@ std::filesystem::path ProjectManager::FindProjectFile(const std::filesystem::pat
         if (IsProjectFile(fileOrDirectory)) {
             return fileOrDirectory;
         }
-        error = "not a " + std::string{ Extension() } + " file: " + fileOrDirectory.generic_string();
+        error = "not a " + std::string{ Extension() } + " file: " + Utf8(fileOrDirectory);
         return {};
     }
     if (!std::filesystem::is_directory(fileOrDirectory, pathError) || pathError) {
-        error = "project path was not found: " + fileOrDirectory.generic_string();
+        error = "project path was not found: " + Utf8(fileOrDirectory);
         return {};
     }
     std::vector<std::filesystem::path> found;
@@ -39,19 +50,19 @@ std::filesystem::path ProjectManager::FindProjectFile(const std::filesystem::pat
         }
     }
     if (pathError) {
-        error = "project directory could not be read: " + fileOrDirectory.generic_string();
+        error = "project directory could not be read: " + Utf8(fileOrDirectory);
         return {};
     }
     if (found.size() == 1U) {
         return found.front();
     }
     if (found.empty()) {
-        error = "no " + std::string{ Extension() } + " file in " + fileOrDirectory.generic_string();
+        error = "no " + std::string{ Extension() } + " file in " + Utf8(fileOrDirectory);
         return {};
     }
-    error = "more than one " + std::string{ Extension() } + " file in " + fileOrDirectory.generic_string() + ":";
+    error = "more than one " + std::string{ Extension() } + " file in " + Utf8(fileOrDirectory) + ":";
     for (const std::filesystem::path& file : found) {
-        error += " " + file.filename().generic_string();
+        error += " " + Utf8(file.filename());
     }
     return {};
 }
@@ -79,7 +90,7 @@ std::string ProjectManager::PathBudgetError(const std::filesystem::path& path) {
         ", and the engine reserves " + std::to_string(kReservedProjectRelativePathLength) +
         " for the files inside a project, so the directory must be at most " +
         std::to_string(kMaxProjectDirectoryLength) +
-        " characters. Move the project to a shorter path: " + directory.generic_string();
+        " characters. Move the project to a shorter path: " + Utf8(directory);
 #else
     static_cast<void>(path);
     return {};

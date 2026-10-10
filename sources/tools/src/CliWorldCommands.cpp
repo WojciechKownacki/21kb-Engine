@@ -44,10 +44,19 @@ namespace {
         }
         cellSize = *parsed;
     }
-    const std::filesystem::path scene = ResolveInputPath(*sceneOption, projectRoot);
+    std::string pathError;
+    const std::filesystem::path scene = ResolveProjectFile(*sceneOption, projectRoot, pathError);
+    if (scene.empty()) {
+        io.err << "error: " << pathError << '\n';
+        return 1;
+    }
     std::filesystem::path out{ *outOption };
     if (out.is_relative() && !projectRoot.empty()) {
         out = projectRoot / out;
+    }
+    if (!projectRoot.empty() && ResolveProjectFile(out, projectRoot, pathError).empty()) {
+        io.err << "error: --out: " << pathError << '\n';
+        return 1;
     }
     const kb::world::WorldMigrationResult migrated = kb::world::WorldMigration::ConvertScene(scene, out, cellSize);
     if (!migrated.succeeded) {
@@ -99,7 +108,12 @@ namespace {
         return 1;
     }
     const std::optional<std::string> project = arguments.Option("--project");
-    const std::filesystem::path world = ResolveInputPath(*worldOption, project.value_or(""));
+    std::string pathError;
+    const std::filesystem::path world = ResolveProjectFile(*worldOption, project.value_or(""), pathError);
+    if (world.empty()) {
+        io.err << "error: " << pathError << '\n';
+        return 1;
+    }
 #if defined(KB_CLI_WORLD_HLOD)
     std::string error;
     const std::optional<std::filesystem::path> contentRoot = ContentRoot(project, world, error);

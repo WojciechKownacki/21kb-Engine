@@ -556,6 +556,7 @@ add_library(kb_engine STATIC
     src/assets/AssetKind.cpp
     src/assets/AssetCompatibility.cpp
     src/assets/AssetDiscoveryService.cpp
+    src/assets/AssetFileName.cpp
     src/assets/AssetFileOperations.cpp
     src/assets/AssetFileSystem.cpp
     src/assets/AssetFolderOperations.cpp
@@ -693,6 +694,7 @@ add_library(kb_engine STATIC
     src/scene/Scene.cpp
     src/scene/SceneComponentAuthoring.cpp
     src/scene/SceneCreateMenu.cpp
+    src/scene/SceneTemplates.cpp
     src/gameplay/GameInstance.cpp
     src/network/NetworkObject.cpp
     src/platform/FileSystemPath.cpp

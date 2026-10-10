@@ -100,6 +100,26 @@ std::filesystem::path ResolveInputPath(
     return input;
 }
 
+std::filesystem::path ResolveProjectFile(
+    const std::filesystem::path& input,
+    const std::filesystem::path& projectRoot,
+    std::string& error) {
+    const std::filesystem::path resolved = ResolveInputPath(input, projectRoot);
+    if (projectRoot.empty()) {
+        return resolved;
+    }
+    std::error_code errorCode;
+    const std::filesystem::path file = std::filesystem::weakly_canonical(std::filesystem::absolute(resolved, errorCode), errorCode);
+    const std::filesystem::path root = std::filesystem::weakly_canonical(std::filesystem::absolute(projectRoot, errorCode), errorCode);
+    const std::filesystem::path relative = file.lexically_relative(root);
+    if (errorCode || relative.empty() || *relative.begin() == "..") {
+        error = "the path " + input.generic_string() + " is outside the project " + projectRoot.generic_string() +
+            ". Pass a path inside the project, e.g. Assets/Scenes/Main.21kbscene or /Game/Scenes/Main.21kbscene.";
+        return {};
+    }
+    return resolved;
+}
+
 const kb::assets::AssetMetadata* FindAssetByFlexiblePath(
     const kb::assets::AssetRegistry& registry,
     const std::filesystem::path& input) {

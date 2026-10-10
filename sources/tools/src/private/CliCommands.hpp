@@ -20,6 +20,7 @@ namespace kb::cli {
 [[nodiscard]] int RunValidateCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneListCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunRunCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
 [[nodiscard]] int RunKeysCommand(const ArgumentList& arguments, CommandIo io);

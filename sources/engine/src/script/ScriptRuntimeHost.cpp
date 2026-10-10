@@ -7,6 +7,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
@@ -138,6 +139,21 @@ void ScriptRuntimeHostSceneSystem::OnDestroy(kb::scene::SceneSystemContext& cont
     system_.OnDestroy(context);
 }
 
+// The script file a behaviour refers to, or why there is none: a reference to a moved, renamed or
+// deleted file has no asset behind it.
+[[nodiscard]] std::string ScriptName(const kb::scene::Scene& scene, kb::assets::AssetId assetId) {
+    if (const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(assetId); metadata != nullptr) {
+        return metadata->virtualPath.generic_string();
+    }
+    return "a missing script (id " + kb::assets::ToString(assetId) +
+        "; the file was moved, renamed or deleted - attach the script to the object again)";
+}
+
+[[nodiscard]] std::string EntityName(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    const std::string_view name = scene.Entities().Name(entity);
+    return name.empty() ? "entity #" + std::to_string(entity.Id()) : "'" + std::string{ name } + "'";
+}
+
 void ScriptRuntimeHostSceneSystem::CollectDiagnostics() {
     const auto push = [this](std::string line) {
         if (state_->reportedSceneSystemDiagnostics.insert(line).second) {
@@ -145,22 +161,18 @@ void ScriptRuntimeHostSceneSystem::CollectDiagnostics() {
         }
     };
     for (const ScriptDiagnostic& diagnostic : system_.LastResult().diagnostics) {
-        // Name the entity and the referenced script asset so a broken behaviour
-        // (e.g. a dangling reference to a deleted/renamed script — "lua script
-        // is not loaded") points at exactly which object's Script component to
-        // fix, instead of a bare, un-actionable message.
-        push("behaviour error: " + diagnostic.message
-            + " (entity #" + std::to_string(diagnostic.entity.Id())
-            + ", script asset #" + std::to_string(diagnostic.assetId.value) + ")"
-            + (diagnostic.stackTrace.empty() ? std::string{}
-                : "\n" + diagnostic.stackTrace));
+        // Name the object and its script so a broken behaviour (e.g. a dangling reference to a
+        // deleted/renamed script - "lua script is not loaded") points at exactly which object's
+        // Script component to fix, instead of a bare, un-actionable number.
+        push(EntityName(state_->scene, diagnostic.entity) + ", " + ScriptName(state_->scene, diagnostic.assetId) + ": " +
+            diagnostic.message +
+            (diagnostic.stackTrace.empty() ? std::string{} : "\n" + diagnostic.stackTrace));
         if (state_->disableFailingBehaviours) {
             DisableFailingBehaviour(diagnostic);
         }
     }
     for (const ScriptRuntimeAssetPrepareDiagnostic& diagnostic : system_.LastPrepareResult().diagnostics) {
-        push("behaviour could not load/compile: " + diagnostic.message
-            + " (script asset #" + std::to_string(diagnostic.assetId.value) + ")");
+        push(ScriptName(state_->scene, diagnostic.assetId) + " could not be loaded: " + diagnostic.message);
     }
 }
 
@@ -173,8 +185,8 @@ void ScriptRuntimeHostSceneSystem::DisableFailingBehaviour(const ScriptDiagnosti
     kb::scene::BehaviourComponent disabled = *current;
     disabled.enabled = false;
     behaviours.Set(diagnostic.entity, disabled);
-    state_->pendingSceneSystemDiagnostics.push_back("behaviour disabled after its error (entity #"
-        + std::to_string(diagnostic.entity.Id()) + ", script asset #" + std::to_string(diagnostic.assetId.value) + ")");
+    state_->pendingSceneSystemDiagnostics.push_back(EntityName(state_->scene, diagnostic.entity) + ", " +
+        ScriptName(state_->scene, diagnostic.assetId) + ": the script was disabled after its error");
 }
 
 } // namespace

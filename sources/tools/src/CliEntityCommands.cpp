@@ -22,6 +22,7 @@
 #include <charconv>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -84,7 +85,11 @@ struct SceneSession {
         }
         session.path = metadata->physicalPath;
     } else {
-        session.path = ResolveInputPath(Utf8Path(sceneOption), projectFile.parent_path());
+        session.path = ResolveProjectFile(Utf8Path(sceneOption), projectFile.parent_path(), error);
+        if (session.path.empty()) {
+            io.err << "error: " << error << '\n';
+            return std::nullopt;
+        }
     }
     const kb::scene::SceneDocumentLoadResult document = kb::scene::SceneDocumentService::Load(session.path);
     if (!document.succeeded) {
@@ -114,27 +119,70 @@ void CollectEntities(const kb::scene::Scene& scene, kb::scene::SceneEntity entit
     return all;
 }
 
-// The one entity called `name`; refuses (with the reason) none or several.
-[[nodiscard]] std::optional<kb::scene::SceneEntity> FindEntity(const kb::scene::Scene& scene, std::string_view name, CommandIo io) {
-    std::vector<kb::scene::SceneEntity> matches;
+// "Parent/Child/Name", like Unity's Transform.Find path.
+[[nodiscard]] std::string EntityPath(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    std::string path{ scene.Entities().Name(entity) };
+    for (kb::scene::SceneEntity parent = scene.Hierarchy().Parent(entity); parent.IsValid();
+         parent = scene.Hierarchy().Parent(parent)) {
+        path = std::string{ scene.Entities().Name(parent) } + "/" + path;
+    }
+    return path;
+}
+
+// The entities `name` addresses, in hierarchy order: by name, or by path ("Parent/Name").
+[[nodiscard]] std::vector<kb::scene::SceneEntity> MatchEntities(const kb::scene::Scene& scene, std::string_view name) {
+    std::vector<kb::scene::SceneEntity> byName;
+    std::vector<kb::scene::SceneEntity> byPath;
     for (const kb::scene::SceneEntity entity : AllEntities(scene)) {
         if (scene.Entities().Name(entity) == name) {
-            matches.push_back(entity);
+            byName.push_back(entity);
+        } else if (name.find('/') != std::string_view::npos && EntityPath(scene, entity) == name) {
+            byPath.push_back(entity);
         }
     }
+    return byName.empty() ? byPath : byName;
+}
+
+void ReportAmbiguous(const kb::scene::Scene& scene, std::string_view name, std::span<const kb::scene::SceneEntity> matches,
+    CommandIo io) {
+    io.err << "error: " << matches.size() << " entities are named '" << name << "':";
+    for (const kb::scene::SceneEntity entity : matches) {
+        io.err << " '" << EntityPath(scene, entity) << "'";
+    }
+    io.err << ". Address one by its path (Parent/Name), or give it its own name: "
+              "kb_cli entity rename --project <dir> --name '" << name << "' --occurrence <1-" << matches.size()
+           << "> --to <NewName>\n";
+}
+
+// The one entity called `name` (or at that path); refuses (with the reason) none or several.
+[[nodiscard]] std::optional<kb::scene::SceneEntity> FindEntity(const kb::scene::Scene& scene, std::string_view name, CommandIo io) {
+    const std::vector<kb::scene::SceneEntity> matches = MatchEntities(scene, name);
     if (matches.size() == 1U) {
         return matches.front();
     }
     if (matches.empty()) {
         io.err << "error: no entity named '" << name << "'. Entities:";
         for (const kb::scene::SceneEntity entity : AllEntities(scene)) {
-            io.err << " '" << scene.Entities().Name(entity) << "'";
+            io.err << " '" << EntityPath(scene, entity) << "'";
         }
         io.err << '\n';
     } else {
-        io.err << "error: " << matches.size() << " entities are named '" << name << "'; rename one first\n";
+        ReportAmbiguous(scene, name, matches, io);
     }
     return std::nullopt;
+}
+
+// A name the CLI can address: no other child of `parent` (or root, when invalid) carries it.
+[[nodiscard]] bool NameFreeUnder(const kb::scene::Scene& scene, kb::scene::SceneEntity parent, std::string_view name,
+    kb::scene::SceneEntity except = {}) {
+    const std::vector<kb::scene::SceneEntity> siblings =
+        parent.IsValid() ? scene.Hierarchy().ChildEntities(parent) : scene.Hierarchy().RootEntities();
+    for (const kb::scene::SceneEntity sibling : siblings) {
+        if (sibling != except && scene.Entities().Name(sibling) == name) {
+            return false;
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] std::optional<std::vector<float>> ParseFloats(std::string_view text, std::size_t count) {
@@ -350,6 +398,13 @@ void ListProperties(std::string_view component, std::ostream& out) {
         parent = FindEntity(scene, *parentName, io);
         if (!parent.has_value()) return 1;
     }
+    // Two objects with one name could no longer be told apart by --name or --entity.
+    if (!NameFreeUnder(scene, parent.value_or(kb::scene::SceneEntity{}), *name)) {
+        io.err << "error: an entity named '" << *name << "' already exists "
+               << (parent.has_value() ? "under '" + EntityPath(scene, *parent) + "'" : std::string{ "at the scene root" })
+               << ". Pass another --name.\n";
+        return 1;
+    }
     kb::scene::SceneEntity entity{};
     if (create.has_value()) {
         const kb::scene::SceneCreateResult created =
@@ -394,6 +449,40 @@ void ListProperties(std::string_view component, std::ostream& out) {
     if (!entity.has_value()) return 1;
     session->scene->Entities().Destroy(*entity);
     return Saved(*session, "removed entity '" + *name + "' and its children", io);
+}
+
+[[nodiscard]] int EntityRename(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> name = arguments.Option("--name");
+    const std::optional<std::string> newName = arguments.Option("--to");
+    if (!name.has_value() || !newName.has_value() || newName->empty()) {
+        io.err << "error: entity rename requires --name <Name|Parent/Name> --to <NewName> [--occurrence <n>]\n";
+        return 1;
+    }
+    std::optional<SceneSession> session = OpenScene(arguments, io);
+    if (!session.has_value()) return 1;
+    kb::scene::Scene& scene = *session->scene;
+    const std::vector<kb::scene::SceneEntity> matches = MatchEntities(scene, *name);
+    kb::scene::SceneEntity entity{};
+    if (const std::optional<std::string> occurrence = arguments.Option("--occurrence"); occurrence.has_value()) {
+        std::size_t index = 0;
+        const auto [end, code] = std::from_chars(occurrence->data(), occurrence->data() + occurrence->size(), index);
+        if (code != std::errc{} || end != occurrence->data() + occurrence->size() || index == 0U || index > matches.size()) {
+            io.err << "error: --occurrence must be 1.." << matches.size() << " for '" << *name << "'\n";
+            return 1;
+        }
+        entity = matches[index - 1U];
+    } else {
+        const std::optional<kb::scene::SceneEntity> found = FindEntity(scene, *name, io);
+        if (!found.has_value()) return 1;
+        entity = *found;
+    }
+    if (!NameFreeUnder(scene, scene.Hierarchy().Parent(entity), *newName, entity)) {
+        io.err << "error: an entity named '" << *newName << "' already exists next to it. Pass another --to.\n";
+        return 1;
+    }
+    const std::string before = EntityPath(scene, entity);
+    scene.Entities().SetName(entity, *newName);
+    return Saved(*session, "renamed entity '" + before + "' to '" + *newName + "'", io);
 }
 
 [[nodiscard]] int ComponentCommand(std::string_view action, const ArgumentList& arguments, CommandIo io) {
@@ -465,7 +554,8 @@ int RunEntityCommand(const ArgumentList& arguments, CommandIo io) {
     const std::string action = positionals.empty() ? std::string{} : positionals.front();
     if (action == "add") return EntityAdd(arguments, io);
     if (action == "remove") return EntityRemove(arguments, io);
-    io.err << "error: entity expects add or remove\n";
+    if (action == "rename") return EntityRename(arguments, io);
+    io.err << "error: entity expects add, remove or rename\n";
     return 1;
 }
 
