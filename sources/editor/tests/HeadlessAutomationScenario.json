@@ -15,6 +15,7 @@
     {"op": "create_mesh_entity", "id": "ui_graphics_mesh", "asset": "/Game/UI/UIGraphicsScene.21kb"},
     {"op": "assert_ui_graphics"},
     {"op":"delete_entity","entity":"ui_graphics_mesh"},
+    { "op": "assert_scene_creation_menu" },
     { "op": "assert_ui_creation_menu" },
     { "op": "copy_fixture", "source": "HeadlessAutomationScenario.json", "destination": "Fixtures/ScenarioCopy.json" },
     { "op": "assert_file", "path": "Fixtures/ScenarioCopy.json", "min_size": 1024, "contains": "21kb.editor-automation/v1" },

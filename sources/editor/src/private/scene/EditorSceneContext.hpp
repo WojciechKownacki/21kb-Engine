@@ -534,6 +534,8 @@ public:
     [[nodiscard]] kb::scene::SceneEntity CreateHierarchyObject();
     [[nodiscard]] kb::scene::SceneEntity CreateUIObject(kb::scene::UIComponentType type, kb::scene::SceneEntity parent = {});
     [[nodiscard]] kb::scene::SceneEntity CreateLightObject(kb::scene::LightKind kind);
+    // An entry of the hierarchy Create menu (kb::scene::SceneCreateMenu), under parent when valid.
+    [[nodiscard]] kb::scene::SceneEntity CreateMenuObject(std::string_view id, kb::scene::SceneEntity parent = {});
     [[nodiscard]] bool ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent);
     [[nodiscard]] bool ReparentEntities(std::span<const kb::scene::SceneEntity> children, kb::scene::SceneEntity parent);
     [[nodiscard]] bool CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path);

@@ -118,6 +118,7 @@ public:
         std::string_view property,
         const kb::scene::UIComponentPropertyValue& value);
     [[nodiscard]] bool VerifyUICreationMenu();
+    [[nodiscard]] bool VerifySceneCreationMenu();
     [[nodiscard]] bool VerifyUIComponentCatalog(std::optional<kb::scene::UIComponentType> only = {});
     [[nodiscard]] bool VerifyUIGraphics();
     [[nodiscard]] bool VerifyUINavigationLinks();

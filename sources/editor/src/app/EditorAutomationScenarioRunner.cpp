@@ -1091,6 +1091,9 @@ ReadScriptValue(
     if (*operation == "verify_ui_2d") {
         return {state.automation.VerifyUI2DEditing(), "2D toolbar, UI selection, eight resize handles, move, undo and cancel"};
     }
+    if (*operation == "assert_scene_creation_menu") {
+        return {state.automation.VerifySceneCreationMenu(), "Hierarchy Create menu: every scene object, its components and Undo"};
+    }
     if (*operation == "assert_ui_creation_menu") {
         return {state.automation.VerifyUICreationMenu(), "Hierarchy UI creation, dependencies, parenting and Undo"};
     }

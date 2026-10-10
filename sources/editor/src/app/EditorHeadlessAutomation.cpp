@@ -19,6 +19,9 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/scene/SceneCreateMenu.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
@@ -1521,6 +1524,71 @@ bool EditorHeadlessAutomation::SetUIRectLayoutField(int field, float value) {
     return matched;
 }
 
+// Every scene object of the hierarchy Create menu: found where SceneCreateMenu puts it, created
+// with its name and components through the menu command, and undone as one step.
+bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
+    const auto fail = [&](std::string_view reason) {
+        Trace("scene_creation_menu", false, reason);
+        return false;
+    };
+    const auto findSubmenu = [](HMENU menu, std::string_view label) -> HMENU {
+        for (int index = 0; index < GetMenuItemCount(menu); ++index) {
+            char text[128]{};
+            GetMenuStringA(menu, static_cast<UINT>(index), text, sizeof(text), MF_BYPOSITION);
+            if (label == text) return GetSubMenu(menu, index);
+        }
+        return nullptr;
+    };
+    const auto findCommand = [](HMENU menu, std::string_view label) -> std::optional<UINT> {
+        for (int index = 0; index < GetMenuItemCount(menu); ++index) {
+            char text[128]{};
+            GetMenuStringA(menu, static_cast<UINT>(index), text, sizeof(text), MF_BYPOSITION);
+            const std::string_view row{ text };
+            if (GetSubMenu(menu, index) == nullptr && row.substr(0, row.find('\t')) == label) return GetMenuItemID(menu, index);
+        }
+        return std::nullopt;
+    };
+    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu();
+    if (!menu) return fail("menu-allocation-failed");
+    const HMENU create = findSubmenu(menu, "Create");
+    std::vector<std::pair<const kb::scene::SceneCreateItem*, UINT>> commands;
+    for (const kb::scene::SceneCreateItem& item : kb::scene::SceneCreateMenu::Items()) {
+        const HMENU holder = !create ? nullptr : item.submenu.empty() ? create : findSubmenu(create, item.submenu);
+        const std::optional<UINT> command = holder ? findCommand(holder, item.label) : std::nullopt;
+        if (!command) {
+            DestroyMenu(menu);
+            return fail(std::string{ item.id } + ": missing from the Create menu");
+        }
+        commands.emplace_back(&item, *command);
+    }
+    DestroyMenu(menu);
+    const auto baseline = context_.HierarchyRows().size();
+    for (const auto& [item, command] : commands) {
+        const std::string id{ item->id };
+        if (!EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(command, context_)) return fail(id + ": creation failed");
+        const kb::scene::SceneEntity entity = context_.SelectedEntity();
+        if (context_.Scene().Entities().Name(entity) != item->name) return fail(id + ": wrong name");
+        const auto has = [&](std::string_view component) { return kb::scene::SceneComponentAuthoring::Has(context_.Scene(), entity, component); };
+        const bool shape = kb::assets::FindBuiltInShape(item->id) != nullptr;
+        const bool components =
+            shape ? has("MeshRenderer") && (item->id == "Cone" || has("Collider")) :
+            item->id.ends_with("Light") ? has("Light") :
+            item->id == "Environment" ? has("WorldBackdrop") && has("Ambient Radiance") :
+            item->id == "Camera" ? has("Camera") :
+            item->id == "Particle System" ? has("Particle Effect") :
+            item->id == "Audio Source" ? has("AudioSource") :
+            item->id == "Audio Listener" ? has("AudioListener") : true;
+        if (!components) return fail(id + ": components missing");
+        if (shape && context_.Scene().Components().MeshRenderers().TryGet(entity)->meshAssetId !=
+                kb::assets::BuiltInShapeId(kb::assets::FindBuiltInShape(item->id)->shape).value)
+            return fail(id + ": not the engine shape");
+        if (context_.HierarchyRows().size() != baseline + 1U || !context_.UndoSceneCommand() ||
+            context_.HierarchyRows().size() != baseline) return fail(id + ": not one undo step");
+        Trace("scene_creation_menu", true, id);
+    }
+    return true;
+}
+
 bool EditorHeadlessAutomation::VerifyUICreationMenu() {
     const auto fail = [&](std::string_view reason) {
         Trace("ui_creation_menu", false, reason);
@@ -1537,7 +1605,7 @@ bool EditorHeadlessAutomation::VerifyUICreationMenu() {
     HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu();
     if (!menu) return fail("menu-allocation-failed");
     const auto create = findSubmenu(menu, "Create");
-    const auto widgets = create ? findSubmenu(create, "User Widget") : nullptr;
+    const auto widgets = create ? findSubmenu(create, "User Interface") : nullptr;
     std::vector<std::pair<std::string, UINT>> commands;
     const auto collect = [&](auto&& self, HMENU current) -> void {
         for (int index = 0; index < GetMenuItemCount(current); ++index) {

@@ -10,6 +10,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/scene/SceneCreateMenu.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -332,9 +333,12 @@ void ListProperties(std::string_view component, std::ostream& out) {
 }
 
 [[nodiscard]] int EntityAdd(const ArgumentList& arguments, CommandIo io) {
-    const std::optional<std::string> name = arguments.Option("--name");
+    const std::optional<std::string> create = arguments.Option("--create");
+    const kb::scene::SceneCreateItem* createItem = create.has_value() ? kb::scene::SceneCreateMenu::Find(*create) : nullptr;
+    const std::optional<std::string> name = arguments.Option("--name").has_value() ? arguments.Option("--name")
+        : createItem != nullptr ? std::optional<std::string>{ std::string{ createItem->name } } : create;
     if (!name.has_value() || name->empty()) {
-        io.err << "error: entity add requires --name <Name>\n";
+        io.err << "error: entity add requires --name <Name> or --create <Item>\n";
         return 1;
     }
     std::optional<SceneSession> session = OpenScene(arguments, io);
@@ -346,16 +350,27 @@ void ListProperties(std::string_view component, std::ostream& out) {
         parent = FindEntity(scene, *parentName, io);
         if (!parent.has_value()) return 1;
     }
-    kb::scene::SceneObjectDesc desc{};
-    desc.name = *name;
-    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(std::move(desc));
-    if (!entity.IsValid()) {
-        io.err << "error: entity could not be created\n";
-        return 1;
-    }
-    if (parent.has_value() && !scene.Hierarchy().SetParent(entity, *parent)) {
-        io.err << "error: '" << *name << "' could not be parented\n";
-        return 1;
+    kb::scene::SceneEntity entity{};
+    if (create.has_value()) {
+        const kb::scene::SceneCreateResult created =
+            kb::scene::SceneCreateMenu::Create(scene, *create, *name, session->descriptor, parent.value_or(kb::scene::SceneEntity{}));
+        if (!created.entity.IsValid()) {
+            io.err << "error: " << created.error << '\n';
+            return 1;
+        }
+        entity = created.entity;
+    } else {
+        kb::scene::SceneObjectDesc desc{};
+        desc.name = *name;
+        entity = scene.Entities().CreateEntity(std::move(desc));
+        if (!entity.IsValid()) {
+            io.err << "error: entity could not be created\n";
+            return 1;
+        }
+        if (parent.has_value() && !scene.Hierarchy().SetParent(entity, *parent)) {
+            io.err << "error: '" << *name << "' could not be parented\n";
+            return 1;
+        }
     }
     for (const auto& [option, property] : { std::pair{ "--position", "localPosition" }, std::pair{ "--rotation", "rotation" },
              std::pair{ "--scale", "localScale" } }) {
@@ -466,6 +481,8 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
     io.out << "\nMeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
     io.out << "Engine shapes:";
     for (const kb::assets::BuiltInShapeDesc& shape : kb::assets::BuiltInShapes()) io.out << ' ' << shape.virtualPath;
+    io.out << "\nentity add --create items:";
+    for (const kb::scene::SceneCreateItem& item : kb::scene::SceneCreateMenu::Items()) io.out << " '" << item.id << '\'';
     io.out << '\n';
     for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
         io.out << kind.id;

@@ -692,6 +692,7 @@ add_library(kb_engine STATIC
     src/ecs/SerializedWorldWriter.cpp
     src/scene/Scene.cpp
     src/scene/SceneComponentAuthoring.cpp
+    src/scene/SceneCreateMenu.cpp
     src/gameplay/GameInstance.cpp
     src/network/NetworkObject.cpp
     src/platform/FileSystemPath.cpp

@@ -17,7 +17,11 @@ Commands:
                  --parent <dir> --name <Name>
   entity       Add or remove a scene entity (the project's startup scene unless --scene).
                  add --project <dir> [--scene <path>] --name <Name> [--parent <Name>]
-                     [--position x,y,z] [--rotation x,y,z (degrees)] [--scale x,y,z]
+                     [--create <Item>] [--position x,y,z] [--rotation x,y,z (degrees)] [--scale x,y,z]
+                 (--create makes what the editor's Create menu makes: Cube, Sphere, Capsule,
+                 Cylinder, Cone, Plane, Quad, Directional Light, Point Light, Spot Light,
+                 Area Light, Camera, Environment, Particle System, Audio Source, Audio Listener;
+                 --name then defaults to the item)
                  remove --project <dir> [--scene <path>] --name <Name>
   component    Add, set or remove a component of an entity.
                  add|set|remove --project <dir> [--scene <path>] --entity <Name>
