@@ -1,4 +1,5 @@
 #include "ProjectCooker.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
 
 #include "engine/platform/FileSystemPath.hpp"
 #include "PackagedRuntimeModuleContract.hpp"
@@ -784,6 +785,23 @@ struct CookerToolInputSnapshot {
     snapshots.clear();
     snapshots.reserve(assets.size());
     for (const kb::assets::AssetMetadata& metadata : assets) {
+        // An engine shape has no file: its source is the text the engine names it by, packed
+        // like any other source and baked by the same mesh loader.
+        if (const kb::assets::BuiltInShapeDesc* shape = kb::assets::FindBuiltInShape(metadata); shape != nullptr) {
+            const std::filesystem::path snapshotPath = snapshotRoot / std::to_string(metadata.id.value) /
+                std::filesystem::path{ shape->virtualPath }.relative_path().make_preferred();
+            std::error_code shapeError;
+            std::filesystem::create_directories(snapshotPath.parent_path(), shapeError);
+            std::ofstream output{ snapshotPath, std::ios::binary | std::ios::trunc };
+            output.write(shape->source.data(), static_cast<std::streamsize>(shape->source.size()));
+            if (shapeError || !output.good()) {
+                error = "engine shape source could not be written: " + std::string{ shape->virtualPath } + " -> " +
+                    snapshotPath.generic_string() + (shapeError ? " (" + shapeError.message() + ")" : std::string{});
+                return false;
+            }
+            snapshots.emplace(metadata.id.value, SourceSnapshot{ .path = snapshotPath, .trackedFiles = {} });
+            continue;
+        }
         std::filesystem::path relativeSource;
         if (!CanonicalRelativePathWithin(metadata.physicalPath, contentRoot, relativeSource)) {
             error = "asset source resolves outside the project content root: " +
@@ -2363,7 +2381,8 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             .browseTag = metadata.browseTag,
             .name = metadata.name,
             .virtualPath = virtualPath,
-            .sourceExtension = metadata.physicalPath.extension().generic_string(),
+            .sourceExtension = metadata.physicalPath.empty() ? metadata.sourceExtension
+                                                             : metadata.physicalPath.extension().generic_string(),
             // The runtime deployment verifies extracted bytes with the same target-independent
             // digest for every source, including assets whose editor registry used an older
             // filesystem hash. The value remains an opaque change token to AssetManager.

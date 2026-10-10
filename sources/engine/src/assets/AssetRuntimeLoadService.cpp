@@ -1,4 +1,5 @@
 #include "assets/AssetRuntimeLoadService.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
 
 #include "assets/AssetLoaderRegistry.hpp"
 #include "assets/AssetPathUtilities.hpp"
@@ -59,7 +60,7 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
         return {};
     }
     const std::filesystem::path resolvedPath = AssetPathUtilities::ResolvePhysicalPath(mounts, *metadata);
-    if (resolvedPath.empty() && runtimePack == nullptr) {
+    if (resolvedPath.empty() && runtimePack == nullptr && FindBuiltInShape(*metadata) == nullptr) {
         errorMessage = "Asset path could not be resolved: " + NormalizeAssetPath(metadata->virtualPath);
         return {};
     }

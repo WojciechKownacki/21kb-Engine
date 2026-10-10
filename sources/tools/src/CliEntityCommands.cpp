@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
@@ -11,6 +12,8 @@
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptValue.hpp"
@@ -219,6 +222,29 @@ void ListProperties(std::string_view component, std::ostream& out) {
     }
     const std::string_view name = setting.substr(0, equals);
     const std::string_view value = setting.substr(equals + 1U);
+
+    // Asset references by path: an engine shape (/Engine/Shapes/Plane, or just Plane) or a project
+    // asset (/Game/Models/Car.obj). The id is the asset's, not something the author types.
+    if (component == "MeshRenderer" && (name == "mesh" || name == "material")) {
+        std::uint64_t id = 0U;
+        if (const kb::assets::BuiltInShapeDesc* shape = kb::assets::FindBuiltInShape(value); shape != nullptr && name == "mesh") {
+            id = kb::assets::BuiltInShapeId(shape->shape).value;
+        } else if (value != "none") {
+            const kb::assets::AssetMetadata* metadata =
+                FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(value));
+            const std::string_view wanted = name == "mesh" ? "RenderMesh" : "RenderMaterial";
+            if (metadata == nullptr || metadata->type.find(wanted) == std::string::npos) {
+                io.err << "error: " << name << " '" << value << "' is not a " << wanted << " asset"
+                       << (name == "mesh" ? " (engine shapes: Cube Sphere Capsule Cylinder Cone Plane Quad)" : "") << '\n';
+                return false;
+            }
+            id = metadata->id.value;
+        }
+        kb::scene::MeshRendererComponent renderer = *scene.Components().MeshRenderers().TryGet(entity);
+        (name == "mesh" ? renderer.meshAssetId : renderer.materialAssetId) = id;
+        scene.Components().MeshRenderers().Set(entity, renderer);
+        return true;
+    }
 
     if (component == "Transform" && name == "rotation") {
         const std::optional<std::vector<float>> degrees = ParseFloats(value, 3U);
@@ -437,6 +463,9 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
     static_cast<void>(arguments);
     io.out << "Transform: rotation (degrees x,y,z)";
     ListProperties("Transform", io.out);
+    io.out << "\nMeshRenderer references: mesh=<asset path | engine shape> material=<asset path | none>\n";
+    io.out << "Engine shapes:";
+    for (const kb::assets::BuiltInShapeDesc& shape : kb::assets::BuiltInShapes()) io.out << ' ' << shape.virtualPath;
     io.out << '\n';
     for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
         io.out << kind.id;

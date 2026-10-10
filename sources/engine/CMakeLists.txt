@@ -552,6 +552,7 @@ add_library(kb_engine STATIC
     src/audio/AudioMixerAssetLoader.cpp
     src/audio/AudioPlayback.cpp
     src/assets/AssetId.cpp
+    src/assets/BuiltInShapes.cpp
     src/assets/AssetKind.cpp
     src/assets/AssetCompatibility.cpp
     src/assets/AssetDiscoveryService.cpp
