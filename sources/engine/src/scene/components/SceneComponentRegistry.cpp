@@ -483,6 +483,13 @@ void RegisterWorldBackdropReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(WorldBackdropComponent, gradientExponent, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(WorldBackdropComponent, priority, kb::ecs::ComponentFieldType::Int32),
         KB_ECS_FIELD(WorldBackdropComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(WorldBackdropComponent, sunDisk, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(WorldBackdropComponent, sunSize, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(WorldBackdropComponent, sunSizeConvergence, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(WorldBackdropComponent, atmosphereThickness, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(WorldBackdropComponent, skyTint, kb::ecs::ComponentFieldType::Vec3Float32),
+        KB_ECS_FIELD(WorldBackdropComponent, groundColor, kb::ecs::ComponentFieldType::Vec3Float32),
+        KB_ECS_FIELD(WorldBackdropComponent, exposure, kb::ecs::ComponentFieldType::Float32),
     }));
 }
 

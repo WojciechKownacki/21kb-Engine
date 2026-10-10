@@ -182,6 +182,13 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "worldBackdrop.gradientExponent=" << backdrop.gradientExponent << '\n';
         output << "worldBackdrop.priority=" << backdrop.priority << '\n';
         output << "worldBackdrop.enabled=" << (backdrop.enabled ? 1 : 0) << '\n';
+        output << "worldBackdrop.sunDisk=" << static_cast<std::uint32_t>(backdrop.sunDisk) << '\n';
+        output << "worldBackdrop.sunSize=" << backdrop.sunSize << '\n';
+        output << "worldBackdrop.sunSizeConvergence=" << backdrop.sunSizeConvergence << '\n';
+        output << "worldBackdrop.atmosphereThickness=" << backdrop.atmosphereThickness << '\n';
+        WriteVec3(output, "worldBackdrop.skyTint", backdrop.skyTint);
+        WriteVec3(output, "worldBackdrop.groundColor", backdrop.groundColor);
+        output << "worldBackdrop.exposure=" << backdrop.exposure << '\n';
     }
     output << "ambientRadiance=" << (components.ambientRadiance.has_value() ? 1 : 0) << '\n';
     if (components.ambientRadiance.has_value()) {

@@ -23,6 +23,7 @@
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/security/ReleaseKeys.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
@@ -2076,6 +2077,12 @@ void RunEntityComponentCommandTests() {
         "--set", "mesh=/Engine/Shapes/Plane" }).exitCode == 0, "an engine shape could not be assigned");
     Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "MeshRenderer",
         "--set", "mesh=/Game/NoSuch.obj" }).exitCode != 0, "a missing mesh must be refused");
+    // Procedural sky settings with Unity's Skybox/Procedural ranges.
+    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "WorldBackdrop",
+        "--set", "mode=3", "--set", "sunDisk=1", "--set", "sunSize=0.1", "--set", "skyTint=0.5,0.2,0.1", "--set", "exposure=2" }).exitCode == 0,
+        "procedural sky settings could not be written");
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "WorldBackdrop",
+        "--set", "sunSize=2" }).exitCode != 0, "a sun size outside 0..1 must be refused");
 
     kb::scene::Scene scene;
     const kb::scene::SceneDocumentLoadResult loaded =
@@ -2094,6 +2101,12 @@ void RunEntityComponentCommandTests() {
     Require(renderer != nullptr &&
             renderer->meshAssetId == kb::assets::BuiltInShapeId(kb::assets::BuiltInShape::Plane).value,
         "the engine Plane was not written as the mesh");
+    const kb::scene::WorldBackdropComponent* sky = scene.Components().WorldBackdrops().TryGet(roots.front());
+    Require(sky != nullptr && sky->mode == kb::scene::WorldBackdropMode::ProceduralSky &&
+            sky->sunDisk == kb::scene::WorldBackdropSunDisk::Simple && std::abs(sky->sunSize - 0.1F) < 0.0001F &&
+            std::abs(sky->skyTint.y - 0.2F) < 0.0001F && std::abs(sky->exposure - 2.0F) < 0.0001F &&
+            std::abs(sky->atmosphereThickness - 1.0F) < 0.0001F,
+        "procedural sky settings were not saved");
     std::filesystem::remove_all(parent, error);
 }
 

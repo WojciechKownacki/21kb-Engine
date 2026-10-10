@@ -51,7 +51,11 @@ struct SceneDocument {
     //      target and refer to.
     // v42: node local translations persist as float64 (large world coordinates); older files store float32
     //      and load unchanged.
-    static constexpr std::uint32_t CurrentFileVersion = 42U;
+    // v43: WorldBackdropComponent persists the procedural sky settings (sun disc and size,
+    //      convergence, atmosphere thickness, sky tint, ground colour, exposure); older files load
+    //      Unity's Skybox/Procedural defaults.
+    static constexpr std::uint32_t CurrentFileVersion = 43U;
+    static constexpr std::uint32_t ProceduralSkySettingsFileVersion = 43U;
     static constexpr std::uint32_t PrefabNodeIdentityFileVersion = 41U;
     static constexpr std::uint32_t DoubleTranslationFileVersion = 42U;
 
