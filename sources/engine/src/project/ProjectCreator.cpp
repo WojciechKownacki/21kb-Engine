@@ -2,6 +2,8 @@
 
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 
 #include <string>
 #include <system_error>
@@ -22,7 +24,7 @@ namespace {
     settings.gameName = settings.name;
     settings.category = "Game";
     settings.description = "21kb project";
-    settings.defaultMap = "/Game/Scenes/Main.21kbscene";
+    settings.defaultMap = "/Game/Scenes/Main.21kbscene"; // written by Create() below
     return settings;
 }
 
@@ -116,6 +118,16 @@ NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirec
         std::filesystem::remove_all(projectRoot / "Assets", error);
         std::filesystem::remove(descriptorFile, error);
         return Refuse(descriptorFile, "Project settings could not be written.");
+    }
+
+    // The settings name Main.21kbscene as the startup map: it has to exist, or the game and every
+    // headless tool start from a scene that is not there.
+    kb::scene::Scene startupScene{ descriptor };
+    if (!kb::scene::SceneDocumentService::Save(startupScene, projectRoot / "Assets" / "Scenes" / "Main.21kbscene", "Main")) {
+        std::filesystem::remove_all(projectRoot / "Assets", error);
+        std::filesystem::remove(descriptorFile, error);
+        std::filesystem::remove(ProjectSettingsStore::FilePath(projectRoot), error);
+        return Refuse(descriptorFile, "Startup scene could not be written.");
     }
 
     return NewProjectResult{ .succeeded = true, .projectFile = descriptorFile, .error = {} };

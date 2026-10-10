@@ -2036,7 +2036,8 @@ void RunNewCommandTests() {
     Require(created.exitCode == 0, "new failed");
     const std::filesystem::path project = parent / "Gra" / "Gra.21kbproject";
     Require(kb::project::ProjectManager::LoadProject(project).succeeded, "new did not write a loadable project");
-    Require(std::filesystem::is_directory(parent / "Gra" / "Assets" / "Scenes"), "new did not create Assets/Scenes");
+    Require(kb::scene::SceneDocumentService::Load(parent / "Gra" / "Assets" / "Scenes" / "Main.21kbscene").succeeded,
+        "new did not write the startup scene the settings point to");
     Require(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(parent / "Gra")).found,
         "new did not write the project settings");
     Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Gra" }).exitCode != 0,
