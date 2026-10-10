@@ -2226,10 +2226,10 @@ template <typename Mutator>
 [[nodiscard]] bool HandleSpaceStrokeClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     const kb::scene::SpaceStrokeComponent* stroke = sceneContext.Scene().Components().SpaceStrokes().TryGet(entity);
     if (stroke == nullptr) return false;
-    if (hit.property == InspectorPropertyId::SpaceStrokeCastsShadow) return EditSpaceStroke(sceneContext, entity, "Toggle Kreska przestrzenna Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
-    if (hit.property == InspectorPropertyId::SpaceStrokeReceivesShadow) return EditSpaceStroke(sceneContext, entity, "Toggle Kreska przestrzenna Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
-    if (hit.property == InspectorPropertyId::SpaceStrokeEnabled) return EditSpaceStroke(sceneContext, entity, "Toggle Kreska przestrzenna", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsSpaceStrokeComponentPersistable(value); });
-    if (hit.property == InspectorPropertyId::SpaceStrokeMode) return EditSpaceStroke(sceneContext, entity, "Change Kreska przestrzenna Mode", [](auto& value) { value.mode = static_cast<kb::scene::SpaceStrokeMode>((static_cast<std::uint32_t>(value.mode) + 1U) % 4U); return true; });
+    if (hit.property == InspectorPropertyId::SpaceStrokeCastsShadow) return EditSpaceStroke(sceneContext, entity, "Toggle Line Renderer Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
+    if (hit.property == InspectorPropertyId::SpaceStrokeReceivesShadow) return EditSpaceStroke(sceneContext, entity, "Toggle Line Renderer Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
+    if (hit.property == InspectorPropertyId::SpaceStrokeEnabled) return EditSpaceStroke(sceneContext, entity, "Toggle Line Renderer", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsSpaceStrokeComponentPersistable(value); });
+    if (hit.property == InspectorPropertyId::SpaceStrokeMode) return EditSpaceStroke(sceneContext, entity, "Change Line Renderer Mode", [](auto& value) { value.mode = static_cast<kb::scene::SpaceStrokeMode>((static_cast<std::uint32_t>(value.mode) + 1U) % 4U); return true; });
     if (!IsSpaceStrokeProperty(hit.property)) return false;
     switch (hit.property) {
     case InspectorPropertyId::SpaceStrokeMeshAssetId: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(stroke->meshAssetId)); break;
@@ -2245,9 +2245,9 @@ template <typename Mutator>
 [[nodiscard]] bool HandleHistoryRibbonClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     const kb::scene::HistoryRibbonComponent* ribbon = sceneContext.Scene().Components().HistoryRibbons().TryGet(entity);
     if (ribbon == nullptr) return false;
-    if (hit.property == InspectorPropertyId::HistoryRibbonCastsShadow) return EditHistoryRibbon(sceneContext, entity, "Toggle Wst\xC4\x99" "ga historii Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
-    if (hit.property == InspectorPropertyId::HistoryRibbonReceivesShadow) return EditHistoryRibbon(sceneContext, entity, "Toggle Wst\xC4\x99" "ga historii Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
-    if (hit.property == InspectorPropertyId::HistoryRibbonEnabled) return EditHistoryRibbon(sceneContext, entity, "Toggle Wst\xC4\x99" "ga historii", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsHistoryRibbonComponentPersistable(value); });
+    if (hit.property == InspectorPropertyId::HistoryRibbonCastsShadow) return EditHistoryRibbon(sceneContext, entity, "Toggle Trail Renderer Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
+    if (hit.property == InspectorPropertyId::HistoryRibbonReceivesShadow) return EditHistoryRibbon(sceneContext, entity, "Toggle Trail Renderer Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
+    if (hit.property == InspectorPropertyId::HistoryRibbonEnabled) return EditHistoryRibbon(sceneContext, entity, "Toggle Trail Renderer", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsHistoryRibbonComponentPersistable(value); });
     if (!IsHistoryRibbonProperty(hit.property)) return false;
     switch (hit.property) {
     case InspectorPropertyId::HistoryRibbonMeshAssetId: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(ribbon->meshAssetId)); break;
@@ -2658,7 +2658,7 @@ template <typename Mutator>
     });
 }
 [[nodiscard]] bool ApplySpaceStrokeText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
-    return EditSpaceStroke(sceneContext, entity, "Edit Kreska przestrzenna", [property, text](kb::scene::SpaceStrokeComponent& value) {
+    return EditSpaceStroke(sceneContext, entity, "Edit Line Renderer", [property, text](kb::scene::SpaceStrokeComponent& value) {
         kb::scene::SpaceStrokeComponent candidate = value;
         switch (property) {
         case InspectorPropertyId::SpaceStrokeMeshAssetId: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.meshAssetId); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
@@ -2675,7 +2675,7 @@ template <typename Mutator>
     });
 }
 [[nodiscard]] bool ApplyHistoryRibbonText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
-    return EditHistoryRibbon(sceneContext, entity, "Edit Wst\xC4\x99" "ga historii", [property, text](kb::scene::HistoryRibbonComponent& value) {
+    return EditHistoryRibbon(sceneContext, entity, "Edit Trail Renderer", [property, text](kb::scene::HistoryRibbonComponent& value) {
         kb::scene::HistoryRibbonComponent candidate = value;
         switch (property) {
         case InspectorPropertyId::HistoryRibbonMeshAssetId: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.meshAssetId); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
@@ -3252,12 +3252,12 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
             } else if (hit.section == InspectorSectionId::SpaceStroke && sceneContext.Scene().Components().SpaceStrokes().Has(entity)) {
-                if (sceneContext.BeginSceneEditTransaction("Remove Kreska przestrzenna")) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Line Renderer")) {
                     sceneContext.Scene().Components().SpaceStrokes().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
             } else if (hit.section == InspectorSectionId::HistoryRibbon && sceneContext.Scene().Components().HistoryRibbons().Has(entity)) {
-                if (sceneContext.BeginSceneEditTransaction("Remove Wst\xC4\x99" "ga historii")) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Trail Renderer")) {
                     sceneContext.Scene().Components().HistoryRibbons().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }

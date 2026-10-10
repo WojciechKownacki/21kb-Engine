@@ -62,9 +62,8 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("3D Radiance Emitter"),
             .serializable = true,
         },
-        // Compatibility alias retained in the public script manifest. The
-        // canonical authoring name is 3D Radiance Emitter, but existing
-        // scripts and serialized API consumers must continue to resolve Light.
+        // Light is the authoring name; 3D Radiance Emitter above is its older
+        // name, kept for scripts and serialized API consumers written against it.
         LibraryComponentDesc{
             .name = "Light",
             .id = ComputeLibraryComponentId("Light"),
@@ -199,6 +198,28 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
+            .name = "Line Renderer",
+            .id = ComputeLibraryComponentId("Line Renderer"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Trail Renderer",
+            .id = ComputeLibraryComponentId("Trail Renderer"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Particle Effect",
+            .id = ComputeLibraryComponentId("Particle Effect"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Lens Flare",
+            .id = ComputeLibraryComponentId("Lens Flare"),
+            .serializable = true,
+        },
+        // Older names of Line Renderer, Trail Renderer and Lens Flare, kept for scripts and
+        // serialized API consumers written against them.
+        LibraryComponentDesc{
             .name = "Kreska przestrzenna",
             .id = ComputeLibraryComponentId("Kreska przestrzenna"),
             .serializable = true,
@@ -206,11 +227,6 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
         LibraryComponentDesc{
             .name = "Wst\xC4\x99" "ga historii",
             .id = ComputeLibraryComponentId("Wst\xC4\x99" "ga historii"),
-            .serializable = true,
-        },
-        LibraryComponentDesc{
-            .name = "Particle Effect",
-            .id = ComputeLibraryComponentId("Particle Effect"),
             .serializable = true,
         },
         LibraryComponentDesc{

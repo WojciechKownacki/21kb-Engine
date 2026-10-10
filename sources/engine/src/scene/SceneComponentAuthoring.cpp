@@ -102,7 +102,7 @@ const std::array kEntries{
     Entry{ { "Geometry Swarm", "Geometry Swarm", {} }, KB_COMPONENT(GeometrySwarms, geometrySwarm, GeometrySwarmComponent{}) },
     Entry{ { "Surface Cast", "Surface Cast", {} }, KB_COMPONENT(SurfaceCasts, surfaceCast, SurfaceCastComponent{}) },
     Entry{ { "Facing Panel", "Facing Panel", {} }, KB_COMPONENT(FacingPanels, facingPanel, FacingPanelComponent{}) },
-    Entry{ { "Kreska przestrzenna", "Kreska przestrzenna", {} },
+    Entry{ { "Line Renderer", "Line Renderer", {} },
         [](const Scene& scene, SceneEntity entity) { return scene.Components().SpaceStrokes().Has(entity); },
         [](Scene& scene, SceneEntity entity) {
             if (!scene.Components().GuideCurves().Has(entity)) scene.Components().GuideCurves().Set(entity, GuideCurveComponent{});
@@ -111,8 +111,8 @@ const std::array kEntries{
         },
         [](Scene& scene, SceneEntity entity) { scene.Components().SpaceStrokes().Remove(entity); },
         [](const ScenePrefabNodeComponents& node) { return node.spaceStroke.has_value(); } },
-    Entry{ { "Wst\xC4\x99" "ga historii", "Wst\xC4\x99" "ga historii", {} }, KB_COMPONENT(HistoryRibbons, historyRibbon, HistoryRibbonComponent{}) },
-    Entry{ { "Echo soczewki", "Echo soczewki", {} }, KB_COMPONENT(LensEchoes, lensEcho, LensEchoComponent{}) },
+    Entry{ { "Trail Renderer", "Trail Renderer", {} }, KB_COMPONENT(HistoryRibbons, historyRibbon, HistoryRibbonComponent{}) },
+    Entry{ { "Lens Flare", "Lens Flare", {} }, KB_COMPONENT(LensEchoes, lensEcho, LensEchoComponent{}) },
     Entry{ { "NavAgent", "Nav Agent", {} }, KB_COMPONENT(NavAgents, navAgent, NavAgent{}) },
     Entry{ { "NavObstacle", "Nav Obstacle", {} }, KB_COMPONENT(NavObstacles, navObstacle, NavObstacle{}) },
     Entry{ { "NavLink", "Nav Link", {} }, KB_COMPONENT(NavLinks, navLink, NavLink{}) },
@@ -121,13 +121,8 @@ const std::array kEntries{
 #undef KB_COMPONENT
 #undef KB_CHECKED_COMPONENT
 
-// "3D Radiance Emitter" is the Light component's older name; scenes and scripts still use it.
-[[nodiscard]] std::string_view CanonicalId(std::string_view id) noexcept {
-    return id == "3D Radiance Emitter" ? std::string_view{ "Light" } : id;
-}
-
 [[nodiscard]] const Entry* FindEntry(std::string_view id) noexcept {
-    const std::string_view canonical = CanonicalId(id);
+    const std::string_view canonical = SceneComponentAuthoring::CanonicalName(id);
     const auto found = std::ranges::find_if(kEntries, [canonical](const Entry& entry) { return entry.kind.id == canonical; });
     return found == kEntries.end() ? nullptr : &*found;
 }
@@ -142,6 +137,14 @@ const std::array<SceneComponentKind, kEntries.size()> kKinds = [] {
 
 std::span<const SceneComponentKind> SceneComponentAuthoring::Kinds() noexcept {
     return kKinds;
+}
+
+std::string_view SceneComponentAuthoring::CanonicalName(std::string_view id) noexcept {
+    if (id == "3D Radiance Emitter") return "Light";
+    if (id == "Kreska przestrzenna") return "Line Renderer";
+    if (id == "Wst\xC4\x99" "ga historii") return "Trail Renderer";
+    if (id == "Echo soczewki") return "Lens Flare";
+    return id;
 }
 
 const SceneComponentKind* SceneComponentAuthoring::Find(std::string_view id) noexcept {

@@ -2021,7 +2021,7 @@ void PaintFacingPanelSection(HDC dc, RECT content, int& y, const EditorTheme& th
     y = section.Bottom() + kSectionGap;
 }
 void PaintSpaceStrokeSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SpaceStrokeComponent& stroke) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::SpaceStroke, HeroIconKind::Cube, "Kreska przestrzenna", true);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::SpaceStroke, HeroIconKind::Cube, "Line Renderer", true);
     constexpr std::array<const char*, 4> modeNames{ "Polyline", "Spline", "Beam", "Cable" };
     section.Field("Segment Mesh", std::to_string(stroke.meshAssetId), InspectorPropertyId::SpaceStrokeMeshAssetId);
     section.Field("Material", std::to_string(stroke.materialAssetId), InspectorPropertyId::SpaceStrokeMaterialAssetId);
@@ -2037,7 +2037,7 @@ void PaintSpaceStrokeSection(HDC dc, RECT content, int& y, const EditorTheme& th
 }
 
 void PaintHistoryRibbonSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::HistoryRibbonComponent& ribbon) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::HistoryRibbon, HeroIconKind::Cube, "Wst\xC4\x99" "ga historii", true);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::HistoryRibbon, HeroIconKind::Cube, "Trail Renderer", true);
     section.Field("Segment Mesh", std::to_string(ribbon.meshAssetId), InspectorPropertyId::HistoryRibbonMeshAssetId);
     section.Field("Material", std::to_string(ribbon.materialAssetId), InspectorPropertyId::HistoryRibbonMaterialAssetId);
     section.Field("Lifetime", FormatFloat(ribbon.lifetimeSeconds, 3), InspectorPropertyId::HistoryRibbonLifetimeSeconds);
@@ -2153,7 +2153,7 @@ void PaintLightSection(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const kb::scene::LightComponent& light) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, "3D Radiance Emitter");
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, "Light");
     section.Field("Type", InspectorComponentLabelFormatter::LightKindName(light.kind), InspectorPropertyId::LightKind);
     section.Float("Color R", FormatFloat(light.color.x, 2), InspectorPropertyId::LightColorR);
     section.Float("Color G", FormatFloat(light.color.y, 2), InspectorPropertyId::LightColorG);

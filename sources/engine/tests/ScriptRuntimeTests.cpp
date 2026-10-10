@@ -12525,6 +12525,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                     validValue = kb::script::ScriptValue{ 0.8F };
                 } else if (componentName == "Detail Switch" && property.name == "demoteCoverage") {
                     validValue = kb::script::ScriptValue{ 0.4F };
+                } else if (componentName == "WorldBackdrop" && property.name == "sunSize") {
+                    validValue = kb::script::ScriptValue{ 0.5F }; // Unity's Sun Size range is 0..1
                 } else {
                     validValue = kb::script::ScriptValue{ 2.5F };
                 }
@@ -12546,9 +12548,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                 kb::tests::Require(get.value == validValue,
                     ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::Float) {
-                const float expectedValue = componentName == "Detail Switch" && property.name == "promoteCoverage" ? 0.8F
-                    : componentName == "Detail Switch" && property.name == "demoteCoverage" ? 0.4F : 2.5F;
-                kb::tests::Require(kb::tests::NearlyEqual(get.value.AsFloat(), expectedValue), ("Script component API did not round-trip " + fieldLabel).c_str());
+                kb::tests::Require(kb::tests::NearlyEqual(get.value.AsFloat(), validValue.AsFloat()), ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::Int) {
                 kb::tests::Require(get.value.AsInt() == 1, ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::UInt32) {
@@ -12577,7 +12577,9 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // Light is a public compatibility alias for 3D Radiance Emitter and
     // deliberately exercises the same 16 generated accessors.
     // NavLink adds eleven fields.
-    kb::tests::Require(fieldsChecked == 628U, "Script component API generated accessor coverage test did not exercise the expected total field count (628, including collision mesh assets and the Light compatibility alias)");
+    // WorldBackdrop grew eleven procedural sky fields, and the older names of Line Renderer
+    // (10), Trail Renderer (9) and Lens Flare (7) are accepted aliases: 628 -> 665.
+    kb::tests::Require(fieldsChecked == 665U, "Script component API generated accessor coverage test did not exercise the expected total field count (665, including collision mesh assets and the compatibility aliases)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12659,7 +12661,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 628U, "LIB-082 raw-pointer audit did not exercise the expected total field count (628, including collision mesh assets and the Light compatibility alias)");
+    kb::tests::Require(propertiesChecked == 665U, "LIB-082 raw-pointer audit did not exercise the expected total field count (665, including collision mesh assets and the compatibility aliases)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
