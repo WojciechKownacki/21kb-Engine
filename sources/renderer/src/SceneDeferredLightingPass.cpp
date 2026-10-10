@@ -2,6 +2,8 @@
 
 #include "kb/render/ShaderLoader.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "engine/math/EngineMath.hpp"
+#include "kb/render/scene/RenderScene.hpp"
 #include "renderer/RendererMatrixMath.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "renderer/RendererDebugLog.hpp"
@@ -123,6 +125,8 @@ bool SceneDeferredLightingPass::Initialize() {
     backdropHorizonUniform_ = bgfx::createUniform("u_deferredBackdropHorizon", bgfx::UniformType::Vec4);
     backdropZenithUniform_ = bgfx::createUniform("u_deferredBackdropZenith", bgfx::UniformType::Vec4);
     backdropParamsUniform_ = bgfx::createUniform("u_deferredBackdropParams", bgfx::UniformType::Vec4);
+    backdropSunUniform_ = bgfx::createUniform("u_deferredBackdropSun", bgfx::UniformType::Vec4);
+    backdropSunColorUniform_ = bgfx::createUniform("u_deferredBackdropSunColor", bgfx::UniformType::Vec4);
     backdropEnvironmentSampler_ = bgfx::createUniform("s_deferredBackdropEnvironment", bgfx::UniformType::Sampler);
     fallbackShadowTexture_ = CreateFallbackWhiteTexture();
     fallbackBackdropEnvironmentTexture_ = CreateFallbackBlackTexture();
@@ -163,6 +167,12 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
     if (bgfx::isValid(backdropParamsUniform_)) {
         bgfx::destroy(backdropParamsUniform_);
         backdropParamsUniform_ = BGFX_INVALID_HANDLE;
+    }
+    for (bgfx::UniformHandle* uniform : { &backdropSunUniform_, &backdropSunColorUniform_ }) {
+        if (bgfx::isValid(*uniform)) {
+            bgfx::destroy(*uniform);
+            *uniform = BGFX_INVALID_HANDLE;
+        }
     }
     if (bgfx::isValid(backdropEnvironmentSampler_)) {
         bgfx::destroy(backdropEnvironmentSampler_);
@@ -412,16 +422,37 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     const std::array<float, 4> backdropZenith = gradientBackdrop
         ? std::array<float, 4>{ desc.worldBackdrop->zenithColor[0], desc.worldBackdrop->zenithColor[1], desc.worldBackdrop->zenithColor[2], 1.0F }
         : std::array<float, 4>{};
+    // x: 1 gradient, 2 environment map, 3 procedural sky (Unity's Skybox/Procedural model).
+    const bool proceduralSky = gradientBackdrop && desc.worldBackdrop->mode == SceneRenderWorldBackdropMode::ProceduralSky;
     const std::array<float, 4> backdropParams = gradientBackdrop
-        ? std::array<float, 4>{ 1.0F, desc.worldBackdrop->horizonHeight, desc.worldBackdrop->gradientExponent,
-              desc.worldBackdrop->mode == SceneRenderWorldBackdropMode::ProceduralSky ? 1.0F : 0.0F }
+        ? std::array<float, 4>{ proceduralSky ? 3.0F : 1.0F, desc.worldBackdrop->horizonHeight, desc.worldBackdrop->gradientExponent, 0.0F }
         : environmentBackdrop ? std::array<float, 4>{ 2.0F, 0.0F, 0.0F, 0.0F } : std::array<float, 4>{};
+    // The sky's sun is the brightest directional light, as Unity's Sun Source defaults to.
+    std::array<float, 4> backdropSun{ 0.0F, 1.0F, 0.0F, 0.0F };
+    std::array<float, 4> backdropSunColor{};
+    float brightestSun = 0.0F;
+    for (const auto& [entityId, proxy] : desc.renderScene->LightProxies()) {
+        static_cast<void>(entityId);
+        const LightRenderProxyDesc& light = proxy.desc;
+        const float brightness = light.intensity * (light.color[0] + light.color[1] + light.color[2]);
+        if (light.kind != RenderLightKind::Directional || brightness <= brightestSun) {
+            continue;
+        }
+        brightestSun = brightness;
+        const kb::math::Vec3 shining = kb::math::Rotate(
+            kb::math::Quat{ light.rotation[0], light.rotation[1], light.rotation[2], light.rotation[3] },
+            kb::math::Vec3{ 0.0F, 0.0F, 1.0F });
+        backdropSun = { -shining.x, -shining.y, -shining.z, 1.0F };
+        backdropSunColor = { light.color[0] * light.intensity, light.color[1] * light.intensity, light.color[2] * light.intensity, 1.0F };
+    }
     bgfx::setUniform(cameraPositionUniform_, cameraPosition.data());
     bgfx::setUniform(inverseViewProjectionUniform_, inverseViewProjection.data());
     bgfx::setUniform(depthParamsUniform_, depthParams.data());
     bgfx::setUniform(backdropHorizonUniform_, backdropHorizon.data());
     bgfx::setUniform(backdropZenithUniform_, backdropZenith.data());
     bgfx::setUniform(backdropParamsUniform_, backdropParams.data());
+    bgfx::setUniform(backdropSunUniform_, backdropSun.data());
+    bgfx::setUniform(backdropSunColorUniform_, backdropSunColor.data());
     // Deferred's key light used to be applied at full strength everywhere, with no shadow term at
     // all, while the forward opaque pass darkens light index 0 by a sampled shadow map -- same light,
     // same scene, but deferred came out visibly brighter/flatter. Feed the same shadow binding used
@@ -492,6 +523,7 @@ bool SceneDeferredLightingPass::IsInitialized() const noexcept {
         bgfx::isValid(environmentZenithUniform_) && bgfx::isValid(environmentGroundUniform_) &&
         bgfx::isValid(environmentParamsUniform_) && bgfx::isValid(cameraPositionUniform_) &&
         bgfx::isValid(inverseViewProjectionUniform_) && bgfx::isValid(depthParamsUniform_) &&
+        bgfx::isValid(backdropSunUniform_) && bgfx::isValid(backdropSunColorUniform_) &&
         bgfx::isValid(shadowMapSampler_) && bgfx::isValid(shadowViewProjUniform_) && bgfx::isValid(shadowParamsUniform_) && shadowCascades_.IsValid() && pointShadows_.IsValid() &&
         giUniforms_.IsValid() &&
         bgfx::isValid(backdropHorizonUniform_) && bgfx::isValid(backdropZenithUniform_) && bgfx::isValid(backdropParamsUniform_) &&

@@ -27,11 +27,107 @@ uniform vec4 u_deferredEnvironmentGround;
 uniform vec4 u_deferredEnvironmentParams;
 uniform mat4 u_deferredShadowViewProj;
 uniform vec4 u_deferredShadowParams;
-// x: 1 for gradient/procedural, 2 for an equirectangular environment map;
-// y: normalized horizon offset, z: vertical blend exponent, w: procedural variant flag.
+// x: 1 vertical gradient, 2 equirectangular environment map, 3 procedural sky;
+// y: horizon offset (sine of the elevation), z: gradient exponent.
 uniform vec4 u_deferredBackdropHorizon;
 uniform vec4 u_deferredBackdropZenith;
 uniform vec4 u_deferredBackdropParams;
+// Procedural sky sun: xyz toward the sun (w = 1 when the scene has one), linear colour * intensity.
+uniform vec4 u_deferredBackdropSun;
+uniform vec4 u_deferredBackdropSunColor;
+
+// Procedural sky after Unity's Skybox/Procedural (O'Neil, GPU Gems 2, ch. 16), with its default
+// settings: sky tint 0.5, ground (0.369, 0.349, 0.341), exposure 1.3, sun size 0.04, convergence 5,
+// atmosphere thickness 1.
+float KbSkyScale(float inCos)
+{
+    float x = 1.0 - inCos;
+    return 0.25 * exp(-0.00287 + x * (0.459 + x * (3.83 + x * (-6.80 + x * 5.25))));
+}
+
+vec3 KbProceduralSky(vec3 eyeRay, vec3 sunDirection, vec3 sunLight, float hasSun)
+{
+    const float kOuterRadius = 1.025;
+    const float kOuterRadius2 = 1.050625;
+    const float kInnerRadius = 1.0;
+    const float kInnerRadius2 = 1.0;
+    const float kCameraHeight = 0.0001;
+    const float kRayleigh = 0.0025;
+    const float kMie = 0.0010;
+    const float kSunBrightness = 20.0;
+    const float kMaxScatter = 50.0;
+    const float kScale = 40.0;               // 1 / (kOuterRadius - 1)
+    const float kScaleDepth = 0.25;
+    const float kScaleOverScaleDepth = 160.0; // kScale / kScaleDepth
+    const float kExposure = 1.3;
+    const float kSunSize = 0.04;
+    const float kSunSizeConvergence = 5.0;
+    const float kMieG = -0.990;
+    const float kMieG2 = 0.9801;
+    const float kPi = 3.14159265;
+
+    vec3 invWavelength = vec3(1.0, 1.0, 1.0) / pow(vec3(0.65, 0.57, 0.475), vec3(4.0, 4.0, 4.0));
+    float krESun = kRayleigh * kSunBrightness;
+    float kr4Pi = kRayleigh * 4.0 * kPi;
+    float kmESun = kMie * kSunBrightness;
+    float km4Pi = kMie * 4.0 * kPi;
+    vec3 groundColor = vec3(0.1119, 0.0999, 0.0953); // sRGB (0.369, 0.349, 0.341)
+    vec3 cameraPos = vec3(0.0, kInnerRadius + kCameraHeight, 0.0);
+    vec3 cIn;
+    vec3 cOut;
+    if (eyeRay.y >= 0.0) {
+        float far = sqrt(kOuterRadius2 + kInnerRadius2 * eyeRay.y * eyeRay.y - kInnerRadius2) - kInnerRadius * eyeRay.y;
+        float height = kInnerRadius + kCameraHeight;
+        float depth = exp(kScaleOverScaleDepth * (-kCameraHeight));
+        float startAngle = dot(eyeRay, cameraPos) / height;
+        float startOffset = depth * KbSkyScale(startAngle);
+        float sampleLength = far / 2.0;
+        float scaledLength = sampleLength * kScale;
+        vec3 sampleRay = eyeRay * sampleLength;
+        vec3 samplePoint = cameraPos + sampleRay * 0.5;
+        vec3 frontColor = vec3(0.0, 0.0, 0.0);
+        for (int i = 0; i < 2; i++) {
+            float sampleHeight = length(samplePoint);
+            float sampleDepth = exp(kScaleOverScaleDepth * (kInnerRadius - sampleHeight));
+            float lightAngle = dot(sunDirection, samplePoint) / sampleHeight;
+            float cameraAngle = dot(eyeRay, samplePoint) / sampleHeight;
+            float scatter = startOffset + sampleDepth * (KbSkyScale(lightAngle) - KbSkyScale(cameraAngle));
+            vec3 attenuate = exp(-clamp(scatter, 0.0, kMaxScatter) * (invWavelength * kr4Pi + km4Pi));
+            frontColor += attenuate * (sampleDepth * scaledLength);
+            samplePoint += sampleRay;
+        }
+        cIn = frontColor * (invWavelength * krESun);
+        cOut = frontColor * kmESun;
+    } else {
+        float far = (-kCameraHeight) / min(-0.001, eyeRay.y);
+        vec3 pos = cameraPos + far * eyeRay;
+        float depth = exp((-kCameraHeight) * (1.0 / kScaleDepth));
+        float cameraScale = KbSkyScale(dot(-eyeRay, pos));
+        float lightScale = KbSkyScale(dot(sunDirection, pos));
+        float cameraOffset = depth * cameraScale;
+        float temp = lightScale + cameraScale;
+        float scaledLength = far * kScale;
+        vec3 samplePoint = cameraPos + eyeRay * far * 0.5;
+        float sampleDepth = exp(kScaleOverScaleDepth * (kInnerRadius - length(samplePoint)));
+        float scatter = sampleDepth * temp - cameraOffset;
+        vec3 attenuate = exp(-clamp(scatter, 0.0, kMaxScatter) * (invWavelength * kr4Pi + km4Pi));
+        cIn = attenuate * (sampleDepth * scaledLength) * (invWavelength * krESun + kmESun);
+        cOut = clamp(attenuate, 0.0, 1.0);
+    }
+    float eyeCos = dot(sunDirection, eyeRay);
+    vec3 sky = kExposure * (cIn * (0.75 + 0.75 * eyeCos * eyeCos));
+    vec3 ground = kExposure * (cIn + groundColor * cOut);
+    vec3 color = mix(sky, ground, clamp(-eyeRay.y / 0.02, 0.0, 1.0));
+    if (eyeRay.y > 0.0 && hasSun > 0.5) {
+        float lightIntensity = clamp(length(sunLight), 0.25, 1.0);
+        vec3 sunColor = 15.0 * clamp(cOut, 0.0, 1.0) * sunLight / lightIntensity;
+        float focused = pow(clamp(eyeCos, 0.0, 1.0), kSunSizeConvergence);
+        float mie = 1.0 + kMieG2 - 2.0 * kMieG * (-focused);
+        mie = max(pow(mie, pow(kSunSize, 0.65) * 10.0), 0.0001);
+        color += sunColor * (1.5 * ((1.0 - kMieG2) / (2.0 + kMieG2)) * (1.0 + focused * focused) / mie);
+    }
+    return color;
+}
 
 #include "ssgi.sh"
 #include "ssr.sh"
@@ -191,9 +287,14 @@ void main()
     // conventions and authored material opacity.
     bool background = encodedNormal.a < 0.5;
     if (background) {
+        vec3 backdropDirection = normalize(ReconstructWorldPosition(v_texcoord0, depth) - u_deferredCameraPosition.xyz);
+        if (u_deferredBackdropParams.x > 2.5) {
+            gl_FragColor = vec4(KbProceduralSky(backdropDirection, normalize(u_deferredBackdropSun.xyz),
+                u_deferredBackdropSunColor.rgb, u_deferredBackdropSun.w), 1.0);
+            return;
+        }
         if (u_deferredBackdropParams.x > 1.5) {
-            vec3 farWorld = ReconstructWorldPosition(v_texcoord0, depth);
-            vec3 direction = normalize(farWorld - u_deferredCameraPosition.xyz);
+            vec3 direction = backdropDirection;
             // bgfx's HLSL profile does not expose the GLSL atan(y, x) overload.
             // Reconstruct its quadrant explicitly so this equirectangular mapping
             // remains backend-independent.
@@ -206,11 +307,10 @@ void main()
             return;
         }
         if (u_deferredBackdropParams.x > 0.5) {
-            float vertical = clamp((1.0 - v_texcoord0.y) + u_deferredBackdropParams.y, 0.0, 1.0);
+            // Horizon to zenith by the view's elevation, as a gradient skybox: the horizon stays
+            // where the camera sees it, whatever the camera's pitch.
+            float vertical = clamp(backdropDirection.y - u_deferredBackdropParams.y, 0.0, 1.0);
             float blend = pow(vertical, max(u_deferredBackdropParams.z, 0.0001));
-            if (u_deferredBackdropParams.w > 0.5) {
-                blend = blend * blend * (3.0 - 2.0 * blend);
-            }
             gl_FragColor = vec4(mix(u_deferredBackdropHorizon.rgb, u_deferredBackdropZenith.rgb, blend), 1.0);
             return;
         }
