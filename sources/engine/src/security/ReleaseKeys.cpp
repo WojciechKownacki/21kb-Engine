@@ -1,4 +1,5 @@
 #include "engine/security/ReleaseKeys.hpp"
+#include "engine/project/ProjectManager.hpp"
 
 #include <algorithm>
 #include <array>
@@ -530,7 +531,10 @@ bool IsInsideProjectOrRepository(const std::filesystem::path& path) {
     std::error_code error;
     std::filesystem::path current = std::filesystem::absolute(path, error).lexically_normal().parent_path();
     while (!current.empty()) {
-        for (const std::string_view marker : { std::string_view{ "Project.21kbproject" }, std::string_view{ ".git" },
+        if (kb::project::ProjectManager::IsProjectDirectory(current)) {
+            return true;
+        }
+        for (const std::string_view marker : { std::string_view{ ".git" },
                  std::string_view{ ".hg" }, std::string_view{ ".svn" } }) {
             std::error_code probeError;
             if (std::filesystem::exists(current / std::filesystem::path{ marker }, probeError)) {

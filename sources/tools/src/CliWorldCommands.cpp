@@ -59,18 +59,11 @@ namespace {
     return 0;
 }
 
-// The project file of a project directory: Project.21kbproject, else the only .21kbproject in it.
 [[nodiscard]] std::optional<std::filesystem::path> ProjectFileIn(const std::filesystem::path& directory) {
-    std::error_code code;
-    if (std::filesystem::is_regular_file(directory / "Project.21kbproject", code)) {
-        return directory / "Project.21kbproject";
-    }
-    std::vector<std::filesystem::path> candidates;
-    for (std::filesystem::directory_iterator it{ directory, code }, end; !code && it != end; it.increment(code)) {
-        if (it->is_regular_file(code) && it->path().extension() == ".21kbproject") candidates.push_back(it->path());
-    }
-    if (candidates.size() != 1U) return std::nullopt;
-    return candidates.front();
+    std::string error;
+    std::filesystem::path found = kb::project::ProjectManager::FindProjectFile(directory, error);
+    if (found.empty()) return std::nullopt;
+    return found;
 }
 
 // The directory the cooker and the editor mount as /Game: the project's content root. Without

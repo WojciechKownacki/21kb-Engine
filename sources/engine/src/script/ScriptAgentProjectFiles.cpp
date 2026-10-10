@@ -33,7 +33,7 @@ This is a game project for the 21kb Engine. Read this file before writing gamepl
 
 ## Project layout
 
-- `Project.21kbproject` — binary project descriptor. Never edit by hand; use the editor or `kb_cli`.
+- `<Name>.21kbproject` — binary project descriptor. Never edit by hand; use the editor or `kb_cli`.
 - `Assets/` — all game content, mounted as virtual root `/Game/`.
   - `Assets/Scenes/*.21kbscene` — scenes (binary; inspect/modify with `kb_cli scene-list` / `kb_cli scene-attach`).
   - `Assets/**/*.lua` — Lua behaviour scripts (plain text, edit freely).

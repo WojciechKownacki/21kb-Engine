@@ -1,4 +1,5 @@
 #include "project/EditorProjectPaths.hpp"
+#include "engine/project/ProjectManager.hpp"
 
 #include <cctype>
 #include <system_error>
@@ -15,7 +16,7 @@ std::filesystem::path g_projectFile;
 
 [[nodiscard]] bool IsDevRepositoryRoot(const std::filesystem::path& root) noexcept {
     return Exists(root / "sources" / "editor" / "src" / "project" / "EditorProjectPaths.cpp") &&
-        Exists(root / "Project" / "Project.21kbproject");
+        kb::project::ProjectManager::IsProjectDirectory(root / "Project");
 }
 
 [[nodiscard]] std::filesystem::path ParentPath(std::filesystem::path path) {
@@ -38,7 +39,7 @@ std::filesystem::path g_projectFile;
 
     for (std::filesystem::path probe = current; !probe.empty(); probe = ParentPath(probe)) {
         const std::filesystem::path candidate = probe / "Project";
-        if (Exists(candidate / "Project.21kbproject")) {
+        if (kb::project::ProjectManager::IsProjectDirectory(candidate)) {
             return candidate;
         }
     }
@@ -79,7 +80,11 @@ std::filesystem::path EditorProjectPaths::ProjectFile() {
     if (!g_projectFile.empty()) {
         return g_projectFile;
     }
-    return ProjectRoot() / "Project.21kbproject";
+    // A project opened without --project: its own descriptor, whatever its name; a brand-new
+    // default project is created as Project.21kbproject.
+    std::string error;
+    const std::filesystem::path found = kb::project::ProjectManager::FindProjectFile(ProjectRoot(), error);
+    return found.empty() ? ProjectRoot() / "Project.21kbproject" : found;
 }
 
 std::filesystem::path EditorProjectPaths::ProjectRoot() {

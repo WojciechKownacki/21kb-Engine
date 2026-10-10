@@ -2040,6 +2040,10 @@ void RunNewCommandTests() {
         "new did not write the startup scene the settings point to");
     Require(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(parent / "Gra")).found,
         "new did not write the project settings");
+    // The project directory alone is enough to run it, whatever the descriptor's name.
+    const CommandRun ran = Run(&kb::cli::RunRunCommand,
+        { "--project", (parent / "Gra").string(), "--scene", "/Game/Scenes/Main.21kbscene", "--frames", "1" });
+    Require(ran.exitCode == 0, "a new project could not be run from its directory");
     Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Gra" }).exitCode != 0,
         "new over an existing project must be refused");
     Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "zla nazwa" }).exitCode != 0,

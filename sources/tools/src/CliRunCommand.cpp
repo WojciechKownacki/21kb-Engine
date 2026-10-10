@@ -151,7 +151,12 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
 
-    const std::filesystem::path projectFile = projectRoot / "Project.21kbproject";
+    std::string projectError;
+    const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(projectRoot, projectError);
+    if (projectFile.empty()) {
+        io.err << "error: " << projectError << '\n';
+        return 1;
+    }
     kb::project::ProjectDescriptorReadResult loadedProject =
         kb::project::ProjectManager::LoadProject(projectFile);
     if (!loadedProject.succeeded) {

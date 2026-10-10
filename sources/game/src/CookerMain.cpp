@@ -11,7 +11,7 @@
 namespace {
 
 void PrintUsage() {
-    std::cerr << "usage: kb_cooker --project <Project.21kbproject|directory> "
+    std::cerr << "usage: kb_cooker --project <Name.21kbproject|directory> "
                  "--target <profile> --output <file.kbpack> "
                  "[--shaderc <executable>] "
                  "[--engine-root <directory>] [--cache <directory>] "
