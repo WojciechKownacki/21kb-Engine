@@ -3,6 +3,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
@@ -2070,6 +2071,11 @@ void RunEntityComponentCommandTests() {
         "--set", "nosuch=1" }).exitCode != 0, "an unknown property must be refused");
     Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Nobody", "--type", "Camera" }).exitCode != 0,
         "a missing entity must be refused");
+    // Engine shapes exist in every project, like Unreal's /Engine/BasicShapes.
+    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "MeshRenderer",
+        "--set", "mesh=/Engine/Shapes/Plane" }).exitCode == 0, "an engine shape could not be assigned");
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "MeshRenderer",
+        "--set", "mesh=/Game/NoSuch.obj" }).exitCode != 0, "a missing mesh must be refused");
 
     kb::scene::Scene scene;
     const kb::scene::SceneDocumentLoadResult loaded =
@@ -2084,6 +2090,10 @@ void RunEntityComponentCommandTests() {
     const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(roots.front());
     Require(light != nullptr && std::abs(light->intensity - 2.5F) < 0.0001F && std::abs(light->color.y - 0.5F) < 0.0001F,
         "light properties were not written");
+    const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(roots.front());
+    Require(renderer != nullptr &&
+            renderer->meshAssetId == kb::assets::BuiltInShapeId(kb::assets::BuiltInShape::Plane).value,
+        "the engine Plane was not written as the mesh");
     std::filesystem::remove_all(parent, error);
 }
 

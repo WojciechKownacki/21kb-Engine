@@ -1,4 +1,6 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
+#include "kb/render/resources/ShapeMeshes.hpp"
 
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
@@ -521,7 +523,7 @@ std::type_index RenderMeshAssetLoader::PayloadType() const noexcept {
 }
 
 std::vector<std::string> RenderMeshAssetLoader::Extensions() const {
-    return { ".obj", ".gltf", ".glb", ".fbx", ".kbterrain",
+    return { ".obj", ".gltf", ".glb", ".fbx", ".kbterrain", std::string{ kb::assets::kBuiltInShapeExtension },
         std::string{ kb::assets::bake::kAssetPackFileExtension } };
 }
 
@@ -561,6 +563,10 @@ namespace {
         if (terrain) mesh = RenderTerrainMeshBuilder::Build(*terrain);
     } else if (request.IsPackaged()) {
         mesh = LoadBakedMeshPayload(request, packagedError);
+    } else if (const kb::assets::BuiltInShapeDesc* shape = kb::assets::FindBuiltInShape(request.metadata);
+               shape != nullptr && extension == kb::assets::kBuiltInShapeExtension) {
+        // The engine's basic shapes have no file: the generator is their source (/Engine/Shapes).
+        mesh = ShapeMeshes::BuiltIn(shape->shape);
     } else if (extension == kb::assets::bake::kAssetPackFileExtension) {
         mesh = LoadBakedMeshPack(request.resolvedPath);
     } else if (extension == ".21kb") {

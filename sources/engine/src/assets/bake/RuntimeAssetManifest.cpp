@@ -1,4 +1,5 @@
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/bake/AssetPack.hpp"
@@ -151,6 +152,15 @@ private:
     return normalized == path && path.find("/../") == std::string_view::npos && !path.ends_with("/..");
 }
 
+// A packed asset is project content (/Game/...) or one of the engine's basic shapes.
+[[nodiscard]] bool IsAssetVirtualPath(std::string_view path) {
+    if (IsGameVirtualPath(path)) {
+        return true;
+    }
+    const BuiltInShapeDesc* shape = FindBuiltInShape(path);
+    return shape != nullptr && shape->virtualPath == path;
+}
+
 [[nodiscard]] bool IsPackVirtualPath(std::string_view path) {
     if (path.empty() || path.size() > kMaxPathBytes ||
         (!path.starts_with("/Game/") && !path.starts_with("/Engine/"))) {
@@ -245,7 +255,7 @@ private:
         if (!asset.id.IsValid() || !IsValidBakeCacheName(asset.type) ||
             asset.importCategory.size() > kMaxShortStringBytes || asset.browseTag.size() > kMaxShortStringBytes ||
             asset.name.empty() || asset.name.size() > kMaxShortStringBytes ||
-            !IsGameVirtualPath(asset.virtualPath) || asset.sourceExtension.size() > kMaxShortStringBytes ||
+            !IsAssetVirtualPath(asset.virtualPath) || asset.sourceExtension.size() > kMaxShortStringBytes ||
             asset.contentHash == 0U || asset.artifacts.empty() ||
             !IsCleanText(asset.importCategory) || !IsCleanText(asset.browseTag) ||
             !IsCleanText(asset.name) || !IsCleanText(asset.sourceExtension)) {

@@ -1,6 +1,7 @@
 #include "CliCommands.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
@@ -105,8 +106,13 @@ struct SceneFileResolution {
     const ArgumentList& arguments,
     kb::scene::Scene* mountedScene) {
     SceneFileResolution resolution;
-    const std::optional<std::string> sceneOption = arguments.Option("--scene");
-    if (!sceneOption.has_value()) {
+    std::optional<std::string> sceneOption = arguments.Option("--scene");
+    if (!sceneOption.has_value() && arguments.Option("--project").has_value()) {
+        // Like entity/component: without --scene, the scene the game starts in.
+        sceneOption = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(*arguments.Option("--project"))).settings.defaultMap;
+    }
+    if (!sceneOption.has_value() || sceneOption->empty()) {
         resolution.error = "missing required option --scene <path>";
         return resolution;
     }

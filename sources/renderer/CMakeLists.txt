@@ -251,6 +251,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshGltfTransforms.hpp
     src/resources/RenderMeshAssetLoader.cpp
     src/resources/BuiltInParticleQuadMesh.cpp
+    src/resources/ShapeMeshes.cpp
     src/resources/RenderMeshObjImporter.cpp
     src/resources/RenderMeshObjImporter.hpp
     src/resources/RenderMeshObjMaterialResolver.cpp
