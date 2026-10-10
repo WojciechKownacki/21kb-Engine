@@ -1,5 +1,6 @@
 #include "rendering/InspectorAudioMixerAssetView.hpp"
 
+#include "rendering/EditorPanelStyle.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
@@ -91,14 +92,14 @@ void Text(HDC dc, RECT rect, std::string_view value, COLORREF color, UINT format
 }
 
 [[nodiscard]] RECT ValueRect(RECT row) noexcept {
-    const int labelRight = row.left + ((row.right - row.left) * 36 / 100);
+    const int labelRight = panel_style::InspectorLabelColumnRight(row);
     const int rowHeight = static_cast<int>(row.bottom - row.top);
     const int top = row.top + std::max(0, (rowHeight - kValueHeight) / 2);
     return Rect(labelRight, top, row.right - kRowPadX, top + kValueHeight);
 }
 
 [[nodiscard]] RECT CheckboxRect(RECT row) noexcept {
-    const int left = row.left + ((row.right - row.left) * 36 / 100);
+    const int left = panel_style::InspectorLabelColumnRight(row);
     const int rowHeight = static_cast<int>(row.bottom - row.top);
     const int top = row.top + std::max(0, (rowHeight - kCheckboxSize) / 2);
     return Rect(left, top, left + kCheckboxSize, top + kCheckboxSize);

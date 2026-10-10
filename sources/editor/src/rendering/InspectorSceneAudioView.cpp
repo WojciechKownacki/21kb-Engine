@@ -1,5 +1,6 @@
 #include "rendering/InspectorSceneAudioView.hpp"
 
+#include "rendering/EditorPanelStyle.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 
@@ -103,7 +104,7 @@ void Text(
 }
 
 [[nodiscard]] RECT ValueRect(RECT row) noexcept {
-    const int labelRight = row.left + ((row.right - row.left) * 36 / 100);
+    const int labelRight = panel_style::InspectorLabelColumnRight(row);
     const int rowHeight = static_cast<int>(row.bottom - row.top);
     const int top = row.top + std::max(0, (rowHeight - kValueHeight) / 2);
     return Rect(labelRight, top, row.right - kRowPadX, top + kValueHeight);
@@ -121,7 +122,7 @@ void Text(
 }
 
 [[nodiscard]] RECT CheckboxRect(RECT row) noexcept {
-    const int left = row.left + ((row.right - row.left) * 36 / 100);
+    const int left = panel_style::InspectorLabelColumnRight(row);
     const int top = row.top + std::max(0, (static_cast<int>(row.bottom - row.top) - kCheckboxSize) / 2);
     return Rect(left, top, left + kCheckboxSize, top + kCheckboxSize);
 }
