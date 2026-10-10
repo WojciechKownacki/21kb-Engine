@@ -563,8 +563,8 @@ end
     Require(
         scriptError != std::string::npos &&
             degraded.output.find("deliberate script failure", scriptError + 1U) == std::string::npos &&
-            Contains(degraded.output, "script error: behaviour error:") &&
-            Contains(degraded.output, "behaviour disabled after its error"),
+            Contains(degraded.output, "script error: 'Broken', /Game/Logic/Broken.lua: ") &&
+            Contains(degraded.output, "the script was disabled after its error"),
         "kb_game did not report the failing script once, with its identity, and disable it");
     Require(
         Contains(degraded.output, "mesh=" + std::to_string(kMissingAssetId)),

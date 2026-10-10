@@ -1,9 +1,8 @@
 #include "engine/project/ProjectCreator.hpp"
 
+#include "engine/assets/AssetFileName.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
-#include "engine/scene/Scene.hpp"
-#include "engine/scene/SceneDocumentService.hpp"
 
 #include <string>
 #include <system_error>
@@ -69,12 +68,16 @@ bool ProjectCreator::IsValidName(std::string_view name) noexcept {
     return true;
 }
 
-NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirectory, std::string_view name) {
+NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirectory, std::string_view name,
+    kb::scene::SceneTemplate startupTemplate) {
     if (parentDirectory.empty()) {
-        return Refuse({}, "Project folder is empty.");
+        return Refuse({}, "Choose the folder the project is created in.");
     }
     if (!IsValidName(name)) {
         return Refuse({}, "Project name is invalid: use letters, digits, '-' and '_'.");
+    }
+    if (std::string problem = kb::assets::AssetFileNameError(name); !problem.empty()) {
+        return Refuse({}, "Project name is invalid: " + problem);
     }
 
     const std::filesystem::path projectRoot = parentDirectory / Utf8Path(name);
@@ -85,63 +88,70 @@ NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirec
         return Refuse(descriptorFile, std::move(budget));
     }
 
+    // Like Unity Hub and Unreal: a project goes into a new or an empty folder, never over files
+    // the user already has (an earlier project, its Assets).
     std::error_code error;
-    if (std::filesystem::exists(descriptorFile, error) && !error) {
-        return Refuse(descriptorFile, "Project descriptor already exists in this folder.");
+    const bool rootExisted = std::filesystem::exists(projectRoot, error);
+    if (error) {
+        return Refuse(descriptorFile, "The project folder could not be inspected: " + error.message());
     }
-
+    if (rootExisted) {
+        if (!std::filesystem::is_directory(projectRoot, error)) {
+            return Refuse(descriptorFile, "A file with the project's name is in the way. Choose another name.");
+        }
+        if (!std::filesystem::is_empty(projectRoot, error) || error) {
+            return Refuse(descriptorFile, "The folder " + projectRoot.filename().string() +
+                " already exists and is not empty. Choose another name or another location.");
+        }
+    }
     std::filesystem::create_directories(projectRoot, error);
     if (error) {
-        return Refuse(descriptorFile, "Project folder could not be created.");
+        return Refuse(descriptorFile, "The project folder could not be created: " + error.message());
     }
-
-    const std::filesystem::directory_iterator firstEntry(projectRoot, error);
-    if (error) {
-        return Refuse(descriptorFile, "Project folder could not be inspected.");
-    }
-    for (std::filesystem::directory_iterator entry = firstEntry; entry != std::filesystem::directory_iterator{}; entry.increment(error)) {
-        if (error) {
-            return Refuse(descriptorFile, "Project folder could not be inspected.");
+    // Everything inside the folder is ours from here on, so a failure takes it all back.
+    const auto undo = [&projectRoot, rootExisted]() {
+        std::error_code ignored;
+        if (rootExisted) {
+            for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(projectRoot, ignored)) {
+                std::filesystem::remove_all(entry.path(), ignored);
+            }
+        } else {
+            std::filesystem::remove_all(projectRoot, ignored);
         }
-        const std::filesystem::path existing = entry->path();
-        if (existing.filename() != "Assets" && existing != descriptorFile) {
-            return Refuse(descriptorFile, "Choose an empty project name or remove the existing folder first.");
-        }
-    }
+    };
 
     std::filesystem::create_directories(projectRoot / "Assets" / "Scenes", error);
     if (error) {
-        return Refuse(descriptorFile, "Scene folder could not be created.");
+        undo();
+        return Refuse(descriptorFile, "The scene folder could not be created: " + error.message());
     }
     std::filesystem::create_directories(projectRoot / "Assets" / "Prefabs", error);
     if (error) {
-        std::filesystem::remove_all(projectRoot / "Assets", error);
-        return Refuse(descriptorFile, "Prefab folder could not be created.");
+        undo();
+        return Refuse(descriptorFile, "The prefab folder could not be created: " + error.message());
     }
 
     ProjectDescriptor descriptor = DefaultDescriptor();
     if (!ProjectManager::CreateProject(descriptorFile, descriptor)) {
-        std::filesystem::remove_all(projectRoot / "Assets", error);
-        return Refuse(descriptorFile, "Project descriptor could not be written.");
+        undo();
+        return Refuse(descriptorFile, "The project file could not be written.");
     }
 
     // A new project starts with the settings file the editor and the game both read,
     // rather than waiting for the editor to seed it on first open.
     std::string settingsError;
     if (!ProjectSettingsStore::Save(ProjectSettingsStore::FilePath(projectRoot), MakeSettings(name), settingsError)) {
-        std::filesystem::remove_all(projectRoot / "Assets", error);
-        std::filesystem::remove(descriptorFile, error);
-        return Refuse(descriptorFile, "Project settings could not be written.");
+        undo();
+        return Refuse(descriptorFile, "The project settings could not be written: " + settingsError);
     }
 
     // The settings name Main.21kbscene as the startup map: it has to exist, or the game and every
     // headless tool start from a scene that is not there.
-    kb::scene::Scene startupScene{ descriptor };
-    if (!kb::scene::SceneDocumentService::Save(startupScene, projectRoot / "Assets" / "Scenes" / "Main.21kbscene", "Main")) {
-        std::filesystem::remove_all(projectRoot / "Assets", error);
-        std::filesystem::remove(descriptorFile, error);
-        std::filesystem::remove(ProjectSettingsStore::FilePath(projectRoot), error);
-        return Refuse(descriptorFile, "Startup scene could not be written.");
+    if (std::string written = kb::scene::SceneTemplates::CreateFile(
+            projectRoot / "Assets" / "Scenes" / "Main.21kbscene", startupTemplate, descriptor);
+        !written.empty()) {
+        undo();
+        return Refuse(descriptorFile, "The startup scene could not be written: " + written);
     }
 
     return NewProjectResult{ .succeeded = true, .projectFile = descriptorFile, .error = {} };

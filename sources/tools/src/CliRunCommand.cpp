@@ -1,5 +1,6 @@
 #include "CliCommands.hpp"
 
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
@@ -73,13 +74,23 @@ struct DiagnosticPrinter {
     std::unordered_set<std::string> printed;
     std::size_t total = 0U;
 
+    // The script's path, or what to do about a reference to a file that is not there.
+    [[nodiscard]] std::string ScriptName(kb::assets::AssetId assetId) const {
+        const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(assetId);
+        return metadata != nullptr ? metadata->virtualPath.generic_string()
+                                   : "missing script " + kb::assets::ToString(assetId) +
+                " (moved, renamed or deleted - attach the script to the object again)";
+    }
+
     void PrintScript(const std::vector<kb::script::ScriptDiagnostic>& diagnostics, std::size_t frame) {
         for (const kb::script::ScriptDiagnostic& diagnostic : diagnostics) {
             ++total;
             std::string line = "[script error] ";
-            const kb::assets::AssetMetadata* metadata =
-                scene.Assets().Manager().Registry().Find(diagnostic.assetId);
-            line += metadata != nullptr ? metadata->virtualPath.generic_string() : kb::assets::ToString(diagnostic.assetId);
+            const std::string_view entity = scene.Entities().Name(diagnostic.entity);
+            if (!entity.empty()) {
+                line += "'" + std::string{ entity } + "', ";
+            }
+            line += ScriptName(diagnostic.assetId);
             line += ": " + diagnostic.message;
             if (printed.insert(line).second) {
                 err << "frame " << frame << ' ' << line << '\n';
@@ -91,9 +102,7 @@ struct DiagnosticPrinter {
         for (const kb::script::ScriptRuntimeAssetPrepareDiagnostic& diagnostic : diagnostics) {
             ++total;
             std::string line = "[compile error] ";
-            const kb::assets::AssetMetadata* metadata =
-                scene.Assets().Manager().Registry().Find(diagnostic.assetId);
-            line += metadata != nullptr ? metadata->virtualPath.generic_string() : kb::assets::ToString(diagnostic.assetId);
+            line += ScriptName(diagnostic.assetId);
             line += ": " + diagnostic.message;
             if (printed.insert(line).second) {
                 err << "frame " << frame << ' ' << line << '\n';
@@ -233,8 +242,17 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
 
     // Resolve and load the scene file exactly the way scene-list does: virtual
     // paths go through the registry, physical paths through the project root.
+    // Without --scene: the scene the game starts in, like entity/component and the game itself.
     std::filesystem::path scenePath;
-    if (const std::optional<std::string> sceneOption = arguments.Option("--scene"); sceneOption.has_value()) {
+    std::optional<std::string> sceneOption = arguments.Option("--scene");
+    if (!sceneOption.has_value()) {
+        const std::string startup = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(projectRoot)).settings.defaultMap;
+        if (!startup.empty()) {
+            sceneOption = startup;
+        }
+    }
+    if (sceneOption.has_value()) {
         if (!sceneOption->empty() && sceneOption->front() == '/') {
             const kb::assets::AssetMetadata* metadata =
                 FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), *sceneOption);
@@ -244,10 +262,15 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
             }
             scenePath = metadata->physicalPath;
         } else {
-            scenePath = ResolveInputPath(*sceneOption, projectRoot.string());
+            std::string outsideError;
+            scenePath = ResolveProjectFile(*sceneOption, projectRoot, outsideError);
+            if (scenePath.empty()) {
+                io.err << "error: " << outsideError << '\n';
+                return 1;
+            }
         }
     } else {
-        io.err << "error: run requires --scene <path>\n";
+        io.err << "error: the project has no startup scene; pass --scene <path>\n";
         return 1;
     }
 

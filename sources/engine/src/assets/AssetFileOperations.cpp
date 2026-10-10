@@ -1,5 +1,6 @@
 #include "assets/AssetFileOperations.hpp"
 
+#include "engine/assets/AssetFileName.hpp"
 #include "assets/AssetFileSystem.hpp"
 #include "assets/AssetPathUtilities.hpp"
 
@@ -83,8 +84,8 @@ bool AssetFileOperations::RenameAsset(
         errorMessage = "Asset is not registered";
         return false;
     }
-    if (!AssetPathUtilities::IsValidEntryName(newName)) {
-        errorMessage = "Invalid asset name";
+    if (std::string problem = AssetFileNameError(newName); !problem.empty()) {
+        errorMessage = std::move(problem);
         return false;
     }
 

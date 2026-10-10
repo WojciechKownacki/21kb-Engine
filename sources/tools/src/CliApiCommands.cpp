@@ -274,15 +274,24 @@ int RunNewCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: new requires --parent <dir> --name <Name>\n";
         return 1;
     }
+    const std::string templateName = arguments.Option("--template").value_or("Basic");
+    const std::optional<kb::scene::SceneTemplate> startupTemplate = kb::scene::SceneTemplates::Parse(templateName);
+    if (!startupTemplate.has_value()) {
+        io.err << "error: unknown template '" << templateName << "'. Templates: Basic Empty\n";
+        return 1;
+    }
     const std::filesystem::path parentDirectory{
         std::u8string{ reinterpret_cast<const char8_t*>(parent->data()), parent->size() } };
-    const kb::project::NewProjectResult created = kb::project::ProjectCreator::Create(parentDirectory, *name);
+    const kb::project::NewProjectResult created =
+        kb::project::ProjectCreator::Create(parentDirectory, *name, *startupTemplate);
     if (!created.succeeded) {
         io.err << "error: " << created.error << '\n';
         return 1;
     }
     const std::u8string file = created.projectFile.generic_u8string();
     io.out << "created " << std::string{ reinterpret_cast<const char*>(file.data()), file.size() } << '\n';
+    io.out << "Startup scene: /Game/Scenes/Main.21kbscene (template " << kb::scene::SceneTemplates::Name(*startupTemplate)
+           << ")\n";
     return 0;
 }
 

@@ -1,11 +1,13 @@
 #include "CliCommands.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneTemplates.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
@@ -131,7 +133,10 @@ struct SceneFileResolution {
         }
         resolution.path = metadata->physicalPath;
     } else {
-        resolution.path = ResolveInputPath(*sceneOption, projectRoot);
+        resolution.path = ResolveProjectFile(*sceneOption, projectRoot, resolution.error);
+        if (resolution.path.empty()) {
+            return resolution;
+        }
     }
 
     resolution.succeeded = true;
@@ -285,6 +290,70 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
     io.out << "attached " << metadata->virtualPath.generic_string()
            << " (" << BackendName(component->backend) << ") to node '" << *nodeName
            << "' in " << resolved.path.generic_string() << '\n';
+    return 0;
+}
+
+// File > New Scene without the editor: a scene file made from a template, optionally the scene the
+// game starts in.
+int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> project = arguments.Option("--project");
+    const std::optional<std::string> name = arguments.Option("--name");
+    if (!project.has_value() || !name.has_value()) {
+        io.err << "error: scene-new requires --project <dir> --name <Name>\n";
+        return 1;
+    }
+    std::string error;
+    const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(*project, error);
+    if (projectFile.empty()) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    const kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(projectFile);
+    if (!loaded.succeeded) {
+        io.err << "error: the project could not be loaded: " << loaded.error << '\n';
+        return 1;
+    }
+    const std::string templateName = arguments.Option("--template").value_or("Basic");
+    const std::optional<kb::scene::SceneTemplate> sceneTemplate = kb::scene::SceneTemplates::Parse(templateName);
+    if (!sceneTemplate.has_value()) {
+        io.err << "error: unknown template '" << templateName << "'. Templates:";
+        for (const kb::scene::SceneTemplateInfo& info : kb::scene::SceneTemplates::All()) {
+            io.err << ' ' << info.name;
+        }
+        io.err << '\n';
+        return 1;
+    }
+    const std::string defaultOption = arguments.Option("--default").value_or("no");
+    if (defaultOption != "yes" && defaultOption != "no") {
+        io.err << "error: --default takes yes or no\n";
+        return 1;
+    }
+
+    const std::filesystem::path projectRoot = projectFile.parent_path();
+    const kb::scene::NewScenePath target = kb::scene::SceneTemplates::ResolveNewScene(
+        projectRoot, arguments.Option("--folder").value_or("Assets/Scenes"), *name);
+    if (!target.error.empty()) {
+        io.err << "error: " << target.error << '\n';
+        return 1;
+    }
+    if (std::string created = kb::scene::SceneTemplates::CreateFile(target.file, *sceneTemplate, loaded.descriptor);
+        !created.empty()) {
+        io.err << "error: " << created << '\n';
+        return 1;
+    }
+    io.out << "Scene created: " << target.virtualPath << " (template " << kb::scene::SceneTemplates::Name(*sceneTemplate)
+           << ").\n";
+
+    if (defaultOption == "yes") {
+        const std::filesystem::path settingsFile = kb::project::ProjectSettingsStore::FilePath(projectRoot);
+        kb::project::ProjectSettingsLoadResult settings = kb::project::ProjectSettingsStore::Load(settingsFile);
+        settings.settings.defaultMap = target.virtualPath;
+        if (!kb::project::ProjectSettingsStore::Save(settingsFile, settings.settings, error)) {
+            io.err << "error: the scene was created, but the startup scene could not be set: " << error << '\n';
+            return 1;
+        }
+        io.out << "Startup scene: " << target.virtualPath << '\n';
+    }
     return 0;
 }
 

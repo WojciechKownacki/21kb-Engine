@@ -40,6 +40,10 @@ if(WIN32)
 endif()
 
 set_target_properties(kb_cli PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+if(WIN32)
+    # UTF-8 process code page: Polish (any) letters in arguments and file names.
+    target_sources(kb_cli PRIVATE kb_cli.manifest)
+endif()
 
 target_link_libraries(kb_cli PRIVATE kb_cli_core)
 
@@ -68,6 +72,10 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)
+    if(WIN32)
+        # The commands run in-process here, under the same code page as kb_cli.
+        target_sources(kb_cli_tests PRIVATE kb_cli.manifest)
+    endif()
 
     add_test(NAME kb_cli_tests COMMAND $<TARGET_FILE:kb_cli_tests>)
     set_tests_properties(kb_cli_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS tools)
