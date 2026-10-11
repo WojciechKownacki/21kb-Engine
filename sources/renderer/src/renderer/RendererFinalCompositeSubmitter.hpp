@@ -11,6 +11,9 @@ namespace kb::render {
 
 class RendererFinalCompositeSubmitter final {
 public:
+    // The transform that shows the post-processed scene: the profile's exposure, tone curve and
+    // display encoding. Tonemapping off removes only the tone curve, as in Unity, Unreal and Godot.
+    [[nodiscard]] static SceneDisplayOutputTransform DisplayTransform(const PostProcessOutput& postProcessOutput) noexcept;
     [[nodiscard]] static bool Submit(
         const FinalCompositePass& finalCompositePass,
         const RenderViewportPlan& viewportPlan,

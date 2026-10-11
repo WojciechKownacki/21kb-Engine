@@ -87,41 +87,47 @@ namespace {
 // flattened with dotted keys) gets exactly one line, unknown keys are ignored (forward
 // compatible with future fields), and a missing key simply leaves the struct's own default
 // member initializer in place (so a hand-trimmed profile file omitting most keys is valid).
-[[nodiscard]] bool ApplyField(std::string_view keyword, std::string_view rest, ScenePostProcessSettings& settings) {
-    if (keyword == "bloomEnabled") return ParseBoolToken(rest, settings.bloomEnabled);
-    if (keyword == "bloomStrength") return ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomStrength);
-    if (keyword == "bloomThreshold") return ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomThreshold);
-    if (keyword == "bloomSoftKnee") return ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomSoftKnee);
-    if (keyword == "bloomRadiusPixels") return ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomRadiusPixels);
-    if (keyword == "temporalAntiAliasingEnabled") return ParseBoolToken(rest, settings.temporalAntiAliasingEnabled);
-    if (keyword == "temporalJitterEnabled") return ParseBoolToken(rest, settings.temporalJitterEnabled);
-    if (keyword == "temporalHistoryBlend") return ParseFiniteMaterialFloatToken(Trim(rest), settings.temporalHistoryBlend);
-    if (keyword == "fxaaEnabled") return ParseBoolToken(rest, settings.fxaaEnabled);
-    if (keyword == "tonemapEnabled") return ParseBoolToken(rest, settings.tonemapEnabled);
-    if (keyword == "autoExposureMetering") return ParseAutoExposureMeteringMode(Trim(rest), settings.autoExposureMetering);
-    if (keyword == "outputTransform.exposureStops") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.exposureStops);
-    if (keyword == "outputTransform.gamma") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.gamma);
-    if (keyword == "outputTransform.tonemap") return ParseTonemapOperator(Trim(rest), settings.outputTransform.tonemap);
+enum class FieldResult { Applied, Invalid, Unknown };
+
+[[nodiscard]] FieldResult Applied(bool parsed) noexcept {
+    return parsed ? FieldResult::Applied : FieldResult::Invalid;
+}
+
+[[nodiscard]] FieldResult ApplyField(std::string_view keyword, std::string_view rest, ScenePostProcessSettings& settings) {
+    if (keyword == "bloomEnabled") return Applied(ParseBoolToken(rest, settings.bloomEnabled));
+    if (keyword == "bloomStrength") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomStrength));
+    if (keyword == "bloomThreshold") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomThreshold));
+    if (keyword == "bloomSoftKnee") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomSoftKnee));
+    if (keyword == "bloomRadiusPixels") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.bloomRadiusPixels));
+    if (keyword == "temporalAntiAliasingEnabled") return Applied(ParseBoolToken(rest, settings.temporalAntiAliasingEnabled));
+    if (keyword == "temporalJitterEnabled") return Applied(ParseBoolToken(rest, settings.temporalJitterEnabled));
+    if (keyword == "temporalHistoryBlend") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.temporalHistoryBlend));
+    if (keyword == "fxaaEnabled") return Applied(ParseBoolToken(rest, settings.fxaaEnabled));
+    if (keyword == "tonemapEnabled") return Applied(ParseBoolToken(rest, settings.tonemapEnabled));
+    if (keyword == "autoExposureMetering") return Applied(ParseAutoExposureMeteringMode(Trim(rest), settings.autoExposureMetering));
+    if (keyword == "outputTransform.exposureStops") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.exposureStops));
+    if (keyword == "outputTransform.gamma") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.gamma));
+    if (keyword == "outputTransform.tonemap") return Applied(ParseTonemapOperator(Trim(rest), settings.outputTransform.tonemap));
     if (keyword == "outputTransform.colorGradingLutStrength") {
         float strength = 0.0F;
         if (!ParseFiniteMaterialFloatToken(Trim(rest), strength) || strength != 0.0F) {
             // No custom LUT asset/binding exists yet. Reject a non-neutral value instead of
             // accepting a serialized control that the identity LUT cannot make observable.
-            return false;
+            return FieldResult::Invalid;
         }
         settings.outputTransform.colorGradingLutStrength = 0.0F;
-        return true;
+        return FieldResult::Applied;
     }
-    if (keyword == "outputTransform.autoExposure.enabled") return ParseBoolToken(rest, settings.outputTransform.autoExposure.enabled);
-    if (keyword == "outputTransform.autoExposure.meteredAverageLuminance") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.meteredAverageLuminance);
-    if (keyword == "outputTransform.autoExposure.middleGray") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.middleGray);
-    if (keyword == "outputTransform.autoExposure.minExposureStops") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.minExposureStops);
-    if (keyword == "outputTransform.autoExposure.maxExposureStops") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.maxExposureStops);
-    if (keyword == "outputTransform.autoExposure.biasStops") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.biasStops);
-    if (keyword == "outputTransform.autoExposure.temporalAdaptationEnabled") return ParseBoolToken(rest, settings.outputTransform.autoExposure.temporalAdaptationEnabled);
-    if (keyword == "outputTransform.autoExposure.brightAdaptationRate") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.brightAdaptationRate);
-    if (keyword == "outputTransform.autoExposure.darkAdaptationRate") return ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.darkAdaptationRate);
-    return true; // unknown keyword - forward compatible, ignored rather than a hard parse failure.
+    if (keyword == "outputTransform.autoExposure.enabled") return Applied(ParseBoolToken(rest, settings.outputTransform.autoExposure.enabled));
+    if (keyword == "outputTransform.autoExposure.meteredAverageLuminance") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.meteredAverageLuminance));
+    if (keyword == "outputTransform.autoExposure.middleGray") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.middleGray));
+    if (keyword == "outputTransform.autoExposure.minExposureStops") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.minExposureStops));
+    if (keyword == "outputTransform.autoExposure.maxExposureStops") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.maxExposureStops));
+    if (keyword == "outputTransform.autoExposure.biasStops") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.biasStops));
+    if (keyword == "outputTransform.autoExposure.temporalAdaptationEnabled") return Applied(ParseBoolToken(rest, settings.outputTransform.autoExposure.temporalAdaptationEnabled));
+    if (keyword == "outputTransform.autoExposure.brightAdaptationRate") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.brightAdaptationRate));
+    if (keyword == "outputTransform.autoExposure.darkAdaptationRate") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.darkAdaptationRate));
+    return FieldResult::Unknown; // forward compatible: a profile file ignores it rather than failing.
 }
 
 [[nodiscard]] std::optional<ScenePostProcessSettings> ParseProfile(std::istream& input) {
@@ -135,7 +141,7 @@ namespace {
         const std::size_t separator = content.find(' ');
         const std::string_view keyword = separator == std::string_view::npos ? content : content.substr(0U, separator);
         const std::string_view rest = separator == std::string_view::npos ? std::string_view{} : Trim(content.substr(separator + 1U));
-        if (!ApplyField(keyword, rest, settings)) {
+        if (ApplyField(keyword, rest, settings) == FieldResult::Invalid) {
             return std::nullopt;
         }
     }
@@ -206,6 +212,33 @@ std::optional<ScenePostProcessSettings> PostProcessProfileAssetLoader::LoadProfi
         return std::nullopt;
     }
     return ParseProfile(input);
+}
+
+bool PostProcessProfileAssetLoader::SetField(ScenePostProcessSettings& settings, std::string_view key, std::string_view value) {
+    ScenePostProcessSettings changed = settings;
+    if (ApplyField(key, Trim(value), changed) != FieldResult::Applied) {
+        return false;
+    }
+    settings = changed;
+    return true;
+}
+
+std::vector<std::string> PostProcessProfileAssetLoader::FieldNames() {
+    std::ostringstream profile;
+    WriteProfile(profile, ScenePostProcessSettings{});
+    std::vector<std::string> names;
+    std::istringstream lines{ profile.str() };
+    std::string line;
+    while (std::getline(lines, line)) {
+        names.push_back(line.substr(0U, line.find(' ')));
+    }
+    return names;
+}
+
+std::string PostProcessProfileAssetLoader::Describe(const ScenePostProcessSettings& settings) {
+    std::ostringstream profile;
+    WriteProfile(profile, settings);
+    return profile.str();
 }
 
 bool PostProcessProfileAssetLoader::SaveProfile(const std::filesystem::path& path, const ScenePostProcessSettings& settings) {

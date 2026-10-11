@@ -2,6 +2,7 @@
 
 #include "kb/render/post/SceneExposureMeter.hpp"
 #include "renderer/RendererExposureSubmitter.hpp"
+#include "renderer/RendererFinalCompositeSubmitter.hpp"
 
 #include <algorithm>
 #include <array>
@@ -139,6 +140,24 @@ void ExposureSubmissionUsesElapsedFrameTime() {
         "Exposure adaptation over one second must agree at 30 and 60 rendered frames");
 }
 
+// A profile with tonemapping off still shows the scene at its exposure and display-encoded, as
+// Unity, Unreal and Godot do; only the tone curve goes.
+void TonemapOffKeepsExposureAndDisplayEncoding() {
+    PostProcessOutput output;
+    output.tonemapEnabled = false;
+    output.outputTransform.exposureStops = 1.5F;
+    output.outputTransform.gamma = 2.2F;
+    output.outputTransform.tonemap = SceneDisplayTonemapOperator::Aces;
+    output.outputTransform.autoExposure.enabled = true;
+    const SceneDisplayOutputTransform shown = RendererFinalCompositeSubmitter::DisplayTransform(output);
+    Require(shown.tonemap == SceneDisplayTonemapOperator::None, "Tonemapping off still applied a tone curve");
+    Require(NearlyEqual(shown.gamma, 2.2F) && NearlyEqual(shown.exposureStops, 1.5F) && shown.autoExposure.enabled,
+        "Tonemapping off dropped the exposure or the display encoding");
+    output.tonemapEnabled = true;
+    Require(RendererFinalCompositeSubmitter::DisplayTransform(output).tonemap == SceneDisplayTonemapOperator::Aces,
+        "Tonemapping on lost the profile's tone curve");
+}
+
 } // namespace
 
 void RunSceneExposureMeterTests() {
@@ -149,6 +168,7 @@ void RunSceneExposureMeterTests() {
     ExposureMeteringRejectsOutlierPercentiles();
     TemporalExposureAdaptationUsesRatesAndHistory();
     ExposureSubmissionUsesElapsedFrameTime();
+    TonemapOffKeepsExposureAndDisplayEncoding();
 }
 
 } // namespace kb::render::tests

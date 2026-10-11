@@ -9,6 +9,7 @@
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -101,6 +102,7 @@ SceneDocumentOwnedLoadResult LoadIntoSceneInternal(Scene& scene, const SceneDocu
         return {};
     }
     SceneAudioOcclusionAccess::PublishRuntimeStats(scene, {});
+    ScenePostProcessAccess::SetActiveProfile(scene, document.postProcessProfileAssetId);
     ClearSceneRoots(scene);
     if (!scene.Tags().ReplaceDefinitions(document.tagDefinitions)) {
         return {};

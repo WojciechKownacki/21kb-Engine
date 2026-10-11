@@ -11,6 +11,9 @@
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
+#if KB_CLI_RENDERER
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
+#endif
 
 #include <optional>
 #include <string>
@@ -292,6 +295,61 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
            << "' in " << resolved.path.generic_string() << '\n';
     return 0;
 }
+
+#if KB_CLI_RENDERER
+// The scene's image settings: the post-process profile the renderer applies to it (as a Unity
+// global Volume's profile or a Godot WorldEnvironment's Environment), or none for the defaults.
+int RunScenePostProcessCommand(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> project = arguments.Option("--project");
+    const std::optional<std::string> profile = arguments.Option("--profile");
+    if (!project.has_value() || !profile.has_value()) {
+        io.err << "error: scene-post-process requires --project <dir> [--scene <path>] --profile /Game/<path>.kbppfx|none\n";
+        return 1;
+    }
+
+    kb::scene::Scene scene;
+    std::string error;
+    if (!MountProjectAssets(scene, *project, error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    const SceneFileResolution resolved = ResolveSceneFile(arguments, &scene);
+    if (!resolved.succeeded) {
+        io.err << "error: " << resolved.error << '\n';
+        return 1;
+    }
+
+    std::uint64_t profileAssetId = 0U;
+    std::string profileName = "none";
+    if (*profile != "none") {
+        const kb::assets::AssetMetadata* metadata =
+            FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), ResolveInputPath(*profile, *project));
+        if (metadata == nullptr) {
+            metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), *profile);
+        }
+        if (metadata == nullptr || metadata->type != kb::render::kPostProcessProfileAssetType) {
+            io.err << "error: the project has no post-process profile '" << *profile
+                   << "' (create one with kb_cli post-process-new)\n";
+            return 1;
+        }
+        profileAssetId = metadata->id.value;
+        profileName = metadata->virtualPath.generic_string();
+    }
+
+    kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(resolved.path);
+    if (!loaded.succeeded) {
+        io.err << "error: could not load scene " << resolved.path.generic_string() << ": " << loaded.error << '\n';
+        return 1;
+    }
+    loaded.document.postProcessProfileAssetId = profileAssetId;
+    if (!kb::scene::SceneDocumentService::Save(loaded.document, resolved.path)) {
+        io.err << "error: could not save scene: " << resolved.path.generic_string() << '\n';
+        return 1;
+    }
+    io.out << "Post-process profile of " << resolved.path.generic_string() << ": " << profileName << '\n';
+    return 0;
+}
+#endif
 
 // File > New Scene without the editor: a scene file made from a template, optionally the scene the
 // game starts in.

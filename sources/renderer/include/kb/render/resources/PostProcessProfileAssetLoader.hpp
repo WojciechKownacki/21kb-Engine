@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <typeindex>
 #include <vector>
@@ -30,6 +31,13 @@ public:
 
     [[nodiscard]] static std::optional<ScenePostProcessSettings> LoadProfile(const std::filesystem::path& path);
     [[nodiscard]] static bool SaveProfile(const std::filesystem::path& path, const ScenePostProcessSettings& settings);
+    // One field by its profile-file name (e.g. tonemapEnabled, outputTransform.exposureStops);
+    // false, and `settings` unchanged, for an unknown name or a value the field does not take.
+    [[nodiscard]] static bool SetField(ScenePostProcessSettings& settings, std::string_view key, std::string_view value);
+    // Every field name, in profile-file order.
+    [[nodiscard]] static std::vector<std::string> FieldNames();
+    // The settings as the profile file writes them, one `name value` line per field.
+    [[nodiscard]] static std::string Describe(const ScenePostProcessSettings& settings);
 };
 
 } // namespace kb::render

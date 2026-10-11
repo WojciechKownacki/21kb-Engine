@@ -4,6 +4,7 @@
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneTagCatalog.hpp"
 #include "scene/prefab/ScenePrefabCaptureService.hpp"
 
@@ -32,6 +33,7 @@ SceneDocument SceneDocumentCaptureService::Capture(Scene& scene, std::string nam
     document.audioMixerAssetId = SceneAudioMixerAccess::ActiveMixer(scene);
     document.audioMixerSnapshot = SceneAudioMixerAccess::ActiveSnapshot(scene);
     document.audioOcclusionSettings = SceneAudioOcclusionAccess::Settings(scene);
+    document.postProcessProfileAssetId = ScenePostProcessAccess::ActiveProfile(scene);
     document.worldPrefab = ScenePrefabCaptureService::CaptureRoots(scene, std::span<const SceneObject>{ roots }, ScenePrefabCaptureSettings{});
     return document;
 }

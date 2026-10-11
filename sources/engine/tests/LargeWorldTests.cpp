@@ -347,6 +347,7 @@ void RunVersion41SceneMigrationTest() {
     Require(found != bytes.end(), "The version 41 fixture did not hold the double translation");
     const auto at = bytes.erase(found, found + 24);
     bytes.insert(at, floats.begin(), floats.end());
+    bytes.resize(bytes.size() - sizeof(std::uint64_t)); // a version 41 file has no v44 post-process profile id
     WriteLittleEndian(bytes, 8U, 41U, 4U);
     Require(WriteBytes(path, bytes), "The version 41 fixture could not be rewritten");
 

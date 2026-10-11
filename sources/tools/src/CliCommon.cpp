@@ -6,6 +6,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #if KB_CLI_RENDERER
 #include "engine/assets/AssetManager.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #endif
 
@@ -91,6 +92,8 @@ bool MountProjectAssets(
     // Materials are typed by the renderer's loader, as in the editor and the game; without it
     // a .kbmat is an unknown file and MeshRenderer material= cannot reference it.
     static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
+    // Post-process profiles (.kbppfx) likewise, for scene-post-process.
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::PostProcessProfileAssetLoader>()));
 #endif
     const std::size_t discovered = scene.Assets().Discover();
     if (discoveredCount != nullptr) {

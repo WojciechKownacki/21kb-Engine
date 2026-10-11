@@ -25,6 +25,9 @@ namespace kb::cli {
 [[nodiscard]] int RunMaterialNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialSetCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMaterialShowCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPostProcessNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPostProcessSetCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunScenePostProcessCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScriptBuildCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunRunCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);

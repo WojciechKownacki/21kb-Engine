@@ -92,6 +92,7 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
     std::vector<SceneAssetDependency> dependencies;
     std::set<std::uint64_t> seen;
     AddDependency(dependencies, seen, scene.audioMixerAssetId, "audioMixer");
+    AddDependency(dependencies, seen, scene.postProcessProfileAssetId, "postProcessProfile");
     for (const ScenePrefabNodeDesc& node : scene.worldPrefab.Nodes()) {
         // Every component field that names an asset comes from one shared walker,
         // so this sidecar and ScenePrefabAssetLoader's prefab edges can never
@@ -163,6 +164,7 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
     WriteFloat(output, scene.audioOcclusionSettings.maxDistance);
     WriteUInt32(output, scene.audioOcclusionSettings.layerMask);
     WriteUInt32(output, scene.audioOcclusionSettings.maxRaycastsPerTick);
+    WriteUInt64(output, scene.postProcessProfileAssetId);
     return output;
 }
 
