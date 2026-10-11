@@ -45,6 +45,8 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "clearCoatRoughness") return PinId(nodeKind, direction, 25U);
         // Unreal's Pixel Depth Offset.
         if (!outputPin && pin == "pixelDepthOffset") return PinId(nodeKind, direction, 26U);
+        // Unreal's Refraction (index of refraction of a translucent surface).
+        if (!outputPin && pin == "refraction") return PinId(nodeKind, direction, 27U);
         return 0U;
     case RenderMaterialGraphNodeKind::TextureSample:
         if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
@@ -329,6 +331,7 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "clearCoat") return PinId(nodeKind, direction, 21U);
         if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 22U);
         if (pin == "pixelDepthOffset") return PinId(nodeKind, direction, 23U);
+        if (pin == "refraction") return PinId(nodeKind, direction, 24U);
         return 0U;
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
         if (outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -351,6 +354,7 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "clearCoat") return PinId(nodeKind, direction, 21U);
         if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 22U);
         if (pin == "pixelDepthOffset") return PinId(nodeKind, direction, 23U);
+        if (pin == "refraction") return PinId(nodeKind, direction, 24U);
         return 0U;
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
         if (!outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -368,6 +372,7 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "clearCoat") return PinId(nodeKind, direction, 21U);
         if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 22U);
         if (pin == "pixelDepthOffset") return PinId(nodeKind, direction, 23U);
+        if (pin == "refraction") return PinId(nodeKind, direction, 24U);
         return 0U;
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);

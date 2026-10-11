@@ -619,6 +619,9 @@ struct RenderMaterialGraphReflection {
     // Unreal's Pixel Depth Offset: the depth-writing passes push the fragment's depth away from the
     // camera (gl_FragDepth), so the wrapper writes depth only when the graph drives it.
     bool hasPixelDepthOffset = false;
+    // Unreal's Refraction on a Translucent material: the forward wrapper shows the opaque scene
+    // behind the surface bent by the index of refraction (reads the scene-color snapshot).
+    bool hasRefraction = false;
     // MAT-37: resolved surface shading model. Drives the fragment wrapper lighting branch and the program
     // key. Declared models without production shader branches fail compilation instead of falling back.
     RenderMaterialShadingModel shadingModel = RenderMaterialShadingModel::DefaultLit;

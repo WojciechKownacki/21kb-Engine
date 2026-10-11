@@ -1027,7 +1027,8 @@ void AppendCustomCodeFunctionDefinitions(
         // Unreal's defaults of the Clear Coat pins.
         "    " + v + ".clearCoat = 1.0;\n"
         "    " + v + ".clearCoatRoughness = 0.1;\n"
-        "    " + v + ".pixelDepthOffset = 0.0;\n";
+        "    " + v + ".pixelDepthOffset = 0.0;\n"
+        "    " + v + ".refraction = 1.0;\n";
 }
 
 // MAT-39: parse a compile-time boolean from a node's value hint.
@@ -1371,6 +1372,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".clearCoat = " + CompileInputExpression(cg, node, "clearCoat", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
         cg.statements += "    " + tmp + ".clearCoatRoughness = " + CompileInputExpression(cg, node, "clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.1") + ";\n";
         cg.statements += "    " + tmp + ".pixelDepthOffset = " + CompileInputExpression(cg, node, "pixelDepthOffset", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        cg.statements += "    " + tmp + ".refraction = " + CompileInputExpression(cg, node, "refraction", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1411,6 +1413,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".clearCoat = mix((" + a + ").clearCoat, (" + b + ").clearCoat, " + fv + ");\n";
         cg.statements += "    " + tmp + ".clearCoatRoughness = mix((" + a + ").clearCoatRoughness, (" + b + ").clearCoatRoughness, " + fv + ");\n";
         cg.statements += "    " + tmp + ".pixelDepthOffset = mix((" + a + ").pixelDepthOffset, (" + b + ").pixelDepthOffset, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".refraction = mix((" + a + ").refraction, (" + b + ").refraction, " + fv + ");\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1478,6 +1481,9 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         }
         if (FindInputLink(cg.graph, node.id, "pixelDepthOffset") != nullptr) {
             cg.statements += "    " + tmp + ".pixelDepthOffset = " + CompileInputExpression(cg, node, "pixelDepthOffset", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "refraction") != nullptr) {
+            cg.statements += "    " + tmp + ".refraction = " + CompileInputExpression(cg, node, "refraction", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
         }
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
@@ -1992,6 +1998,7 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
         if (outputPin == "clearCoat") return "(" + baseRef + ").clearCoat";
         if (outputPin == "clearCoatRoughness") return "(" + baseRef + ").clearCoatRoughness";
         if (outputPin == "pixelDepthOffset") return "(" + baseRef + ").pixelDepthOffset";
+        if (outputPin == "refraction") return "(" + baseRef + ").refraction";
         AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "Material attribute output pin is not supported.");
         return "0.0";
     case RenderMaterialGraphNodeKind::BreakVector:
@@ -3345,6 +3352,12 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += std::string{ TextureSamplerMacro(textureEntries[index].dimension) } + "(" +
             textureEntries[index].samplerName + ", " + std::to_string(stage) + ");\n";
     }
+    // Unreal's Refraction bends the opaque scene seen through a Translucent surface, so that
+    // material reads the scene-color snapshot like a Scene Color node; other blend modes ignore it.
+    const bool usesRefraction = resolvedBlendMode == RenderMaterialGraphBlendMode::Translucent &&
+        std::any_of(graph.links.begin(), graph.links.end(),
+            [](const RenderMaterialGraphLink& link) { return link.toPin == "refraction"; });
+    usesSceneColor = usesSceneColor || usesRefraction;
     if (usesSceneColor) {
         // MAT-31: transparent graph materials can sample an opaque scene-color snapshot bound at slot 4.
         source += "SAMPLER2D(s_kbSceneColor, 4);\n";
@@ -3404,6 +3417,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    float clearCoat;\n";
     source += "    float clearCoatRoughness;\n";
     source += "    float pixelDepthOffset;\n";
+    source += "    float refraction;\n";
     source += "};\n\n";
 
     if (usesHsv) {
@@ -3568,6 +3582,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     std::string clearCoatExpr;
     std::string clearCoatRoughnessExpr;
     std::string pixelDepthOffsetExpr;
+    std::string refractionExpr;
 
     // MAT-36: when a single MaterialAttributes set is wired into MaterialOutput.attributes it drives the
     // whole surface (the "use material attributes" mode); the per-channel pins are bypassed entirely.
@@ -3587,6 +3602,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         clearCoatExpr = compileOutput("clearCoat", RenderMaterialGraphPinType::Float, "1.0");
         clearCoatRoughnessExpr = compileOutput("clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.1");
         pixelDepthOffsetExpr = compileOutput("pixelDepthOffset", RenderMaterialGraphPinType::Float, "0.0");
+        refractionExpr = compileOutput("refraction", RenderMaterialGraphPinType::Float, "1.0");
     }
     {
         std::ostringstream row;
@@ -3620,6 +3636,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "    material.clearCoat = " + clearCoatExpr + ";\n";
         source += "    material.clearCoatRoughness = " + clearCoatRoughnessExpr + ";\n";
         source += "    material.pixelDepthOffset = " + pixelDepthOffsetExpr + ";\n";
+        source += "    material.refraction = " + refractionExpr + ";\n";
     }
     source += "    return material;\n";
     source += "}\n";
@@ -3720,6 +3737,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     // Directly or through the material attribute nodes: any link into a Pixel Depth Offset pin.
     reflection.hasPixelDepthOffset = std::any_of(graph.links.begin(), graph.links.end(),
         [](const RenderMaterialGraphLink& link) { return link.toPin == "pixelDepthOffset"; });
+    reflection.hasRefraction = usesRefraction;
     reflection.shadingModel = resolvedShadingModel;
     reflection.blendMode = resolvedBlendMode;
     reflection.usesSceneDepth = usesSceneDepth;

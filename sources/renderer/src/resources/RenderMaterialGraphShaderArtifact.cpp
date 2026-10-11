@@ -709,6 +709,23 @@ void AppendMaterialGraphPixelDepthOffset(std::string& wrapper) {
     wrapper += "    gl_FragDepth = kbPdoDepth;\n";
 }
 
+// Unreal's Refraction (Index of Refraction mode) on a Translucent surface: the opaque scene behind it
+// is read from the scene-color snapshot at an offset along the view-space normal, scaled by (IOR - 1)
+// and the projection, toward the middle of a convex surface when IOR > 1 like a lens; the lit surface
+// then covers it by its opacity. The fragment writes alpha 1, so the alpha blend keeps its colour.
+// The sign between NDC y and the screen position comes from the derivatives, so D3D, Vulkan and
+// OpenGL (bottom-left origin) bend the same way.
+void AppendMaterialGraphRefraction(std::string& wrapper, const std::string& normal, const std::string& litColor) {
+    wrapper += "    vec3 kbRefrViewNormal = mul(u_view, vec4(" + normal + ", 0.0)).xyz;\n";
+    wrapper += "    vec4 kbRefrClip = mul(u_viewProj, vec4(v_worldPos, 1.0));\n";
+    wrapper += "    float kbRefrNdcY = kbRefrClip.y / kbRefrClip.w;\n";
+    wrapper += "    float kbRefrYSign = dFdy(kbRefrNdcY) < 0.0 ? -1.0 : 1.0;\n";
+    wrapper += "    vec2 kbRefrNdc = -kbRefrViewNormal.xy * (surface.refraction - 1.0) * vec2(u_proj[0][0], u_proj[1][1]);\n";
+    wrapper += "    vec2 kbRefrUv = clamp(ctx.screenPosition + vec2(kbRefrNdc.x, kbRefrNdc.y * kbRefrYSign) * 0.5, vec2(0.0, 0.0), vec2(1.0, 1.0));\n";
+    wrapper += "    vec3 kbRefrScene = texture2DLod(s_kbSceneColor, kbRefrUv, 0.0).rgb;\n";
+    wrapper += "    gl_FragColor = vec4(mix(kbRefrScene, " + litColor + ", clamp(surface.alpha, 0.0, 1.0)), 1.0);\n";
+}
+
 void AppendMaterialGraphTangentBasis(std::string& wrapper, const RenderMaterialGraphShaderSource& shader) {
     if (shader.reflection.hasWorldPositionOffset || shader.reflection.hasDisplacement) {
         wrapper += "    vec3 basisNormal = normalize(cross(dFdx(v_worldPos), dFdy(v_worldPos)));\n";
@@ -1067,7 +1084,12 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    gl_FragData[3] = vec4(surface.emissive, clamp(surface.specular, 0.0, 1.0));\n";
         } else if (shader.reflection.shadingModel == RenderMaterialShadingModel::Unlit) {
             // MAT-37 Unlit: the surface emissive plus base color go straight to the framebuffer with no lighting.
-            wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, surface.alpha);\n";
+            if (shader.reflection.hasRefraction) {
+                wrapper += "    vec3 worldNormal = normalize(v_normal) * (gl_FrontFacing ? 1.0 : -1.0);\n";
+                AppendMaterialGraphRefraction(wrapper, "worldNormal", "surface.baseColor.rgb + surface.emissive");
+            } else {
+                wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, surface.alpha);\n";
+            }
         } else {
             // MAT-37 DefaultLit: the metallic-roughness forward PBR path.
             AppendMaterialGraphTangentBasis(wrapper, shader);
@@ -1088,7 +1110,11 @@ std::string BuildGraphFragmentWrapperSource(
             const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
             wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
                 std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0));\n";
-            wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);\n";
+            if (shader.reflection.hasRefraction) {
+                AppendMaterialGraphRefraction(wrapper, "worldNormal", "lighting + surface.emissive");
+            } else {
+                wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);\n";
+            }
         }
     }
     wrapper += "}\n";
@@ -1218,6 +1244,7 @@ std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraph
     HashU64(hash, reflection.hasDisplacement ? 1U : 0U);
     HashU64(hash, reflection.hasTangentOutput ? 1U : 0U);
     HashU64(hash, reflection.hasPixelDepthOffset ? 1U : 0U);
+    HashU64(hash, reflection.hasRefraction ? 1U : 0U);
     // MAT-37: the shading model selects the fragment wrapper lighting branch, so it is part of program identity.
     HashU64(hash, static_cast<std::uint64_t>(reflection.shadingModel));
     // MAT-38: the blend mode changes the wrapper (masked clip) and the cooked pass, so it is part of identity.
