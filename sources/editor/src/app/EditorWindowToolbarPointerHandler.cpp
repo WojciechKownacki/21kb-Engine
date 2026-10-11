@@ -16,12 +16,15 @@
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <shellapi.h>
 
 namespace kb::editor {
 namespace {
@@ -357,6 +360,27 @@ void ActivatePanel(
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
             } else if (*row == 2) {
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::EditorSettings, DockArea::Right);
+            }
+        } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Help) {
+            // Like Unity's and Unreal's Help menu: the engine's pages in the browser, and About.
+            constexpr const wchar_t* kHelpPages[] = {
+                L"https://github.com/WojciechKownacki/21kb-Engine/tree/1.0/docs",
+                L"https://github.com/WojciechKownacki/21kb-Engine/issues/new",
+                L"https://github.com/WojciechKownacki/21kb-Engine/releases",
+            };
+            if (*row >= 0 && *row < 3) {
+                const auto opened = reinterpret_cast<INT_PTR>(
+                    ShellExecuteW(mainWindow, L"open", kHelpPages[*row], nullptr, nullptr, SW_SHOWNORMAL));
+                if (opened <= 32) {
+                    sceneContext.Console().Error("Editor", "The help page could not be opened in the browser (error " +
+                        std::to_string(static_cast<long long>(opened)) + ").");
+                }
+            } else if (*row == 3) {
+                const std::string about = EditorLocalization::Format("help.aboutText",
+                    "21kb Engine editor\nBuilt {date}\n\nMIT License, Copyright (c) 2026 WojciechKownacki.\n{url}",
+                    { { "date", __DATE__ }, { "url", "https://github.com/WojciechKownacki/21kb-Engine" } });
+                kb::editor::MessageBoxUtf8(mainWindow, about.c_str(),
+                    std::string{ EditorText("help.aboutTitle", "About 21kb Engine") }.c_str(), MB_OK | MB_ICONINFORMATION);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::World) {
             bool changed = false;
