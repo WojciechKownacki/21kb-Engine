@@ -73,6 +73,7 @@ add_executable(kb_editor WIN32
     src/app/EditorParticleDocumentLifecycle.cpp
     src/app/EditorWindowHitTestHandler.cpp
     src/app/EditorPaintDispatcher.cpp
+    src/rendering/MaterialPreviewPresentSettings.cpp
     src/app/EditorPendingTextEditCommitter.cpp
     src/app/EditorPlayModeState.cpp
     src/app/EditorPlayModeSceneSession.cpp
@@ -1507,6 +1508,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Post-Process")
     set_tests_properties(kb_editor_post_process_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;rendering" TIMEOUT 180)
+    add_test(NAME kb_editor_material_preview_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessMaterialPreviewScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Material-Preview")
+    set_tests_properties(kb_editor_material_preview_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;rendering;material" TIMEOUT 300)
     add_test(NAME kb_editor_navigation_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessNavigationScenario.json"

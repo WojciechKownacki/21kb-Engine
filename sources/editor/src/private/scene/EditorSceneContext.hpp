@@ -865,6 +865,10 @@ public:
     [[nodiscard]] std::uint64_t RequestMaterialThumbnailCapture(const std::filesystem::path& path);
     [[nodiscard]] kb::scene::SceneScreenCaptureStatus MaterialThumbnailCaptureStatus(std::uint64_t captureId) const noexcept;
     [[nodiscard]] std::uint64_t MaterialThumbnailSceneRevision() const noexcept;
+    // The same capture for the Material Editor's or the Inspector's material preview: its next
+    // presented frame is written to `path` (headless automation reads what the panel shows).
+    [[nodiscard]] std::uint64_t RequestMaterialPreviewCapture(EditorMaterialPreviewSurface surface, const std::filesystem::path& path);
+    [[nodiscard]] kb::scene::SceneScreenCaptureStatus MaterialPreviewCaptureStatus(EditorMaterialPreviewSurface surface, std::uint64_t captureId) const noexcept;
     [[nodiscard]] const EditorMaterialPreviewSceneSettings& MaterialPreviewSceneSettings() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings);
     // Orbit (drag) and dolly (wheel) the material preview camera around the framed object.

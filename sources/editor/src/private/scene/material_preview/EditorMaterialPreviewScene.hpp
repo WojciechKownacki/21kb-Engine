@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 
 namespace kb::editor {
@@ -43,8 +44,13 @@ public:
     [[nodiscard]] const EditorMaterialPreviewTelemetry& Telemetry() const noexcept;
     [[nodiscard]] std::uint64_t Revision() const noexcept;
     void Clear() noexcept;
+    // Told before the preview's Scene is destroyed or replaced (another material), so the renderer
+    // drops what it keeps for that Scene (runtime resources, particle progress) - as the main scene.
+    void SetReleaseHandler(std::function<void(const kb::scene::Scene&)> handler);
 
 private:
+    void ReleaseScene() noexcept;
+
     void Rebuild(
         const kb::scene::Scene& sourceScene,
         kb::assets::AssetId materialAssetId,
@@ -52,6 +58,7 @@ private:
         std::uint64_t contentHash);
 
     std::unique_ptr<kb::scene::Scene> scene_;
+    std::function<void(const kb::scene::Scene&)> releaseHandler_;
     // The scene's single mesh entity, remembered so a content-only Rebuild (the SAME material, just
     // edited) can rebind its material in place instead of recreating the whole Scene - see Rebuild()'s
     // comment for why that matters (Scene::Id()-keyed runtime resource caches, texture decode cost).

@@ -1,0 +1,66 @@
+# KB material
+version 1
+materialType builtin.pbr
+materialTypeVersion 1
+baseColor 1 1 1 1
+metallicFactor 0
+roughnessFactor 1
+normalScale 1
+occlusionStrength 1
+emissiveColor 0 0 0
+emissiveStrength 1
+alphaMode OPAQUE
+alphaCutoff 0.5
+translucencyBlend ALPHA
+doubleSided false
+writesDepth true
+tiling 1 1
+offset 0 0
+clearcoatFactor 0
+clearcoatRoughnessFactor 0
+sheenColor 0 0 0
+sheenRoughnessFactor 0
+transmissionFactor 0
+thicknessFactor 0
+attenuationColor 1 1 1
+attenuationDistance 0
+subsurfaceColor 1 1 1
+subsurfaceFactor 0
+anisotropyStrength 0
+anisotropyRotation 0
+layerWeight 1
+decalBlendMode DISABLED
+layerBlendMode REPLACE
+graphVersion 3
+graphMaterialDomain surface
+graphShadingModel defaultLit
+graphBlendMode opaque
+graphStorageModel inline-kbmat
+graphDiagnosticSchemaVersion 1
+graphPersistCompileDiagnostics true
+graphArtifactFailurePolicy LastGoodThenErrorMaterial
+graphNode 1 MaterialOutput 640 240
+graphNode 2 ConstantColor 0 120
+graphParameter 2 _ Kolor Core 0.00518152%200.00518152%200.00518152%201 _ _ _ Unknown false 0 _
+graphSamplerState 2 Linear Linear Linear Repeat Repeat
+graphNode 3 ConstantScalar 0 240
+graphParameter 3 _ Metal Core 0 _ _ _ Unknown false 0 _
+graphSamplerState 3 Linear Linear Linear Repeat Repeat
+graphNode 4 ConstantScalar 0 360
+graphParameter 4 _ Chropowatosc Core 0.5 _ _ _ Unknown false 0 _
+graphSamplerState 4 Linear Linear Linear Repeat Repeat
+graphNode 5 Fresnel 0 480
+graphParameter 5 _ Fresnel Core 3%200 _ _ _ Unknown false 0 _
+graphSamplerState 5 Linear Linear Linear Repeat Repeat
+graphNode 6 ConstantColor 0 600
+graphParameter 6 _ Emisja Core 0.0295568%200.215861%201%201 _ _ _ Unknown false 0 _
+graphSamplerState 6 Linear Linear Linear Repeat Repeat
+graphNode 7 Multiply 0 720
+graphParameter 7 _ Razy Core _ _ _ _ Unknown true 0 _
+graphSamplerState 7 Linear Linear Linear Repeat Repeat
+graphLink 2486548411 2 270337 rgba 1 69633 baseColor
+graphLink 1689370047 3 139265 value 1 69634 metallic
+graphLink 1137954601 4 139265 value 1 69635 roughness
+graphLink 3024349733 5 3219457 value 7 1249281 a
+graphLink 2253196856 6 270337 rgba 7 1249282 b
+graphLink 1768650165 7 1253377 value 1 69637 emissive

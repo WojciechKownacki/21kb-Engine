@@ -1,0 +1,55 @@
+# KB material
+version 1
+materialType builtin.pbr
+materialTypeVersion 1
+baseColor 1 1 1 1
+metallicFactor 0
+roughnessFactor 1
+normalScale 1
+occlusionStrength 1
+emissiveColor 0 0 0
+emissiveStrength 1
+alphaMode OPAQUE
+alphaCutoff 0.5
+translucencyBlend ALPHA
+doubleSided false
+writesDepth true
+tiling 1 1
+offset 0 0
+clearcoatFactor 0
+clearcoatRoughnessFactor 0
+sheenColor 0 0 0
+sheenRoughnessFactor 0
+transmissionFactor 0
+thicknessFactor 0
+attenuationColor 1 1 1
+attenuationDistance 0
+subsurfaceColor 1 1 1
+subsurfaceFactor 0
+anisotropyStrength 0
+anisotropyRotation 0
+layerWeight 1
+decalBlendMode DISABLED
+layerBlendMode REPLACE
+graphParameterValue color4 Color 1 1 1 1
+graphVersion 3
+graphMaterialDomain surface
+graphShadingModel defaultLit
+graphBlendMode opaque
+graphStorageModel inline-kbmat
+graphDiagnosticSchemaVersion 1
+graphPersistCompileDiagnostics true
+graphArtifactFailurePolicy LastGoodThenErrorMaterial
+graphNode 1 MaterialOutput 640 240
+graphNode 2 ConstantScalar 0 120
+graphParameter 2 _ Metal Core 0 _ _ _ Unknown false 0 _
+graphSamplerState 2 Linear Linear Linear Repeat Repeat
+graphNode 3 ConstantScalar 0 240
+graphParameter 3 _ Chropowatosc Core 0.5 _ _ _ Unknown false 0 _
+graphSamplerState 3 Linear Linear Linear Repeat Repeat
+graphNode 4 ParameterColor 0 360
+graphParameter 4 color4 Kolor Core 1%201%201%201 _ _ _ Unknown true 0 _
+graphSamplerState 4 Linear Linear Linear Repeat Repeat
+graphLink 216961998 2 139265 value 1 69634 metallic
+graphLink 1169125726 3 139265 value 1 69635 roughness
+graphLink 4238460238 4 991233 rgba 1 69633 baseColor
