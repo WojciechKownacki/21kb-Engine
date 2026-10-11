@@ -1,4 +1,5 @@
 #include "rendering/ProjectFilesBottomBarRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserState.hpp"
@@ -12,19 +13,19 @@ namespace {
 
 using Draw = ProjectFilesPanelDrawing;
 
-[[nodiscard]] const char* SortLabel(EditorAssetSortMode mode) noexcept {
+[[nodiscard]] std::string_view SortLabel(EditorAssetSortMode mode) {
     switch (mode) {
     case EditorAssetSortMode::Type:
-        return "Sort: Type";
+        return EditorText("projectFiles.sortByType", "Sort: Type");
     case EditorAssetSortMode::Path:
-        return "Sort: Path";
+        return EditorText("projectFiles.sortByPath", "Sort: Path");
     case EditorAssetSortMode::Name:
     default:
-        return "Sort: Name";
+        return EditorText("projectFiles.sortByName", "Sort: Name");
     }
 }
 
-void DrawSortMenuItem(HDC dc, RECT rect, const EditorTheme& theme, const char* label, bool selected) {
+void DrawSortMenuItem(HDC dc, RECT rect, const EditorTheme& theme, std::string_view label, bool selected) {
     GdiDrawing::DrawSharpFrame(dc, rect, selected ? Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), 16) : Draw::Color(theme.panel), selected ? Draw::Color(theme.accent) : Draw::Color(theme.borderPanel));
     Draw::DrawLabel(dc, Draw::Inset(rect, 8, 0), label, selected ? Draw::Color(theme.textPrimary) : Draw::Color(theme.textSecondary));
 }
@@ -36,7 +37,7 @@ void ProjectFilesBottomBarRenderer::Paint(HDC dc, const EditorAssetBrowserLayout
     Draw::DrawTextButton(dc, layout.sortButton, theme, SortLabel(state.SortMode()), state.IsSortMenuOpen());
     Draw::DrawIconButton(dc, layout.listButton, theme, HeroIconKind::EllipsisHorizontal, state.ViewMode() == EditorAssetViewMode::List);
     Draw::DrawIconButton(dc, layout.tileButton, theme, HeroIconKind::Cube, state.ViewMode() == EditorAssetViewMode::Tiles);
-    Draw::DrawTextButton(dc, layout.recursiveButton, theme, state.Recursive() ? "Recursive" : "Current", state.Recursive());
+    Draw::DrawTextButton(dc, layout.recursiveButton, theme, state.Recursive() ? EditorText("projectFiles.recursive", "Recursive") : EditorText("projectFiles.currentFolder", "Current"), state.Recursive());
 
     RECT sliderLine = layout.sliderTrack;
     GdiDrawing::FillRectColor(dc, sliderLine, Draw::Blend(Draw::Color(theme.borderPanel), Draw::Color(theme.textSecondary), 18));
@@ -51,9 +52,9 @@ void ProjectFilesBottomBarRenderer::Paint(HDC dc, const EditorAssetBrowserLayout
     Draw::DrawCenteredLabel(dc, large, "A", Draw::Color(theme.textPrimary));
 
     if (state.IsSortMenuOpen()) {
-        DrawSortMenuItem(dc, layout.sortNameItem, theme, "Name", state.SortMode() == EditorAssetSortMode::Name);
-        DrawSortMenuItem(dc, layout.sortTypeItem, theme, "Type", state.SortMode() == EditorAssetSortMode::Type);
-        DrawSortMenuItem(dc, layout.sortPathItem, theme, "Path", state.SortMode() == EditorAssetSortMode::Path);
+        DrawSortMenuItem(dc, layout.sortNameItem, theme, EditorText("projectFiles.list.name", "Name"), state.SortMode() == EditorAssetSortMode::Name);
+        DrawSortMenuItem(dc, layout.sortTypeItem, theme, EditorText("projectFiles.list.type", "Type"), state.SortMode() == EditorAssetSortMode::Type);
+        DrawSortMenuItem(dc, layout.sortPathItem, theme, EditorText("projectFiles.list.path", "Path"), state.SortMode() == EditorAssetSortMode::Path);
     }
 }
 

@@ -135,8 +135,9 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      # Packaging scripts: the package contract, platform staging, third-party notices and SBOM.
-      - name: Packaging script tests
+      # Script tests: the package contract, platform staging, third-party notices, SBOM and the
+      # editor's translations (every editor text in all 32 catalogs).
+      - name: Script tests
         if: matrix.name == 'Windows MSVC'
         shell: pwsh
         run: |

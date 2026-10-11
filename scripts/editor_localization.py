@@ -19,16 +19,22 @@ LANGUAGES = ['pl', 'de', 'fr', 'es', 'it', 'ru', 'ja', 'zh-Hans', 'ko', 'pt-PT',
              'vi', 'ms']
 
 STRING = r'"((?:[^"\\]|\\.)*)"'
+# An argument may be several adjacent literals the compiler joins: "part one " "part two".
+LITERALS = r'((?:"(?:[^"\\]|\\.)*"\s*)+)'
+
 TEXT_CALL = re.compile(r'\b(?:EditorText|EditorLocalization::Text|EditorLocalization::Format)\s*\(\s*' + STRING +
-                       r'\s*,\s*' + STRING, re.S)
-PLURAL_CALL = re.compile(r'\bEditorLocalization::Plural\s*\(\s*' + STRING + r'\s*,[^,]+,\s*' + STRING + r'\s*,\s*' +
-                         STRING, re.S)
+                       r'\s*,\s*' + LITERALS, re.S)
+PLURAL_CALL = re.compile(r'\bEditorLocalization::Plural\s*\(\s*' + STRING + r'\s*,[^,]+,\s*' + LITERALS + r'\s*,\s*' +
+                         LITERALS, re.S)
 PLACEHOLDER = re.compile(r'\{[A-Za-z_][A-Za-z0-9_]*\}')
 KEY = re.compile(r'^[A-Za-z0-9._-]{1,256}$')
 
 
 def unescape(text):
-    return bytes(text, 'utf-8').decode('unicode_escape').encode('latin-1').decode('utf-8')
+    """The C++ text of one literal or of adjacent literals ("a " "b" -> "a b")."""
+    parts = re.findall(r'"((?:[^"\\]|\\.)*)"', text) if text.lstrip().startswith('"') else [text]
+    joined = ''.join(parts)
+    return bytes(joined, 'utf-8').decode('unicode_escape').encode('latin-1').decode('utf-8')
 
 
 def collect():

@@ -1,4 +1,5 @@
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "platform/win32/EditorTextEntryDialog.hpp"
@@ -13,11 +14,12 @@ std::optional<std::string> EditorMaterialParameterValueDialog::Show(
     std::string_view currentValue,
     std::string_view hint) {
     return EditorTextEntryDialog::Show(owner, EditorTextEntryDialogDescriptor{
-        .title = "Edit Value",
-        .label = "Value for " + std::string{parameterName},
+        .title = std::string{ EditorText("materialParameter.editValueTitle", "Edit Value") },
+        .label = EditorLocalization::Format("materialParameter.valueFor", "Value for {parameter}",
+            { { "parameter", std::string{ parameterName } } }),
         .value = std::string{currentValue},
         .hint = std::string{hint},
-        .acceptLabel = "Apply",
+        .acceptLabel = std::string{ EditorText("common.apply", "Apply") },
         .icon = HeroIconKind::AdjustmentsHorizontal,
     });
 }

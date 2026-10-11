@@ -44,6 +44,7 @@ int main(int argumentCount, char** arguments) {
     kb::editor::tests::RunEditorDockingTests();
     kb::editor::tests::RunEditorProjectTests();
     kb::editor::tests::RunEditorSettingsTests();
+    kb::editor::tests::RunEditorLocalizationTests();
     kb::editor::tests::RunEditorInspectorTests();
     kb::editor::tests::RunEditorMaterialAssetAuthoringTests();
     kb::editor::tests::RunScriptEditorTests();

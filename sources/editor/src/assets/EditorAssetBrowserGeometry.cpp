@@ -1,4 +1,5 @@
 #include "assets/EditorAssetBrowserGeometry.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserState.hpp"
@@ -161,7 +162,7 @@ std::vector<std::string> EditorAssetBrowserGeometry::BreadcrumbSegments(const st
 
 std::string EditorAssetBrowserGeometry::BreadcrumbDisplayLabel(const std::string& segment, std::size_t index) {
     if (index == 0U && segment == "Game") {
-        return "Content";
+        return std::string{ EditorText("projectFiles.contentRoot", "Content") };
     }
     return segment;
 }

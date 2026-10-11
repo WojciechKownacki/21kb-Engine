@@ -1021,6 +1021,9 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content"
         "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/21kbParticle"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Localization"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVuSans.ttf"
@@ -1041,6 +1044,9 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content"
         "$<TARGET_FILE_DIR:kb_editor>/Content/21kbParticle"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization"
+        "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Localization"
     VERBATIM
 )
 
@@ -1159,6 +1165,11 @@ if(TARGET kb_21kb_particle_plugin)
     )
 endif()
 
+if(WIN32)
+    # UTF-8 process code page: the interface in any of its 33 languages and names in any letters.
+    target_sources(kb_editor PRIVATE kb_editor.manifest)
+endif()
+
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
 
@@ -1167,6 +1178,7 @@ if(BUILD_TESTING)
         tests/EditorBuildGameTests.cpp
         src/rendering/BuildGamePanelLayout.cpp
         src/rendering/BuildGamePanelModel.cpp
+        src/localization/EditorLocalization.cpp
         src/settings/EditorBuildGameSettingsStore.cpp
         src/packaging/EditorProjectPackageService.cpp
         src/packaging/EditorAndroidSigningBroker.cpp
@@ -1220,6 +1232,7 @@ if(BUILD_TESTING)
         tests/EditorDockingTests.cpp
         tests/EditorProjectTests.cpp
         tests/EditorSettingsTests.cpp
+        tests/EditorLocalizationTests.cpp
         tests/EditorInspectorTests.cpp
         tests/EditorMaterialAssetAuthoringTests.cpp
         tests/EditorMaterialGraphCanvasTests.cpp
@@ -1430,6 +1443,7 @@ if(BUILD_TESTING)
     target_compile_definitions(kb_editor_tests
         PRIVATE
             KB_EDITOR_GRAPH_SHADER_CACHE_DIR="${CMAKE_BINARY_DIR}/editor_graph_cook_tests"
+            KB_EDITOR_LOCALIZATION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization"
     )
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
@@ -1531,6 +1545,8 @@ if(BUILD_TESTING)
         src/rendering/material_graph/MaterialGraphCanvas.cpp
         # The canvas tests check node rects against the panel layout, which owns ResolveLayout.
         src/rendering/MaterialEditorPanelLayout.cpp
+        # The panel's labels are in the editor language.
+        src/localization/EditorLocalization.cpp
     )
 
     target_include_directories(kb_editor_material_graph_canvas_tests

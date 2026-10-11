@@ -1,4 +1,5 @@
 #include "packaging/EditorProjectPackageService.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "packaging/EditorAndroidSigningBroker.hpp"
 #include "packaging/EditorPackageInputValidation.hpp"
 #include "packaging/EditorPackageProcessEnvironment.hpp"
@@ -124,11 +125,14 @@ struct RequestSecretsGuard {
     return fields;
 }
 
+// The status line of a package job that stopped at `operation` (in the editor language).
 [[nodiscard]] std::string LastProcessError(std::string_view operation) {
 #if defined(_WIN32)
-    return std::string{ operation } + " failed with Windows error " + std::to_string(GetLastError()) + '.';
+    return EditorLocalization::Format("buildGame.status.windowsError", "{operation} failed with Windows error {code}.",
+        { { "operation", std::string{ operation } }, { "code", std::to_string(GetLastError()) } });
 #else
-    return std::string{ operation } + " is unsupported on this platform.";
+    return EditorLocalization::Format("buildGame.status.unsupported", "{operation} is unsupported on this platform.",
+        { { "operation", std::string{ operation } } });
 #endif
 }
 
@@ -270,7 +274,7 @@ bool EditorProjectPackageService::Start(EditorPackageRequest request, std::strin
             .state = EditorPackageJobState::Running,
             .stage = EditorPackageStage::Validate,
             .progress = 0,
-            .status = "Starting package job.",
+            .status = std::string{ EditorText("buildGame.status.starting", "Starting package job.") },
         };
         cancelRequested_ = false;
     }
@@ -305,7 +309,7 @@ void EditorProjectPackageService::Cancel() noexcept {
     // A job no worker has taken yet never starts its process.
     if (lane_ != nullptr && job_ != nullptr && lane_->Service().Cancel(job_)) {
         snapshot_.state = EditorPackageJobState::Cancelled;
-        snapshot_.status = "Package job cancelled.";
+        snapshot_.status = std::string{ EditorText("buildGame.status.cancelled", "Package job cancelled.") };
         return;
     }
 #if defined(_WIN32)
@@ -462,7 +466,7 @@ void EditorProjectPackageService::Run(EditorPackageRequest request) {
     RequestSecretsGuard secrets{ request };
     const kb::packaging::PackagingTargetSpec* targetSpec = kb::packaging::FindPackagingTarget(request.targetId);
 #if !defined(_WIN32)
-    Finish(EditorPackageJobState::Failed, "The editor package process is unsupported on this platform.");
+    Finish(EditorPackageJobState::Failed, std::string{ EditorText("buildGame.status.processUnsupported", "The editor package process is unsupported on this platform.") });
     return;
 #else
     SECURITY_ATTRIBUTES inheritable{ sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE };
@@ -478,21 +482,21 @@ void EditorProjectPackageService::Run(EditorPackageRequest request) {
         if (outputWrite != nullptr) CloseHandle(outputWrite);
         if (inputRead != nullptr) CloseHandle(inputRead);
         if (inputWrite != nullptr) CloseHandle(inputWrite);
-        Finish(EditorPackageJobState::Failed, LastProcessError("Creating package process pipes"));
+        Finish(EditorPackageJobState::Failed, LastProcessError(EditorText("buildGame.status.createPipes", "Creating package process pipes")));
         return;
     }
 
     HANDLE job = CreateJobObjectW(nullptr, nullptr);
     if (job == nullptr) {
         CloseHandle(outputRead); CloseHandle(outputWrite); CloseHandle(inputRead); CloseHandle(inputWrite);
-        Finish(EditorPackageJobState::Failed, LastProcessError("Creating the package process job"));
+        Finish(EditorPackageJobState::Failed, LastProcessError(EditorText("buildGame.status.createJob", "Creating the package process job")));
         return;
     }
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
     if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
         CloseHandle(job); CloseHandle(outputRead); CloseHandle(outputWrite); CloseHandle(inputRead); CloseHandle(inputWrite);
-        Finish(EditorPackageJobState::Failed, LastProcessError("Configuring the package process job"));
+        Finish(EditorPackageJobState::Failed, LastProcessError(EditorText("buildGame.status.configureJob", "Configuring the package process job")));
         return;
     }
 
@@ -515,7 +519,7 @@ void EditorProjectPackageService::Run(EditorPackageRequest request) {
     if (!attributesReady) {
         if (attributeListInitialized) DeleteProcThreadAttributeList(startup.lpAttributeList);
         CloseHandle(job); CloseHandle(outputRead); CloseHandle(outputWrite); CloseHandle(inputRead); CloseHandle(inputWrite);
-        Finish(EditorPackageJobState::Failed, LastProcessError("Isolating package process handles"));
+        Finish(EditorPackageJobState::Failed, LastProcessError(EditorText("buildGame.status.isolateHandles", "Isolating package process handles")));
         return;
     }
     PROCESS_INFORMATION process{};
@@ -525,7 +529,7 @@ void EditorProjectPackageService::Run(EditorPackageRequest request) {
     if (!environment.has_value()) {
         DeleteProcThreadAttributeList(startup.lpAttributeList);
         CloseHandle(job); CloseHandle(outputRead); CloseHandle(outputWrite); CloseHandle(inputRead); CloseHandle(inputWrite);
-        Finish(EditorPackageJobState::Failed, "Sanitizing the package process environment failed.");
+        Finish(EditorPackageJobState::Failed, std::string{ EditorText("buildGame.status.environmentFailed", "Sanitizing the package process environment failed.") });
         return;
     }
     const BOOL created = CreateProcessW(
@@ -538,13 +542,13 @@ void EditorProjectPackageService::Run(EditorPackageRequest request) {
     CloseHandle(inputRead);
     if (!created) {
         CloseHandle(job); CloseHandle(outputRead); CloseHandle(inputWrite);
-        Finish(EditorPackageJobState::Failed, LastProcessError("Starting the package process"));
+        Finish(EditorPackageJobState::Failed, LastProcessError(EditorText("buildGame.status.startProcess", "Starting the package process")));
         return;
     }
     if (!AssignProcessToJobObject(job, process.hProcess)) {
         static_cast<void>(TerminateProcess(process.hProcess, ERROR_PROCESS_ABORTED));
         CloseHandle(process.hThread); CloseHandle(process.hProcess); CloseHandle(job); CloseHandle(outputRead); CloseHandle(inputWrite);
-        Finish(EditorPackageJobState::Failed, LastProcessError("Assigning the package process job"));
+        Finish(EditorPackageJobState::Failed, LastProcessError(EditorText("buildGame.status.assignJob", "Assigning the package process job")));
         return;
     }
     {
@@ -564,7 +568,7 @@ void EditorProjectPackageService::Run(EditorPackageRequest request) {
         }
         CloseHandle(job);
         SetLastError(error);
-        Finish(EditorPackageJobState::Failed, LastProcessError("Resuming the package process"));
+        Finish(EditorPackageJobState::Failed, LastProcessError(EditorText("buildGame.status.resumeProcess", "Resuming the package process")));
         return;
     }
     CloseHandle(process.hThread);
@@ -664,20 +668,21 @@ void EditorProjectPackageService::Run(EditorPackageRequest request) {
         resultDirectory = snapshot_.resultDirectory;
     }
     if (cancelled) {
-        Finish(EditorPackageJobState::Cancelled, "Package job cancelled.");
+        Finish(EditorPackageJobState::Cancelled, std::string{ EditorText("buildGame.status.cancelled", "Package job cancelled.") });
     } else if (exitCode != 0U) {
-        Finish(EditorPackageJobState::Failed, "Package process failed with exit code " + std::to_string(exitCode) + '.');
+        Finish(EditorPackageJobState::Failed, EditorLocalization::Format("buildGame.status.exitCode",
+            "Package process failed with exit code {code}.", { { "code", std::to_string(exitCode) } }));
     } else if (targetSpec != nullptr && targetSpec->needsAndroidMetadata &&
         request.configuration == "Release" && !signingRequestSeen) {
-        Finish(EditorPackageJobState::Failed, "Android Release completed without a signing request.");
+        Finish(EditorPackageJobState::Failed, std::string{ EditorText("buildGame.status.androidNoSigning", "Android Release completed without a signing request.") });
     } else if (!request.windowsCertificateFile.empty() && !signingRequestSeen) {
-        Finish(EditorPackageJobState::Failed, "Windows Release completed without asking for its certificate.");
+        Finish(EditorPackageJobState::Failed, std::string{ EditorText("buildGame.status.windowsNoSigning", "Windows Release completed without asking for its certificate.") });
     } else if (!hasResult) {
-        Finish(EditorPackageJobState::Failed, "Package process completed without a RESULT directory.");
+        Finish(EditorPackageJobState::Failed, std::string{ EditorText("buildGame.status.noResult", "Package process completed without a RESULT directory.") });
     } else if (!ResultMatchesRequest(request, resultDirectory)) {
-        Finish(EditorPackageJobState::Failed, "Package process returned a different output directory than requested.");
+        Finish(EditorPackageJobState::Failed, std::string{ EditorText("buildGame.status.wrongResult", "Package process returned a different output directory than requested.") });
     } else {
-        Finish(EditorPackageJobState::Succeeded, "Package verified and published.");
+        Finish(EditorPackageJobState::Succeeded, std::string{ EditorText("buildGame.status.succeeded", "Package verified and published.") });
     }
 #endif
 }

@@ -12,7 +12,7 @@ void InspectorRigidbodyTextBuilder::Append(std::string& text, const kb::scene::R
         component,
         sizeof(component),
         "\n\nRigidbody\nBody type: %s\nMass: %.2f\nLinear velocity: %.2f, %.2f, %.2f\nAngular velocity: %.2f, %.2f, %.2f\nGravity scale: %.2f\nUse gravity: %s\nLock rotation: %s",
-        InspectorComponentLabelFormatter::RigidbodyBodyTypeName(rigidbody.bodyType),
+        std::string{ InspectorComponentLabelFormatter::RigidbodyBodyTypeName(rigidbody.bodyType) }.c_str(),
         static_cast<double>(rigidbody.mass),
         static_cast<double>(rigidbody.linearVelocity.x),
         static_cast<double>(rigidbody.linearVelocity.y),

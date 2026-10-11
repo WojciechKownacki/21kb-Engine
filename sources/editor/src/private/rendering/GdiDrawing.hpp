@@ -10,6 +10,8 @@
 #include <Windows.h>
 #endif
 
+#include <string_view>
+
 namespace kb::editor {
 
 #if defined(_WIN32)
@@ -25,9 +27,9 @@ public:
 
     static void FillRectColor(HDC dc, const RECT& rect, COLORREF color);
     static void FillRectAlpha(HDC target, const RECT& rect, COLORREF color, BYTE alpha);
-    static void DrawTextBlock(HDC dc, RECT rect, const char* text, COLORREF color);
-    static void DrawTabText(HDC dc, RECT rect, const char* text, COLORREF color);
-    static void DrawCenteredText(HDC dc, RECT rect, const char* text, COLORREF color);
+    static void DrawTextBlock(HDC dc, RECT rect, std::string_view text, COLORREF color);
+    static void DrawTabText(HDC dc, RECT rect, std::string_view text, COLORREF color);
+    static void DrawCenteredText(HDC dc, RECT rect, std::string_view text, COLORREF color);
     static void DrawSharpFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border);
     static void DrawRaisedFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF highlight, COLORREF shadow);
 };

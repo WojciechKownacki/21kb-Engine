@@ -1,4 +1,5 @@
 #include "rendering/ProjectFilesTreeRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserState.hpp"
@@ -39,7 +40,7 @@ void ProjectFilesTreeRenderer::Paint(
     GdiDrawing::DrawSharpFrame(dc, layout.tree, Draw::Blend(Draw::Color(theme.panel), RGB(0, 0, 0), 5), Draw::Color(theme.borderPanel));
     RECT header{ layout.tree.left + 1, layout.tree.top + 1, layout.tree.right - 1, layout.toolbar.bottom - 1 };
     GdiDrawing::FillRectColor(dc, header, Draw::Blend(Draw::Color(theme.strip), RGB(0, 0, 0), 8));
-    Draw::DrawTextWithFont(dc, RECT{ header.left + 10, header.top, header.right - 10, header.bottom }, "Folders", Draw::Color(theme.textSecondary), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    Draw::DrawTextWithFont(dc, RECT{ header.left + 10, header.top, header.right - 10, header.bottom }, EditorText("projectFiles.folders", "Folders"), Draw::Color(theme.textSecondary), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     Draw::DrawHairline(dc, RECT{ layout.tree.left + 1, header.bottom, layout.tree.right - 1, header.bottom + 1 }, Draw::Color(theme.borderPanel));
     const RECT viewport = EditorAssetBrowserLayout::TreeViewportRect(layout);
     const int contentHeight = static_cast<int>(folders.size()) * EditorAssetBrowserLayout::RowHeight;

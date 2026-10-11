@@ -20,7 +20,7 @@ public:
     MaterialAssetFormatter() = delete;
 
     /// Display name for a material alpha mode ("Opaque", "Mask", "Blend").
-    [[nodiscard]] static std::string AlphaModeName(kb::render::RenderMaterialAlphaMode mode) noexcept;
+    [[nodiscard]] static std::string AlphaModeName(kb::render::RenderMaterialAlphaMode mode);
     /// Artist-facing debug channel rows for the currently inspected PBR material.
     [[nodiscard]] static std::vector<MaterialDebugChannelRow> DebugChannelRows(
         const kb::render::RenderMaterialDesc& material,

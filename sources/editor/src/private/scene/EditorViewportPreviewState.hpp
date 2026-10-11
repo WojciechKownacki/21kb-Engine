@@ -140,10 +140,11 @@ private:
 
 [[nodiscard]] const char* EditorViewportFitModeLabel(EditorViewportFitMode mode) noexcept;
 [[nodiscard]] const char* EditorViewportCameraModeLabel(EditorViewportCameraMode mode) noexcept;
-[[nodiscard]] const char* EditorViewportRenderProfileLabel(EditorViewportRenderProfile profile) noexcept;
-[[nodiscard]] const char* EditorViewportGridSpacingLabel(float spacing) noexcept;
-[[nodiscard]] const char* EditorViewportSnapStepLabel(float step) noexcept;
-[[nodiscard]] const char* EditorViewportRotationSnapLabel(float degrees) noexcept;
+// Toolbar labels in the editor language.
+[[nodiscard]] std::string_view EditorViewportRenderProfileLabel(EditorViewportRenderProfile profile);
+[[nodiscard]] std::string_view EditorViewportGridSpacingLabel(float spacing);
+[[nodiscard]] std::string_view EditorViewportSnapStepLabel(float step);
+[[nodiscard]] std::string_view EditorViewportRotationSnapLabel(float degrees);
 [[nodiscard]] std::size_t EditorViewportGridSpacingOptionCount() noexcept;
 [[nodiscard]] float EditorViewportGridSpacingOption(std::size_t index) noexcept;
 [[nodiscard]] std::size_t EditorViewportSnapStepOptionCount() noexcept;

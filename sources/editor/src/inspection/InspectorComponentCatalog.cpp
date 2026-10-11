@@ -1,5 +1,7 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "scene/ui/EditorUIComponentAuthoring.hpp"
 
 #include <algorithm>
@@ -87,9 +89,12 @@ namespace {
         return true;
     }
     const std::string loweredQuery = LowerAscii(query);
+    // The names the user reads match as well as the English ones the catalog keeps.
     return LowerAscii(tile.label).find(loweredQuery) != std::string::npos ||
         LowerAscii(tile.category).find(loweredQuery) != std::string::npos ||
-        LowerAscii(tile.id).find(loweredQuery) != std::string::npos;
+        LowerAscii(tile.id).find(loweredQuery) != std::string::npos ||
+        LowerAscii(InspectorComponentCatalog::DisplayLabel(tile)).find(loweredQuery) != std::string::npos ||
+        LowerAscii(InspectorComponentCatalog::CategoryLabel(tile.category)).find(loweredQuery) != std::string::npos;
 }
 
 } // namespace
@@ -148,6 +153,67 @@ const InspectorComponentTile* InspectorComponentCatalog::Find(std::string_view i
         return tile.id == id;
     });
     return iter == tiles.end() ? nullptr : &*iter;
+}
+
+std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile& tile) {
+    if (tile.id == "Camera") return std::string{ EditorText("component.camera", "Camera") };
+    if (tile.id == "Light") return std::string{ EditorText("component.light", "Light") };
+    if (tile.id == "MeshRenderer") return std::string{ EditorText("component.meshRenderer", "Mesh Renderer") };
+    if (tile.id == "Particle Effect") return std::string{ EditorText("component.particleEffect", "Particle Effect") };
+    if (tile.id == "TerrainEditor") return std::string{ EditorText("component.terrainEditor", "Terrain Editor") };
+    if (tile.id == "WorldBackdrop") return std::string{ EditorText("component.worldBackdrop", "World Backdrop") };
+    if (tile.id == "Ambient Radiance") return std::string{ EditorText("component.ambientRadiance", "Ambient Radiance") };
+    if (tile.id == "Detail Switch") return std::string{ EditorText("component.detailSwitch", "Detail Switch") };
+    if (tile.id == "Visibility Blocker") return std::string{ EditorText("component.visibilityBlocker", "Visibility Blocker") };
+    if (tile.id == "Visibility Cell") return std::string{ EditorText("component.visibilityCell", "Visibility Cell") };
+    if (tile.id == "Region Portal") return std::string{ EditorText("component.regionPortal", "Region Portal") };
+    if (tile.id == "Secondary Frame") return std::string{ EditorText("component.secondaryFrame", "Secondary Frame") };
+    if (tile.id == "Geometry Swarm") return std::string{ EditorText("component.geometrySwarm", "Geometry Swarm") };
+    if (tile.id == "Surface Cast") return std::string{ EditorText("component.surfaceCast", "Surface Cast") };
+    if (tile.id == "Facing Panel") return std::string{ EditorText("component.facingPanel", "Facing Panel") };
+    if (tile.id == "Line Renderer") return std::string{ EditorText("component.lineRenderer", "Line Renderer") };
+    if (tile.id == "Trail Renderer") return std::string{ EditorText("component.trailRenderer", "Trail Renderer") };
+    if (tile.id == "Tags") return std::string{ EditorText("component.objectClassification", "Object Classification") };
+    if (tile.id == "RegionShape") return std::string{ EditorText("component.regionShape", "Region Shape") };
+    if (tile.id == "GuideCurve") return std::string{ EditorText("component.guideCurve", "Guide Curve") };
+    if (tile.id == "ContentInstance") return std::string{ EditorText("component.contentInstance", "Content Instance") };
+    if (tile.id == "StreamFocus") return std::string{ EditorText("component.streamFocus", "Stream Focus") };
+    if (tile.id == "AudioSource") return std::string{ EditorText("component.audioSource", "Audio Source") };
+    if (tile.id == "AudioListener") return std::string{ EditorText("component.audioListener", "Audio Listener") };
+    if (tile.id == "Animator") return std::string{ EditorText("component.animator", "Animator") };
+    if (tile.id == "SkeletonBinding") return std::string{ EditorText("component.skeletonBinding", "Skeleton Binding") };
+    if (tile.id == "DeformedGeometry") return std::string{ EditorText("component.deformedGeometry", "Deformed Geometry") };
+    if (tile.id == "Rigidbody") return std::string{ EditorText("component.rigidbody", "Rigidbody") };
+    if (tile.id == "Collider") return std::string{ EditorText("component.collider", "Collider") };
+    if (tile.id == "CharacterController") return std::string{ EditorText("component.characterController", "Character Controller") };
+    if (tile.id == "Joint") return std::string{ EditorText("component.joint", "Joint") };
+    if (tile.id == "NavAgent") return std::string{ EditorText("component.navAgent", "Nav Agent") };
+    if (tile.id == "NavObstacle") return std::string{ EditorText("component.navObstacle", "Nav Obstacle") };
+    if (tile.id == "NavLink") return std::string{ EditorText("component.navLink", "Nav Link") };
+    for (const kb::scene::UIComponentDescriptor& definition : kb::scene::UIComponentCatalog()) {
+        if (tile.id == definition.stableId) {
+            return std::string{ InspectorUIComponentModel::DisplayName(definition.type) };
+        }
+    }
+    for (const kb::scene::UIComponentPresetDescriptor& preset : kb::scene::UIComponentPresetCatalog()) {
+        if (tile.id == std::string{ EditorUIPresetPrefix() } + std::string{ preset.name }) {
+            return EditorLocalization::Format("component.uiPresetSet", "{preset} Set",
+                { { "preset", std::string{ InspectorUIComponentModel::PresetDisplayName(preset.preset) } } });
+        }
+    }
+    return tile.label;
+}
+
+std::string_view InspectorComponentCatalog::CategoryLabel(std::string_view category) {
+    if (category == "Animation") return EditorText("component.category.animation", "Animation");
+    if (category == "Audio") return EditorText("component.category.audio", "Audio");
+    if (category == "Navigation") return EditorText("component.category.navigation", "Navigation");
+    if (category == "Physics") return EditorText("component.category.physics", "Physics");
+    if (category == "Rendering") return EditorText("component.category.rendering", "Rendering");
+    if (category == "Scene") return EditorText("component.category.scene", "Scene");
+    if (category == "User Widget") return EditorText("component.category.userWidget", "User Widget");
+    if (category == "World") return EditorText("component.category.world", "World");
+    return category;
 }
 
 std::string_view InspectorComponentCatalog::RequiredPluginId(std::string_view componentId) noexcept {

@@ -1,4 +1,5 @@
 #include "app/console/EditorConsolePointerController.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "console/EditorConsoleLayout.hpp"
@@ -162,8 +163,8 @@ bool EditorConsolePointerController::HandleContextMenu(const RECT& content, int 
     }
     constexpr UINT_PTR kCopyLine = 1;
     constexpr UINT_PTR kSaveLog = 2;
-    AppendMenuW(menu, MF_STRING, kCopyLine, L"Copy Line");
-    AppendMenuW(menu, MF_STRING, kSaveLog, L"Save Log to File");
+    AppendMenuW(menu, MF_STRING, kCopyLine, Utf8ToWide(std::string{ EditorText("console.copyLine", "Copy Line") }).c_str());
+    AppendMenuW(menu, MF_STRING, kSaveLog, Utf8ToWide(std::string{ EditorText("console.saveLogToFile", "Save Log to File") }).c_str());
 
     POINT screen{ x, y };
     ClientToScreen(owner_, &screen);

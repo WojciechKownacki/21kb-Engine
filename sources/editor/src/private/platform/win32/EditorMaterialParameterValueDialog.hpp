@@ -1,5 +1,7 @@
 #pragma once
 
+#include "localization/EditorLocalization.hpp"
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -21,7 +23,7 @@ public:
         HWND owner,
         std::string_view parameterName,
         std::string_view currentValue,
-        std::string_view hint = "Use numbers like: 0.25 or 1 0 0 1");
+        std::string_view hint = EditorText("materialParameter.valueHint", "Use numbers like: 0.25 or 1 0 0 1"));
 #endif
 };
 

@@ -1,4 +1,5 @@
 #include "rendering/ProjectFilesAssetTileRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorAudioAssetPreview.hpp"
@@ -629,7 +630,7 @@ void DrawAssetTile(
         const int badgeTop = (visual.icon.top + visual.icon.bottom - badgeHeight) / 2;
         const RECT badge{ tile.left + 6, badgeTop, tile.right - 6, badgeTop + badgeHeight };
         GdiDrawing::DrawSharpFrame(dc, badge, RGB(20, 72, 65), RGB(88, 232, 203));
-        Draw::DrawTextWithFont(dc, badge, "PLAYING", RGB(183, 255, 235), 12, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        Draw::DrawTextWithFont(dc, badge, EditorText("projectFiles.tile.playing", "PLAYING"), RGB(183, 255, 235), 12, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     if (state.TextEditMode() == EditorAssetTextEditMode::RenameAsset && state.TextEditTargetAsset() == asset.metadata.id) {
         Draw::DrawCenteredEditField(dc, visual.label, theme, state.TextEditValue());

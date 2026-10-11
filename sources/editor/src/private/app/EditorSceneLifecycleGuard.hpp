@@ -1,5 +1,6 @@
 #pragma once
 
+#include "platform/win32/EditorSceneDirtyPrompt.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -9,9 +10,14 @@
 #endif
 
 #include <optional>
-#include <string_view>
 
 namespace kb::editor {
+
+// Why prefab edit mode is being left.
+enum class EditorPrefabLeaveReason {
+    CloseEditor,
+    ClosePrefab,
+};
 
 #if defined(_WIN32)
 
@@ -22,12 +28,12 @@ public:
     [[nodiscard]] static std::optional<EditorDirtySceneResolution> ConfirmDirtySceneTransition(
         HWND owner,
         EditorSceneContext& sceneContext,
-        std::wstring_view action);
+        EditorSceneTransition transition);
     // Leaves prefab edit mode, first asking what to do with unsaved prefab edits. False when cancelled.
     [[nodiscard]] static bool LeavePrefabEditMode(
         HWND owner,
         EditorSceneContext& sceneContext,
-        std::wstring_view action);
+        EditorPrefabLeaveReason reason);
 };
 
 #endif

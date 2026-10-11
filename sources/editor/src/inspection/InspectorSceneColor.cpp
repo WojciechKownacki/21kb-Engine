@@ -1,4 +1,5 @@
 #include "inspection/InspectorSceneColor.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -24,18 +25,18 @@ bool InspectorSceneColor::IsColorProperty(InspectorPropertyId property) noexcept
     }
 }
 
-std::string_view InspectorSceneColor::Label(InspectorPropertyId property) noexcept {
+std::string_view InspectorSceneColor::Label(InspectorPropertyId property) {
     switch (property) {
     case InspectorPropertyId::LightColor:
     case InspectorPropertyId::WorldBackdropColor:
-    case InspectorPropertyId::AmbientRadianceColor: return "Color";
-    case InspectorPropertyId::CameraClearColor: return "Clear Color";
+    case InspectorPropertyId::AmbientRadianceColor: return EditorText("inspector.color.color", "Color");
+    case InspectorPropertyId::CameraClearColor: return EditorText("inspector.color.clearColor", "Clear Color");
     case InspectorPropertyId::WorldBackdropHorizonColor:
-    case InspectorPropertyId::AmbientRadianceHorizonColor: return "Horizon";
+    case InspectorPropertyId::AmbientRadianceHorizonColor: return EditorText("inspector.color.horizon", "Horizon");
     case InspectorPropertyId::WorldBackdropZenithColor:
-    case InspectorPropertyId::AmbientRadianceZenithColor: return "Zenith";
-    case InspectorPropertyId::WorldBackdropSkyTint: return "Sky Tint";
-    case InspectorPropertyId::WorldBackdropGroundColor: return "Ground";
+    case InspectorPropertyId::AmbientRadianceZenithColor: return EditorText("inspector.color.zenith", "Zenith");
+    case InspectorPropertyId::WorldBackdropSkyTint: return EditorText("inspector.color.skyTint", "Sky Tint");
+    case InspectorPropertyId::WorldBackdropGroundColor: return EditorText("inspector.color.ground", "Ground");
     default: return {};
     }
 }

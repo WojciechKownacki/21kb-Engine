@@ -18,6 +18,14 @@ enum class EditorSettingsHitKind : std::uint8_t {
     None,
     Toggle,
     Choice,
+    Category,
+    Language,
+};
+
+// The categories of the sidebar, in order.
+enum class EditorSettingsCategory : std::uint8_t {
+    General,
+    Saving,
 };
 
 struct EditorSettingsHit {
@@ -39,6 +47,11 @@ public:
         const RECT& content,
         int x,
         int y) noexcept;
+    // The language field, where the Language list opens below.
+    [[nodiscard]] static RECT LanguageField(const RECT& content) noexcept;
+    // The category shown on the right (the panel's own view state, not saved).
+    [[nodiscard]] static EditorSettingsCategory SelectedCategory() noexcept;
+    static void SelectCategory(EditorSettingsCategory category) noexcept;
 #endif
 };
 

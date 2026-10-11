@@ -1,4 +1,5 @@
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderPrewarmer.hpp"
@@ -392,16 +393,16 @@ EditorMaterialGraphCookBanner MakeEditorMaterialGraphCookBanner(EditorMaterialGr
     switch (status) {
     case EditorMaterialGraphCookStatus::Pending:
     case EditorMaterialGraphCookStatus::Cooking:
-        return { "Compiling graph shader...", EditorMaterialGraphCookBannerSeverity::Pending };
+        return { std::string{ EditorText("materialEditor.cook.compiling", "Compiling graph shader...") }, EditorMaterialGraphCookBannerSeverity::Pending };
     case EditorMaterialGraphCookStatus::Ready:
     case EditorMaterialGraphCookStatus::UpToDate:
-        return { "Ready (GPU graph)", EditorMaterialGraphCookBannerSeverity::Ready };
+        return { std::string{ EditorText("materialEditor.cook.ready", "Ready (GPU graph)") }, EditorMaterialGraphCookBannerSeverity::Ready };
     case EditorMaterialGraphCookStatus::Stale:
-        return { "Stale (last-good) - fix graph to refresh", EditorMaterialGraphCookBannerSeverity::Warning };
+        return { std::string{ EditorText("materialEditor.cook.stale", "Stale (last-good) - fix graph to refresh") }, EditorMaterialGraphCookBannerSeverity::Warning };
     case EditorMaterialGraphCookStatus::Failed:
-        return { "Failed (error material) - see diagnostics", EditorMaterialGraphCookBannerSeverity::Error };
+        return { std::string{ EditorText("materialEditor.cook.failed", "Failed (error material) - see diagnostics") }, EditorMaterialGraphCookBannerSeverity::Error };
     case EditorMaterialGraphCookStatus::CookUnavailable:
-        return { "Fallback (CPU/builtin) - shaderc unavailable", EditorMaterialGraphCookBannerSeverity::Warning };
+        return { std::string{ EditorText("materialEditor.cook.fallback", "Fallback (CPU/builtin) - shaderc unavailable") }, EditorMaterialGraphCookBannerSeverity::Warning };
     case EditorMaterialGraphCookStatus::Idle:
         break;
     }

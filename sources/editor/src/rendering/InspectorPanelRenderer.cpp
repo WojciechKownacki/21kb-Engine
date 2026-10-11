@@ -1,4 +1,5 @@
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
@@ -226,11 +227,6 @@ constexpr std::array<InspectorRowDefinition, 3> kDeformedGeometryRows{ {
     { InspectorPropertyId::DeformedGeometryCastsShadow, InspectorRowValueKind::Bool },
     { InspectorPropertyId::DeformedGeometryReceivesShadow, InspectorRowValueKind::Bool },
     { InspectorPropertyId::DeformedGeometryEnabled, InspectorRowValueKind::Bool },
-} };
-
-constexpr std::array<const char*, kb::scene::kMaxDeformedGeometryMaterialSlotOverrides> kDeformedGeometryMaterialSlotLabels{ {
-    "Material Slot 0", "Material Slot 1", "Material Slot 2", "Material Slot 3",
-    "Material Slot 4", "Material Slot 5", "Material Slot 6", "Material Slot 7",
 } };
 
 [[nodiscard]] constexpr InspectorPropertyId DeformedGeometryMaterialSlotProperty(std::uint32_t slot) noexcept {
@@ -523,7 +519,7 @@ void DrawAddComponentBrowser(
     EditorDialogStyle::PaintSurface(dc, browser, theme);
     EditorDialogStyle::PaintTitleBar(dc, theme, EditorDialogHeaderDescriptor{
         .bounds = Rect(browser.left + 1, browser.top + 1, browser.right - 1, browser.top + 30),
-        .title = "Add Component",
+        .title = EditorText("inspector.addComponent", "Add Component"),
         .icon = HeroIconKind::Plus,
         .showIcon = true,
     });
@@ -536,7 +532,7 @@ void DrawAddComponentBrowser(
     EditorDialogStyle::PaintText(
         dc,
         Rect(search.left + 24, search.top, search.right - 7, search.bottom),
-        query.empty() ? "Search" : query,
+        query.empty() ? EditorText("inspector.addComponentSearch", "Search") : query,
         EditorDialogStyle::Color(query.empty() ? theme.textDisabled : theme.textPrimary));
 
     const std::string& category = inspector.AddComponentBrowserCategory();
@@ -565,7 +561,8 @@ void DrawAddComponentBrowser(
         HeroIconPainter::Draw(dc, Rect(back.left + 26, backIconTop, back.left + 26 + backIconSize, backIconTop + backIconSize), categoryIcon, Color(theme.textPrimary), 1);
         ScopedFont backFont(12, FW_SEMIBOLD);
         const ScopedGdiObject selectedBackFont(dc, backFont.handle);
-        Text(dc, Rect(back.left + 48, back.top, back.right - 10, back.bottom), category, Color(theme.textPrimary), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        Text(dc, Rect(back.left + 48, back.top, back.right - 10, back.bottom), InspectorComponentCatalog::CategoryLabel(category),
+            Color(theme.textPrimary), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         GdiDrawing::FillRectColor(dc, Rect(back.left, back.bottom - 1, back.right, back.bottom), Rgb(52, 58, 66));
     }
 
@@ -590,7 +587,7 @@ void DrawAddComponentBrowser(
     const int savedListDc = SaveDC(dc);
     IntersectClipRect(dc, list.left, list.top, list.right, list.bottom);
     if (rowCount == 0) {
-        Text(dc, list, "No components found", Rgb(122, 130, 144), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        Text(dc, list, EditorText("inspector.noComponentsFound", "No components found"), Rgb(122, 130, 144), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     } else {
         const InspectorAddComponentBrowserModel::VisibleWindow window = InspectorAddComponentBrowserModel::Visible(rowCount, scroll, kAddComponentRowHeight, listHeight);
         for (int i = window.first; i < window.first + window.count; ++i) {
@@ -633,7 +630,7 @@ void DrawAddComponent(HDC dc, RECT content, const EditorTheme& theme, const Insp
     Text(
         dc,
         Rect(groupLeft + glyphWidth + 8, button.top, groupLeft + glyphWidth + 8 + textWidth, button.bottom),
-        "Add Component",
+        EditorText("inspector.addComponent", "Add Component"),
         Color(buttonActive ? theme.textPrimary : theme.textSecondary),
         DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
@@ -852,8 +849,9 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
 
     RECT footer = Rect(panel.left + 12, panel.bottom - 28, panel.right - 12, panel.bottom - 7);
     const std::string footerText = stats == nullptr
-        ? std::string{ "Mesh preview" }
-        : ("Mesh preview  |  " + FormatUInt64(stats->triangleCount) + " tris  |  " + FormatUInt64(stats->vertexCount) + " verts");
+        ? std::string{ EditorText("inspector.meshPreview", "Mesh preview") }
+        : EditorLocalization::Format("inspector.meshPreviewStats", "Mesh preview  |  {triangles} tris  |  {vertices} verts",
+              { { "triangles", FormatUInt64(stats->triangleCount) }, { "vertices", FormatUInt64(stats->vertexCount) } });
     ScopedFont font(11, FW_NORMAL);
     const ScopedGdiObject selectedFont(dc, font.handle);
     Text(dc, footer, footerText, Color(theme.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -875,7 +873,7 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
     const int sectionTop = y;
     const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewFor(metadata);
     const RECT header = Rect(content.left, y, content.right, y + kSectionHeaderHeight);
-    DrawSectionHeader(dc, header, theme, inspector, InspectorSectionId::Details, HeroIconKind::Eye, "Details");
+    DrawSectionHeader(dc, header, theme, inspector, InspectorSectionId::Details, HeroIconKind::Eye, EditorText("inspector.details.title", "Details"));
     y += kSectionHeaderHeight;
     if (inspector.IsCollapsed(InspectorSectionId::Details)) {
         DrawSectionCardOutline(dc, Rect(content.left, sectionTop, content.right, y), theme);
@@ -893,7 +891,7 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
     } else {
         ScopedFont font(12, FW_NORMAL);
         const ScopedGdiObject selectedFont(dc, font.handle);
-        Text(dc, frame, "Texture preview unavailable", Color(theme.textDisabled), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        Text(dc, frame, EditorText("inspector.texturePreviewUnavailable", "Texture preview unavailable"), Color(theme.textDisabled), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     const int sectionBottom = frame.bottom + 10;
     DrawSectionCardOutline(dc, Rect(content.left, sectionTop, content.right, sectionBottom), theme);
@@ -903,9 +901,9 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
 [[nodiscard]] std::string FormatValidationIssue(const EditorMeshValidationIssue& issue) {
     switch (issue.severity) {
     case EditorMeshValidationSeverity::Error:
-        return "Error: " + issue.message;
+        return EditorLocalization::Format("inspector.validationError", "Error: {message}", { { "message", issue.message } });
     case EditorMeshValidationSeverity::Warning:
-        return "Warning: " + issue.message;
+        return EditorLocalization::Format("inspector.validationWarning", "Warning: {message}", { { "message", issue.message } });
     case EditorMeshValidationSeverity::Info:
     default:
         return issue.message;
@@ -934,31 +932,31 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     GdiDrawing::FillRectColor(dc, content, Color(theme.panel));
     ScopedFont font(12, FW_NORMAL);
     const ScopedGdiObject selectedFont(dc, font.handle);
-    Text(dc, content, "Select an object or asset to inspect it", Color(theme.textDisabled), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    Text(dc, content, EditorText("inspector.empty", "Select an object or asset to inspect it"), Color(theme.textDisabled), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 // Resolves an asset id to a display label for inspector fields that reference
 // another asset (mapping-context on a component, action on a mapping).
 [[nodiscard]] std::string AssetDisplayName(const EditorSceneContext& sceneContext, std::uint64_t id) {
     if (id == 0U) {
-        return "(none)";
+        return std::string{ EditorText("inspector.noAsset", "(none)") };
     }
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     if (const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ id }); metadata != nullptr) {
         return metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
     }
-    return "(missing)";
+    return std::string{ EditorText("inspector.missingAsset", "(missing)") };
 }
 
 [[nodiscard]] std::string MaterialDisplayName(const EditorSceneContext& sceneContext, std::uint64_t id) {
     if (id == 0U) {
-        return "None";
+        return std::string{ EditorText("inspector.noMaterial", "None") };
     }
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     if (const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ id }); metadata != nullptr) {
         return metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
     }
-    return "Missing material asset " + std::to_string(id);
+    return EditorLocalization::Format("inspector.missingMaterialAsset", "Missing material asset {id}", { { "id", std::to_string(id) } });
 }
 
 [[nodiscard]] bool IsMaterialDocument(const kb::assets::AssetMetadata& metadata) noexcept;
@@ -973,8 +971,9 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
 
 [[nodiscard]] std::string MaterialGraphArtifactStatus(const kb::render::RenderMaterialAssetData& material) {
     return material.graph.lastGoodArtifact.IsValid()
-        ? "artifact ready #" + std::to_string(material.graph.lastGoodArtifact.assetId)
-        : "artifact pending";
+        ? EditorLocalization::Format("inspector.materialStatus.artifactReady", "artifact ready #{id}",
+              { { "id", std::to_string(material.graph.lastGoodArtifact.assetId) } })
+        : std::string{ EditorText("inspector.materialStatus.artifactPending", "artifact pending") };
 }
 
 [[nodiscard]] std::string MaterialGraphDiagnosticStatus(const kb::render::RenderMaterialAssetData& material) {
@@ -989,49 +988,49 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
         }
     }
     if (errors != 0U) {
-        return "diagnostics error x" + std::to_string(errors);
+        return EditorLocalization::Format("inspector.materialStatus.diagnosticsErrors", "diagnostics error x{count}", { { "count", std::to_string(errors) } });
     }
     if (warnings != 0U) {
-        return "diagnostics warning x" + std::to_string(warnings);
+        return EditorLocalization::Format("inspector.materialStatus.diagnosticsWarnings", "diagnostics warning x{count}", { { "count", std::to_string(warnings) } });
     }
-    return "diagnostics ok";
+    return std::string{ EditorText("inspector.materialStatus.diagnosticsOk", "diagnostics ok") };
 }
 
 [[nodiscard]] std::string MaterialSlotRuntimeStatus(const EditorSceneContext& sceneContext, std::uint64_t id) {
     if (id == 0U) {
-        return "None";
+        return std::string{ EditorText("inspector.noMaterial", "None") };
     }
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ id });
     if (metadata == nullptr) {
-        return "Missing material asset " + std::to_string(id);
+        return EditorLocalization::Format("inspector.missingMaterialAsset", "Missing material asset {id}", { { "id", std::to_string(id) } });
     }
     if (!IsMaterialDocument(*metadata)) {
-        return "Not a material";
+        return std::string{ EditorText("inspector.materialStatus.notMaterial", "Not a material") };
     }
     const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialDocumentAsset(metadata->id);
     if (!material.has_value()) {
-        return "Unreadable material";
+        return std::string{ EditorText("inspector.materialStatus.unreadable", "Unreadable material") };
     }
     if (IsBuiltInPbrMaterial(*material)) {
-        return "Built-in PBR | runtime ready";
+        return std::string{ EditorText("inspector.materialStatus.builtInPbr", "Built-in PBR | runtime ready") };
     }
 
-    std::string referenceStatus = "type reference ok";
+    std::string referenceStatus{ EditorText("inspector.materialStatus.typeReferenceOk", "type reference ok") };
     if (metadata->type == "RenderMaterial") {
         const kb::render::RenderMaterialTypeReferenceValidationResult reference =
             kb::render::ValidateRenderMaterialTypeReference(*material, *metadata, manager);
         if (!reference.Succeeded()) {
-            referenceStatus = "type reference error x" + std::to_string(reference.diagnostics.size());
+            referenceStatus = EditorLocalization::Format("inspector.materialStatus.typeReferenceErrors", "type reference error x{count}",
+                { { "count", std::to_string(reference.diagnostics.size()) } });
         }
     }
 
-    return "Graph-backed | "
-        + referenceStatus
-        + " | "
-        + MaterialGraphDiagnosticStatus(*material)
-        + " | "
-        + MaterialGraphArtifactStatus(*material);
+    return EditorLocalization::Format("inspector.materialStatus.graphBacked", "Graph-backed | {reference} | {diagnostics} | {artifact}", {
+        { "reference", referenceStatus },
+        { "diagnostics", MaterialGraphDiagnosticStatus(*material) },
+        { "artifact", MaterialGraphArtifactStatus(*material) },
+    });
 }
 
 [[nodiscard]] std::optional<kb::render::RenderMeshAssetData> LoadMeshAssetData(const EditorSceneContext& sceneContext, std::uint64_t meshAssetId) {
@@ -1105,8 +1104,8 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
 }
 
-[[nodiscard]] std::string_view MaterialDocumentLabel(const kb::assets::AssetMetadata& metadata) noexcept {
-    return metadata.type == "RenderMaterialInstance" ? std::string_view{ "Material Instance" } : std::string_view{ "Render Material" };
+[[nodiscard]] std::string_view MaterialDocumentLabel(const kb::assets::AssetMetadata& metadata) {
+    return metadata.type == "RenderMaterialInstance" ? EditorText("inspector.materialInstance", "Material Instance") : EditorText("inspector.renderMaterial", "Render Material");
 }
 
 [[nodiscard]] EditorMaterialPreviewTelemetry MaterialPreviewTelemetryFor(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
@@ -1300,7 +1299,7 @@ void DrawTelemetryRow(
     const kb::assets::AssetMetadata& metadata) {
     const int sectionTop = y;
     const EditorMaterialPreviewTelemetry telemetry = MaterialPreviewTelemetryFor(sceneContext, metadata);
-    DrawSectionHeader(dc, Rect(content.left, y, content.right, y + kSectionHeaderHeight), theme, inspector, InspectorSectionId::MaterialPreview, HeroIconKind::Eye, "Preview");
+    DrawSectionHeader(dc, Rect(content.left, y, content.right, y + kSectionHeaderHeight), theme, inspector, InspectorSectionId::MaterialPreview, HeroIconKind::Eye, EditorText("inspector.materialPreview.title", "Preview"));
     y += kSectionHeaderHeight;
     if (inspector.IsCollapsed(InspectorSectionId::MaterialPreview)) {
         DrawSectionCardOutline(dc, Rect(content.left, sectionTop, content.right, y), theme);
@@ -1324,19 +1323,21 @@ void DrawTelemetryRow(
     y = frame.bottom + kMaterialPreviewGap;
 
     if (debugRows.empty()) {
-        DrawTelemetryRow(dc, content, y, theme, inspector, "Material Id", FormatUInt64(telemetry.materialAssetId.value));
+        DrawTelemetryRow(dc, content, y, theme, inspector, EditorText("inspector.materialPreview.materialId", "Material Id"), FormatUInt64(telemetry.materialAssetId.value));
     } else {
         for (const MaterialDebugChannelRow& row : debugRows) {
             DrawTelemetryRow(dc, content, y, theme, inspector, row.label, row.value);
         }
     }
-    DrawTelemetryRow(dc, content, y, theme, inspector, "Cache", telemetry.materialLoaded ? "Loaded" : "Missing");
-    DrawTelemetryRow(dc, content, y, theme, inspector, "Preview Scene", telemetry.previewSceneReady ? "Ready" : "Fallback");
-    DrawTelemetryRow(dc, content, y, theme, inspector, "Missing Textures", FormatUInt64(telemetry.missingTextureCount));
-    DrawTelemetryRow(dc, content, y, theme, inspector, "Virtual Path", NormalizePath(metadata.virtualPath));
+    DrawTelemetryRow(dc, content, y, theme, inspector, EditorText("inspector.materialPreview.cache", "Cache"),
+        telemetry.materialLoaded ? EditorText("inspector.materialPreview.loaded", "Loaded") : EditorText("inspector.materialPreview.missing", "Missing"));
+    DrawTelemetryRow(dc, content, y, theme, inspector, EditorText("inspector.materialPreview.previewScene", "Preview Scene"),
+        telemetry.previewSceneReady ? EditorText("inspector.materialPreview.ready", "Ready") : EditorText("inspector.materialPreview.fallback", "Fallback"));
+    DrawTelemetryRow(dc, content, y, theme, inspector, EditorText("inspector.materialPreview.missingTextures", "Missing Textures"), FormatUInt64(telemetry.missingTextureCount));
+    DrawTelemetryRow(dc, content, y, theme, inspector, EditorText("inspector.asset.virtualPath", "Virtual Path"), NormalizePath(metadata.virtualPath));
     const std::size_t shown = std::min<std::size_t>(telemetry.missingTextures.size(), kMaterialPreviewMaxMissingRows);
     for (std::size_t index = 0; index < shown; ++index) {
-        DrawTelemetryRow(dc, content, y, theme, inspector, index == 0U ? "Diagnostic" : "", telemetry.missingTextures[index]);
+        DrawTelemetryRow(dc, content, y, theme, inspector, index == 0U ? EditorText("inspector.materialPreview.diagnostic", "Diagnostic") : std::string_view{}, telemetry.missingTextures[index]);
     }
     DrawSectionCardOutline(dc, Rect(content.left, sectionTop, content.right, y), theme);
     return y + kSectionGap;
@@ -1380,19 +1381,19 @@ void PaintInputActionAsset(HDC dc, RECT content, const EditorTheme& theme, const
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const kb::input::InputActionAsset action = sceneContext.ReadInputActionAsset(metadata.id).value_or(kb::input::InputActionAsset{});
 
-    DrawHeader(dc, content, theme, HeroIconKind::Gamepad2, action.name.empty() ? metadata.name : action.name, "Input Action");
+    DrawHeader(dc, content, theme, HeroIconKind::Gamepad2, action.name.empty() ? metadata.name : action.name, EditorText("inspector.inputAction.title", "Input Action"));
     int y = InspectorBodyTop(content);
     {
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::InputAction, HeroIconKind::Gamepad2, "Input Action");
-        section.Field("Name", action.name, InspectorPropertyId::InputActionName);
-        section.Field("Value Type", kb::input::ToString(action.valueType), InspectorPropertyId::InputActionValueType);
-        section.Bool("Consume Input", action.consumeInput, InspectorPropertyId::InputActionConsume);
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::InputAction, HeroIconKind::Gamepad2, EditorText("inspector.inputAction.title", "Input Action"));
+        section.Field(EditorText("inspector.inputAction.name", "Name"), action.name, InspectorPropertyId::InputActionName);
+        section.Field(EditorText("inspector.inputAction.valueType", "Value Type"), kb::input::ToString(action.valueType), InspectorPropertyId::InputActionValueType);
+        section.Bool(EditorText("inspector.inputAction.consumeInput", "Consume Input"), action.consumeInput, InspectorPropertyId::InputActionConsume);
         y = section.Bottom() + kSectionGap;
     }
     {
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
-        section.Field("Id", FormatUInt64(metadata.id.value));
-        section.Field("Virtual Path", NormalizePath(metadata.virtualPath));
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, EditorText("inspector.asset.title", "Asset"));
+        section.Field(EditorText("inspector.asset.id", "Id"), FormatUInt64(metadata.id.value));
+        section.Field(EditorText("inspector.asset.virtualPath", "Virtual Path"), NormalizePath(metadata.virtualPath));
     }
     // Drawn last so the open dropdown overlays the rows beneath the Value Type field.
     PaintValueTypeDropdown(dc, content, theme, inspector);
@@ -1402,25 +1403,29 @@ void PaintInputMappingContextAsset(HDC dc, RECT content, const EditorTheme& them
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const kb::input::InputMappingContextAsset context = sceneContext.ReadInputMappingContextAsset(metadata.id).value_or(kb::input::InputMappingContextAsset{});
 
-    DrawHeader(dc, content, theme, HeroIconKind::Gamepad2, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, "Input Mapping Context");
+    DrawHeader(dc, content, theme, HeroIconKind::Gamepad2, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, EditorText("inspector.inputMappingContext", "Input Mapping Context"));
     int y = InspectorBodyTop(content);
 
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::InputMappings, HeroIconKind::Gamepad2, "Mappings");
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::InputMappings, HeroIconKind::Gamepad2, EditorText("inspector.mappings.title", "Mappings"));
     for (std::size_t index = 0; index < context.mappings.size(); ++index) {
         const kb::input::InputKeyMapping& mapping = context.mappings[index];
-        const std::string suffix = " " + std::to_string(index);
+        const std::string number = std::to_string(index);
         const bool capturing = inspector.IsListeningForKey() && inspector.KeyCaptureMappingIndex() == static_cast<int>(index);
-        const std::string keyText = capturing ? std::string{ "Press a key..." } : std::string{ kb::input::ToString(mapping.key) };
+        const std::string keyText = capturing ? std::string{ EditorText("inspector.mappings.pressKey", "Press a key...") } : std::string{ kb::input::ToString(mapping.key) };
         const std::string triggerText = mapping.triggers.empty()
-            ? std::string{ "Down (implicit)" }
+            ? std::string{ EditorText("inspector.mappings.downImplicit", "Down (implicit)") }
             : std::string{ kb::input::ToString(mapping.triggers.front().type) };
-        section.Field("Key" + suffix, keyText, InspectorPropertyId::InputMappingKey);
-        section.Field("Action" + suffix, AssetDisplayName(sceneContext, mapping.actionId), InspectorPropertyId::InputMappingAction);
-        section.Field("Scale" + suffix, FormatFloat(mapping.scale), InspectorPropertyId::InputMappingScale);
-        section.Field("Trigger" + suffix, triggerText, InspectorPropertyId::InputMappingTrigger);
-        section.Field("", "Remove", InspectorPropertyId::InputMappingRemove);
+        section.Field(EditorLocalization::Format("inspector.mappings.key", "Key {index}", { { "index", number } }),
+            keyText, InspectorPropertyId::InputMappingKey);
+        section.Field(EditorLocalization::Format("inspector.mappings.action", "Action {index}", { { "index", number } }),
+            AssetDisplayName(sceneContext, mapping.actionId), InspectorPropertyId::InputMappingAction);
+        section.Field(EditorLocalization::Format("inspector.mappings.scale", "Scale {index}", { { "index", number } }),
+            FormatFloat(mapping.scale), InspectorPropertyId::InputMappingScale);
+        section.Field(EditorLocalization::Format("inspector.mappings.trigger", "Trigger {index}", { { "index", number } }),
+            triggerText, InspectorPropertyId::InputMappingTrigger);
+        section.Field("", EditorText("inspector.mappings.remove", "Remove"), InspectorPropertyId::InputMappingRemove);
     }
-    section.Field("", "Add Mapping", InspectorPropertyId::InputMappingAdd);
+    section.Field("", EditorText("inspector.mappings.addMapping", "Add Mapping"), InspectorPropertyId::InputMappingAdd);
 }
 
 void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
@@ -1470,24 +1475,24 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneConte
             return;
         }
 
-        DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name, metadata->type.empty() ? "Asset" : metadata->type);
+        DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name, metadata->type.empty() ? EditorText("inspector.asset.title", "Asset") : std::string_view{ metadata->type });
         y = InspectorBodyTop(content);
         y = DrawTextureDetails(dc, content, y, theme, inspector, *metadata);
         y = DrawMeshPreview(dc, content, y, theme, inspector, manager, *metadata, deferMeshPreviewWork);
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, EditorText("inspector.asset.title", "Asset"));
         if (!metadata->importCategory.empty()) {
-            section.Field("Category", metadata->importCategory);
+            section.Field(EditorText("inspector.asset.category", "Category"), metadata->importCategory);
         }
         const EditorMeshThumbnailStats* stats = deferMeshPreviewWork
             ? EditorMeshPreviewCache().CachedStatsFor(*metadata)
             : EditorMeshPreviewCache().StatsFor(manager, *metadata);
         if (stats != nullptr) {
-            section.Field("Vertices", FormatUInt64(stats->vertexCount));
-            section.Field("Indices", FormatUInt64(stats->indexCount));
-            section.Field("Triangles", FormatUInt64(stats->triangleCount));
-            section.Field("Material Slots", FormatUInt64(stats->materialSlotCount));
-            section.Field("Bounds Center", FormatVec3(stats->boundsCenter));
-            section.Field("Bounds Radius", FormatFloat(stats->boundsRadius, 3));
+            section.Field(EditorText("inspector.asset.vertices", "Vertices"), FormatUInt64(stats->vertexCount));
+            section.Field(EditorText("inspector.asset.indices", "Indices"), FormatUInt64(stats->indexCount));
+            section.Field(EditorText("inspector.asset.triangles", "Triangles"), FormatUInt64(stats->triangleCount));
+            section.Field(EditorText("inspector.asset.materialSlots", "Material Slots"), FormatUInt64(stats->materialSlotCount));
+            section.Field(EditorText("inspector.asset.boundsCenter", "Bounds Center"), FormatVec3(stats->boundsCenter));
+            section.Field(EditorText("inspector.asset.boundsRadius", "Bounds Radius"), FormatFloat(stats->boundsRadius, 3));
         }
         const EditorMeshValidationResult* validation = deferMeshPreviewWork
             ? EditorMeshPreviewCache().CachedValidationFor(*metadata)
@@ -1495,17 +1500,17 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneConte
         if (validation != nullptr) {
             const std::size_t shown = std::min<std::size_t>(validation->issues.size(), 6U);
             for (std::size_t index = 0; index < shown; ++index) {
-                section.Field(index == 0U ? "Validation" : "", FormatValidationIssue(validation->issues[index]));
+                section.Field(index == 0U ? EditorText("inspector.asset.validation", "Validation") : std::string_view{}, FormatValidationIssue(validation->issues[index]));
             }
         }
-        section.Field("Id", FormatUInt64(metadata->id.value));
-        section.Field("Virtual Path", NormalizePath(metadata->virtualPath));
+        section.Field(EditorText("inspector.asset.id", "Id"), FormatUInt64(metadata->id.value));
+        section.Field(EditorText("inspector.asset.virtualPath", "Virtual Path"), NormalizePath(metadata->virtualPath));
         if (const std::optional<std::filesystem::path> physical = ResolveAssetPhysicalPath(manager, *metadata)) {
-            section.Field("Physical Path", physical->string());
+            section.Field(EditorText("inspector.asset.physicalPath", "Physical Path"), physical->string());
         }
-        section.Field("Content Hash", FormatUInt64(metadata->contentHash));
-        section.Bool("Runtime Loadable", metadata->runtimeLoadable);
-        section.Bool("Loaded", manager.IsLoaded(metadata->id));
+        section.Field(EditorText("inspector.asset.contentHash", "Content Hash"), FormatUInt64(metadata->contentHash));
+        section.Bool(EditorText("inspector.asset.runtimeLoadable", "Runtime Loadable"), metadata->runtimeLoadable);
+        section.Bool(EditorText("inspector.asset.loaded", "Loaded"), manager.IsLoaded(metadata->id));
         return;
     }
 
@@ -1519,32 +1524,32 @@ void PaintAudioSourceSection(
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
     const kb::scene::AudioSourceComponent& audioSource) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioSource, HeroIconKind::SpeakerWave, "Audio Source",
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioSource, HeroIconKind::SpeakerWave, EditorText("inspector.audioSource.title", "Audio Source"),
         InspectorAudioComponentModel::HasRemoveControl(InspectorSectionId::AudioSource));
     for (const InspectorAudioRow& row : InspectorAudioComponentModel::SourceRows()) {
         switch (row.property) {
         case InspectorPropertyId::AudioSourceClip:
-            section.AssetField(row.label, InspectorAudioComponentModel::ClipDisplay(sceneContext.Scene(), audioSource), row.property, row.pickerProperty);
+            section.AssetField(InspectorAudioComponentModel::Label(row.property), InspectorAudioComponentModel::ClipDisplay(sceneContext.Scene(), audioSource), row.property, row.pickerProperty);
             break;
-        case InspectorPropertyId::AudioSourceClipClear: section.Action(row.label, row.property); break;
-        case InspectorPropertyId::AudioSourceVolume: section.Float(row.label, FormatFloat(audioSource.volume, 3), row.property); break;
-        case InspectorPropertyId::AudioSourcePitch: section.Float(row.label, FormatFloat(audioSource.pitch, 3), row.property); break;
-        case InspectorPropertyId::AudioSourceEnabled: section.Bool(row.label, audioSource.enabled, row.property); break;
-        case InspectorPropertyId::AudioSourceAutoplay: section.Bool(row.label, audioSource.autoplay, row.property); break;
-        case InspectorPropertyId::AudioSourceLoop: section.Bool(row.label, audioSource.loop, row.property); break;
-        case InspectorPropertyId::AudioSourceMute: section.Bool(row.label, audioSource.mute, row.property); break;
-        case InspectorPropertyId::AudioSourceSpatial: section.Bool(row.label, audioSource.spatial, row.property); break;
-        case InspectorPropertyId::AudioSourcePan: section.Float(row.label, FormatFloat(audioSource.pan, 3), row.property); break;
-        case InspectorPropertyId::AudioSourceSpatialBlend: section.Float(row.label, FormatFloat(audioSource.spatialBlend, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceClipClear: section.Action(InspectorAudioComponentModel::Label(row.property), row.property); break;
+        case InspectorPropertyId::AudioSourceVolume: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.volume, 3), row.property); break;
+        case InspectorPropertyId::AudioSourcePitch: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.pitch, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceEnabled: section.Bool(InspectorAudioComponentModel::Label(row.property), audioSource.enabled, row.property); break;
+        case InspectorPropertyId::AudioSourceAutoplay: section.Bool(InspectorAudioComponentModel::Label(row.property), audioSource.autoplay, row.property); break;
+        case InspectorPropertyId::AudioSourceLoop: section.Bool(InspectorAudioComponentModel::Label(row.property), audioSource.loop, row.property); break;
+        case InspectorPropertyId::AudioSourceMute: section.Bool(InspectorAudioComponentModel::Label(row.property), audioSource.mute, row.property); break;
+        case InspectorPropertyId::AudioSourceSpatial: section.Bool(InspectorAudioComponentModel::Label(row.property), audioSource.spatial, row.property); break;
+        case InspectorPropertyId::AudioSourcePan: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.pan, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceSpatialBlend: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.spatialBlend, 3), row.property); break;
         case InspectorPropertyId::AudioSourceAttenuation:
-            section.Field(row.label, InspectorComponentLabelFormatter::AudioAttenuationModelName(audioSource.attenuationModel), row.property);
+            section.Field(InspectorAudioComponentModel::Label(row.property), InspectorComponentLabelFormatter::AudioAttenuationModelName(audioSource.attenuationModel), row.property);
             break;
-        case InspectorPropertyId::AudioSourceMinDistance: section.Float(row.label, FormatFloat(audioSource.minDistance, 3), row.property); break;
-        case InspectorPropertyId::AudioSourceMaxDistance: section.Float(row.label, FormatFloat(audioSource.maxDistance, 3), row.property); break;
-        case InspectorPropertyId::AudioSourceRolloff: section.Float(row.label, FormatFloat(audioSource.rolloff, 3), row.property); break;
-        case InspectorPropertyId::AudioSourceDopplerFactor: section.Float(row.label, FormatFloat(audioSource.dopplerFactor, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceMinDistance: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.minDistance, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceMaxDistance: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.maxDistance, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceRolloff: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.rolloff, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceDopplerFactor: section.Float(InspectorAudioComponentModel::Label(row.property), FormatFloat(audioSource.dopplerFactor, 3), row.property); break;
         case InspectorPropertyId::AudioSourceOutputBus:
-            section.Field(row.label, InspectorAudioComponentModel::OutputBusDisplay(sceneContext.Scene(), audioSource), row.property);
+            section.Field(InspectorAudioComponentModel::Label(row.property), InspectorAudioComponentModel::OutputBusDisplay(sceneContext.Scene(), audioSource), row.property);
             break;
         default: break;
         }
@@ -1559,14 +1564,14 @@ void PaintAudioListenerSection(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const kb::scene::AudioListenerComponent& audioListener) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioListener, HeroIconKind::SpeakerWave, "Audio Listener",
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioListener, HeroIconKind::SpeakerWave, EditorText("inspector.audioListener.title", "Audio Listener"),
         InspectorAudioComponentModel::HasRemoveControl(InspectorSectionId::AudioListener));
     for (const InspectorAudioRow& row : InspectorAudioComponentModel::ListenerRows()) {
         switch (row.property) {
-        case InspectorPropertyId::AudioListenerPriority: section.Field(row.label, std::to_string(audioListener.priority), row.property); break;
-        case InspectorPropertyId::AudioListenerLocalUser: section.Field(row.label, std::to_string(audioListener.localUser.value), row.property); break;
-        case InspectorPropertyId::AudioListenerPrimary: section.Bool(row.label, audioListener.primary, row.property); break;
-        case InspectorPropertyId::AudioListenerEnabled: section.Bool(row.label, audioListener.enabled, row.property); break;
+        case InspectorPropertyId::AudioListenerPriority: section.Field(InspectorAudioComponentModel::Label(row.property), std::to_string(audioListener.priority), row.property); break;
+        case InspectorPropertyId::AudioListenerLocalUser: section.Field(InspectorAudioComponentModel::Label(row.property), std::to_string(audioListener.localUser.value), row.property); break;
+        case InspectorPropertyId::AudioListenerPrimary: section.Bool(InspectorAudioComponentModel::Label(row.property), audioListener.primary, row.property); break;
+        case InspectorPropertyId::AudioListenerEnabled: section.Bool(InspectorAudioComponentModel::Label(row.property), audioListener.enabled, row.property); break;
         default: break;
         }
     }
@@ -1581,24 +1586,26 @@ void PaintAnimatorSection(
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
     const kb::scene::Animator& animator) {
-    const char* rootMotionOwner = "Invalid";
+    std::string_view rootMotionOwner = EditorText("inspector.invalid", "Invalid");
     switch (animator.rootMotionOwner) {
-    case kb::scene::AnimatorRootMotionOwner::None: rootMotionOwner = "None"; break;
-    case kb::scene::AnimatorRootMotionOwner::Animator: rootMotionOwner = "Animator"; break;
-    case kb::scene::AnimatorRootMotionOwner::CharacterController: rootMotionOwner = "Character Controller"; break;
-    case kb::scene::AnimatorRootMotionOwner::Rigidbody: rootMotionOwner = "Rigidbody"; break;
+    case kb::scene::AnimatorRootMotionOwner::None: rootMotionOwner = EditorText("inspector.animator.rootMotionNone", "None"); break;
+    case kb::scene::AnimatorRootMotionOwner::Animator: rootMotionOwner = EditorText("inspector.animator.rootMotionAnimator", "Animator"); break;
+    case kb::scene::AnimatorRootMotionOwner::CharacterController:
+        rootMotionOwner = EditorText("inspector.animator.rootMotionCharacterController", "Character Controller");
+        break;
+    case kb::scene::AnimatorRootMotionOwner::Rigidbody: rootMotionOwner = EditorText("inspector.animator.rootMotionRigidbody", "Rigidbody"); break;
     default: break;
     }
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
-        InspectorSectionId::Animator, HeroIconKind::Play, "Animator", true);
+        InspectorSectionId::Animator, HeroIconKind::Play, EditorText("inspector.animator.title", "Animator"), true);
     section.AssetField(
-        "Controller",
+        EditorText("inspector.animator.controller", "Controller"),
         AssetDisplayName(sceneContext, animator.controllerAssetId),
         InspectorPropertyId::AnimatorController,
         InspectorPropertyId::AnimatorControllerPicker);
-    section.Field("Speed", FormatFloat(animator.speed, 3), InspectorPropertyId::AnimatorSpeed);
-    section.Bool("Enabled", animator.enabled, InspectorPropertyId::AnimatorEnabled);
-    section.Field("Root Motion", rootMotionOwner, InspectorPropertyId::AnimatorRootMotionOwner);
+    section.Field(EditorText("inspector.animator.speed", "Speed"), FormatFloat(animator.speed, 3), InspectorPropertyId::AnimatorSpeed);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), animator.enabled, InspectorPropertyId::AnimatorEnabled);
+    section.Field(EditorText("inspector.animator.rootMotion", "Root Motion"), rootMotionOwner, InspectorPropertyId::AnimatorRootMotionOwner);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -1611,14 +1618,14 @@ void PaintParticleEffectSection(
     const EditorSceneContext& sceneContext,
     const kb::scene::ParticleEffectComponent& particleEffect) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
-        InspectorSectionId::ParticleEffect, HeroIconKind::Bolt, "Particle Effect", true);
+        InspectorSectionId::ParticleEffect, HeroIconKind::Bolt, EditorText("inspector.particleEffect.title", "Particle Effect"), true);
     section.AssetField(
-        "Effect",
+        EditorText("inspector.particleEffect.effect", "Effect"),
         AssetDisplayName(sceneContext, particleEffect.effectAssetId),
         InspectorPropertyId::ParticleEffectAsset,
         InspectorPropertyId::ParticleEffectAssetPicker);
-    section.Bool("Enabled", particleEffect.enabled, InspectorPropertyId::ParticleEffectEnabled);
-    section.Bool("Auto Play", particleEffect.autoPlay, InspectorPropertyId::ParticleEffectAutoPlay);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), particleEffect.enabled, InspectorPropertyId::ParticleEffectEnabled);
+    section.Bool(EditorText("inspector.particleEffect.autoPlay", "Auto Play"), particleEffect.autoPlay, InspectorPropertyId::ParticleEffectAutoPlay);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -1631,13 +1638,13 @@ void PaintSkeletonBindingSection(
     const EditorSceneContext& sceneContext,
     const kb::scene::SkeletonBindingComponent& binding) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
-        InspectorSectionId::SkeletonBinding, HeroIconKind::AdjustmentsHorizontal, "Skeleton Binding", true);
+        InspectorSectionId::SkeletonBinding, HeroIconKind::AdjustmentsHorizontal, EditorText("inspector.skeletonBinding.title", "Skeleton Binding"), true);
     section.AssetField(
-        "Skeleton",
+        EditorText("inspector.skeletonBinding.skeleton", "Skeleton"),
         AssetDisplayName(sceneContext, binding.skeletonAssetId),
         InspectorPropertyId::SkeletonBindingAsset,
         InspectorPropertyId::SkeletonBindingAssetPicker);
-    section.Bool("Enabled", binding.enabled, InspectorPropertyId::SkeletonBindingEnabled);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), binding.enabled, InspectorPropertyId::SkeletonBindingEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -1650,9 +1657,9 @@ void PaintDeformedGeometrySection(
     const EditorSceneContext& sceneContext,
     const kb::scene::DrawD3DeformedGeometryComponent& geometry) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
-        InspectorSectionId::DeformedGeometry, HeroIconKind::Cube, "Deformed Geometry", true);
+        InspectorSectionId::DeformedGeometry, HeroIconKind::Cube, EditorText("inspector.deformedGeometry.title", "Deformed Geometry"), true);
     section.AssetField(
-        "Skeletal Mesh",
+        EditorText("inspector.deformedGeometry.skeletalMesh", "Skeletal Mesh"),
         AssetDisplayName(sceneContext, geometry.skeletalMeshAssetId),
         InspectorPropertyId::DeformedGeometryMesh,
         InspectorPropertyId::DeformedGeometryMeshPicker);
@@ -1661,14 +1668,14 @@ void PaintDeformedGeometrySection(
             ? geometry.materialSlotAssetIds[slot]
             : 0U;
         section.AssetField(
-            kDeformedGeometryMaterialSlotLabels[slot],
+            EditorLocalization::Format("inspector.deformedGeometry.materialSlot", "Material Slot {slot}", { { "slot", std::to_string(slot) } }),
             AssetDisplayName(sceneContext, material),
             DeformedGeometryMaterialSlotProperty(slot),
             DeformedGeometryMaterialSlotPickerProperty(slot));
     }
-    section.Bool("Casts Shadow", geometry.castsShadow, InspectorPropertyId::DeformedGeometryCastsShadow);
-    section.Bool("Receives Shadow", geometry.receivesShadow, InspectorPropertyId::DeformedGeometryReceivesShadow);
-    section.Bool("Enabled", geometry.enabled, InspectorPropertyId::DeformedGeometryEnabled);
+    section.Bool(EditorText("inspector.deformedGeometry.castsShadow", "Casts Shadow"), geometry.castsShadow, InspectorPropertyId::DeformedGeometryCastsShadow);
+    section.Bool(EditorText("inspector.deformedGeometry.receivesShadow", "Receives Shadow"), geometry.receivesShadow, InspectorPropertyId::DeformedGeometryReceivesShadow);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), geometry.enabled, InspectorPropertyId::DeformedGeometryEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -1680,16 +1687,16 @@ void PaintNavAgentSection(
     const InspectorPanelState& inspector,
     const kb::scene::NavAgent& agent) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
-        InspectorSectionId::NavAgent, HeroIconKind::Gamepad2, "Nav Agent", true);
-    section.Field("Radius", FormatFloat(agent.radius, 3), InspectorPropertyId::NavAgentRadius);
-    section.Field("Height", FormatFloat(agent.height, 3), InspectorPropertyId::NavAgentHeight);
-    section.Field("Max Speed", FormatFloat(agent.maxSpeed, 3), InspectorPropertyId::NavAgentMaxSpeed);
-    section.Field("Acceleration", FormatFloat(agent.acceleration, 3), InspectorPropertyId::NavAgentAcceleration);
-    section.Field("Angular Speed", FormatFloat(agent.angularSpeedDegrees, 3), InspectorPropertyId::NavAgentAngularSpeed);
-    section.Field("Stopping Distance", FormatFloat(agent.stoppingDistance, 3), InspectorPropertyId::NavAgentStoppingDistance);
-    section.Field("Area Mask", std::to_string(agent.areaMask), InspectorPropertyId::NavAgentAreaMask);
-    section.Vec3("Destination", agent.destination, InspectorPropertyId::NavAgentDestinationX, InspectorPropertyId::NavAgentDestinationY, InspectorPropertyId::NavAgentDestinationZ);
-    section.Bool("Enabled", agent.enabled, InspectorPropertyId::NavAgentEnabled);
+        InspectorSectionId::NavAgent, HeroIconKind::Gamepad2, EditorText("inspector.navAgent.title", "Nav Agent"), true);
+    section.Field(EditorText("inspector.navAgent.radius", "Radius"), FormatFloat(agent.radius, 3), InspectorPropertyId::NavAgentRadius);
+    section.Field(EditorText("inspector.navAgent.height", "Height"), FormatFloat(agent.height, 3), InspectorPropertyId::NavAgentHeight);
+    section.Field(EditorText("inspector.navAgent.maxSpeed", "Max Speed"), FormatFloat(agent.maxSpeed, 3), InspectorPropertyId::NavAgentMaxSpeed);
+    section.Field(EditorText("inspector.navAgent.acceleration", "Acceleration"), FormatFloat(agent.acceleration, 3), InspectorPropertyId::NavAgentAcceleration);
+    section.Field(EditorText("inspector.navAgent.angularSpeed", "Angular Speed"), FormatFloat(agent.angularSpeedDegrees, 3), InspectorPropertyId::NavAgentAngularSpeed);
+    section.Field(EditorText("inspector.navAgent.stoppingDistance", "Stopping Distance"), FormatFloat(agent.stoppingDistance, 3), InspectorPropertyId::NavAgentStoppingDistance);
+    section.Field(EditorText("inspector.navAgent.areaMask", "Area Mask"), std::to_string(agent.areaMask), InspectorPropertyId::NavAgentAreaMask);
+    section.Vec3(EditorText("inspector.navAgent.destination", "Destination"), agent.destination, InspectorPropertyId::NavAgentDestinationX, InspectorPropertyId::NavAgentDestinationY, InspectorPropertyId::NavAgentDestinationZ);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), agent.enabled, InspectorPropertyId::NavAgentEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -1701,15 +1708,17 @@ void PaintNavObstacleSection(
     const InspectorPanelState& inspector,
     const kb::scene::NavObstacle& obstacle) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
-        InspectorSectionId::NavObstacle, HeroIconKind::Cube, "Nav Obstacle", true);
-    section.Field("Shape", obstacle.shape == kb::scene::NavObstacleShape::Box ? "Box" : "Cylinder", InspectorPropertyId::NavObstacleShape);
-    section.Vec3("Center", obstacle.center, InspectorPropertyId::NavObstacleCenterX, InspectorPropertyId::NavObstacleCenterY, InspectorPropertyId::NavObstacleCenterZ);
-    section.Vec3("Size", obstacle.size, InspectorPropertyId::NavObstacleSizeX, InspectorPropertyId::NavObstacleSizeY, InspectorPropertyId::NavObstacleSizeZ);
-    section.Field("Radius", FormatFloat(obstacle.radius, 3), InspectorPropertyId::NavObstacleRadius);
-    section.Field("Height", FormatFloat(obstacle.height, 3), InspectorPropertyId::NavObstacleHeight);
-    section.Field("Area", std::to_string(obstacle.area), InspectorPropertyId::NavObstacleArea);
-    section.Bool("Carve", obstacle.carve, InspectorPropertyId::NavObstacleCarve);
-    section.Bool("Enabled", obstacle.enabled, InspectorPropertyId::NavObstacleEnabled);
+        InspectorSectionId::NavObstacle, HeroIconKind::Cube, EditorText("inspector.navObstacle.title", "Nav Obstacle"), true);
+    section.Field(EditorText("inspector.navObstacle.shape", "Shape"), obstacle.shape == kb::scene::NavObstacleShape::Box
+        ? EditorText("inspector.navObstacle.shapeBox", "Box")
+        : EditorText("inspector.navObstacle.shapeCylinder", "Cylinder"), InspectorPropertyId::NavObstacleShape);
+    section.Vec3(EditorText("inspector.navObstacle.center", "Center"), obstacle.center, InspectorPropertyId::NavObstacleCenterX, InspectorPropertyId::NavObstacleCenterY, InspectorPropertyId::NavObstacleCenterZ);
+    section.Vec3(EditorText("inspector.navObstacle.size", "Size"), obstacle.size, InspectorPropertyId::NavObstacleSizeX, InspectorPropertyId::NavObstacleSizeY, InspectorPropertyId::NavObstacleSizeZ);
+    section.Field(EditorText("inspector.navObstacle.radius", "Radius"), FormatFloat(obstacle.radius, 3), InspectorPropertyId::NavObstacleRadius);
+    section.Field(EditorText("inspector.navObstacle.height", "Height"), FormatFloat(obstacle.height, 3), InspectorPropertyId::NavObstacleHeight);
+    section.Field(EditorText("inspector.navObstacle.area", "Area"), std::to_string(obstacle.area), InspectorPropertyId::NavObstacleArea);
+    section.Bool(EditorText("inspector.navObstacle.carve", "Carve"), obstacle.carve, InspectorPropertyId::NavObstacleCarve);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), obstacle.enabled, InspectorPropertyId::NavObstacleEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -1721,27 +1730,29 @@ void PaintNavLinkSection(
     const InspectorPanelState& inspector,
     const kb::scene::NavLink& link) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
-        InspectorSectionId::NavLink, HeroIconKind::RotationSnap, "Nav Link", true);
-    section.Field("Kind", link.kind == kb::scene::NavLinkKind::Jump ? "Jump" : link.kind == kb::scene::NavLinkKind::Ladder ? "Ladder" : "Walk",
+        InspectorSectionId::NavLink, HeroIconKind::RotationSnap, EditorText("inspector.navLink.title", "Nav Link"), true);
+    section.Field(EditorText("inspector.navLink.kind", "Kind"), link.kind == kb::scene::NavLinkKind::Jump ? EditorText("inspector.navLink.kindJump", "Jump")
+        : link.kind == kb::scene::NavLinkKind::Ladder ? EditorText("inspector.navLink.kindLadder", "Ladder")
+        : EditorText("inspector.navLink.kindWalk", "Walk"),
         InspectorPropertyId::NavLinkKind);
-    section.Vec3("Start", link.start, InspectorPropertyId::NavLinkStartX, InspectorPropertyId::NavLinkStartY, InspectorPropertyId::NavLinkStartZ);
-    section.Vec3("End", link.end, InspectorPropertyId::NavLinkEndX, InspectorPropertyId::NavLinkEndY, InspectorPropertyId::NavLinkEndZ);
-    section.Field("Radius", FormatFloat(link.radius, 3), InspectorPropertyId::NavLinkRadius);
-    section.Field("Area", std::to_string(link.area), InspectorPropertyId::NavLinkArea);
-    section.Bool("Both Ways", link.bidirectional, InspectorPropertyId::NavLinkBidirectional);
-    section.Bool("Enabled", link.enabled, InspectorPropertyId::NavLinkEnabled);
+    section.Vec3(EditorText("inspector.navLink.start", "Start"), link.start, InspectorPropertyId::NavLinkStartX, InspectorPropertyId::NavLinkStartY, InspectorPropertyId::NavLinkStartZ);
+    section.Vec3(EditorText("inspector.navLink.end", "End"), link.end, InspectorPropertyId::NavLinkEndX, InspectorPropertyId::NavLinkEndY, InspectorPropertyId::NavLinkEndZ);
+    section.Field(EditorText("inspector.navLink.radius", "Radius"), FormatFloat(link.radius, 3), InspectorPropertyId::NavLinkRadius);
+    section.Field(EditorText("inspector.navLink.area", "Area"), std::to_string(link.area), InspectorPropertyId::NavLinkArea);
+    section.Bool(EditorText("inspector.navLink.bothWays", "Both Ways"), link.bidirectional, InspectorPropertyId::NavLinkBidirectional);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), link.enabled, InspectorPropertyId::NavLinkEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
-[[nodiscard]] const char* RegionShapeKindLabel(kb::scene::RegionShapeKind kind) noexcept {
+[[nodiscard]] std::string_view RegionShapeKindLabel(kb::scene::RegionShapeKind kind) {
     switch (kind) {
-    case kb::scene::RegionShapeKind::Circle2D: return "Circle 2D";
-    case kb::scene::RegionShapeKind::Rectangle2D: return "Rectangle 2D";
-    case kb::scene::RegionShapeKind::Sphere: return "Sphere";
-    case kb::scene::RegionShapeKind::Box: return "Box";
-    case kb::scene::RegionShapeKind::Capsule: return "Capsule";
+    case kb::scene::RegionShapeKind::Circle2D: return EditorText("inspector.regionShape.circle2D", "Circle 2D");
+    case kb::scene::RegionShapeKind::Rectangle2D: return EditorText("inspector.regionShape.rectangle2D", "Rectangle 2D");
+    case kb::scene::RegionShapeKind::Sphere: return EditorText("inspector.regionShape.sphere", "Sphere");
+    case kb::scene::RegionShapeKind::Box: return EditorText("inspector.regionShape.box", "Box");
+    case kb::scene::RegionShapeKind::Capsule: return EditorText("inspector.regionShape.capsule", "Capsule");
     }
-    return "Invalid";
+    return EditorText("inspector.invalid", "Invalid");
 }
 
 void PaintRegionShapeSection(
@@ -1758,66 +1769,73 @@ void PaintRegionShapeSection(
         inspector,
         InspectorSectionId::RegionShape,
         HeroIconKind::Cube,
-        "Region Shape",
+        EditorText("inspector.regionShape.title", "Region Shape"),
         true);
-    section.Field("Shape", RegionShapeKindLabel(shape.kind), InspectorPropertyId::RegionShapeKind);
-    section.Vec3("Center", shape.center, InspectorPropertyId::RegionShapeCenterX, InspectorPropertyId::RegionShapeCenterY, InspectorPropertyId::RegionShapeCenterZ);
-    section.Vec3("Size", shape.size, InspectorPropertyId::RegionShapeSizeX, InspectorPropertyId::RegionShapeSizeY, InspectorPropertyId::RegionShapeSizeZ);
-    section.Field("Radius", FormatFloat(shape.radius, 3), InspectorPropertyId::RegionShapeRadius);
-    section.Field("Height", FormatFloat(shape.height, 3), InspectorPropertyId::RegionShapeHeight);
-    section.Bool("Enabled", shape.enabled, InspectorPropertyId::RegionShapeEnabled);
+    section.Field(EditorText("inspector.regionShape.shape", "Shape"), RegionShapeKindLabel(shape.kind), InspectorPropertyId::RegionShapeKind);
+    section.Vec3(EditorText("inspector.regionShape.center", "Center"), shape.center, InspectorPropertyId::RegionShapeCenterX, InspectorPropertyId::RegionShapeCenterY, InspectorPropertyId::RegionShapeCenterZ);
+    section.Vec3(EditorText("inspector.regionShape.size", "Size"), shape.size, InspectorPropertyId::RegionShapeSizeX, InspectorPropertyId::RegionShapeSizeY, InspectorPropertyId::RegionShapeSizeZ);
+    section.Field(EditorText("inspector.regionShape.radius", "Radius"), FormatFloat(shape.radius, 3), InspectorPropertyId::RegionShapeRadius);
+    section.Field(EditorText("inspector.regionShape.height", "Height"), FormatFloat(shape.height, 3), InspectorPropertyId::RegionShapeHeight);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), shape.enabled, InspectorPropertyId::RegionShapeEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
 void PaintGuideCurveSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::GuideCurveComponent& curve) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::GuideCurve, HeroIconKind::Cube, "Guide Curve", true);
-    section.Field("Control Points", std::to_string(curve.controlPointCount), InspectorPropertyId::GuideCurveControlPointCount);
-    section.Field("Interpolation", curve.interpolation == kb::scene::GuideCurveInterpolation::Linear ? "Linear" : "Catmull-Rom", InspectorPropertyId::GuideCurveInterpolation);
-    section.Bool("Closed", curve.closed, InspectorPropertyId::GuideCurveClosed);
-    section.Bool("Enabled", curve.enabled, InspectorPropertyId::GuideCurveEnabled);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::GuideCurve, HeroIconKind::Cube, EditorText("inspector.guideCurve.title", "Guide Curve"), true);
+    section.Field(EditorText("inspector.guideCurve.controlPoints", "Control Points"), std::to_string(curve.controlPointCount), InspectorPropertyId::GuideCurveControlPointCount);
+    section.Field(EditorText("inspector.guideCurve.interpolation", "Interpolation"), curve.interpolation == kb::scene::GuideCurveInterpolation::Linear
+        ? EditorText("inspector.guideCurve.linear", "Linear")
+        : EditorText("inspector.guideCurve.catmullRom", "Catmull-Rom"), InspectorPropertyId::GuideCurveInterpolation);
+    section.Bool(EditorText("inspector.guideCurve.closed", "Closed"), curve.closed, InspectorPropertyId::GuideCurveClosed);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), curve.enabled, InspectorPropertyId::GuideCurveEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
 void PaintContentInstanceSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::ContentInstanceComponent& instance) {
-    const char* kind = instance.kind == kb::scene::ContentInstanceKind::Prefab ? "Prefab" : instance.kind == kb::scene::ContentInstanceKind::Subscene ? "Subscene"
-        : instance.kind == kb::scene::ContentInstanceKind::WorldFragment ? "World Fragment"
-        : instance.kind == kb::scene::ContentInstanceKind::PartitionedWorld ? "Partitioned World" : "Navigation Mesh";
-    const char* lifetime = instance.lifetime == kb::scene::ContentInstanceLifetime::Owner ? "Owner" : "Persistent";
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::ContentInstance, HeroIconKind::Cube, "Content Instance", true);
-    section.Field("Asset ID", std::to_string(instance.assetId), InspectorPropertyId::ContentInstanceAssetId);
-    section.Field("Source Type", kind, InspectorPropertyId::ContentInstanceKind);
-    section.Field("Lifetime", lifetime, InspectorPropertyId::ContentInstanceLifetime);
-    section.Bool("Active", instance.active, InspectorPropertyId::ContentInstanceActive);
+    const std::string_view kind = instance.kind == kb::scene::ContentInstanceKind::Prefab ? EditorText("inspector.contentInstance.prefab", "Prefab")
+        : instance.kind == kb::scene::ContentInstanceKind::Subscene ? EditorText("inspector.contentInstance.subscene", "Subscene")
+        : instance.kind == kb::scene::ContentInstanceKind::WorldFragment ? EditorText("inspector.contentInstance.worldFragment", "World Fragment")
+        : instance.kind == kb::scene::ContentInstanceKind::PartitionedWorld ? EditorText("inspector.contentInstance.partitionedWorld", "Partitioned World")
+        : EditorText("inspector.contentInstance.navigationMesh", "Navigation Mesh");
+    const std::string_view lifetime = instance.lifetime == kb::scene::ContentInstanceLifetime::Owner
+        ? EditorText("inspector.contentInstance.owner", "Owner")
+        : EditorText("inspector.contentInstance.persistent", "Persistent");
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::ContentInstance, HeroIconKind::Cube, EditorText("inspector.contentInstance.title", "Content Instance"), true);
+    section.Field(EditorText("inspector.contentInstance.assetID", "Asset ID"), std::to_string(instance.assetId), InspectorPropertyId::ContentInstanceAssetId);
+    section.Field(EditorText("inspector.contentInstance.sourceType", "Source Type"), kind, InspectorPropertyId::ContentInstanceKind);
+    section.Field(EditorText("inspector.contentInstance.lifetime", "Lifetime"), lifetime, InspectorPropertyId::ContentInstanceLifetime);
+    section.Bool(EditorText("inspector.contentInstance.active", "Active"), instance.active, InspectorPropertyId::ContentInstanceActive);
     y = section.Bottom() + kSectionGap;
 }
 
 void PaintStreamFocusSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::StreamFocusComponent& focus) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::StreamFocus, HeroIconKind::Cube, "Stream Focus", true);
-    section.Field("Inner Radius", FormatFloat(focus.innerRadius, 3), InspectorPropertyId::StreamFocusInnerRadius);
-    section.Field("Outer Radius", FormatFloat(focus.outerRadius, 3), InspectorPropertyId::StreamFocusOuterRadius);
-    section.Field("Priority", std::to_string(focus.priority), InspectorPropertyId::StreamFocusPriority);
-    section.Field("Load Mask", std::to_string(static_cast<std::uint32_t>(focus.loadMask)), InspectorPropertyId::StreamFocusLoadMask);
-    section.Bool("Enabled", focus.enabled, InspectorPropertyId::StreamFocusEnabled);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::StreamFocus, HeroIconKind::Cube, EditorText("inspector.streamFocus.title", "Stream Focus"), true);
+    section.Field(EditorText("inspector.streamFocus.innerRadius", "Inner Radius"), FormatFloat(focus.innerRadius, 3), InspectorPropertyId::StreamFocusInnerRadius);
+    section.Field(EditorText("inspector.streamFocus.outerRadius", "Outer Radius"), FormatFloat(focus.outerRadius, 3), InspectorPropertyId::StreamFocusOuterRadius);
+    section.Field(EditorText("inspector.streamFocus.priority", "Priority"), std::to_string(focus.priority), InspectorPropertyId::StreamFocusPriority);
+    section.Field(EditorText("inspector.streamFocus.loadMask", "Load Mask"), std::to_string(static_cast<std::uint32_t>(focus.loadMask)), InspectorPropertyId::StreamFocusLoadMask);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), focus.enabled, InspectorPropertyId::StreamFocusEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
-[[nodiscard]] const char* WorldBackdropModeName(kb::scene::WorldBackdropMode mode) noexcept {
+[[nodiscard]] std::string_view WorldBackdropModeName(kb::scene::WorldBackdropMode mode) {
     switch (mode) {
-    case kb::scene::WorldBackdropMode::SolidColor: return "Solid Color";
-    case kb::scene::WorldBackdropMode::VerticalGradient: return "Vertical Gradient";
-    case kb::scene::WorldBackdropMode::EnvironmentMap: return "Environment Map (2D Equirectangular)";
-    case kb::scene::WorldBackdropMode::ProceduralSky: return "Procedural Sky";
+    case kb::scene::WorldBackdropMode::SolidColor: return EditorText("inspector.worldBackdrop.solidColor", "Solid Color");
+    case kb::scene::WorldBackdropMode::VerticalGradient: return EditorText("inspector.worldBackdrop.verticalGradient", "Vertical Gradient");
+    case kb::scene::WorldBackdropMode::EnvironmentMap:
+        return EditorText("inspector.environmentMapEquirectangular", "Environment Map (2D Equirectangular)");
+    case kb::scene::WorldBackdropMode::ProceduralSky: return EditorText("inspector.proceduralSky", "Procedural Sky");
     }
-    return "Invalid";
+    return EditorText("inspector.invalid", "Invalid");
 }
 
-[[nodiscard]] const char* WorldBackdropSunDiskName(kb::scene::WorldBackdropSunDisk sunDisk) noexcept {
+[[nodiscard]] std::string_view WorldBackdropSunDiskName(kb::scene::WorldBackdropSunDisk sunDisk) {
     switch (sunDisk) {
-    case kb::scene::WorldBackdropSunDisk::None: return "None";
-    case kb::scene::WorldBackdropSunDisk::Simple: return "Simple";
-    case kb::scene::WorldBackdropSunDisk::HighQuality: return "High Quality";
+    case kb::scene::WorldBackdropSunDisk::None: return EditorText("inspector.worldBackdrop.sunDiskNone", "None");
+    case kb::scene::WorldBackdropSunDisk::Simple: return EditorText("inspector.worldBackdrop.sunDiskSimple", "Simple");
+    case kb::scene::WorldBackdropSunDisk::HighQuality: return EditorText("inspector.worldBackdrop.sunDiskHighQuality", "High Quality");
     }
-    return "Unknown";
+    return EditorText("inspector.unknown", "Unknown");
 }
 
 // The rows a backdrop mode uses, shared by painting, section height and hit testing. Like
@@ -1846,193 +1864,206 @@ void PaintStreamFocusSection(HDC dc, RECT content, int& y, const EditorTheme& th
 }
 
 void PaintWorldBackdropSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::WorldBackdropComponent& backdrop) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::WorldBackdrop, HeroIconKind::Eye, "World Backdrop", true);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::WorldBackdrop, HeroIconKind::Eye, EditorText("inspector.worldBackdrop.title", "World Backdrop"), true);
     for (const InspectorPropertyId property : WorldBackdropRows(backdrop.mode)) {
         switch (property) {
-        case InspectorPropertyId::WorldBackdropMode: section.Field("Mode", WorldBackdropModeName(backdrop.mode), property); break;
+        case InspectorPropertyId::WorldBackdropMode: section.Field(EditorText("inspector.worldBackdrop.mode", "Mode"), WorldBackdropModeName(backdrop.mode), property); break;
         case InspectorPropertyId::WorldBackdropColor: section.Color(backdrop.color, property); break;
         case InspectorPropertyId::WorldBackdropHorizonColor: section.Color(backdrop.horizonColor, property); break;
         case InspectorPropertyId::WorldBackdropZenithColor: section.Color(backdrop.zenithColor, property); break;
-        case InspectorPropertyId::WorldBackdropEnvironmentAssetId: section.Field("Environment Asset", std::to_string(backdrop.environmentAssetId), property); break;
-        case InspectorPropertyId::WorldBackdropHorizonHeight: section.Field("Horizon Height", FormatFloat(backdrop.horizonHeight, 3), property); break;
-        case InspectorPropertyId::WorldBackdropGradientExponent: section.Field("Gradient Exponent", FormatFloat(backdrop.gradientExponent, 3), property); break;
-        case InspectorPropertyId::WorldBackdropSunDisk: section.Field("Sun Disk", WorldBackdropSunDiskName(backdrop.sunDisk), property); break;
-        case InspectorPropertyId::WorldBackdropSunSize: section.Field("Sun Size", FormatFloat(backdrop.sunSize, 3), property); break;
-        case InspectorPropertyId::WorldBackdropSunSizeConvergence: section.Field("Sun Size Convergence", FormatFloat(backdrop.sunSizeConvergence, 2), property); break;
-        case InspectorPropertyId::WorldBackdropAtmosphereThickness: section.Field("Atmosphere Thickness", FormatFloat(backdrop.atmosphereThickness, 2), property); break;
+        case InspectorPropertyId::WorldBackdropEnvironmentAssetId: section.Field(EditorText("inspector.worldBackdrop.environmentAsset", "Environment Asset"), std::to_string(backdrop.environmentAssetId), property); break;
+        case InspectorPropertyId::WorldBackdropHorizonHeight: section.Field(EditorText("inspector.worldBackdrop.horizonHeight", "Horizon Height"), FormatFloat(backdrop.horizonHeight, 3), property); break;
+        case InspectorPropertyId::WorldBackdropGradientExponent: section.Field(EditorText("inspector.worldBackdrop.gradientExponent", "Gradient Exponent"), FormatFloat(backdrop.gradientExponent, 3), property); break;
+        case InspectorPropertyId::WorldBackdropSunDisk: section.Field(EditorText("inspector.worldBackdrop.sunDisk", "Sun Disk"), WorldBackdropSunDiskName(backdrop.sunDisk), property); break;
+        case InspectorPropertyId::WorldBackdropSunSize: section.Field(EditorText("inspector.worldBackdrop.sunSize", "Sun Size"), FormatFloat(backdrop.sunSize, 3), property); break;
+        case InspectorPropertyId::WorldBackdropSunSizeConvergence: section.Field(EditorText("inspector.worldBackdrop.sunSizeConvergence", "Sun Size Convergence"), FormatFloat(backdrop.sunSizeConvergence, 2), property); break;
+        case InspectorPropertyId::WorldBackdropAtmosphereThickness: section.Field(EditorText("inspector.worldBackdrop.atmosphereThickness", "Atmosphere Thickness"), FormatFloat(backdrop.atmosphereThickness, 2), property); break;
         case InspectorPropertyId::WorldBackdropSkyTint: section.Color(backdrop.skyTint, property); break;
         case InspectorPropertyId::WorldBackdropGroundColor: section.Color(backdrop.groundColor, property); break;
-        case InspectorPropertyId::WorldBackdropExposure: section.Field("Exposure", FormatFloat(backdrop.exposure, 2), property); break;
-        case InspectorPropertyId::WorldBackdropPriority: section.Field("Priority", std::to_string(backdrop.priority), property); break;
-        case InspectorPropertyId::WorldBackdropEnabled: section.Bool("Enabled", backdrop.enabled, property); break;
+        case InspectorPropertyId::WorldBackdropExposure: section.Field(EditorText("inspector.worldBackdrop.exposure", "Exposure"), FormatFloat(backdrop.exposure, 2), property); break;
+        case InspectorPropertyId::WorldBackdropPriority: section.Field(EditorText("inspector.worldBackdrop.priority", "Priority"), std::to_string(backdrop.priority), property); break;
+        case InspectorPropertyId::WorldBackdropEnabled: section.Bool(EditorText("inspector.enabled", "Enabled"), backdrop.enabled, property); break;
         default: break;
         }
     }
     y = section.Bottom() + kSectionGap;
 }
 
-[[nodiscard]] const char* AmbientRadianceModeName(kb::scene::AmbientRadianceMode mode) noexcept {
+[[nodiscard]] std::string_view AmbientRadianceModeName(kb::scene::AmbientRadianceMode mode) {
     switch (mode) {
-    case kb::scene::AmbientRadianceMode::Constant: return "Constant";
-    case kb::scene::AmbientRadianceMode::Gradient: return "Gradient";
-    case kb::scene::AmbientRadianceMode::EnvironmentMap: return "Environment Map (2D Equirectangular)";
-    case kb::scene::AmbientRadianceMode::ProceduralSky: return "Procedural Sky";
-    case kb::scene::AmbientRadianceMode::CapturedEnvironment: return "Captured Environment";
-    case kb::scene::AmbientRadianceMode::EstimatedEnvironment: return "Estimated Environment";
+    case kb::scene::AmbientRadianceMode::Constant: return EditorText("inspector.ambientRadiance.constant", "Constant");
+    case kb::scene::AmbientRadianceMode::Gradient: return EditorText("inspector.ambientRadiance.gradient", "Gradient");
+    case kb::scene::AmbientRadianceMode::EnvironmentMap:
+        return EditorText("inspector.environmentMapEquirectangular", "Environment Map (2D Equirectangular)");
+    case kb::scene::AmbientRadianceMode::ProceduralSky: return EditorText("inspector.proceduralSky", "Procedural Sky");
+    case kb::scene::AmbientRadianceMode::CapturedEnvironment: return EditorText("inspector.ambientRadiance.capturedEnvironment", "Captured Environment");
+    case kb::scene::AmbientRadianceMode::EstimatedEnvironment: return EditorText("inspector.ambientRadiance.estimatedEnvironment", "Estimated Environment");
     }
-    return "Invalid";
+    return EditorText("inspector.invalid", "Invalid");
 }
 
 // Mode, three colours, environment, three intensities, priority, enabled.
 constexpr int kAmbientRadianceRows = 10;
 
 void PaintAmbientRadianceSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::AmbientRadianceComponent& ambient) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AmbientRadiance, HeroIconKind::Bolt, "Ambient Radiance", true);
-    section.Field("Mode", AmbientRadianceModeName(ambient.mode), InspectorPropertyId::AmbientRadianceMode);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AmbientRadiance, HeroIconKind::Bolt, EditorText("inspector.ambientRadiance.title", "Ambient Radiance"), true);
+    section.Field(EditorText("inspector.ambientRadiance.mode", "Mode"), AmbientRadianceModeName(ambient.mode), InspectorPropertyId::AmbientRadianceMode);
     section.Color(ambient.color, InspectorPropertyId::AmbientRadianceColor);
     section.Color(ambient.horizonColor, InspectorPropertyId::AmbientRadianceHorizonColor);
     section.Color(ambient.zenithColor, InspectorPropertyId::AmbientRadianceZenithColor);
-    section.Field("Environment Asset", std::to_string(ambient.environmentAssetId), InspectorPropertyId::AmbientRadianceEnvironmentAssetId);
-    section.Field("Intensity", FormatFloat(ambient.intensity, 3), InspectorPropertyId::AmbientRadianceIntensity);
-    section.Field("Diffuse Intensity", FormatFloat(ambient.diffuseIntensity, 3), InspectorPropertyId::AmbientRadianceDiffuseIntensity);
-    section.Field("Specular Intensity", FormatFloat(ambient.specularIntensity, 3), InspectorPropertyId::AmbientRadianceSpecularIntensity);
-    section.Field("Priority", std::to_string(ambient.priority), InspectorPropertyId::AmbientRadiancePriority);
-    section.Bool("Enabled", ambient.enabled, InspectorPropertyId::AmbientRadianceEnabled);
+    section.Field(EditorText("inspector.ambientRadiance.environmentAsset", "Environment Asset"), std::to_string(ambient.environmentAssetId), InspectorPropertyId::AmbientRadianceEnvironmentAssetId);
+    section.Field(EditorText("inspector.ambientRadiance.intensity", "Intensity"), FormatFloat(ambient.intensity, 3), InspectorPropertyId::AmbientRadianceIntensity);
+    section.Field(EditorText("inspector.ambientRadiance.diffuseIntensity", "Diffuse Intensity"), FormatFloat(ambient.diffuseIntensity, 3), InspectorPropertyId::AmbientRadianceDiffuseIntensity);
+    section.Field(EditorText("inspector.ambientRadiance.specularIntensity", "Specular Intensity"), FormatFloat(ambient.specularIntensity, 3), InspectorPropertyId::AmbientRadianceSpecularIntensity);
+    section.Field(EditorText("inspector.ambientRadiance.priority", "Priority"), std::to_string(ambient.priority), InspectorPropertyId::AmbientRadiancePriority);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), ambient.enabled, InspectorPropertyId::AmbientRadianceEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
 void PaintDetailSwitchSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SceneDetailSwitchComponent& detailSwitch) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::DetailSwitch, HeroIconKind::Cube, "Detail Switch", true);
-    section.Field("Group", std::to_string(detailSwitch.groupId), InspectorPropertyId::DetailSwitchGroupId);
-    section.Field("Minimum LOD", std::to_string(detailSwitch.minimumLod), InspectorPropertyId::DetailSwitchMinimumLod);
-    section.Field("Maximum LOD", std::to_string(detailSwitch.maximumLod), InspectorPropertyId::DetailSwitchMaximumLod);
-    section.Field("Promote Coverage", FormatFloat(detailSwitch.promoteCoverage, 3), InspectorPropertyId::DetailSwitchPromoteCoverage);
-    section.Field("Demote Coverage", FormatFloat(detailSwitch.demoteCoverage, 3), InspectorPropertyId::DetailSwitchDemoteCoverage);
-    section.Bool("Enabled", detailSwitch.enabled, InspectorPropertyId::DetailSwitchEnabled);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::DetailSwitch, HeroIconKind::Cube, EditorText("inspector.detailSwitch.title", "Detail Switch"), true);
+    section.Field(EditorText("inspector.detailSwitch.group", "Group"), std::to_string(detailSwitch.groupId), InspectorPropertyId::DetailSwitchGroupId);
+    section.Field(EditorText("inspector.detailSwitch.minimumLOD", "Minimum LOD"), std::to_string(detailSwitch.minimumLod), InspectorPropertyId::DetailSwitchMinimumLod);
+    section.Field(EditorText("inspector.detailSwitch.maximumLOD", "Maximum LOD"), std::to_string(detailSwitch.maximumLod), InspectorPropertyId::DetailSwitchMaximumLod);
+    section.Field(EditorText("inspector.detailSwitch.promoteCoverage", "Promote Coverage"), FormatFloat(detailSwitch.promoteCoverage, 3), InspectorPropertyId::DetailSwitchPromoteCoverage);
+    section.Field(EditorText("inspector.detailSwitch.demoteCoverage", "Demote Coverage"), FormatFloat(detailSwitch.demoteCoverage, 3), InspectorPropertyId::DetailSwitchDemoteCoverage);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), detailSwitch.enabled, InspectorPropertyId::DetailSwitchEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
 void PaintVisibilityBlockerSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SceneVisibilityBlockerComponent& blocker) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::VisibilityBlocker, HeroIconKind::Cube, "Visibility Blocker", true);
-    section.Field("Center X", FormatFloat(blocker.localCenter.x, 3), InspectorPropertyId::VisibilityBlockerCenterX);
-    section.Field("Center Y", FormatFloat(blocker.localCenter.y, 3), InspectorPropertyId::VisibilityBlockerCenterY);
-    section.Field("Center Z", FormatFloat(blocker.localCenter.z, 3), InspectorPropertyId::VisibilityBlockerCenterZ);
-    section.Field("Size X", FormatFloat(blocker.size.x, 3), InspectorPropertyId::VisibilityBlockerSizeX);
-    section.Field("Size Y", FormatFloat(blocker.size.y, 3), InspectorPropertyId::VisibilityBlockerSizeY);
-    section.Field("Size Z", FormatFloat(blocker.size.z, 3), InspectorPropertyId::VisibilityBlockerSizeZ);
-    section.Bool("Enabled", blocker.enabled, InspectorPropertyId::VisibilityBlockerEnabled);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::VisibilityBlocker, HeroIconKind::Cube, EditorText("inspector.visibilityBlocker.title", "Visibility Blocker"), true);
+    section.Field(EditorText("inspector.visibilityBlocker.centerX", "Center X"), FormatFloat(blocker.localCenter.x, 3), InspectorPropertyId::VisibilityBlockerCenterX);
+    section.Field(EditorText("inspector.visibilityBlocker.centerY", "Center Y"), FormatFloat(blocker.localCenter.y, 3), InspectorPropertyId::VisibilityBlockerCenterY);
+    section.Field(EditorText("inspector.visibilityBlocker.centerZ", "Center Z"), FormatFloat(blocker.localCenter.z, 3), InspectorPropertyId::VisibilityBlockerCenterZ);
+    section.Field(EditorText("inspector.visibilityBlocker.sizeX", "Size X"), FormatFloat(blocker.size.x, 3), InspectorPropertyId::VisibilityBlockerSizeX);
+    section.Field(EditorText("inspector.visibilityBlocker.sizeY", "Size Y"), FormatFloat(blocker.size.y, 3), InspectorPropertyId::VisibilityBlockerSizeY);
+    section.Field(EditorText("inspector.visibilityBlocker.sizeZ", "Size Z"), FormatFloat(blocker.size.z, 3), InspectorPropertyId::VisibilityBlockerSizeZ);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), blocker.enabled, InspectorPropertyId::VisibilityBlockerEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
 void PaintVisibilityCellSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::VisibilityCellComponent& cell) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::VisibilityCell, HeroIconKind::Cube, "Visibility Cell", true);
-    section.Field("Membership Mask", std::to_string(cell.membershipMask), InspectorPropertyId::VisibilityCellMembershipMask);
-    section.Field("Membership", std::to_string(static_cast<int>(cell.membership)), InspectorPropertyId::VisibilityCellMembership);
-    section.Field("Visibility Override", std::to_string(static_cast<int>(cell.visibilityOverride)), InspectorPropertyId::VisibilityCellOverride);
-    section.Bool("Enabled", cell.enabled, InspectorPropertyId::VisibilityCellEnabled);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::VisibilityCell, HeroIconKind::Cube, EditorText("inspector.visibilityCell.title", "Visibility Cell"), true);
+    section.Field(EditorText("inspector.visibilityCell.membershipMask", "Membership Mask"), std::to_string(cell.membershipMask), InspectorPropertyId::VisibilityCellMembershipMask);
+    section.Field(EditorText("inspector.visibilityCell.membership", "Membership"), std::to_string(static_cast<int>(cell.membership)), InspectorPropertyId::VisibilityCellMembership);
+    section.Field(EditorText("inspector.visibilityCell.visibilityOverride", "Visibility Override"), std::to_string(static_cast<int>(cell.visibilityOverride)), InspectorPropertyId::VisibilityCellOverride);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), cell.enabled, InspectorPropertyId::VisibilityCellEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
 void PaintRegionPortalSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SceneRegionPortalComponent& portal) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::RegionPortal, HeroIconKind::Cube, "Region Portal", true);
-    section.Field("Source Cell", std::to_string(portal.sourceCell.Id()), InspectorPropertyId::RegionPortalSourceCell);
-    section.Field("Target Cell", std::to_string(portal.targetCell.Id()), InspectorPropertyId::RegionPortalTargetCell);
-    section.Field("Purposes", std::to_string(portal.purposes), InspectorPropertyId::RegionPortalPurposes);
-    section.Bool("Enabled", portal.enabled, InspectorPropertyId::RegionPortalEnabled);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::RegionPortal, HeroIconKind::Cube, EditorText("inspector.regionPortal.title", "Region Portal"), true);
+    section.Field(EditorText("inspector.regionPortal.sourceCell", "Source Cell"), std::to_string(portal.sourceCell.Id()), InspectorPropertyId::RegionPortalSourceCell);
+    section.Field(EditorText("inspector.regionPortal.targetCell", "Target Cell"), std::to_string(portal.targetCell.Id()), InspectorPropertyId::RegionPortalTargetCell);
+    section.Field(EditorText("inspector.regionPortal.purposes", "Purposes"), std::to_string(portal.purposes), InspectorPropertyId::RegionPortalPurposes);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), portal.enabled, InspectorPropertyId::RegionPortalEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
 void PaintSecondaryFrameSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::AuxFrameComponent& frame) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::SecondaryFrame, HeroIconKind::Eye, "Secondary Frame", true);
-    const char* modeName = "Flat";
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::SecondaryFrame, HeroIconKind::Eye, EditorText("inspector.secondaryFrame.title", "Secondary Frame"), true);
+    std::string_view modeName = EditorText("inspector.secondaryFrame.flat", "Flat");
     switch (frame.mode) {
-    case kb::scene::AuxFrameMode::Flat: modeName = "Flat"; break;
-    case kb::scene::AuxFrameMode::Mirror: modeName = "Mirror"; break;
-    case kb::scene::AuxFrameMode::Cube: modeName = "Cube"; break;
-    case kb::scene::AuxFrameMode::Panoramic: modeName = "Panoramic 360° Atlas"; break;
+    case kb::scene::AuxFrameMode::Flat: modeName = EditorText("inspector.secondaryFrame.flat", "Flat"); break;
+    case kb::scene::AuxFrameMode::Mirror: modeName = EditorText("inspector.secondaryFrame.mirror", "Mirror"); break;
+    case kb::scene::AuxFrameMode::Cube: modeName = EditorText("inspector.secondaryFrame.cube", "Cube"); break;
+    case kb::scene::AuxFrameMode::Panoramic: modeName = EditorText("inspector.secondaryFrame.panoramic", "Panoramic 360° Atlas"); break;
     }
-    section.Field("Mode", modeName, InspectorPropertyId::SecondaryFrameMode);
-    section.Field("Image Target", std::to_string(frame.imageTargetId), InspectorPropertyId::SecondaryFrameImageTargetId);
-    section.Field("Width", std::to_string(frame.width), InspectorPropertyId::SecondaryFrameWidth);
-    section.Field("Height", std::to_string(frame.height), InspectorPropertyId::SecondaryFrameHeight);
-    section.Field("Mirror Plane X", FormatFloat(frame.mirrorPlaneNormal.x, 3), InspectorPropertyId::SecondaryFramePlaneNormalX);
-    section.Field("Mirror Plane Y", FormatFloat(frame.mirrorPlaneNormal.y, 3), InspectorPropertyId::SecondaryFramePlaneNormalY);
-    section.Field("Mirror Plane Z", FormatFloat(frame.mirrorPlaneNormal.z, 3), InspectorPropertyId::SecondaryFramePlaneNormalZ);
-    section.Field("Mirror Offset", FormatFloat(frame.mirrorPlaneOffset, 3), InspectorPropertyId::SecondaryFramePlaneOffset);
-    section.Bool("Enabled", frame.enabled, InspectorPropertyId::SecondaryFrameEnabled);
+    section.Field(EditorText("inspector.secondaryFrame.mode", "Mode"), modeName, InspectorPropertyId::SecondaryFrameMode);
+    section.Field(EditorText("inspector.secondaryFrame.imageTarget", "Image Target"), std::to_string(frame.imageTargetId), InspectorPropertyId::SecondaryFrameImageTargetId);
+    section.Field(EditorText("inspector.secondaryFrame.width", "Width"), std::to_string(frame.width), InspectorPropertyId::SecondaryFrameWidth);
+    section.Field(EditorText("inspector.secondaryFrame.height", "Height"), std::to_string(frame.height), InspectorPropertyId::SecondaryFrameHeight);
+    section.Field(EditorText("inspector.secondaryFrame.mirrorPlaneX", "Mirror Plane X"), FormatFloat(frame.mirrorPlaneNormal.x, 3), InspectorPropertyId::SecondaryFramePlaneNormalX);
+    section.Field(EditorText("inspector.secondaryFrame.mirrorPlaneY", "Mirror Plane Y"), FormatFloat(frame.mirrorPlaneNormal.y, 3), InspectorPropertyId::SecondaryFramePlaneNormalY);
+    section.Field(EditorText("inspector.secondaryFrame.mirrorPlaneZ", "Mirror Plane Z"), FormatFloat(frame.mirrorPlaneNormal.z, 3), InspectorPropertyId::SecondaryFramePlaneNormalZ);
+    section.Field(EditorText("inspector.secondaryFrame.mirrorOffset", "Mirror Offset"), FormatFloat(frame.mirrorPlaneOffset, 3), InspectorPropertyId::SecondaryFramePlaneOffset);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), frame.enabled, InspectorPropertyId::SecondaryFrameEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
 void PaintGeometrySwarmSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::GeometrySwarmComponent& swarm) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::GeometrySwarm, HeroIconKind::Cube, "Geometry Swarm", true);
-    section.Field("Mesh", std::to_string(swarm.meshAssetId), InspectorPropertyId::GeometrySwarmMeshAssetId);
-    section.Field("Material", std::to_string(swarm.materialAssetId), InspectorPropertyId::GeometrySwarmMaterialAssetId);
-    section.Field("Instances", std::to_string(swarm.instanceCount), InspectorPropertyId::GeometrySwarmInstanceCount);
-    section.Field("Columns", std::to_string(swarm.columns), InspectorPropertyId::GeometrySwarmColumns);
-    section.Field("Rows", std::to_string(swarm.rows), InspectorPropertyId::GeometrySwarmRows);
-    section.Field("Layers", std::to_string(swarm.layers), InspectorPropertyId::GeometrySwarmLayers);
-    section.Field("Spacing X", FormatFloat(swarm.spacing.x, 3), InspectorPropertyId::GeometrySwarmSpacingX);
-    section.Field("Spacing Y", FormatFloat(swarm.spacing.y, 3), InspectorPropertyId::GeometrySwarmSpacingY);
-    section.Field("Spacing Z", FormatFloat(swarm.spacing.z, 3), InspectorPropertyId::GeometrySwarmSpacingZ);
-    section.Field("Instance Scale", FormatFloat(swarm.instanceScale, 3), InspectorPropertyId::GeometrySwarmInstanceScale);
-    section.Field("Render Layer", std::to_string(swarm.layer), InspectorPropertyId::GeometrySwarmLayer);
-    section.Bool("Cast Shadows", swarm.castsShadow, InspectorPropertyId::GeometrySwarmCastsShadow);
-    section.Bool("Receive Shadows", swarm.receivesShadow, InspectorPropertyId::GeometrySwarmReceivesShadow);
-    section.Bool("Enabled", swarm.enabled, InspectorPropertyId::GeometrySwarmEnabled);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::GeometrySwarm, HeroIconKind::Cube, EditorText("inspector.geometrySwarm.title", "Geometry Swarm"), true);
+    section.Field(EditorText("inspector.geometrySwarm.mesh", "Mesh"), std::to_string(swarm.meshAssetId), InspectorPropertyId::GeometrySwarmMeshAssetId);
+    section.Field(EditorText("inspector.geometrySwarm.material", "Material"), std::to_string(swarm.materialAssetId), InspectorPropertyId::GeometrySwarmMaterialAssetId);
+    section.Field(EditorText("inspector.geometrySwarm.instances", "Instances"), std::to_string(swarm.instanceCount), InspectorPropertyId::GeometrySwarmInstanceCount);
+    section.Field(EditorText("inspector.geometrySwarm.columns", "Columns"), std::to_string(swarm.columns), InspectorPropertyId::GeometrySwarmColumns);
+    section.Field(EditorText("inspector.geometrySwarm.rows", "Rows"), std::to_string(swarm.rows), InspectorPropertyId::GeometrySwarmRows);
+    section.Field(EditorText("inspector.geometrySwarm.layers", "Layers"), std::to_string(swarm.layers), InspectorPropertyId::GeometrySwarmLayers);
+    section.Field(EditorText("inspector.geometrySwarm.spacingX", "Spacing X"), FormatFloat(swarm.spacing.x, 3), InspectorPropertyId::GeometrySwarmSpacingX);
+    section.Field(EditorText("inspector.geometrySwarm.spacingY", "Spacing Y"), FormatFloat(swarm.spacing.y, 3), InspectorPropertyId::GeometrySwarmSpacingY);
+    section.Field(EditorText("inspector.geometrySwarm.spacingZ", "Spacing Z"), FormatFloat(swarm.spacing.z, 3), InspectorPropertyId::GeometrySwarmSpacingZ);
+    section.Field(EditorText("inspector.geometrySwarm.instanceScale", "Instance Scale"), FormatFloat(swarm.instanceScale, 3), InspectorPropertyId::GeometrySwarmInstanceScale);
+    section.Field(EditorText("inspector.geometrySwarm.renderLayer", "Render Layer"), std::to_string(swarm.layer), InspectorPropertyId::GeometrySwarmLayer);
+    section.Bool(EditorText("inspector.geometrySwarm.castShadows", "Cast Shadows"), swarm.castsShadow, InspectorPropertyId::GeometrySwarmCastsShadow);
+    section.Bool(EditorText("inspector.geometrySwarm.receiveShadows", "Receive Shadows"), swarm.receivesShadow, InspectorPropertyId::GeometrySwarmReceivesShadow);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), swarm.enabled, InspectorPropertyId::GeometrySwarmEnabled);
     y = section.Bottom() + kSectionGap;
 }
 void PaintSurfaceCastSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SurfaceCastComponent& surfaceCast) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::SurfaceCast, HeroIconKind::Cube, "Surface Cast", true);
-    section.Field("Material", std::to_string(surfaceCast.materialAssetId), InspectorPropertyId::SurfaceCastMaterialAssetId);
-    section.Field("Receiver Layers", std::to_string(surfaceCast.receiverLayerMask), InspectorPropertyId::SurfaceCastReceiverLayerMask);
-    section.Field("Order", std::to_string(surfaceCast.order), InspectorPropertyId::SurfaceCastOrder);
-    section.Field("Content", surfaceCast.content == kb::scene::SurfaceCastContent::Material ? "Material" : "Detail", InspectorPropertyId::SurfaceCastContent);
-    section.Bool("Enabled", surfaceCast.enabled, InspectorPropertyId::SurfaceCastEnabled);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::SurfaceCast, HeroIconKind::Cube, EditorText("inspector.surfaceCast.title", "Surface Cast"), true);
+    section.Field(EditorText("inspector.surfaceCast.material", "Material"), std::to_string(surfaceCast.materialAssetId), InspectorPropertyId::SurfaceCastMaterialAssetId);
+    section.Field(EditorText("inspector.surfaceCast.receiverLayers", "Receiver Layers"), std::to_string(surfaceCast.receiverLayerMask), InspectorPropertyId::SurfaceCastReceiverLayerMask);
+    section.Field(EditorText("inspector.surfaceCast.order", "Order"), std::to_string(surfaceCast.order), InspectorPropertyId::SurfaceCastOrder);
+    section.Field(EditorText("inspector.surfaceCast.content", "Content"), surfaceCast.content == kb::scene::SurfaceCastContent::Material
+        ? EditorText("inspector.surfaceCast.contentMaterial", "Material")
+        : EditorText("inspector.surfaceCast.contentDetail", "Detail"), InspectorPropertyId::SurfaceCastContent);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), surfaceCast.enabled, InspectorPropertyId::SurfaceCastEnabled);
     y = section.Bottom() + kSectionGap;
 }
 void PaintFacingPanelSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::FacingPanelComponent& panel) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::FacingPanel, HeroIconKind::Eye, "Facing Panel", true);
-    constexpr std::array<const char*, 4> modeNames{ "View", "Point", "Axis", "Fixed" };
-    section.Field("Mode", modeNames[static_cast<std::size_t>(panel.mode)], InspectorPropertyId::FacingPanelMode);
-    section.Field("Target X", FormatFloat(panel.targetPoint.x, 3), InspectorPropertyId::FacingPanelTargetX);
-    section.Field("Target Y", FormatFloat(panel.targetPoint.y, 3), InspectorPropertyId::FacingPanelTargetY);
-    section.Field("Target Z", FormatFloat(panel.targetPoint.z, 3), InspectorPropertyId::FacingPanelTargetZ);
-    section.Field("Axis X", FormatFloat(panel.axis.x, 3), InspectorPropertyId::FacingPanelAxisX);
-    section.Field("Axis Y", FormatFloat(panel.axis.y, 3), InspectorPropertyId::FacingPanelAxisY);
-    section.Field("Axis Z", FormatFloat(panel.axis.z, 3), InspectorPropertyId::FacingPanelAxisZ);
-    section.Field("Up X", FormatFloat(panel.up.x, 3), InspectorPropertyId::FacingPanelUpX);
-    section.Field("Up Y", FormatFloat(panel.up.y, 3), InspectorPropertyId::FacingPanelUpY);
-    section.Field("Up Z", FormatFloat(panel.up.z, 3), InspectorPropertyId::FacingPanelUpZ);
-    section.Bool("Enabled", panel.enabled, InspectorPropertyId::FacingPanelEnabled);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::FacingPanel, HeroIconKind::Eye, EditorText("inspector.facingPanel.title", "Facing Panel"), true);
+    const std::array<std::string_view, 4> modeNames{
+        EditorText("inspector.facingPanel.modeView", "View"),
+        EditorText("inspector.facingPanel.modePoint", "Point"),
+        EditorText("inspector.facingPanel.modeAxis", "Axis"),
+        EditorText("inspector.facingPanel.modeFixed", "Fixed"),
+    };
+    section.Field(EditorText("inspector.facingPanel.mode", "Mode"), modeNames[static_cast<std::size_t>(panel.mode)], InspectorPropertyId::FacingPanelMode);
+    section.Field(EditorText("inspector.facingPanel.targetX", "Target X"), FormatFloat(panel.targetPoint.x, 3), InspectorPropertyId::FacingPanelTargetX);
+    section.Field(EditorText("inspector.facingPanel.targetY", "Target Y"), FormatFloat(panel.targetPoint.y, 3), InspectorPropertyId::FacingPanelTargetY);
+    section.Field(EditorText("inspector.facingPanel.targetZ", "Target Z"), FormatFloat(panel.targetPoint.z, 3), InspectorPropertyId::FacingPanelTargetZ);
+    section.Field(EditorText("inspector.facingPanel.axisX", "Axis X"), FormatFloat(panel.axis.x, 3), InspectorPropertyId::FacingPanelAxisX);
+    section.Field(EditorText("inspector.facingPanel.axisY", "Axis Y"), FormatFloat(panel.axis.y, 3), InspectorPropertyId::FacingPanelAxisY);
+    section.Field(EditorText("inspector.facingPanel.axisZ", "Axis Z"), FormatFloat(panel.axis.z, 3), InspectorPropertyId::FacingPanelAxisZ);
+    section.Field(EditorText("inspector.facingPanel.upX", "Up X"), FormatFloat(panel.up.x, 3), InspectorPropertyId::FacingPanelUpX);
+    section.Field(EditorText("inspector.facingPanel.upY", "Up Y"), FormatFloat(panel.up.y, 3), InspectorPropertyId::FacingPanelUpY);
+    section.Field(EditorText("inspector.facingPanel.upZ", "Up Z"), FormatFloat(panel.up.z, 3), InspectorPropertyId::FacingPanelUpZ);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), panel.enabled, InspectorPropertyId::FacingPanelEnabled);
     y = section.Bottom() + kSectionGap;
 }
 void PaintSpaceStrokeSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SpaceStrokeComponent& stroke) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::SpaceStroke, HeroIconKind::Cube, "Line Renderer", true);
-    constexpr std::array<const char*, 4> modeNames{ "Polyline", "Spline", "Beam", "Cable" };
-    section.Field("Segment Mesh", std::to_string(stroke.meshAssetId), InspectorPropertyId::SpaceStrokeMeshAssetId);
-    section.Field("Material", std::to_string(stroke.materialAssetId), InspectorPropertyId::SpaceStrokeMaterialAssetId);
-    section.Field("Mode", modeNames[static_cast<std::size_t>(stroke.mode)], InspectorPropertyId::SpaceStrokeMode);
-    section.Field("Width", FormatFloat(stroke.width, 3), InspectorPropertyId::SpaceStrokeWidth);
-    section.Field("Cable Sag", FormatFloat(stroke.cableSag, 3), InspectorPropertyId::SpaceStrokeCableSag);
-    section.Field("Spline Segments", std::to_string(stroke.splineSegments), InspectorPropertyId::SpaceStrokeSplineSegments);
-    section.Field("Render Layer", std::to_string(stroke.layer), InspectorPropertyId::SpaceStrokeLayer);
-    section.Bool("Cast Shadows", stroke.castsShadow, InspectorPropertyId::SpaceStrokeCastsShadow);
-    section.Bool("Receive Shadows", stroke.receivesShadow, InspectorPropertyId::SpaceStrokeReceivesShadow);
-    section.Bool("Enabled", stroke.enabled, InspectorPropertyId::SpaceStrokeEnabled);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::SpaceStroke, HeroIconKind::Cube, EditorText("inspector.lineRenderer.title", "Line Renderer"), true);
+    const std::array<std::string_view, 4> modeNames{
+        EditorText("inspector.lineRenderer.modePolyline", "Polyline"),
+        EditorText("inspector.lineRenderer.modeSpline", "Spline"),
+        EditorText("inspector.lineRenderer.modeBeam", "Beam"),
+        EditorText("inspector.lineRenderer.modeCable", "Cable"),
+    };
+    section.Field(EditorText("inspector.lineRenderer.segmentMesh", "Segment Mesh"), std::to_string(stroke.meshAssetId), InspectorPropertyId::SpaceStrokeMeshAssetId);
+    section.Field(EditorText("inspector.lineRenderer.material", "Material"), std::to_string(stroke.materialAssetId), InspectorPropertyId::SpaceStrokeMaterialAssetId);
+    section.Field(EditorText("inspector.lineRenderer.mode", "Mode"), modeNames[static_cast<std::size_t>(stroke.mode)], InspectorPropertyId::SpaceStrokeMode);
+    section.Field(EditorText("inspector.lineRenderer.width", "Width"), FormatFloat(stroke.width, 3), InspectorPropertyId::SpaceStrokeWidth);
+    section.Field(EditorText("inspector.lineRenderer.cableSag", "Cable Sag"), FormatFloat(stroke.cableSag, 3), InspectorPropertyId::SpaceStrokeCableSag);
+    section.Field(EditorText("inspector.lineRenderer.splineSegments", "Spline Segments"), std::to_string(stroke.splineSegments), InspectorPropertyId::SpaceStrokeSplineSegments);
+    section.Field(EditorText("inspector.lineRenderer.renderLayer", "Render Layer"), std::to_string(stroke.layer), InspectorPropertyId::SpaceStrokeLayer);
+    section.Bool(EditorText("inspector.lineRenderer.castShadows", "Cast Shadows"), stroke.castsShadow, InspectorPropertyId::SpaceStrokeCastsShadow);
+    section.Bool(EditorText("inspector.lineRenderer.receiveShadows", "Receive Shadows"), stroke.receivesShadow, InspectorPropertyId::SpaceStrokeReceivesShadow);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), stroke.enabled, InspectorPropertyId::SpaceStrokeEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
 void PaintHistoryRibbonSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::HistoryRibbonComponent& ribbon) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::HistoryRibbon, HeroIconKind::Cube, "Trail Renderer", true);
-    section.Field("Segment Mesh", std::to_string(ribbon.meshAssetId), InspectorPropertyId::HistoryRibbonMeshAssetId);
-    section.Field("Material", std::to_string(ribbon.materialAssetId), InspectorPropertyId::HistoryRibbonMaterialAssetId);
-    section.Field("Lifetime", FormatFloat(ribbon.lifetimeSeconds, 3), InspectorPropertyId::HistoryRibbonLifetimeSeconds);
-    section.Field("Width", FormatFloat(ribbon.width, 3), InspectorPropertyId::HistoryRibbonWidth);
-    section.Field("Sample Interval", FormatFloat(ribbon.sampleIntervalSeconds, 3), InspectorPropertyId::HistoryRibbonSampleIntervalSeconds);
-    section.Field("Render Layer", std::to_string(ribbon.layer), InspectorPropertyId::HistoryRibbonLayer);
-    section.Bool("Cast Shadows", ribbon.castsShadow, InspectorPropertyId::HistoryRibbonCastsShadow);
-    section.Bool("Receive Shadows", ribbon.receivesShadow, InspectorPropertyId::HistoryRibbonReceivesShadow);
-    section.Bool("Enabled", ribbon.enabled, InspectorPropertyId::HistoryRibbonEnabled);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::HistoryRibbon, HeroIconKind::Cube, EditorText("inspector.trailRenderer.title", "Trail Renderer"), true);
+    section.Field(EditorText("inspector.trailRenderer.segmentMesh", "Segment Mesh"), std::to_string(ribbon.meshAssetId), InspectorPropertyId::HistoryRibbonMeshAssetId);
+    section.Field(EditorText("inspector.trailRenderer.material", "Material"), std::to_string(ribbon.materialAssetId), InspectorPropertyId::HistoryRibbonMaterialAssetId);
+    section.Field(EditorText("inspector.trailRenderer.lifetime", "Lifetime"), FormatFloat(ribbon.lifetimeSeconds, 3), InspectorPropertyId::HistoryRibbonLifetimeSeconds);
+    section.Field(EditorText("inspector.trailRenderer.width", "Width"), FormatFloat(ribbon.width, 3), InspectorPropertyId::HistoryRibbonWidth);
+    section.Field(EditorText("inspector.trailRenderer.sampleInterval", "Sample Interval"), FormatFloat(ribbon.sampleIntervalSeconds, 3), InspectorPropertyId::HistoryRibbonSampleIntervalSeconds);
+    section.Field(EditorText("inspector.trailRenderer.renderLayer", "Render Layer"), std::to_string(ribbon.layer), InspectorPropertyId::HistoryRibbonLayer);
+    section.Bool(EditorText("inspector.trailRenderer.castShadows", "Cast Shadows"), ribbon.castsShadow, InspectorPropertyId::HistoryRibbonCastsShadow);
+    section.Bool(EditorText("inspector.trailRenderer.receiveShadows", "Receive Shadows"), ribbon.receivesShadow, InspectorPropertyId::HistoryRibbonReceivesShadow);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), ribbon.enabled, InspectorPropertyId::HistoryRibbonEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2052,43 +2083,43 @@ void PaintCameraSection(
         inspector,
         InspectorSectionId::Camera,
         HeroIconKind::Eye,
-        "Camera",
+        EditorText("inspector.camera.title", "Camera"),
         true);
     section.Field(
-        "Projection",
+        EditorText("inspector.camera.projection", "Projection"),
         InspectorComponentLabelFormatter::ProjectionName(camera.projection),
         InspectorPropertyId::CameraProjection);
     section.Float(
-        "Vertical FOV",
+        EditorText("inspector.camera.verticalFOV", "Vertical FOV"),
         FormatFloat(camera.verticalFovDegrees, 2),
         InspectorPropertyId::CameraVerticalFov);
     section.Float(
-        "Ortho Height",
+        EditorText("inspector.camera.orthoHeight", "Ortho Height"),
         FormatFloat(camera.orthographicHeight, 2),
         InspectorPropertyId::CameraOrthographicHeight);
     section.Float(
-        "Near Clip",
+        EditorText("inspector.camera.nearClip", "Near Clip"),
         FormatFloat(camera.nearClip, 3),
         InspectorPropertyId::CameraNearClip);
     section.Float(
-        "Far Clip",
+        EditorText("inspector.camera.farClip", "Far Clip"),
         FormatFloat(camera.farClip, 2),
         InspectorPropertyId::CameraFarClip);
-    section.Bool("Primary", camera.primary, InspectorPropertyId::CameraPrimary);
+    section.Bool(EditorText("inspector.camera.primary", "Primary"), camera.primary, InspectorPropertyId::CameraPrimary);
     section.Field(
-        "Viewport ID",
+        EditorText("inspector.camera.viewportID", "Viewport ID"),
         std::to_string(camera.viewportId),
         InspectorPropertyId::CameraViewportId);
     section.Field(
-        "Priority",
+        EditorText("inspector.camera.priority", "Priority"),
         std::to_string(camera.priority),
         InspectorPropertyId::CameraPriority);
     section.Field(
-        "Culling Mask",
+        EditorText("inspector.camera.cullingMask", "Culling Mask"),
         std::to_string(camera.cullingMask),
         InspectorPropertyId::CameraCullingMask);
     section.Field(
-        "Clear Mode",
+        EditorText("inspector.camera.clearMode", "Clear Mode"),
         InspectorComponentLabelFormatter::CameraClearModeName(camera.clearMode),
         InspectorPropertyId::CameraClearMode);
     section.Color(camera.clearColor, InspectorPropertyId::CameraClearColor);
@@ -2128,27 +2159,27 @@ void PaintLightSection(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const kb::scene::LightComponent& light) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, "Light");
-    section.Field("Type", InspectorComponentLabelFormatter::LightKindName(light.kind), InspectorPropertyId::LightKind);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, EditorText("inspector.light.title", "Light"));
+    section.Field(EditorText("inspector.light.type", "Type"), InspectorComponentLabelFormatter::LightKindName(light.kind), InspectorPropertyId::LightKind);
     section.Color(light.color, InspectorPropertyId::LightColor);
-    section.Float("Intensity", FormatFloat(light.intensity, 2), InspectorPropertyId::LightIntensity);
+    section.Float(EditorText("inspector.light.intensity", "Intensity"), FormatFloat(light.intensity, 2), InspectorPropertyId::LightIntensity);
     if (LightUsesRange(light.kind)) {
-        section.Float("Range", FormatFloat(light.range, 2), InspectorPropertyId::LightRange);
+        section.Float(EditorText("inspector.light.range", "Range"), FormatFloat(light.range, 2), InspectorPropertyId::LightRange);
     }
     if (LightUsesSpotCone(light.kind)) {
-        section.Float("Inner Cone", FormatFloat(light.innerConeDegrees, 2), InspectorPropertyId::LightInnerCone);
-        section.Float("Outer Cone", FormatFloat(light.outerConeDegrees, 2), InspectorPropertyId::LightOuterCone);
+        section.Float(EditorText("inspector.light.innerCone", "Inner Cone"), FormatFloat(light.innerConeDegrees, 2), InspectorPropertyId::LightInnerCone);
+        section.Float(EditorText("inspector.light.outerCone", "Outer Cone"), FormatFloat(light.outerConeDegrees, 2), InspectorPropertyId::LightOuterCone);
     }
     if (LightUsesAreaSize(light.kind)) {
-        section.Float("Area Width", FormatFloat(light.areaWidth, 2), InspectorPropertyId::LightAreaWidth);
-        section.Float("Area Height", FormatFloat(light.areaHeight, 2), InspectorPropertyId::LightAreaHeight);
+        section.Float(EditorText("inspector.light.areaWidth", "Area Width"), FormatFloat(light.areaWidth, 2), InspectorPropertyId::LightAreaWidth);
+        section.Float(EditorText("inspector.light.areaHeight", "Area Height"), FormatFloat(light.areaHeight, 2), InspectorPropertyId::LightAreaHeight);
     }
-    section.Float("Contact Shadow", FormatFloat(light.contactShadowLength, 2), InspectorPropertyId::LightContactShadowLength);
-    section.Float("Volumetric", FormatFloat(light.volumetricScattering, 2), InspectorPropertyId::LightVolumetricScattering);
-    section.Bool("Casts Shadow", light.castsShadow, InspectorPropertyId::LightCastsShadow);
-    section.Bool("Use Color Temperature", light.useColorTemperature, InspectorPropertyId::LightUseColorTemperature);
-    section.Float("Color Temperature (K)", FormatFloat(light.colorTemperatureKelvin, 0), InspectorPropertyId::LightColorTemperatureKelvin);
-    section.Field("Layer Mask", std::to_string(light.layerMask), InspectorPropertyId::LightLayerMask);
+    section.Float(EditorText("inspector.light.contactShadow", "Contact Shadow"), FormatFloat(light.contactShadowLength, 2), InspectorPropertyId::LightContactShadowLength);
+    section.Float(EditorText("inspector.light.volumetric", "Volumetric"), FormatFloat(light.volumetricScattering, 2), InspectorPropertyId::LightVolumetricScattering);
+    section.Bool(EditorText("inspector.light.castsShadow", "Casts Shadow"), light.castsShadow, InspectorPropertyId::LightCastsShadow);
+    section.Bool(EditorText("inspector.light.useColorTemperature", "Use Color Temperature"), light.useColorTemperature, InspectorPropertyId::LightUseColorTemperature);
+    section.Float(EditorText("inspector.light.colorTemperatureK", "Color Temperature (K)"), FormatFloat(light.colorTemperatureKelvin, 0), InspectorPropertyId::LightColorTemperatureKelvin);
+    section.Field(EditorText("inspector.light.layerMask", "Layer Mask"), std::to_string(light.layerMask), InspectorPropertyId::LightLayerMask);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2160,9 +2191,9 @@ void PaintMeshRendererSection(
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
     const kb::scene::MeshRendererComponent& renderer) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::MeshRenderer, HeroIconKind::Cube, "Mesh Renderer", true);
-    section.AssetField("Mesh", AssetDisplayName(sceneContext, renderer.meshAssetId), InspectorPropertyId::MeshRendererMesh, InspectorPropertyId::MeshRendererMeshPicker);
-    section.AssetField("Material", MaterialDisplayName(sceneContext, renderer.materialAssetId), InspectorPropertyId::MeshRendererMaterial, InspectorPropertyId::MeshRendererMaterialPicker);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::MeshRenderer, HeroIconKind::Cube, EditorText("inspector.meshRenderer.title", "Mesh Renderer"), true);
+    section.AssetField(EditorText("inspector.meshRenderer.mesh", "Mesh"), AssetDisplayName(sceneContext, renderer.meshAssetId), InspectorPropertyId::MeshRendererMesh, InspectorPropertyId::MeshRendererMeshPicker);
+    section.AssetField(EditorText("inspector.meshRenderer.material", "Material"), MaterialDisplayName(sceneContext, renderer.materialAssetId), InspectorPropertyId::MeshRendererMaterial, InspectorPropertyId::MeshRendererMaterialPicker);
     const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId);
     const std::vector<InspectorMeshRendererMaterialSlotRow> slotRows = InspectorMeshRendererMaterialSlotModel::Build(
         renderer,
@@ -2171,15 +2202,15 @@ void PaintMeshRendererSection(
         [&sceneContext](std::uint64_t materialId) { return MaterialSlotRuntimeStatus(sceneContext, materialId); });
     if (!slotRows.empty()) {
         section.Disclosure(
-            "Advanced",
+            EditorText("inspector.meshRenderer.advanced", "Advanced"),
             InspectorPropertyId::MeshRendererAdvanced,
             inspector.IsDisclosureExpanded(InspectorDisclosureId::MeshRendererAdvanced));
     }
     for (const InspectorMeshRendererMaterialSlotRow& row : slotRows) {
-        const std::string prefix = "Slot " + std::to_string(row.slotIndex + 1U);
-        const std::string nameLabel = prefix + " Name";
-        const std::string sourceLabel = prefix + " Source";
-        const std::string defaultLabel = prefix + " Default";
+        const std::string slot = std::to_string(row.slotIndex + 1U);
+        const std::string nameLabel = EditorLocalization::Format("inspector.meshRenderer.slotName", "Slot {slot} Name", { { "slot", slot } });
+        const std::string sourceLabel = EditorLocalization::Format("inspector.meshRenderer.slotSource", "Slot {slot} Source", { { "slot", slot } });
+        const std::string defaultLabel = EditorLocalization::Format("inspector.meshRenderer.slotDefault", "Slot {slot} Default", { { "slot", slot } });
         const std::array<DisplayField, 3> advancedFields{ {
             { nameLabel, row.slotName },
             { sourceLabel, row.importedSourceName },
@@ -2190,11 +2221,13 @@ void PaintMeshRendererSection(
             inspector.DisclosureExpansion(InspectorDisclosureId::MeshRendererAdvanced),
             static_cast<int>(row.slotIndex * 3U));
         section.AssetField(row.label, row.overrideMaterialName, MeshRendererMaterialSlotProperty(row.slotIndex), MeshRendererMaterialSlotPickerProperty(row.slotIndex));
-        section.Field(prefix + " Material Status", row.activeMaterialStatus);
-        section.Field(prefix + " Sections", row.sectionsUsingSlot);
+        section.Field(EditorLocalization::Format("inspector.meshRenderer.slotMaterialStatus", "Slot {slot} Material Status", { { "slot", slot } }),
+            row.activeMaterialStatus);
+        section.Field(EditorLocalization::Format("inspector.meshRenderer.slotSections", "Slot {slot} Sections", { { "slot", slot } }),
+            row.sectionsUsingSlot);
     }
-    section.Bool("Casts Shadow", renderer.castsShadow, InspectorPropertyId::MeshRendererCastsShadow);
-    section.Bool("Receives Shadow", renderer.receivesShadow, InspectorPropertyId::MeshRendererReceivesShadow);
+    section.Bool(EditorText("inspector.meshRenderer.castsShadow", "Casts Shadow"), renderer.castsShadow, InspectorPropertyId::MeshRendererCastsShadow);
+    section.Bool(EditorText("inspector.meshRenderer.receivesShadow", "Receives Shadow"), renderer.receivesShadow, InspectorPropertyId::MeshRendererReceivesShadow);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2245,7 +2278,7 @@ void PaintPhysicsSection(
         const int iconTop = button.top + (static_cast<int>(button.bottom - button.top) - iconSize) / 2;
         const COLORREF textColor = fitEnabled ? Color(theme.textPrimary) : Rgb(96, 104, 116);
         HeroIconPainter::Draw(dc, Rect(button.left + 14, iconTop, button.left + 14 + iconSize, iconTop + iconSize), HeroIconKind::Cube, textColor, 1);
-        Text(dc, Rect(button.left + 14 + iconSize, button.top, button.right - 10, button.bottom), "Fit to Mesh", textColor, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        Text(dc, Rect(button.left + 14 + iconSize, button.top, button.right - 10, button.bottom), EditorText("inspector.collider.fitToMesh", "Fit to Mesh"), textColor, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         bottom += kFieldRowHeight + kDividerHeight;
     }
     y = bottom + kSectionGap;
@@ -2277,25 +2310,27 @@ void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const E
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const std::vector<kb::scene::SceneEntity>& selected = sceneContext.SelectedHierarchyEntities();
     const std::size_t aliveCount = AliveSelectionCount(scene, selected);
-    const std::string primaryName = scene.Entities().IsAlive(primary) ? scene.Entities().Name(primary) : std::string{ "(none)" };
+    const std::string primaryName = scene.Entities().IsAlive(primary) ? scene.Entities().Name(primary) : std::string{ EditorText("inspector.noAsset", "(none)") };
 
-    DrawHeader(dc, content, theme, HeroIconKind::ListBullet, "Selection (" + std::to_string(aliveCount) + ")", "Primary: " + primaryName);
+    DrawHeader(dc, content, theme, HeroIconKind::ListBullet,
+        EditorLocalization::Format("inspector.selection.header", "Selection ({count})", { { "count", std::to_string(aliveCount) } }),
+        EditorLocalization::Format("inspector.selection.primaryHeader", "Primary: {name}", { { "name", primaryName } }));
     int y = InspectorBodyTop(content);
 
     {
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::General, HeroIconKind::AdjustmentsHorizontal, "Selection");
-        section.Field("Entities", FormatUInt64(aliveCount));
-        section.Field("Primary", primaryName);
-        section.Field("Primary Id", FormatUInt64(primary.Id()));
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::General, HeroIconKind::AdjustmentsHorizontal, EditorText("inspector.selection.title", "Selection"));
+        section.Field(EditorText("inspector.selection.entities", "Entities"), FormatUInt64(aliveCount));
+        section.Field(EditorText("inspector.selection.primary", "Primary"), primaryName);
+        section.Field(EditorText("inspector.selection.primaryId", "Primary Id"), FormatUInt64(primary.Id()));
         y = section.Bottom() + kSectionGap;
     }
 
     if (scene.Entities().IsAlive(primary)) {
         const kb::scene::TransformComponent transform = MultiSelectionTransformView(scene, selected, primary);
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Transform, HeroIconKind::Gamepad2, "Transform");
-        section.Vec3("Pivot", transform.localPosition, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ);
-        section.Rotation("Primary Rotation", transform.localRotation);
-        section.Vec3("Primary Scale", transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Transform, HeroIconKind::Gamepad2, EditorText("inspector.transform.title", "Transform"));
+        section.Vec3(EditorText("inspector.transform.pivot", "Pivot"), transform.localPosition, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ);
+        section.Rotation(EditorText("inspector.transform.primaryRotation", "Primary Rotation"), transform.localRotation);
+        section.Vec3(EditorText("inspector.transform.primaryScale", "Primary Scale"), transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
     }
 }
 
@@ -2350,8 +2385,9 @@ struct DropdownInspectorLayoutResult {
     for (const std::string_view name : {"value", "alphaFadeSpeed"})
         if (const int row = find(name); row >= 0) add(DropdownInspectorItem::Kind::Field, kFieldRowHeight, row, rows[static_cast<std::size_t>(row)].label);
     if (const int row = find("templateEntity"); row >= 0 && rows[static_cast<std::size_t>(row)].value == "0")
-        add(DropdownInspectorItem::Kind::Warning, kGroupRowHeight, -1, "Template is not assigned - the list cannot open.");
-    add(DropdownInspectorItem::Kind::Header, kGroupRowHeight, -1, "Options");
+        add(DropdownInspectorItem::Kind::Warning, kGroupRowHeight, -1,
+            std::string{ EditorText("inspector.dropdown.templateMissing", "Template is not assigned - the list cannot open.") });
+    add(DropdownInspectorItem::Kind::Header, kGroupRowHeight, -1, std::string{ EditorText("inspector.dropdown.options", "Options") });
     const int countRow = find("optionCount");
     const std::uint32_t options = countRow >= 0 ? static_cast<std::uint32_t>(std::stoul(rows[static_cast<std::size_t>(countRow)].value)) : 0U;
     layout.optionsTop = y;
@@ -2359,7 +2395,7 @@ struct DropdownInspectorLayoutResult {
     for (std::uint32_t option = 0U; option < options; ++option) {
         const std::string prefix = "options." + std::to_string(option);
         add(DropdownInspectorItem::Kind::OptionText, kFieldRowHeight, find(prefix + ".text"), {}, static_cast<int>(option));
-        add(DropdownInspectorItem::Kind::OptionImage, kFieldRowHeight, find(prefix + ".image"), "Image", static_cast<int>(option));
+        add(DropdownInspectorItem::Kind::OptionImage, kFieldRowHeight, find(prefix + ".image"), std::string{ EditorText("inspector.dropdown.image", "Image") }, static_cast<int>(option));
     }
     add(DropdownInspectorItem::Kind::Footer, kFieldRowHeight, countRow, {});
     layout.height = y - top;
@@ -2398,7 +2434,7 @@ void PaintUIDropdownBody(HDC dc, RECT body, const EditorTheme& theme, const Edit
             DrawDropdownOptionTextRow(dc, item.rect, theme, state, section, property, item.row, item.option, row->value, selectedOption);
             break;
         case DropdownInspectorItem::Kind::OptionImage:
-            DrawAssetFieldRow(dc, item.rect, theme, state, section, property, InspectorPropertyId::UIAssetPicker, "      Image",
+            DrawAssetFieldRow(dc, item.rect, theme, state, section, property, InspectorPropertyId::UIAssetPicker, "      " + item.label,
                 AssetDisplayName(sceneContext, std::stoull(row->value)), item.row);
             if (selectedOption) {
                 GdiDrawing::FillRectColor(dc, Rect(item.rect.left, item.rect.top, item.rect.left + 3, item.rect.bottom), Color(theme.accent));
@@ -2510,7 +2546,7 @@ void PaintUIRectBody(HDC dc, RECT body, const EditorTheme& theme, const Inspecto
     constexpr auto section = InspectorSectionId::UIRectTransform;
     const bool presets = state.IsDisclosureExpanded(InspectorDisclosureId::UIAnchorPresets);
     PaintUIAnchorDiagram(dc, UIAnchorButtonRect(body), theme, rect, presets);
-    Text(dc, Rect(body.left + 10, body.top + 72, body.left + 76, body.top + 88), "Anchors", Color(theme.textSecondary));
+    Text(dc, Rect(body.left + 10, body.top + 72, body.left + 76, body.top + 88), EditorText("inspector.uiRect.anchors", "Anchors"), Color(theme.textSecondary));
     const auto fields = InspectorUIComponentModel::RectLayoutFields(rect);
     for (int index = 0; index < 4; ++index) {
         const RECT box = UIRectFieldRect(body, index);
@@ -2530,12 +2566,16 @@ void PaintUIRectBody(HDC dc, RECT body, const EditorTheme& theme, const Inspecto
                 state.IsHovered(InspectorHitKind::Row, section, InspectorPropertyId::UIAnchorPreset, index));
         }
         Text(dc, Rect(body.left + 10, y + 162, body.right - 8, y + 179),
-            "Click: keep position", Color(theme.textSecondary));
+            EditorText("inspector.uiRect.presetClickHint", "Click: keep position"), Color(theme.textSecondary));
         Text(dc, Rect(body.left + 10, y + 179, body.right - 8, y + 196),
-            "Alt: align position   Shift: align pivot", Color(theme.textSecondary));
+            EditorText("inspector.uiRect.presetModifierHint", "Alt: align position   Shift: align pivot"), Color(theme.textSecondary));
         y += kUIAnchorGridHeight;
     }
-    constexpr std::array labels{"Pivot", "Rotation", "Scale"};
+    const std::array<std::string_view, 3> labels{
+        EditorText("inspector.uiRect.pivot", "Pivot"),
+        EditorText("inspector.uiRect.rotation", "Rotation"),
+        EditorText("inspector.uiRect.scale", "Scale"),
+    };
     for (int pair = 0; pair < 3; ++pair) {
         const RECT rowRect = Rect(body.left, y, body.right, y + kFieldRowHeight);
         Text(dc, Rect(body.left + 10, y, body.left + 86, y + kFieldRowHeight), labels[pair], Color(theme.textSecondary));
@@ -2546,14 +2586,15 @@ void PaintUIRectBody(HDC dc, RECT body, const EditorTheme& theme, const Inspecto
             const RECT box = UIRectPairFieldRect(rowRect, lane, pair);
             const bool editing = state.EditedProperty() == InspectorPropertyId::UIRectTransformField && state.EditIndex() == index;
             Text(dc, Rect(box.left - (pair == 1 && lane == 1 ? 43 : 15), box.top, box.left, box.bottom),
-                pair == 1 ? (lane == 0 ? "Z" : "Order") : (lane == 0 ? "X" : "Y"), Color(theme.textSecondary));
+                pair == 1 ? (lane == 0 ? std::string_view{ "Z" } : EditorText("inspector.uiRect.order", "Order"))
+                          : (lane == 0 ? std::string_view{ "X" } : std::string_view{ "Y" }), Color(theme.textSecondary));
             DrawValueBox(dc, box, theme, editing ? std::string_view{state.EditBuffer()} : row.value, false, editing,
                 state.IsTextCaretVisible());
         }
         y += kFieldRowHeight + kDividerHeight;
     }
     inspector_panel_rows::DrawDisclosureRow(dc, Rect(body.left, y, body.right, y + kDisclosureRowHeight),
-        theme, state, section, InspectorPropertyId::UIRectAdvanced, "Custom anchors and offsets",
+        theme, state, section, InspectorPropertyId::UIRectAdvanced, EditorText("inspector.uiRect.customAnchors", "Custom anchors and offsets"),
         state.IsDisclosureExpanded(InspectorDisclosureId::UIRectAdvanced));
     y += kDisclosureRowHeight + kDividerHeight;
     if (state.IsDisclosureExpanded(InspectorDisclosureId::UIRectAdvanced)) {
@@ -2616,8 +2657,9 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
                 kb::scene::FindUIComponentDescriptor(component);
             SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom),
                 theme, inspector, sectionId, HeroIconKind::RectangleGroup,
-                component == kb::scene::UIComponentType::RectTransform ? std::string_view{"Transform (UI)"}
-                    : descriptor != nullptr ? descriptor->displayName : std::string_view{ "UI Component" }, true);
+                component == kb::scene::UIComponentType::RectTransform ? EditorText("inspector.uiRect.title", "Transform (UI)")
+                    : descriptor != nullptr ? InspectorUIComponentModel::DisplayName(component)
+                    : EditorText("inspector.uiComponent.title", "UI Component"), true);
             if (component == kb::scene::UIComponentType::RectTransform) {
                 if (!inspector.IsCollapsed(sectionId)) {
                     const auto* rect = sceneContext.Scene().Components().UI().TryGet<kb::scene::UIRectTransform>(entity);
@@ -2639,7 +2681,8 @@ void PaintUIComponentSections(HDC dc, RECT content, const RECT& band,
                     }
                 } else if (!row.choices.empty()) {
                     const auto choice = static_cast<std::size_t>(std::stoul(row.value));
-                    section.Tag(row.label, choice < row.choices.size() ? row.choices[choice] : "Invalid", editableProperty, index);
+                    section.Tag(row.label, choice < row.choices.size() ? std::string_view{ row.choices[choice] } : EditorText("inspector.invalid", "Invalid"),
+                        editableProperty, index);
                 } else if (row.type == kb::scene::UIComponentPropertyType::Bool) {
                     section.Bool(row.label, row.boolValue, editableProperty, index);
                 } else if (row.type == kb::scene::UIComponentPropertyType::Asset) {
@@ -2913,7 +2956,8 @@ void DrawTerrainLayerCard(
         ScopedFont font(9, FW_SEMIBOLD);
         const ScopedGdiObject selectedFont(dc, font.handle);
         Text(dc, Rect(textLeft, card.top + 8, textRight, card.top + 25),
-            index == 0U ? "BASE LAYER" : ("PAINT LAYER " + std::to_string(index)),
+            index == 0U ? std::string{ EditorText("inspector.terrainEditor.baseLayer", "BASE LAYER") }
+                        : EditorLocalization::Format("inspector.terrainEditor.paintLayer", "PAINT LAYER {index}", { { "index", std::to_string(index) } }),
             selected ? Color(theme.accent) : Color(theme.textSecondary));
     }
     {
@@ -2926,7 +2970,7 @@ void DrawTerrainLayerCard(
         ScopedFont font(9, FW_NORMAL);
         const ScopedGdiObject selectedFont(dc, font.handle);
         Text(dc, Rect(textLeft, card.top + 46, remove.left - 5, card.bottom - 7),
-            "Material", Color(theme.textDisabled));
+            EditorText("inspector.terrainEditor.layerMaterial", "Material"), Color(theme.textDisabled));
     }
 
     if (selected) {
@@ -2993,13 +3037,16 @@ void DrawTerrainMaterialLayers(
             ScopedFont font(11, FW_SEMIBOLD);
             const ScopedGdiObject selectedFont(dc, font.handle);
             Text(dc, Rect(empty.left + 46, empty.top + 9, empty.right - 10, empty.top + 31),
-                terrain != nullptr ? "No Terrain Layers" : "Terrain asset unavailable", Color(theme.textPrimary));
+                terrain != nullptr ? EditorText("inspector.terrainEditor.noLayers", "No Terrain Layers")
+                                   : EditorText("inspector.terrainEditor.assetUnavailable", "Terrain asset unavailable"),
+                Color(theme.textPrimary));
         }
         {
             ScopedFont font(9, FW_NORMAL);
             const ScopedGdiObject selectedFont(dc, font.handle);
             Text(dc, Rect(empty.left + 46, empty.top + 29, empty.right - 10, empty.bottom - 7),
-                terrain != nullptr ? "Create or add a Material to start painting." : "Repair the Terrain asset reference to edit layers.",
+                terrain != nullptr ? EditorText("inspector.terrainEditor.noLayersHint", "Create or add a Material to start painting.")
+                                   : EditorText("inspector.terrainEditor.assetUnavailableHint", "Repair the Terrain asset reference to edit layers."),
                 Color(theme.textSecondary));
         }
     }
@@ -3017,7 +3064,7 @@ void DrawTerrainMaterialLayers(
         ScopedFont font(10, FW_SEMIBOLD);
         const ScopedGdiObject selectedFont(dc, font.handle);
         Text(dc, Rect(toolbar.left + 32, toolbar.top, toolbar.right - 76, toolbar.bottom),
-            "Edit Terrain Layers", Color(theme.textPrimary));
+            EditorText("inspector.terrainEditor.editLayers", "Edit Terrain Layers"), Color(theme.textPrimary));
     }
     {
         ScopedFont font(9, FW_NORMAL);
@@ -3037,14 +3084,17 @@ void DrawTerrainMaterialLayers(
     const bool canAdd = terrain != nullptr && layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers;
     DrawTerrainLayerMenuAction(dc, TerrainLayerMenuItemRect(menu, 0), theme, inspector,
         InspectorPropertyId::TerrainMaterialLayerCreate, HeroIconKind::Plus,
-        "Create Layer", "Create a new Material and assign it", canAdd);
+        EditorText("inspector.terrainEditor.createLayer", "Create Layer"),
+        EditorText("inspector.terrainEditor.createLayerHint", "Create a new Material and assign it"), canAdd);
     DrawTerrainLayerMenuAction(dc, TerrainLayerMenuItemRect(menu, 1), theme, inspector,
         InspectorPropertyId::TerrainMaterialLayerAdd, HeroIconKind::Folder,
-        "Add Layer", "Choose an existing Material", canAdd);
+        EditorText("inspector.terrainEditor.addLayer", "Add Layer"),
+        EditorText("inspector.terrainEditor.addLayerHint", "Choose an existing Material"), canAdd);
     if (layerCount > 0U) {
         DrawTerrainLayerMenuAction(dc, TerrainLayerMenuItemRect(menu, 2), theme, inspector,
             InspectorPropertyId::TerrainMaterialLayerRemove, HeroIconKind::Minus,
-            "Remove Layer", "Detach the selected layer from Terrain", true);
+            EditorText("inspector.terrainEditor.removeLayer", "Remove Layer"),
+            EditorText("inspector.terrainEditor.removeLayerHint", "Detach the selected layer from Terrain"), true);
     }
 }
 
@@ -3070,60 +3120,63 @@ void PaintTerrainSection(
     const EditorSceneContext& sceneContext,
     const kb::scene::MeshRendererComponent& renderer,
     const kb::assets::TerrainAsset* terrain) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Terrain, HeroIconKind::Cube, "Terrain Editor", true);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Terrain, HeroIconKind::Cube, EditorText("inspector.terrainEditor.title", "Terrain Editor"), true);
     const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     const kb::terrain_editor::TerrainBrushSettings& brush = tool.brush;
     const std::size_t layerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
-    section.Group("TERRAIN LAYERS");
+    section.Group(EditorText("inspector.terrainEditor.terrainLayers", "TERRAIN LAYERS"));
     const RECT layerBody = section.Reserve(TerrainMaterialLayersBodyHeight(layerCount));
     if (RectWidth(layerBody) > 0 && RectHeight(layerBody) > 0) {
         DrawTerrainMaterialLayers(dc, layerBody, theme, inspector, sceneContext, terrain, tool.selectedMaterialLayer);
     }
-    section.Group("BRUSH BEHAVIOR");
-    section.Float("Falloff", FormatFloat(brush.falloff, 2), InspectorPropertyId::TerrainBrushFalloff);
-    section.Float("Flatten Height", FormatFloat(brush.targetHeight, 2), InspectorPropertyId::TerrainFlattenHeight);
-    section.Float("Terrace Step", FormatFloat(brush.terraceStep, 2), InspectorPropertyId::TerrainTerraceStep);
-    section.Field("Noise Seed", std::to_string(brush.noiseSeed), InspectorPropertyId::TerrainNoiseSeed);
+    section.Group(EditorText("inspector.terrainEditor.brushBehavior", "BRUSH BEHAVIOR"));
+    section.Float(EditorText("inspector.terrainEditor.falloff", "Falloff"), FormatFloat(brush.falloff, 2), InspectorPropertyId::TerrainBrushFalloff);
+    section.Float(EditorText("inspector.terrainEditor.flattenHeight", "Flatten Height"), FormatFloat(brush.targetHeight, 2), InspectorPropertyId::TerrainFlattenHeight);
+    section.Float(EditorText("inspector.terrainEditor.terraceStep", "Terrace Step"), FormatFloat(brush.terraceStep, 2), InspectorPropertyId::TerrainTerraceStep);
+    section.Field(EditorText("inspector.terrainEditor.noiseSeed", "Noise Seed"), std::to_string(brush.noiseSeed), InspectorPropertyId::TerrainNoiseSeed);
 
-    section.Group("HEIGHTMAP IMPORT");
+    section.Group(EditorText("inspector.terrainEditor.heightmapImport", "HEIGHTMAP IMPORT"));
     section.Pair(
-        "Height Range",
-        "Min", FormatFloat(tool.heightmapImport.minimumHeight, 2), InspectorPropertyId::TerrainImportMinimumHeight,
-        "Max", FormatFloat(tool.heightmapImport.maximumHeight, 2), InspectorPropertyId::TerrainImportMaximumHeight);
-    section.Bool("Flip Vertical", tool.heightmapImport.flipVertically, InspectorPropertyId::TerrainImportFlipVertically);
-    section.Field("Source", "Import PNG16 / RAW16...", InspectorPropertyId::TerrainImportHeightmap);
+        EditorText("inspector.terrainEditor.heightRange", "Height Range"),
+        EditorText("inspector.terrainEditor.min", "Min"), FormatFloat(tool.heightmapImport.minimumHeight, 2), InspectorPropertyId::TerrainImportMinimumHeight,
+        EditorText("inspector.terrainEditor.max", "Max"), FormatFloat(tool.heightmapImport.maximumHeight, 2), InspectorPropertyId::TerrainImportMaximumHeight);
+    section.Bool(EditorText("inspector.terrainEditor.flipVertical", "Flip Vertical"), tool.heightmapImport.flipVertically, InspectorPropertyId::TerrainImportFlipVertically);
+    section.Field(EditorText("inspector.terrainEditor.source", "Source"), EditorText("inspector.terrainEditor.importHeightmap", "Import PNG16 / RAW16..."), InspectorPropertyId::TerrainImportHeightmap);
 
-    section.Group("RENDERING");
+    section.Group(EditorText("inspector.terrainEditor.rendering", "RENDERING"));
     section.BoolPair(
-        "Shadows",
-        "Cast", renderer.castsShadow, InspectorPropertyId::MeshRendererCastsShadow,
-        "Receive", renderer.receivesShadow, InspectorPropertyId::MeshRendererReceivesShadow);
+        EditorText("inspector.terrainEditor.shadows", "Shadows"),
+        EditorText("inspector.terrainEditor.castShadows", "Cast"), renderer.castsShadow, InspectorPropertyId::MeshRendererCastsShadow,
+        EditorText("inspector.terrainEditor.receiveShadows", "Receive"), renderer.receivesShadow, InspectorPropertyId::MeshRendererReceivesShadow);
 
     section.Disclosure(
-        "Advanced Terrain Settings",
+        EditorText("inspector.terrainEditor.advancedTerrainSettings", "Advanced Terrain Settings"),
         InspectorPropertyId::TerrainAdvanced,
         inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced));
     if (inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced) && terrain != nullptr) {
         section.Pair(
-            "Resolution",
+            EditorText("inspector.terrainEditor.resolution", "Resolution"),
             "X", std::to_string(terrain->width), InspectorPropertyId::TerrainResolutionX,
             "Z", std::to_string(terrain->height), InspectorPropertyId::TerrainResolutionZ);
         section.Pair(
-            "World Size",
+            EditorText("inspector.terrainEditor.worldSize", "World Size"),
             "X", FormatFloat(terrain->worldSizeX, 2), InspectorPropertyId::TerrainWorldSizeX,
             "Z", FormatFloat(terrain->worldSizeZ, 2), InspectorPropertyId::TerrainWorldSizeZ);
         section.Pair(
-            "Topology",
-            "Chunk", std::to_string(terrain->chunkQuads), InspectorPropertyId::TerrainChunkQuads,
-            "LODs", std::to_string(terrain->lodCount), InspectorPropertyId::TerrainLodCount);
+            EditorText("inspector.terrainEditor.topology", "Topology"),
+            EditorText("inspector.terrainEditor.chunk", "Chunk"), std::to_string(terrain->chunkQuads), InspectorPropertyId::TerrainChunkQuads,
+            EditorText("inspector.terrainEditor.lods", "LODs"), std::to_string(terrain->lodCount), InspectorPropertyId::TerrainLodCount);
         const std::uint32_t chunksX = (terrain->width - 1U + terrain->chunkQuads - 1U) / terrain->chunkQuads;
         const std::uint32_t chunksZ = (terrain->height - 1U + terrain->chunkQuads - 1U) / terrain->chunkQuads;
-        section.Field("Streaming Layout", std::to_string(chunksX * chunksZ) + " chunks / " + std::to_string(terrain->lodCount) + " LODs");
+        section.Field(EditorText("inspector.terrainEditor.streamingLayout", "Streaming Layout"), EditorLocalization::Format("inspector.terrainEditor.streamingLayoutValue", "{chunks} chunks / {lods} LODs",
+            { { "chunks", std::to_string(chunksX * chunksZ) }, { "lods", std::to_string(terrain->lodCount) } }));
     } else if (inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced)) {
-        section.Pair("Resolution", "X", "Unavailable", InspectorPropertyId::None, "Z", "-", InspectorPropertyId::None);
-        section.Pair("World Size", "X", "-", InspectorPropertyId::None, "Z", "-", InspectorPropertyId::None);
-        section.Pair("Topology", "Chunk", "-", InspectorPropertyId::None, "LODs", "-", InspectorPropertyId::None);
-        section.Field("Streaming Layout", "Asset unavailable");
+        section.Pair(EditorText("inspector.terrainEditor.resolution", "Resolution"), "X",
+            EditorText("inspector.terrainEditor.unavailable", "Unavailable"), InspectorPropertyId::None, "Z", "-", InspectorPropertyId::None);
+        section.Pair(EditorText("inspector.terrainEditor.worldSize", "World Size"), "X", "-", InspectorPropertyId::None, "Z", "-", InspectorPropertyId::None);
+        section.Pair(EditorText("inspector.terrainEditor.topology", "Topology"), EditorText("inspector.terrainEditor.chunk", "Chunk"), "-",
+            InspectorPropertyId::None, EditorText("inspector.terrainEditor.lods", "LODs"), "-", InspectorPropertyId::None);
+        section.Field(EditorText("inspector.terrainEditor.streamingLayout", "Streaming Layout"), EditorText("inspector.terrainEditor.layoutAssetUnavailable", "Asset unavailable"));
     }
     y = section.Bottom() + kSectionGap;
 }
@@ -3210,10 +3263,10 @@ void PaintTagsDropdown(HDC dc, const RECT& content, const EditorTheme& theme, co
             label = tag;
             checked = std::find(selected.begin(), selected.end(), tag) != selected.end();
         } else if (isNoTag) {
-            label = "None";
+            label = EditorText("inspector.tags.none", "None");
             checked = selected.empty();
         } else {
-            label = "Add Tag";
+            label = EditorText("inspector.tags.addTag", "Add Tag");
         }
 
         if (hovered) {
@@ -3281,13 +3334,13 @@ struct PrefabSectionModel {
     model.shown = true;
     model.root = prefabs.RootInstance(entity) == instance;
     const std::filesystem::path source = prefabs.SourcePath(prefabs.SourcePrefab(instance));
-    model.prefabName = source.empty() ? std::string{ "Unsaved prefab" } : source.stem().string();
+    model.prefabName = source.empty() ? std::string{ EditorText("inspector.prefab.unsaved", "Unsaved prefab") } : source.stem().string();
     if (model.root) {
         for (const kb::scene::ScenePrefabPropertyOverride& property : sceneContext.PrefabInstanceOverrides(instance).properties) {
             model.overrides.push_back(PrefabSectionModel::OverrideRow{
                 .node = property.target.IsValid() && scene.Entities().IsAlive(property.target)
                     ? scene.Entities().Name(property.target)
-                    : "Node " + std::to_string(property.nodeIndex),
+                    : EditorLocalization::Format("inspector.prefab.node", "Node {index}", { { "index", std::to_string(property.nodeIndex) } }),
                 .change = property.propertyPath + " = " + property.value,
             });
         }
@@ -3299,7 +3352,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     const kb::scene::Scene& scene = sceneContext.Scene();
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const std::string title = scene.Entities().Name(selected);
-    const std::string subtitle = "Entity " + FormatUInt64(selected.Id());
+    const std::string subtitle = EditorLocalization::Format("inspector.entitySubtitle", "Entity {id}", { { "id", FormatUInt64(selected.Id()) } });
 
     DrawHeader(
         dc,
@@ -3339,11 +3392,11 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     {
         const int h = SectionHeight(inspector, InspectorSectionId::General, 3);
         if (sectionVisible(y, h)) {
-            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::General, HeroIconKind::AdjustmentsHorizontal, "General");
-            section.Field("Name", scene.Entities().Name(selected), InspectorPropertyId::EntityName);
-            section.Bool("Visible", visibility.mode != kb::scene::VisibilityMode::Hidden, InspectorPropertyId::EntityVisible);
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::General, HeroIconKind::AdjustmentsHorizontal, EditorText("inspector.general.title", "General"));
+            section.Field(EditorText("inspector.general.name", "Name"), scene.Entities().Name(selected), InspectorPropertyId::EntityName);
+            section.Bool(EditorText("inspector.general.visible", "Visible"), visibility.mode != kb::scene::VisibilityMode::Hidden, InspectorPropertyId::EntityVisible);
             const std::vector<std::string> assignedTags = sceneContext.EntityTags(selected);
-            section.Tag("Tag", assignedTags.empty() ? std::string_view{} : std::string_view{ assignedTags.front() }, InspectorPropertyId::TagsText);
+            section.Tag(EditorText("inspector.general.tag", "Tag"), assignedTags.empty() ? std::string_view{} : std::string_view{ assignedTags.front() }, InspectorPropertyId::TagsText);
         }
         y += h + kSectionGap;
     }
@@ -3352,10 +3405,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (!scene.Components().UI().Has<kb::scene::UIRectTransform>(selected)) {
         const int h = SectionHeight(inspector, InspectorSectionId::Transform, 3);
         if (sectionVisible(y, h)) {
-            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Transform, HeroIconKind::Gamepad2, "Transform");
-            section.Vec3("Position", transform.localPosition, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ);
-            section.Rotation("Rotation", transform.localRotation);
-            section.Vec3("Scale", transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Transform, HeroIconKind::Gamepad2, EditorText("inspector.transform.title", "Transform"));
+            section.Vec3(EditorText("inspector.transform.position", "Position"), transform.localPosition, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ);
+            section.Rotation(EditorText("inspector.transform.rotation", "Rotation"), transform.localRotation);
+            section.Vec3(EditorText("inspector.transform.scale", "Scale"), transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
         }
         y += h + kSectionGap;
     }
@@ -3363,19 +3416,19 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const PrefabSectionModel prefab = BuildPrefabSection(sceneContext, selected); prefab.shown) {
         const int h = SectionHeight(inspector, InspectorSectionId::Prefab, prefab.Rows());
         if (sectionVisible(y, h)) {
-            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Prefab, HeroIconKind::Cube, "Prefab");
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Prefab, HeroIconKind::Cube, EditorText("inspector.prefab.title", "Prefab"));
             if (prefab.root) {
-                section.Field("Source", prefab.prefabName, InspectorPropertyId::PrefabSource);
-                section.Field("Overrides", std::to_string(prefab.overrides.size()));
+                section.Field(EditorText("inspector.prefab.source", "Source"), prefab.prefabName, InspectorPropertyId::PrefabSource);
+                section.Field(EditorText("inspector.prefab.overrides", "Overrides"), std::to_string(prefab.overrides.size()));
                 for (const PrefabSectionModel::OverrideRow& row : prefab.overrides) {
                     section.Field(row.node, row.change);
                 }
-                section.Action("Apply", InspectorPropertyId::PrefabApply, true);
-                section.Action("Revert", InspectorPropertyId::PrefabRevert);
-                section.Action("Unpack", InspectorPropertyId::PrefabUnpack);
+                section.Action(EditorText("inspector.prefab.apply", "Apply"), InspectorPropertyId::PrefabApply, true);
+                section.Action(EditorText("inspector.prefab.revert", "Revert"), InspectorPropertyId::PrefabRevert);
+                section.Action(EditorText("inspector.prefab.unpack", "Unpack"), InspectorPropertyId::PrefabUnpack);
             } else {
-                section.Field("Prefab", prefab.prefabName, InspectorPropertyId::PrefabSource);
-                section.Action("Select Root", InspectorPropertyId::PrefabSelectRoot);
+                section.Field(EditorText("inspector.prefab.prefab", "Prefab"), prefab.prefabName, InspectorPropertyId::PrefabSource);
+                section.Action(EditorText("inspector.prefab.selectRoot", "Select Root"), InspectorPropertyId::PrefabSelectRoot);
             }
         }
         y += h + kSectionGap;
@@ -3454,9 +3507,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
         const int h = SectionHeight(inspector, InspectorSectionId::Script, 2 + static_cast<int>(scriptVariables.size()));
         if (sectionVisible(y, h)) {
-            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Script, HeroIconKind::CommandLine, "Script", true);
-            section.AssetField("Script", sceneContext.EntityScriptName(selected), InspectorPropertyId::ScriptName, InspectorPropertyId::ScriptPicker);
-            section.Bool("Enabled", sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Script, HeroIconKind::CommandLine, EditorText("inspector.script.title", "Script"), true);
+            section.AssetField(EditorText("inspector.script.script", "Script"), sceneContext.EntityScriptName(selected), InspectorPropertyId::ScriptName, InspectorPropertyId::ScriptPicker);
+            section.Bool(EditorText("inspector.enabled", "Enabled"), sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
             // One editable row per exposed ("@expose") variable. A leading dot marks
             // an overridden variable: its value differs from the script default.
             for (int index = 0; index < static_cast<int>(scriptVariables.size()); ++index) {
@@ -3585,7 +3638,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody));
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Rigidbody, "Rigidbody", InspectorPropertyId::RigidbodyField, InspectorPhysicsModel::Fields(*rigidbody), false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Rigidbody, EditorText("inspector.rigidbody.title", "Rigidbody"), InspectorPropertyId::RigidbodyField, InspectorPhysicsModel::Fields(*rigidbody), false, false);
         } else {
             y += h + kSectionGap;
         }
@@ -3596,7 +3649,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             h += kFieldRowHeight + kDividerHeight; // the "Fit to Mesh" action button
         }
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Collider, "Collider", InspectorPropertyId::ColliderField, InspectorPhysicsModel::Fields(*collider), true, sceneContext.CanFitColliderToMesh(selected));
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Collider, EditorText("inspector.collider.title", "Collider"), InspectorPropertyId::ColliderField, InspectorPhysicsModel::Fields(*collider), true, sceneContext.CanFitColliderToMesh(selected));
         } else {
             y += h + kSectionGap;
         }
@@ -3604,7 +3657,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::CharacterControllerComponent* character = scene.Components().CharacterControllers().TryGet(selected); character != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::CharacterController, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::CharacterController));
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::CharacterController, "Character Controller", InspectorPropertyId::CharacterControllerField, InspectorPhysicsModel::Fields(*character), false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::CharacterController, EditorText("inspector.characterController.title", "Character Controller"), InspectorPropertyId::CharacterControllerField, InspectorPhysicsModel::Fields(*character), false, false);
         } else {
             y += h + kSectionGap;
         }
@@ -3612,7 +3665,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::Joint, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Joint));
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, "Joint", InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, EditorText("inspector.joint.title", "Joint"), InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), false, false);
         } else {
             y += h + kSectionGap;
         }
@@ -4624,8 +4677,8 @@ void AdvanceGroup(int& y) noexcept {
     AdvanceGroup(y); // Heightmap Import.
     if (InspectorPanelRenderer::Hit hit = HitPair(
             RowRect(content, y), InspectorSectionId::Terrain,
-            "Min", InspectorPropertyId::TerrainImportMinimumHeight,
-            "Max", InspectorPropertyId::TerrainImportMaximumHeight,
+            EditorText("inspector.terrainEditor.min", "Min"), InspectorPropertyId::TerrainImportMinimumHeight,
+            EditorText("inspector.terrainEditor.max", "Max"), InspectorPropertyId::TerrainImportMaximumHeight,
             x, yPoint); hit.kind != InspectorHitKind::None) return hit;
     AdvanceRow(y);
     if (InspectorPanelRenderer::Hit hit = HitBool(
@@ -4667,8 +4720,8 @@ void AdvanceGroup(int& y) noexcept {
         AdvanceRow(y);
         if (InspectorPanelRenderer::Hit hit = HitPair(
                 RowRect(content, y), InspectorSectionId::Terrain,
-                "Chunk", InspectorPropertyId::TerrainChunkQuads,
-                "LODs", InspectorPropertyId::TerrainLodCount,
+                EditorText("inspector.terrainEditor.chunk", "Chunk"), InspectorPropertyId::TerrainChunkQuads,
+                EditorText("inspector.terrainEditor.lods", "LODs"), InspectorPropertyId::TerrainLodCount,
                 x, yPoint); hit.kind != InspectorHitKind::None) return hit;
         AdvanceRow(y);
         AdvanceRow(y); // Streaming Layout summary (read only).

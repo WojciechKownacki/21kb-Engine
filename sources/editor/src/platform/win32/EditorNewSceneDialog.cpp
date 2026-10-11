@@ -1,4 +1,5 @@
 #include "platform/win32/EditorNewSceneDialog.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "platform/win32/EditorModalMessageLoop.hpp"
@@ -177,24 +178,26 @@ private:
         EditorDialogStyle::PaintTitleBar(dc, theme, EditorDialogHeaderDescriptor{
             .bounds = Rect(client.left + 1, client.top + 1, client.right - 1, client.top + EditorDialogStyle::TitleBarHeight),
             .closeButton = CloseRect(),
-            .title = "New Scene",
+            .title = EditorText("newScene.title", "New Scene"),
             .icon = HeroIconKind::Plus,
             .showIcon = true,
             .closeHovered = hovered_ == HoverTarget::Close,
         });
-        EditorDialogStyle::PaintText(dc, Rect(kPad, 38, client.right - kPad, 58), "Template", primary, 11, FW_SEMIBOLD);
+        EditorDialogStyle::PaintText(dc, Rect(kPad, 38, client.right - kPad, 58), EditorText("newScene.template", "Template"), primary, 11, FW_SEMIBOLD);
         for (const kb::scene::SceneTemplateInfo& info : kb::scene::SceneTemplates::All()) {
             const bool basic = info.kind == kb::scene::SceneTemplate::Basic;
             EditorDialogStyle::PaintListRow(dc, theme, EditorDialogListRowDescriptor{
                 .bounds = CardRect(info.kind),
-                .title = info.name,
-                .subtitle = info.description,
+                .title = basic ? EditorText("newScene.template.basic", "Basic") : EditorText("newScene.template.empty", "Empty"),
+                .subtitle = basic
+                    ? EditorText("newScene.template.basicDescription", "Camera, sun, sky and a floor - ready to press Play.")
+                    : EditorText("newScene.template.emptyDescription", "Nothing at all. Add objects from the Create menu."),
                 .icon = basic ? HeroIconKind::Cube : HeroIconKind::DocumentText,
                 .selected = choice_.sceneTemplate == info.kind,
                 .hovered = hovered_ == (basic ? HoverTarget::Basic : HoverTarget::Empty),
             });
         }
-        const std::array<std::string_view, 2> labels{ "Name", "Folder" };
+        const std::array<std::string_view, 2> labels{ EditorText("newScene.name", "Name"), EditorText("newScene.folder", "Folder") };
         for (int row = 0; row < 2; ++row) {
             const RECT field = FieldRect(row);
             EditorDialogStyle::PaintText(dc, Rect(kPad, field.top, field.left - 6, field.bottom), labels[static_cast<std::size_t>(row)],
@@ -205,14 +208,14 @@ private:
         EditorDialogStyle::PaintCheckbox(dc, Rect(startup.left, startup.top + 2, startup.left + 16, startup.top + 18), theme,
             choice_.setAsStartupScene);
         EditorDialogStyle::PaintText(dc, Rect(startup.left + 24, startup.top, startup.right, startup.bottom),
-            "Set as startup scene (the game starts here)", hovered_ == HoverTarget::Startup ? primary : secondary, 11);
+            EditorText("newScene.setAsStartup", "Set as startup scene (the game starts here)"), hovered_ == HoverTarget::Startup ? primary : secondary, 11);
         if (!error_.empty()) {
             EditorDialogStyle::PaintText(dc, ErrorRect(), error_, kErrorColor, 11, FW_NORMAL, DT_LEFT | DT_TOP | DT_WORDBREAK);
         }
         EditorDialogStyle::PaintFooter(dc, Rect(client.left + 1, client.bottom - 42, client.right - 1, client.bottom - 1), theme);
-        EditorDialogStyle::PaintButton(dc, CancelRect(), theme, "Cancel", EditorDialogButtonTone::Neutral,
+        EditorDialogStyle::PaintButton(dc, CancelRect(), theme, EditorText("common.cancel", "Cancel"), EditorDialogButtonTone::Neutral,
             hovered_ == HoverTarget::Cancel);
-        EditorDialogStyle::PaintButton(dc, CreateRect(), theme, "Create", EditorDialogButtonTone::Primary,
+        EditorDialogStyle::PaintButton(dc, CreateRect(), theme, EditorText("common.create", "Create"), EditorDialogButtonTone::Primary,
             hovered_ == HoverTarget::Create);
     }
 

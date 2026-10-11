@@ -1,4 +1,5 @@
 #include "rendering/InspectorSceneAudioView.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include "rendering/EditorPanelStyle.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
@@ -165,9 +166,9 @@ void PaintHeader(HDC dc, const RECT& content, const EditorTheme& theme) {
     {
         ScopedFont font(14, FW_SEMIBOLD);
         const ScopedGdiObject selected(dc, font.handle);
-        Text(dc, Rect(icon.right + 10, header.top + 7, header.right - 12, header.top + 33), "Scene Audio", Color(theme.textPrimary));
+        Text(dc, Rect(icon.right + 10, header.top + 7, header.right - 12, header.top + 33), EditorText("inspector.sceneAudio.title", "Scene Audio"), Color(theme.textPrimary));
     }
-    Text(dc, Rect(icon.right + 10, header.top + 31, header.right - 12, header.bottom - 7), "Scene Settings", Color(theme.textDisabled));
+    Text(dc, Rect(icon.right + 10, header.top + 31, header.right - 12, header.bottom - 7), EditorText("inspector.sceneAudio.subtitle", "Scene Settings"), Color(theme.textDisabled));
 }
 
 void PaintRow(
@@ -301,11 +302,11 @@ void InspectorSceneAudioView::Paint(
     Fill(dc, content, Color(theme.background));
     PaintHeader(dc, content, theme);
     const int routingTop = content.top + kHeaderHeight + kPanelPadTop;
-    PaintSection(dc, content, routingTop, theme, state, documentGeneration, InspectorSectionId::SceneAudioRouting, "Routing", model.Rows(InspectorSectionId::SceneAudioRouting));
+    PaintSection(dc, content, routingTop, theme, state, documentGeneration, InspectorSectionId::SceneAudioRouting, EditorText("inspector.sceneAudio.routing", "Routing"), model.Rows(InspectorSectionId::SceneAudioRouting));
     const int occlusionTop = routingTop
         + SectionHeight(state, InspectorSectionId::SceneAudioRouting, model.Rows(InspectorSectionId::SceneAudioRouting))
         + kSectionGap;
-    PaintSection(dc, content, occlusionTop, theme, state, documentGeneration, InspectorSectionId::SceneAudioOcclusion, "Occlusion", model.Rows(InspectorSectionId::SceneAudioOcclusion));
+    PaintSection(dc, content, occlusionTop, theme, state, documentGeneration, InspectorSectionId::SceneAudioOcclusion, EditorText("inspector.sceneAudio.occlusion", "Occlusion"), model.Rows(InspectorSectionId::SceneAudioOcclusion));
 }
 
 InspectorSceneAudioHit InspectorSceneAudioView::HitTest(

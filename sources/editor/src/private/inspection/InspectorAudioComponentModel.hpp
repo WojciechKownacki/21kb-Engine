@@ -29,7 +29,6 @@ enum class InspectorAudioControlKind : std::uint8_t {
 struct InspectorAudioRow {
     InspectorPropertyId property = InspectorPropertyId::None;
     InspectorAudioControlKind kind = InspectorAudioControlKind::Float;
-    std::string_view label;
     InspectorPropertyId pickerProperty = InspectorPropertyId::None;
 };
 
@@ -49,6 +48,8 @@ public:
     InspectorAudioComponentModel() = delete;
 
     [[nodiscard]] static std::span<const InspectorAudioRow> SourceRows() noexcept;
+    // A row's label in the editor language.
+    [[nodiscard]] static std::string_view Label(InspectorPropertyId property);
     [[nodiscard]] static std::span<const InspectorAudioRow> ListenerRows() noexcept;
     [[nodiscard]] static const InspectorAudioRow* FindRow(InspectorPropertyId property) noexcept;
     [[nodiscard]] static InspectorHitKind HitKindForControl(InspectorAudioControlKind kind) noexcept;

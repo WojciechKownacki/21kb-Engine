@@ -21,7 +21,7 @@ public:
 
     [[nodiscard]] static bool IsColorProperty(InspectorPropertyId property) noexcept;
     // The row label, also the colour picker's title.
-    [[nodiscard]] static std::string_view Label(InspectorPropertyId property) noexcept;
+    [[nodiscard]] static std::string_view Label(InspectorPropertyId property);
     // Linear RGB of the selected entity's colour, or nullopt when it has no such component.
     [[nodiscard]] static std::optional<std::array<float, 3U>> Read(
         const EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property);

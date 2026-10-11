@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetMetadata.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "engine/scene/SkeletalMeshAsset.hpp"
 
 #include <algorithm>
@@ -71,7 +72,7 @@ public:
         meshMetadata_ = {};
         skeletonMetadata_ = skeletonMetadata;
         previewMeshName_ = previewMeshMetadata == nullptr
-            ? std::string{ "None" }
+            ? std::string{ EditorText("skeletalMeshEditor.details.none", "None") }
             : (previewMeshMetadata->virtualPath.filename().empty()
                 ? previewMeshMetadata->name
                 : previewMeshMetadata->virtualPath.filename().string());
@@ -211,8 +212,8 @@ private:
         return SkeletalMeshEditorDetailsSection{
             .title = std::move(title),
             .fields = {
-                { "Center", Vector(bounds.center) },
-                { "Extents", Vector(bounds.extents) },
+                { std::string{ EditorText("skeletalMeshEditor.details.center", "Center") }, Vector(bounds.center) },
+                { std::string{ EditorText("skeletalMeshEditor.details.extents", "Extents") }, Vector(bounds.extents) },
             },
         };
     }
@@ -236,47 +237,48 @@ private:
         if (skeletonDocument_) {
             const kb::scene::SkeletonAssetValidationResult validation =
                 kb::scene::ValidateSkeletonAsset(skeleton_);
-            SkeletalMeshEditorDetailsModel model{ .title = "Skeleton" };
-            model.sections.push_back({ "Asset", {
-                { "Name", skeletonMetadata_.name },
-                { "Path", skeletonMetadata_.virtualPath.generic_string() },
-                { "Bones", Number(skeleton_.bones.size()) },
-                { "Sockets", Number(skeleton_.sockets.size()) },
-                { "Compatibility", Number(kb::scene::SkeletonCompatibilitySignature(skeleton_)) },
-                { "Preview Mesh", previewMeshName_ },
+            SkeletalMeshEditorDetailsModel model{ .title = std::string{ EditorText("skeletalMeshEditor.details.skeleton", "Skeleton") } };
+            model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.asset", "Asset") }, {
+                { std::string{ EditorText("skeletalMeshEditor.details.name", "Name") }, skeletonMetadata_.name },
+                { std::string{ EditorText("skeletalMeshEditor.details.path", "Path") }, skeletonMetadata_.virtualPath.generic_string() },
+                { std::string{ EditorText("skeletalMeshEditor.details.bones", "Bones") }, Number(skeleton_.bones.size()) },
+                { std::string{ EditorText("skeletalMeshEditor.details.sockets", "Sockets") }, Number(skeleton_.sockets.size()) },
+                { std::string{ EditorText("skeletalMeshEditor.details.compatibility", "Compatibility") }, Number(kb::scene::SkeletonCompatibilitySignature(skeleton_)) },
+                { std::string{ EditorText("skeletalMeshEditor.details.previewMesh", "Preview Mesh") }, previewMeshName_ },
             } });
-            model.sections.push_back({ "Import Settings", {
-                { "Category", skeletonMetadata_.importCategory },
-                { "Source", skeletonMetadata_.physicalPath.generic_string() },
-                { "Content Hash", Number(skeletonMetadata_.contentHash) },
-                { "Runtime Loadable", skeletonMetadata_.runtimeLoadable ? "Yes" : "No" },
+            model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.importSettings", "Import Settings") }, {
+                { std::string{ EditorText("skeletalMeshEditor.details.category", "Category") }, skeletonMetadata_.importCategory },
+                { std::string{ EditorText("skeletalMeshEditor.details.source", "Source") }, skeletonMetadata_.physicalPath.generic_string() },
+                { std::string{ EditorText("skeletalMeshEditor.details.contentHash", "Content Hash") }, Number(skeletonMetadata_.contentHash) },
+                { std::string{ EditorText("skeletalMeshEditor.details.runtimeLoadable", "Runtime Loadable") }, skeletonMetadata_.runtimeLoadable ? std::string{ EditorText("common.yes", "Yes") } : std::string{ EditorText("common.no", "No") } },
             } });
-            model.sections.push_back({ "Validation", {
-                { "Skeleton", validation.valid ? "Valid" : validation.error },
+            model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.validation", "Validation") }, {
+                { std::string{ EditorText("skeletalMeshEditor.details.skeleton", "Skeleton") }, validation.valid ? std::string{ EditorText("skeletalMeshEditor.details.valid", "Valid") } : validation.error },
             } });
             ApplyExpansion(model);
             cachedAssetModel_ = model;
             return model;
         }
-        SkeletalMeshEditorDetailsModel model{ .title = "Skeletal Mesh" };
-        model.sections.push_back({ "Asset", {
-            { "Name", meshMetadata_.name },
-            { "Path", meshMetadata_.virtualPath.generic_string() },
-            { "Skeleton", Number(mesh_.skeletonAssetId) },
-            { "Compatibility", Number(mesh_.skeletonCompatibilitySignature) },
-            { "LODs", Number(mesh_.lods.size()) },
-            { "Morph Targets", Number(mesh_.morphTargets.size()) },
+        SkeletalMeshEditorDetailsModel model{ .title = std::string{ EditorText("skeletalMeshEditor.details.skeletalMesh", "Skeletal Mesh") } };
+        model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.asset", "Asset") }, {
+            { std::string{ EditorText("skeletalMeshEditor.details.name", "Name") }, meshMetadata_.name },
+            { std::string{ EditorText("skeletalMeshEditor.details.path", "Path") }, meshMetadata_.virtualPath.generic_string() },
+            { std::string{ EditorText("skeletalMeshEditor.details.skeleton", "Skeleton") }, Number(mesh_.skeletonAssetId) },
+            { std::string{ EditorText("skeletalMeshEditor.details.compatibility", "Compatibility") }, Number(mesh_.skeletonCompatibilitySignature) },
+            { std::string{ EditorText("skeletalMeshEditor.details.lODs", "LODs") }, Number(mesh_.lods.size()) },
+            { std::string{ EditorText("skeletalMeshEditor.details.morphTargets", "Morph Targets") }, Number(mesh_.morphTargets.size()) },
         } });
 
-        model.sections.push_back({ "Materials", {} });
+        model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.materials", "Materials") }, {} });
         std::vector<SkeletalMeshEditorDetailsField>& materialFields = model.sections.back().fields;
         for (std::size_t lodIndex = 0U; lodIndex < mesh_.lods.size(); ++lodIndex) {
             const kb::scene::SkeletalMeshLod& lod = mesh_.lods[lodIndex];
             for (std::size_t sectionIndex = 0U; sectionIndex < lod.sections.size(); ++sectionIndex) {
                 const kb::scene::SkeletalMeshSection& section = lod.sections[sectionIndex];
                 materialFields.push_back(SkeletalMeshEditorDetailsField{
-                    .label = "LOD " + Number(lodIndex) + " / Section " + Number(sectionIndex),
-                    .value = section.materialAssetId == 0U ? "None" : Number(section.materialAssetId),
+                    .label = EditorLocalization::Format("skeletalMeshEditor.details.lodSection", "LOD {lod} / Section {section}",
+                        { { "lod", Number(lodIndex) }, { "section", Number(sectionIndex) } }),
+                    .value = section.materialAssetId == 0U ? std::string{ EditorText("skeletalMeshEditor.details.none", "None") } : Number(section.materialAssetId),
                     .action = SkeletalMeshEditorDetailsAction::SectionMaterial,
                     .lodIndex = static_cast<std::uint32_t>(lodIndex),
                     .sectionIndex = static_cast<std::uint32_t>(sectionIndex),
@@ -285,69 +287,74 @@ private:
             }
         }
 
-        model.sections.push_back({ "LOD Picker", {
-            { "Preview LOD", "Auto", SkeletalMeshEditorDetailsAction::PreviewLod },
-            { "Number of LODs", Number(mesh_.lods.size()) },
+        model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.lodPicker", "LOD Picker") }, {
+            { std::string{ EditorText("skeletalMeshEditor.details.previewLOD", "Preview LOD") }, std::string{ EditorText("skeletalMeshEditor.lodAuto", "Auto") }, SkeletalMeshEditorDetailsAction::PreviewLod },
+            { std::string{ EditorText("skeletalMeshEditor.details.numberOfLODs", "Number of LODs") }, Number(mesh_.lods.size()) },
         } });
         for (std::size_t index = 0U; index < mesh_.lods.size(); ++index) {
             const kb::scene::SkeletalMeshLod& lod = mesh_.lods[index];
-            model.sections.push_back({ "LOD " + Number(index), {
-                { "Vertices", Number(lod.vertices.size()) },
-                { "Indices", Number(lod.indices.size()) },
-                { "Triangles", Number(lod.indices.size() / 3U) },
-                { "Sections", Number(lod.sections.size()) },
-                { "Required Bones", Number(lod.requiredBones.size()) },
-                { "Per-Bone Bounds", Number(lod.boneBounds.size()) },
-                { "Min Screen Coverage", Number(lod.minScreenCoverage),
+            model.sections.push_back({ EditorLocalization::Format("skeletalMeshEditor.lod", "LOD {index}", { { "index", Number(index) } }), {
+                { std::string{ EditorText("skeletalMeshEditor.details.vertices", "Vertices") }, Number(lod.vertices.size()) },
+                { std::string{ EditorText("skeletalMeshEditor.details.indices", "Indices") }, Number(lod.indices.size()) },
+                { std::string{ EditorText("skeletalMeshEditor.details.triangles", "Triangles") }, Number(lod.indices.size() / 3U) },
+                { std::string{ EditorText("skeletalMeshEditor.details.sections", "Sections") }, Number(lod.sections.size()) },
+                { std::string{ EditorText("skeletalMeshEditor.details.requiredBones", "Required Bones") }, Number(lod.requiredBones.size()) },
+                { std::string{ EditorText("skeletalMeshEditor.details.perBoneBounds", "Per-Bone Bounds") }, Number(lod.boneBounds.size()) },
+                { std::string{ EditorText("skeletalMeshEditor.details.minScreenCoverage", "Min Screen Coverage") }, Number(lod.minScreenCoverage),
                     SkeletalMeshEditorDetailsAction::LodScreenCoverage,
                     static_cast<std::uint32_t>(index) },
             } });
             for (std::size_t sectionIndex = 0U; sectionIndex < lod.sections.size(); ++sectionIndex) {
                 const kb::scene::SkeletalMeshSection& section = lod.sections[sectionIndex];
                 std::vector<SkeletalMeshEditorDetailsField>& fields = model.sections.back().fields;
-                const std::string prefix = "Section " + Number(sectionIndex) + " ";
-                fields.push_back({ prefix + "Material", section.materialAssetId == 0U
-                    ? "None" : Number(section.materialAssetId),
+                const std::string number = Number(sectionIndex);
+                fields.push_back({ EditorLocalization::Format("skeletalMeshEditor.details.sectionMaterial", "Section {index} Material",
+                        { { "index", number } }), section.materialAssetId == 0U
+                    ? std::string{ EditorText("skeletalMeshEditor.details.none", "None") } : Number(section.materialAssetId),
                     SkeletalMeshEditorDetailsAction::SectionMaterial,
                     static_cast<std::uint32_t>(index), static_cast<std::uint32_t>(sectionIndex),
                     section.materialAssetId });
-                fields.push_back({ prefix + "First Index", Number(static_cast<std::uint64_t>(section.firstIndex)) });
-                fields.push_back({ prefix + "Triangles", Number(static_cast<std::uint64_t>(section.indexCount / 3U)) });
-                fields.push_back({ prefix + "Palette Bones", Number(section.boneMap.size()) });
+                fields.push_back({ EditorLocalization::Format("skeletalMeshEditor.details.sectionFirstIndex", "Section {index} First Index",
+                    { { "index", number } }), Number(static_cast<std::uint64_t>(section.firstIndex)) });
+                fields.push_back({ EditorLocalization::Format("skeletalMeshEditor.details.sectionTriangles", "Section {index} Triangles",
+                    { { "index", number } }), Number(static_cast<std::uint64_t>(section.indexCount / 3U)) });
+                fields.push_back({ EditorLocalization::Format("skeletalMeshEditor.details.sectionPaletteBones", "Section {index} Palette Bones",
+                    { { "index", number } }), Number(section.boneMap.size()) });
             }
         }
 
-        model.sections.push_back({ "Morph Targets", {
-            { "Count", Number(mesh_.morphTargets.size()) },
+        model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.morphTargets", "Morph Targets") }, {
+            { std::string{ EditorText("skeletalMeshEditor.details.count", "Count") }, Number(mesh_.morphTargets.size()) },
         } });
         for (const kb::scene::SkeletalMeshMorphTarget& morph : mesh_.morphTargets) {
             model.sections.back().fields.push_back({
                 morph.name,
-                "LOD " + Number(static_cast<std::uint64_t>(morph.lodIndex)) + ", " +
-                    Number(morph.deltas.size()) + " deltas",
+                EditorLocalization::Format("skeletalMeshEditor.details.morphTarget", "LOD {lod}, {deltas} deltas",
+                    { { "lod", Number(static_cast<std::uint64_t>(morph.lodIndex)) }, { "deltas", Number(morph.deltas.size()) } }),
             });
         }
-        model.sections.push_back({ "Bounds", {
-            { "Mode", mesh_.boundsMode == kb::scene::SkeletalMeshBoundsMode::Fixed
-                ? "Fixed" : "Imported Conservative", SkeletalMeshEditorDetailsAction::BoundsMode },
-            { "Imported Center", Vector(mesh_.conservativeBounds.center) },
-            { "Imported Extents", Vector(mesh_.conservativeBounds.extents) },
-            { "Fixed Center", Vector(mesh_.fixedBounds.center),
+        model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.bounds", "Bounds") }, {
+            { std::string{ EditorText("skeletalMeshEditor.details.mode", "Mode") }, mesh_.boundsMode == kb::scene::SkeletalMeshBoundsMode::Fixed
+                ? std::string{ EditorText("skeletalMeshEditor.details.boundsFixed", "Fixed") } : std::string{ EditorText("skeletalMeshEditor.details.boundsImported", "Imported Conservative") },
+                SkeletalMeshEditorDetailsAction::BoundsMode },
+            { std::string{ EditorText("skeletalMeshEditor.details.importedCenter", "Imported Center") }, Vector(mesh_.conservativeBounds.center) },
+            { std::string{ EditorText("skeletalMeshEditor.details.importedExtents", "Imported Extents") }, Vector(mesh_.conservativeBounds.extents) },
+            { std::string{ EditorText("skeletalMeshEditor.details.fixedCenter", "Fixed Center") }, Vector(mesh_.fixedBounds.center),
                 SkeletalMeshEditorDetailsAction::FixedBoundsCenter },
-            { "Fixed Extents", Vector(mesh_.fixedBounds.extents),
+            { std::string{ EditorText("skeletalMeshEditor.details.fixedExtents", "Fixed Extents") }, Vector(mesh_.fixedBounds.extents),
                 SkeletalMeshEditorDetailsAction::FixedBoundsExtents },
         } });
-        model.sections.push_back({ "Import Settings", {
-            { "Category", meshMetadata_.importCategory },
-            { "Source", meshMetadata_.physicalPath.generic_string() },
-            { "Content Hash", Number(meshMetadata_.contentHash) },
-            { "Runtime Loadable", meshMetadata_.runtimeLoadable ? "Yes" : "No" },
+        model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.importSettings", "Import Settings") }, {
+            { std::string{ EditorText("skeletalMeshEditor.details.category", "Category") }, meshMetadata_.importCategory },
+            { std::string{ EditorText("skeletalMeshEditor.details.source", "Source") }, meshMetadata_.physicalPath.generic_string() },
+            { std::string{ EditorText("skeletalMeshEditor.details.contentHash", "Content Hash") }, Number(meshMetadata_.contentHash) },
+            { std::string{ EditorText("skeletalMeshEditor.details.runtimeLoadable", "Runtime Loadable") }, meshMetadata_.runtimeLoadable ? std::string{ EditorText("common.yes", "Yes") } : std::string{ EditorText("common.no", "No") } },
         } });
         const kb::scene::SkeletalMeshAssetValidationResult meshValidation = kb::scene::ValidateSkeletalMeshAsset(mesh_);
         const kb::scene::SkeletonAssetValidationResult skeletonValidation = kb::scene::ValidateSkeletonAsset(skeleton_);
-        model.sections.push_back({ "Import / Reimport Diagnostics", {
-            { "Skeletal Mesh", meshValidation.valid ? "Valid" : meshValidation.error },
-            { "Skeleton", skeletonValidation.valid ? "Valid" : skeletonValidation.error },
+        model.sections.push_back({ std::string{ EditorText("skeletalMeshEditor.details.importReimportDiagnostics", "Import / Reimport Diagnostics") }, {
+            { std::string{ EditorText("skeletalMeshEditor.details.skeletalMesh", "Skeletal Mesh") }, meshValidation.valid ? std::string{ EditorText("skeletalMeshEditor.details.valid", "Valid") } : meshValidation.error },
+            { std::string{ EditorText("skeletalMeshEditor.details.skeleton", "Skeleton") }, skeletonValidation.valid ? std::string{ EditorText("skeletalMeshEditor.details.valid", "Valid") } : skeletonValidation.error },
         } });
         ApplyExpansion(model);
         cachedAssetModel_ = model;
@@ -364,7 +371,7 @@ private:
         if (const auto cached = cachedBoneModels_.find(bone.id); cached != cachedBoneModels_.end()) {
             return cached->second;
         }
-        std::string parent = "None";
+        std::string parent = std::string{ EditorText("skeletalMeshEditor.details.none", "None") };
         if (bone.parentIndex >= 0 && static_cast<std::size_t>(bone.parentIndex) < skeleton_.bones.size()) {
             parent = skeleton_.bones[static_cast<std::size_t>(bone.parentIndex)].name;
         }
@@ -373,22 +380,22 @@ private:
             ? BoneInfluenceStats{}
             : statsIterator->second;
         SkeletalMeshEditorDetailsModel model{
-            .title = "Bone: " + bone.name,
-            .sections = {{ "Bone", {
-                { "Id", Number(bone.id) },
-                { "Parent", std::move(parent) },
-                { "Reference Position", Vector(bone.referencePose.position) },
-                { "Reference Rotation", Rotation(bone.referencePose.rotation) },
-                { "Reference Scale", Vector(bone.referencePose.scale) },
+            .title = EditorLocalization::Format("skeletalMeshEditor.details.boneTitle", "Bone: {name}", { { "name", bone.name } }),
+            .sections = {{ std::string{ EditorText("skeletalMeshEditor.details.bone", "Bone") }, {
+                { std::string{ EditorText("skeletalMeshEditor.details.id", "Id") }, Number(bone.id) },
+                { std::string{ EditorText("skeletalMeshEditor.details.parent", "Parent") }, std::move(parent) },
+                { std::string{ EditorText("skeletalMeshEditor.details.referencePosition", "Reference Position") }, Vector(bone.referencePose.position) },
+                { std::string{ EditorText("skeletalMeshEditor.details.referenceRotation", "Reference Rotation") }, Rotation(bone.referencePose.rotation) },
+                { std::string{ EditorText("skeletalMeshEditor.details.referenceScale", "Reference Scale") }, Vector(bone.referencePose.scale) },
             } }},
         };
         if (!skeletonDocument_) {
             std::vector<SkeletalMeshEditorDetailsField>& fields = model.sections.front().fields;
-            fields.push_back({ "Influenced Vertices", Number(stats.influencedVertices) });
-            fields.push_back({ "Average Weight", Number(stats.influencedVertices == 0U
+            fields.push_back({ std::string{ EditorText("skeletalMeshEditor.details.influencedVertices", "Influenced Vertices") }, Number(stats.influencedVertices) });
+            fields.push_back({ std::string{ EditorText("skeletalMeshEditor.details.averageWeight", "Average Weight") }, Number(stats.influencedVertices == 0U
                 ? 0.0F
                 : static_cast<float>(stats.totalWeight / stats.influencedVertices)) });
-            fields.push_back({ "Peak Weight", Number(stats.peakWeight) });
+            fields.push_back({ std::string{ EditorText("skeletalMeshEditor.details.peakWeight", "Peak Weight") }, Number(stats.peakWeight) });
         }
         ApplyExpansion(model);
         cachedBoneModels_.emplace(bone.id, model);
@@ -398,13 +405,13 @@ private:
     [[nodiscard]] SkeletalMeshEditorDetailsModel BuildSocket(const kb::scene::SkeletonSocket& socket) const {
         const kb::scene::SkeletonBone* bone = FindBone(socket.boneId);
         SkeletalMeshEditorDetailsModel model{
-            .title = "Socket: " + socket.name,
-            .sections = {{ "Socket", {
-                { "Bone", bone == nullptr ? Number(socket.boneId) : bone->name },
-                { "Bone Id", Number(socket.boneId) },
-                { "Local Position", Vector(socket.localTransform.position) },
-                { "Local Rotation", Rotation(socket.localTransform.rotation) },
-                { "Local Scale", Vector(socket.localTransform.scale) },
+            .title = EditorLocalization::Format("skeletalMeshEditor.details.socketTitle", "Socket: {name}", { { "name", socket.name } }),
+            .sections = {{ std::string{ EditorText("skeletalMeshEditor.details.socket", "Socket") }, {
+                { std::string{ EditorText("skeletalMeshEditor.details.bone", "Bone") }, bone == nullptr ? Number(socket.boneId) : bone->name },
+                { std::string{ EditorText("skeletalMeshEditor.details.boneId", "Bone Id") }, Number(socket.boneId) },
+                { std::string{ EditorText("skeletalMeshEditor.details.localPosition", "Local Position") }, Vector(socket.localTransform.position) },
+                { std::string{ EditorText("skeletalMeshEditor.details.localRotation", "Local Rotation") }, Rotation(socket.localTransform.rotation) },
+                { std::string{ EditorText("skeletalMeshEditor.details.localScale", "Local Scale") }, Vector(socket.localTransform.scale) },
             } }},
         };
         ApplyExpansion(model);

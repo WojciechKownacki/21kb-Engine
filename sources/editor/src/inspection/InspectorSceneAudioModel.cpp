@@ -1,4 +1,5 @@
 #include "inspection/InspectorSceneAudioModel.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
@@ -62,7 +63,7 @@ InspectorSceneAudioModel::InspectorSceneAudioModel(const kb::scene::Scene& scene
         }
     }
 
-    std::string mixerValue = "None";
+    std::string mixerValue{ EditorText("inspector.sceneAudio.noMixer", "None") };
     bool mixerInvalid = false;
     if (mixerId_.IsValid()) {
         mixerInvalid = mixerMetadata == nullptr
@@ -70,13 +71,13 @@ InspectorSceneAudioModel::InspectorSceneAudioModel(const kb::scene::Scene& scene
             || !mixer.IsLoaded();
         mixerValue = mixerMetadata != nullptr && !mixerMetadata->name.empty()
             ? mixerMetadata->name
-            : "Missing (" + std::to_string(mixerId_.value) + ")";
+            : EditorLocalization::Format("inspector.sceneAudio.missingMixer", "Missing ({id})", { { "id", std::to_string(mixerId_.value) } });
     }
     add(InspectorSceneAudioRow{
         .kind = InspectorSceneAudioRowKind::Asset,
         .section = InspectorSectionId::SceneAudioRouting,
         .property = InspectorPropertyId::SceneAudioMixer,
-        .label = "Mixer",
+        .label = std::string{ EditorText("inspector.sceneAudio.mixer", "Mixer") },
         .value = std::move(mixerValue),
         .invalid = mixerInvalid,
     });
@@ -85,7 +86,7 @@ InspectorSceneAudioModel::InspectorSceneAudioModel(const kb::scene::Scene& scene
             .kind = InspectorSceneAudioRowKind::Action,
             .section = InspectorSectionId::SceneAudioRouting,
             .property = InspectorPropertyId::SceneAudioMixerClear,
-            .label = "Clear Mixer",
+            .label = std::string{ EditorText("inspector.sceneAudio.clearMixer", "Clear Mixer") },
         });
     }
 
@@ -96,8 +97,8 @@ InspectorSceneAudioModel::InspectorSceneAudioModel(const kb::scene::Scene& scene
         .kind = InspectorSceneAudioRowKind::ReadOnly,
         .section = InspectorSectionId::SceneAudioRouting,
         .property = InspectorPropertyId::SceneAudioSnapshot,
-        .label = "Snapshot",
-        .value = activeSnapshot.empty() ? "Default" : activeSnapshot,
+        .label = std::string{ EditorText("inspector.sceneAudio.snapshot", "Snapshot") },
+        .value = activeSnapshot.empty() ? std::string{ EditorText("inspector.sceneAudio.defaultSnapshot", "Default") } : activeSnapshot,
         .invalid = !snapshotValid,
     });
     if (!activeSnapshot.empty()) {
@@ -105,7 +106,7 @@ InspectorSceneAudioModel::InspectorSceneAudioModel(const kb::scene::Scene& scene
             .kind = InspectorSceneAudioRowKind::Action,
             .section = InspectorSectionId::SceneAudioRouting,
             .property = InspectorPropertyId::SceneAudioSnapshotOption,
-            .label = "Use Default",
+            .label = std::string{ EditorText("inspector.sceneAudio.useDefault", "Use Default") },
         });
     }
     if (mixer.IsLoaded()) {
@@ -117,7 +118,7 @@ InspectorSceneAudioModel::InspectorSceneAudioModel(const kb::scene::Scene& scene
                 .kind = InspectorSceneAudioRowKind::Action,
                 .section = InspectorSectionId::SceneAudioRouting,
                 .property = InspectorPropertyId::SceneAudioSnapshotOption,
-                .label = "Use " + snapshot.name,
+                .label = EditorLocalization::Format("inspector.sceneAudio.useSnapshot", "Use {snapshot}", { { "snapshot", snapshot.name } }),
                 .option = snapshot.name,
             });
         }
@@ -125,7 +126,7 @@ InspectorSceneAudioModel::InspectorSceneAudioModel(const kb::scene::Scene& scene
         add(InspectorSceneAudioRow{
             .kind = InspectorSceneAudioRowKind::Empty,
             .section = InspectorSectionId::SceneAudioRouting,
-            .label = "Assign a mixer to use snapshots",
+            .label = std::string{ EditorText("inspector.sceneAudio.assignMixerHint", "Assign a mixer to use snapshots") },
         });
     }
     routingRows_ = rows_.size();
@@ -136,35 +137,35 @@ InspectorSceneAudioModel::InspectorSceneAudioModel(const kb::scene::Scene& scene
         .kind = InspectorSceneAudioRowKind::Bool,
         .section = InspectorSectionId::SceneAudioOcclusion,
         .property = InspectorPropertyId::SceneAudioOcclusionEnabled,
-        .label = "Enabled",
+        .label = std::string{ EditorText("inspector.enabled", "Enabled") },
         .boolValue = settings.enabled,
     });
     add(InspectorSceneAudioRow{
         .kind = InspectorSceneAudioRowKind::Text,
         .section = InspectorSectionId::SceneAudioOcclusion,
         .property = InspectorPropertyId::SceneAudioOcclusionVolumeScale,
-        .label = "Volume Scale",
+        .label = std::string{ EditorText("inspector.sceneAudio.volumeScale", "Volume Scale") },
         .value = FormatFloat(settings.occludedVolumeScale),
     });
     add(InspectorSceneAudioRow{
         .kind = InspectorSceneAudioRowKind::Text,
         .section = InspectorSectionId::SceneAudioOcclusion,
         .property = InspectorPropertyId::SceneAudioOcclusionMaxDistance,
-        .label = "Max Distance",
+        .label = std::string{ EditorText("inspector.sceneAudio.maxDistance", "Max Distance") },
         .value = FormatFloat(settings.maxDistance),
     });
     add(InspectorSceneAudioRow{
         .kind = InspectorSceneAudioRowKind::Text,
         .section = InspectorSectionId::SceneAudioOcclusion,
         .property = InspectorPropertyId::SceneAudioOcclusionLayerMask,
-        .label = "Layer Mask",
+        .label = std::string{ EditorText("inspector.sceneAudio.layerMask", "Layer Mask") },
         .value = std::to_string(settings.layerMask),
     });
     add(InspectorSceneAudioRow{
         .kind = InspectorSceneAudioRowKind::Text,
         .section = InspectorSectionId::SceneAudioOcclusion,
         .property = InspectorPropertyId::SceneAudioOcclusionMaxRaycasts,
-        .label = "Max Raycasts",
+        .label = std::string{ EditorText("inspector.sceneAudio.maxRaycasts", "Max Raycasts") },
         .value = std::to_string(settings.maxRaycastsPerTick),
     });
 }

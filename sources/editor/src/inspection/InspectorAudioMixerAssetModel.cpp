@@ -1,4 +1,5 @@
 #include "inspection/InspectorAudioMixerAssetModel.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -74,7 +75,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
         add(InspectorAudioMixerRow{
             .kind = InspectorAudioMixerRowKind::Empty,
             .section = InspectorSectionId::AudioMixerBuses,
-            .label = "No buses",
+            .label = std::string{ EditorText("inspector.audioMixer.noBuses", "No buses") },
         });
     }
     for (std::size_t busIndex = 0U; busIndex < asset.buses.size(); ++busIndex) {
@@ -92,7 +93,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
             .property = InspectorPropertyId::AudioMixerBusName,
             .busIndex = busIndex,
             .busName = bus.name,
-            .label = "Name",
+            .label = std::string{ EditorText("inspector.audioMixer.busName", "Name") },
             .value = bus.name,
         });
         add(InspectorAudioMixerRow{
@@ -101,7 +102,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
             .property = InspectorPropertyId::AudioMixerBusParent,
             .busIndex = busIndex,
             .busName = bus.name,
-            .label = "Parent",
+            .label = std::string{ EditorText("inspector.audioMixer.parent", "Parent") },
             .value = bus.parentBus.empty() ? "-" : bus.parentBus,
         });
         add(InspectorAudioMixerRow{
@@ -110,7 +111,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
             .property = InspectorPropertyId::AudioMixerBusVolume,
             .busIndex = busIndex,
             .busName = bus.name,
-            .label = "Volume",
+            .label = std::string{ EditorText("inspector.audioMixer.volume", "Volume") },
             .value = FormatFloat(bus.volume),
         });
         add(InspectorAudioMixerRow{
@@ -119,7 +120,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
             .property = InspectorPropertyId::AudioMixerBusMute,
             .busIndex = busIndex,
             .busName = bus.name,
-            .label = "Mute",
+            .label = std::string{ EditorText("inspector.audioMixer.mute", "Mute") },
             .boolValue = bus.mute,
         });
         add(InspectorAudioMixerRow{
@@ -128,14 +129,14 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
             .property = InspectorPropertyId::AudioMixerBusRemove,
             .busIndex = busIndex,
             .busName = bus.name,
-            .label = "Remove Bus",
+            .label = std::string{ EditorText("inspector.audioMixer.removeBus", "Remove Bus") },
         });
     }
     add(InspectorAudioMixerRow{
         .kind = InspectorAudioMixerRowKind::Action,
         .section = InspectorSectionId::AudioMixerBuses,
         .property = InspectorPropertyId::AudioMixerBusAdd,
-        .label = "Add Bus",
+        .label = std::string{ EditorText("inspector.audioMixer.addBus", "Add Bus") },
     });
     busRows_ = rows_.size();
 
@@ -143,7 +144,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
         add(InspectorAudioMixerRow{
             .kind = InspectorAudioMixerRowKind::Empty,
             .section = InspectorSectionId::AudioMixerSnapshots,
-            .label = "No snapshots",
+            .label = std::string{ EditorText("inspector.audioMixer.noSnapshots", "No snapshots") },
         });
     }
     for (std::size_t snapshotIndex = 0U; snapshotIndex < asset.snapshots.size(); ++snapshotIndex) {
@@ -161,7 +162,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
             .property = InspectorPropertyId::AudioMixerSnapshotName,
             .snapshotIndex = snapshotIndex,
             .snapshotName = snapshot.name,
-            .label = "Name",
+            .label = std::string{ EditorText("inspector.audioMixer.snapshotName", "Name") },
             .value = snapshot.name,
         });
         add(InspectorAudioMixerRow{
@@ -170,7 +171,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
             .property = InspectorPropertyId::AudioMixerSnapshotRemove,
             .snapshotIndex = snapshotIndex,
             .snapshotName = snapshot.name,
-            .label = "Remove Snapshot",
+            .label = std::string{ EditorText("inspector.audioMixer.removeSnapshot", "Remove Snapshot") },
         });
 
         if (asset.buses.empty()) {
@@ -179,7 +180,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
                 .section = InspectorSectionId::AudioMixerSnapshots,
                 .snapshotIndex = snapshotIndex,
                 .snapshotName = snapshot.name,
-                .label = "No buses available",
+                .label = std::string{ EditorText("inspector.audioMixer.noBusesAvailable", "No buses available") },
             });
         }
         for (std::size_t overrideIndex = 0U; overrideIndex < snapshot.busVolumes.size(); ++overrideIndex) {
@@ -191,7 +192,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
                 .overrideIndex = overrideIndex,
                 .snapshotName = snapshot.name,
                 .overrideBusName = value.bus,
-                .label = "Override " + value.bus,
+                .label = EditorLocalization::Format("inspector.audioMixer.override", "Override {bus}", { { "bus", value.bus } }),
             });
             add(InspectorAudioMixerRow{
                 .kind = InspectorAudioMixerRowKind::ReadOnly,
@@ -201,7 +202,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
                 .overrideIndex = overrideIndex,
                 .snapshotName = snapshot.name,
                 .overrideBusName = value.bus,
-                .label = "Bus",
+                .label = std::string{ EditorText("inspector.audioMixer.bus", "Bus") },
                 .value = value.bus,
             });
             add(InspectorAudioMixerRow{
@@ -212,7 +213,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
                 .overrideIndex = overrideIndex,
                 .snapshotName = snapshot.name,
                 .overrideBusName = value.bus,
-                .label = "Volume",
+                .label = std::string{ EditorText("inspector.audioMixer.volume", "Volume") },
                 .value = FormatFloat(value.volume),
             });
             add(InspectorAudioMixerRow{
@@ -223,7 +224,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
                 .overrideIndex = overrideIndex,
                 .snapshotName = snapshot.name,
                 .overrideBusName = value.bus,
-                .label = "Remove Override",
+                .label = std::string{ EditorText("inspector.audioMixer.removeOverride", "Remove Override") },
             });
         }
         for (std::size_t busIndex = 0U; busIndex < asset.buses.size(); ++busIndex) {
@@ -240,7 +241,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
                 .busName = bus.name,
                 .snapshotName = snapshot.name,
                 .overrideBusName = bus.name,
-                .label = "Add " + bus.name,
+                .label = EditorLocalization::Format("inspector.audioMixer.addOverride", "Add {bus}", { { "bus", bus.name } }),
             });
         }
     }
@@ -248,7 +249,7 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
         .kind = InspectorAudioMixerRowKind::Action,
         .section = InspectorSectionId::AudioMixerSnapshots,
         .property = InspectorPropertyId::AudioMixerSnapshotAdd,
-        .label = "Add Snapshot",
+        .label = std::string{ EditorText("inspector.audioMixer.addSnapshot", "Add Snapshot") },
     });
 }
 

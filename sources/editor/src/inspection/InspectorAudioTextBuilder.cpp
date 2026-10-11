@@ -28,7 +28,7 @@ void InspectorAudioSourceTextBuilder::Append(std::string& text, const kb::scene:
         audioSource.spatial ? "true" : "false",
         audioSource.pan,
         audioSource.spatialBlend,
-        InspectorComponentLabelFormatter::AudioAttenuationModelName(audioSource.attenuationModel),
+        std::string{ InspectorComponentLabelFormatter::AudioAttenuationModelName(audioSource.attenuationModel) }.c_str(),
         audioSource.minDistance,
         audioSource.maxDistance,
         audioSource.rolloff,

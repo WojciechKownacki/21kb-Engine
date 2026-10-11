@@ -7,6 +7,9 @@
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/components/EditorDialogStyle.hpp"
+#include "rendering/gdi/ScopedFont.hpp"
+#include "rendering/gdi/ScopedGdiObject.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #pragma warning(push, 0)
@@ -84,23 +87,30 @@ void DrawStatusText(HDC dc, RECT rect, std::string_view label, COLORREF text, UI
     if (!filename.empty()) {
         return filename;
     }
-    return "Untitled.21kbscene";
+    return std::string{ EditorText("toolbar.untitledScene", "Untitled.21kbscene") };
 }
 
 [[nodiscard]] std::string ScenePersistenceStatus(const EditorSceneContext& sceneContext) {
-    return sceneContext.SceneDocumentDirty() || sceneContext.HasDirtyMaterialAssetEdit() ? "Unsaved" : "Saved";
+    return sceneContext.SceneDocumentDirty() || sceneContext.HasDirtyMaterialAssetEdit() ? std::string{ EditorText("toolbar.sceneUnsaved", "Unsaved") }
+        : std::string{ EditorText("toolbar.sceneSaved", "Saved") };
 }
 
 [[nodiscard]] std::string PlayModeStatus(const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode) {
     switch (playMode.Mode()) {
     case EditorPlayMode::Playing:
-        return sceneContext.HasPlayModeSceneSession() ? "Playing - runtime snapshot active" : "Playing";
+        return std::string{ sceneContext.HasPlayModeSceneSession()
+                ? EditorText("toolbar.playingSnapshot", "Playing - runtime snapshot active")
+                : EditorText("toolbar.playing", "Playing") };
     case EditorPlayMode::Paused:
-        return sceneContext.HasPlayModeSceneSession() ? "Paused - runtime snapshot active" : "Paused";
+        return std::string{ sceneContext.HasPlayModeSceneSession()
+                ? EditorText("toolbar.pausedSnapshot", "Paused - runtime snapshot active")
+                : EditorText("toolbar.paused", "Paused") };
     case EditorPlayMode::Stopped:
-        return sceneContext.HasPlayModeSceneSession() ? "Stopping - restoring scene" : "Editing";
+        return std::string{ sceneContext.HasPlayModeSceneSession()
+                ? EditorText("toolbar.stoppingRestoring", "Stopping - restoring scene")
+                : EditorText("toolbar.editing", "Editing") };
     }
-    return "Editing";
+    return std::string{ EditorText("toolbar.editing", "Editing") };
 }
 
 void FillRound(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius) {
@@ -222,6 +232,9 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
     const COLORREF textSecondary = ThemeColor(theme.textSecondary);
     const COLORREF hoverFill = RGB(34, 39, 48);
     const COLORREF activeFill = RGB(42, 47, 56);
+    // The font the layout measured the titles with.
+    const ScopedFont menuFont(EditorToolbarLayout::MenuFontSize, FW_NORMAL);
+    const ScopedGdiObject selectedFont(dc, menuFont.handle);
 
     for (const EditorMenuDescriptor& descriptor : EditorToolbarLayout::MenuDescriptors()) {
         const RECT item = EditorToolbarLayout::MenuRectByCommand(menu, descriptor.command);
@@ -230,7 +243,7 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
         if (open || hovered) {
             FillRound(dc, item, open ? activeFill : hoverFill, RGB(48, 56, 68), 5);
         }
-        DrawMenuText(dc, item, descriptor.label, open || hovered ? textPrimary : textSecondary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawMenuText(dc, item, EditorToolbarLayout::MenuLabel(descriptor.command), open || hovered ? textPrimary : textSecondary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
@@ -295,7 +308,7 @@ void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorT
     const bool stopPressed = transportActive && pressed == EditorTransportCommand::Stop;
 
     const bool hasUnsavedOpenDocument = sceneContext.SceneDocumentDirty() || sceneContext.HasDirtyMaterialAssetEdit();
-    PaintTextButton(dc, toolbar.saveButton, theme, "Save", true, hasUnsavedOpenDocument, interaction.HoveredSave(), interaction.PressedSave(), warning);
+    PaintTextButton(dc, toolbar.saveButton, theme, EditorText("common.save", "Save"), true, hasUnsavedOpenDocument, interaction.HoveredSave(), interaction.PressedSave(), warning);
     PaintButton(dc, toolbar.playButton, theme, isStopped, false, playHovered, playPressed, noGlow);
     PaintButton(dc, toolbar.pauseButton, theme, transportActive, isPaused, pauseHovered, pausePressed, isPaused ? success : noGlow);
     PaintButton(dc, toolbar.stopButton, theme, transportActive, false, stopHovered, stopPressed, noGlow);
@@ -339,7 +352,10 @@ void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorT
         rect.right - statusGap,
         rect.bottom,
     };
-    DrawStatusText(dc, sceneRect, SceneDisplayName(sceneContext) + " - " + ScenePersistenceStatus(sceneContext), dirtyText, DT_LEFT);
+    DrawStatusText(dc, sceneRect,
+        EditorLocalization::Format("toolbar.sceneStatus", "{scene} - {status}",
+            { { "scene", SceneDisplayName(sceneContext) }, { "status", ScenePersistenceStatus(sceneContext) } }),
+        dirtyText, DT_LEFT);
     DrawStatusText(dc, modeRect, PlayModeStatus(sceneContext, playMode), playMode.IsPlaying() || playMode.IsPaused() ? textPrimary : textSecondary, DT_RIGHT);
 }
 
