@@ -30,20 +30,20 @@ namespace {
 
 constexpr std::string_view kLuaExtension = ".lua";
 
-// Starter template so a freshly created script already ticks in play mode and
-// proves scripting works by printing to the editor Console once on the first tick.
+// Starter template: the two hooks every behaviour starts from, named as the engine calls them and
+// as the init-agent documentation describes them, so the script proves scripting works on Play.
 constexpr std::string_view kLuaTemplate =
-    "-- Lua behaviour script. Runs every frame in play mode.\n"
-    "-- 'self' is the entity this script is attached to; 'dt' is the frame delta.\n"
+    "-- Lua behaviour script. 21kb calls these functions on the object it is attached to:\n"
+    "--   Ready(self, dt)  once, when the object starts in Play (Unity: Start, Godot: _ready)\n"
+    "--   Tick(self, dt)   every frame in Play (Unity: Update, Godot: _process); dt is in seconds\n"
+    "-- Other hooks: Created, Activated, FixedTick, LateTick, Deactivated, Destroyed.\n"
     "-- Log(\"text\") prints to the editor Console.\n"
     "\n"
-    "local started = false\n"
+    "function Ready(self, dt)\n"
+    "    Log(\"Hello from Lua! Scripting works.\")\n"
+    "end\n"
     "\n"
     "function Tick(self, dt)\n"
-    "    if not started then\n"
-    "        started = true\n"
-    "        Log(\"Hello from Lua! Scripting works.\")\n"
-    "    end\n"
     "end\n";
 
 [[nodiscard]] std::filesystem::path UniqueFilePath(const std::filesystem::path& folder, std::string_view baseName) {
