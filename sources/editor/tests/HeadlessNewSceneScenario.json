@@ -119,6 +119,16 @@
       "op": "save_scene"
     },
     {
+      "op": "save_scene",
+      "outside_project": "../Outside.21kbscene",
+      "refused_with": "inside the project's Assets folder"
+    },
+    {
+      "op": "save_scene",
+      "outside_project": "Saved/NotAssets.21kbscene",
+      "refused_with": "inside the project's Assets folder"
+    },
+    {
       "op": "discover_assets"
     },
     {

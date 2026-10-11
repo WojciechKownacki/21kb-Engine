@@ -647,6 +647,14 @@ bool EditorSceneContext::SaveCurrentSceneAs(const std::filesystem::path& path) {
         console_.Warning("Project", "Save As ignored while play mode is active. Stop play mode before saving.");
         return false;
     }
+    std::error_code error;
+    const std::filesystem::path assets = std::filesystem::weakly_canonical(EditorProjectPaths::AssetsRoot(), error);
+    const std::filesystem::path relative = std::filesystem::weakly_canonical(path, error).lexically_relative(assets);
+    if (error || relative.empty() || *relative.begin() == "..") {
+        console_.Error("Project", "Scenes are saved inside the project's Assets folder (" + assets.generic_string() +
+            "); nothing was saved to " + path.generic_string() + ".");
+        return false;
+    }
     return SaveSceneToPath(path);
 }
 

@@ -322,6 +322,12 @@ text "fileDialog.pngFilter" "PNG image (*.png)"
 text "fileDialog.saveSceneAsTitle" "Save scene as"
 text "fileDialog.sceneFilter" "21KB Scene (*.21kbscene)"
 text "fileDialog.sceneOrWorldFilter" "21KB Scene or World (*.21kbscene;*.21kbworld)"
+text "fileDialog.sceneOutsideAssets" "Scenes are saved inside this project's Assets folder:
+{folder}
+
+Choose a place there."
+text "fileDialog.sceneReplace" "{file} already exists.
+Do you want to replace it?"
 text "fileDialog.selectAppIconTitle" "Select application icon"
 text "fileDialog.selectBuildDirectoryTitle" "Select build directory"
 text "fileDialog.selectCertificateTitle" "Select code signing certificate"

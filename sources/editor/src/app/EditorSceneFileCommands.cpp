@@ -40,7 +40,8 @@ bool EditorSceneFileCommands::OpenScene(HWND owner, EditorSceneContext& sceneCon
 
 bool EditorSceneFileCommands::SaveSceneAs(HWND owner, EditorSceneContext& sceneContext) {
     const std::optional<std::filesystem::path> path =
-        EditorSceneFileDialog::SaveAs(owner, sceneContext.CurrentScenePath(), EditorProjectPaths::ScenesRoot());
+        EditorSceneFileDialog::SaveAs(owner, sceneContext.CurrentScenePath(), EditorProjectPaths::ScenesRoot(),
+            EditorProjectPaths::AssetsRoot());
     return path.has_value() && sceneContext.SaveCurrentSceneAs(*path);
 }
 
