@@ -128,6 +128,12 @@ void RunMaterialProgramRegistryFullIdentityKeyTest() {
     MaterialProgramKey changedPipeline = base;
     changedPipeline.pipelineStateKey ^= 0xBBBB'0000'0000'0000ULL;
     distinctKeys.push_back(changedPipeline);
+    MaterialProgramKey changedSkinned = base;
+    changedSkinned.skinned = true;
+    distinctKeys.push_back(changedSkinned);
+    // The graph pipeline hash uses all 64 bits; its top bit set must not read as a skinned mesh.
+    Require(!base.skinned && (base.pipelineStateKey >> 63U) != 0U,
+        "A graph pipeline hash with its top bit set must stay a static-mesh program key");
 
     for (const MaterialProgramKey& key : distinctKeys) {
         Require(!(key == base), "KBMAT-MAT66: Mutating any full identity field must change key equality");

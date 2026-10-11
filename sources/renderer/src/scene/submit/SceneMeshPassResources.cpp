@@ -57,7 +57,6 @@ namespace {
 
 constexpr std::uint64_t kBuiltinMeshMaterialTypeId = 0x6275696C74696E70ULL; // "builtinp"
 constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
-constexpr std::uint64_t kSkinnedGraphPipelineStateBit = 1ULL << 63U;
 
 [[nodiscard]] const char* GraphBackendDirectoryForKey(std::uint32_t backend) noexcept;
 
@@ -83,7 +82,8 @@ constexpr std::uint64_t kSkinnedGraphPipelineStateBit = 1ULL << 63U;
         .variantKey = 0U,
         .pass = std::move(pass),
         .backend = 0U,
-        .pipelineStateKey = skinned ? 1U : 0U,
+        .pipelineStateKey = 0U,
+        .skinned = skinned,
         .requiresGeneratedVertexShader = false,
         .graphProgram = false,
     };
@@ -179,7 +179,7 @@ void AppendUniqueValue(std::vector<T>& values, const T& value) {
 }
 
 [[nodiscard]] bgfx::ProgramHandle LoadBuiltinMeshProgram(const MaterialProgramKey& key) {
-    const bool skinned = key.pipelineStateKey == 1U;
+    const bool skinned = key.skinned;
     const char* const meshVertexShader = skinned
         ? "vs_mesh_skinned_instanced.sc"
         : "vs_mesh_instanced.sc";
@@ -706,7 +706,7 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
     } else if (key.requiresGeneratedVertexShader) {
         return BGFX_INVALID_HANDLE;
     } else {
-        vertex = ShaderLoader::Load((key.pipelineStateKey & kSkinnedGraphPipelineStateBit) != 0U
+        vertex = ShaderLoader::Load(key.skinned
             ? "vs_mesh_skinned_instanced.sc"
             : "vs_mesh_instanced.sc");
     }
@@ -889,8 +889,8 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
                     material->graphProgram.variantKey,
                     GraphMeshPassName(pass),
                     static_cast<std::uint32_t>(bgfx::getRendererType())),
-                .pipelineStateKey = material->graphProgram.pipelineStateKey |
-                    (skinned ? kSkinnedGraphPipelineStateBit : 0U),
+                .pipelineStateKey = material->graphProgram.pipelineStateKey,
+                .skinned = skinned,
                 .requiresGeneratedVertexShader = material->graphProgram.requiresGeneratedVertexShader,
                 .graphProgram = true,
             };
