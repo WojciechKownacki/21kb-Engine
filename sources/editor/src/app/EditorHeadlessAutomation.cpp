@@ -1,4 +1,5 @@
 #include "app/EditorHeadlessAutomation.hpp"
+#include "rendering/EditorPanelStyle.hpp"
 #include "app/EditorHeadlessPopupChecks.hpp"
 
 #if defined(_WIN32)
@@ -191,7 +192,8 @@ FindInspectorHit(
         if (static_cast<std::size_t>(index) < rows.size()) {
             const auto& group = rows[static_cast<std::size_t>(rows[index].groupStart)];
             if (group.fieldCount > 1 && !group.color) {
-                const int left = kInspectorContent.left + (kInspectorContent.right - kInspectorContent.left) * 36 / 100;
+                // The value column starts where the Inspector's label column ends (InspectorLabelColumnRight).
+                const int left = panel_style::InspectorLabelColumnRight(kInspectorContent);
                 const int width = kInspectorContent.right - left - 24;
                 compactX = left + width * (2 * (index - group.groupStart) + 1) / (2 * group.fieldCount);
             }
@@ -209,14 +211,16 @@ FindInspectorHit(
         : property == InspectorPropertyId::UIAnchorPreset ? 40 + 64 * (std::max(0, index) % 4)
         : property == InspectorPropertyId::UIRectLayoutField ? (index % 2 == 0 ? 225 : 585)
         : uiField
-        ? kInspectorContent.left + (kInspectorContent.right - kInspectorContent.left) * 36 / 100 + 8
+        ? panel_style::InspectorLabelColumnRight(kInspectorContent) + 8
         : addButton ? (kInspectorContent.left + kInspectorContent.right) / 2
         : kInspectorContent.left;
     // The picker button sits at the value column's right edge, which moves left once the Inspector
     // is long enough to show its scrollbar, so it is searched across that edge rather than at one x.
     const int lastX = leftEdgeHandle ? kInspectorContent.left + 40
         : rightEdgeButton ? kInspectorContent.right - 4
-        : uiField || addButton ? firstX + 1 : kInspectorContent.right;
+        : addButton ? firstX + 1
+        // A value control starts a few pixels past the label column; a short sweep finds it in any row inset.
+        : uiField ? firstX + 48 : kInspectorContent.right;
     for (int scroll = addButton ? InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context) : 0;;) {
         const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(
             kInspectorContent, context);
