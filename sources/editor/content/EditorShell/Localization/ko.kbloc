@@ -159,11 +159,13 @@ text "buildGame.invalid.linuxPort" "Linux SSH 포트가 올바르지 않습니�
 text "buildGame.invalid.linuxUser" "Linux SSH 사용자가 올바르지 않습니다."
 text "buildGame.invalid.productName" "제품 이름은 인쇄 가능한 문자 1-128자여야 합니다."
 text "buildGame.invalid.publisher" "게시자는 인쇄 가능한 문자 1-128자여야 합니다."
+text "buildGame.invalid.startupMapMissing" "시작 맵 {map}은(는) 이 프로젝트의 씬이 아닙니다. 목록에서 선택하세요."
 text "buildGame.invalid.target" "선택한 패키지 대상이 올바르지 않습니다."
 text "buildGame.invalid.thumbprint" "인증서 지문은 16진수 40자리여야 합니다."
 text "buildGame.invalid.timestampUrl" "타임스탬프 URL은 http:// 또는 https:// 주소여야 합니다."
 text "buildGame.invalid.version" "버전은 인쇄 가능한 문자 1-64자여야 합니다."
 text "buildGame.invalid.windowsVersion" "Windows 버전은 65535 이하의 숫자 구성 요소 1-4개와 선택적인 프리릴리스 접미사로 이루어져야 합니다."
+text "buildGame.noScenes" "이 프로젝트에는 아직 씬이 없습니다"
 text "buildGame.outputNotSelected" "출력 디렉터리가 선택되지 않았습니다"
 text "buildGame.platforms" "플랫폼"
 text "buildGame.player" "플레이어"
@@ -320,6 +322,12 @@ text "fileDialog.pngFilter" "PNG 이미지 (*.png)"
 text "fileDialog.saveSceneAsTitle" "씬을 다른 이름으로 저장"
 text "fileDialog.sceneFilter" "21KB 씬 (*.21kbscene)"
 text "fileDialog.sceneOrWorldFilter" "21KB 씬 또는 월드 (*.21kbscene;*.21kbworld)"
+text "fileDialog.sceneOutsideAssets" "씬은 이 프로젝트의 Assets 폴더에 저장됩니다:
+{folder}
+
+그 안에서 위치를 선택하세요."
+text "fileDialog.sceneReplace" "{file}이(가) 이미 있습니다.
+바꾸시겠습니까?"
 text "fileDialog.selectAppIconTitle" "애플리케이션 아이콘 선택"
 text "fileDialog.selectBuildDirectoryTitle" "빌드 디렉터리 선택"
 text "fileDialog.selectCertificateTitle" "코드 서명 인증서 선택"
@@ -329,6 +337,12 @@ text "fileDialog.selectOutputDirectoryTitle" "패키지 출력 디렉터리 선�
 text "fileDialog.selectSshIdentityTitle" "SSH ID 파일 선택"
 text "fileDialog.sshKeyFilter" "SSH 개인 키 (id_*)"
 text "files.rename" "이름 바꾸기"
+text "help.aboutText" "21kb Engine 에디터
+빌드 날짜 {date}
+
+MIT License, Copyright (c) 2026 WojciechKownacki.
+{url}"
+text "help.aboutTitle" "21kb Engine 정보"
 text "hierarchy.create" "만들기"
 text "hierarchy.create.advanced" "고급"
 text "hierarchy.create.areaLight" "영역"
@@ -1674,7 +1688,6 @@ text "prefabDirty.beforeCloseEditor" "에디터를 닫기 전에 프리팹의 �
 text "prefabDirty.beforeClosePrefab" "닫기 전에 프리팹의 변경 사항을 저장하시겠습니까? ({prefab})"
 text "prefabDirty.supporting" "현재 프리팹 변경 사항을 유지할지 선택하세요."
 text "prefabDirty.title" "저장되지 않은 프리팹"
-text "projectFiles.contentRoot" "콘텐츠"
 text "projectFiles.copyHere" "여기에 복사"
 text "projectFiles.currentFolder" "현재"
 text "projectFiles.deleteConfirm.body" "나열된 오브젝트는 휴지통으로 이동되며, 휴지통에서 복원할 수 있습니다."
@@ -2234,6 +2247,7 @@ text "viewport.renderProfile.game" "게임"
 text "viewport.renderProfile.interactive" "인터랙티브"
 text "viewport.renderProfile.lit" "라이팅 적용"
 text "viewport.rotationSnapOff" "끔"
+text "window.untitledScene" "제목 없음"
 text "world.addDataLayerTitle" "데이터 레이어 추가"
 text "world.dataLayerNameHint" "문자, 숫자, '_', '-' 또는 '.'를 사용할 수 있습니다. 새 레이어는 처음에 활성 상태입니다."
 text "world.dataLayerNameLabel" "레이어 이름"

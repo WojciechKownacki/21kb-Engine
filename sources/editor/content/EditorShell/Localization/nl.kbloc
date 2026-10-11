@@ -1688,7 +1688,6 @@ text "prefabDirty.beforeCloseEditor" "Wijzigingen in de prefab opslaan voordat d
 text "prefabDirty.beforeClosePrefab" "Wijzigingen in de prefab opslaan voordat deze wordt gesloten? ({prefab})"
 text "prefabDirty.supporting" "Kies of de huidige prefabwijzigingen moeten worden bewaard."
 text "prefabDirty.title" "Niet-opgeslagen prefab"
-text "projectFiles.contentRoot" "Inhoud"
 text "projectFiles.copyHere" "Hier kopiëren"
 text "projectFiles.currentFolder" "Huidige"
 text "projectFiles.deleteConfirm.body" "De vermelde objecten gaan naar de Prullenbak, waar je ze kunt herstellen."

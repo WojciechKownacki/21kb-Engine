@@ -998,6 +998,30 @@ set_target_properties(kb_editor PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
+# The language catalogs are content: a changed translation reaches the editor's folders on the next
+# build whenever a catalog changes, not only when the editor relinks.
+file(GLOB KB_EDITOR_LOCALIZATION_CATALOGS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization/*.kbloc")
+get_property(KB_EDITOR_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(KB_EDITOR_MULTI_CONFIG)
+    set(KB_EDITOR_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+else()
+    set(KB_EDITOR_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bin")
+endif()
+add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_localization.stamp"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Localization"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization"
+        "${KB_EDITOR_RUNTIME_DIR}/Content/EditorShell/Localization"
+    COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_localization.stamp"
+    DEPENDS ${KB_EDITOR_LOCALIZATION_CATALOGS}
+    VERBATIM)
+add_custom_target(kb_editor_localization DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_localization.stamp")
+add_dependencies(kb_editor kb_editor_localization)
+
 add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kb_editor>" "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor.exe"
@@ -1021,9 +1045,6 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content"
         "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/21kbParticle"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization"
-        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Localization"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVuSans.ttf"
@@ -1044,9 +1065,6 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content"
         "$<TARGET_FILE_DIR:kb_editor>/Content/21kbParticle"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization"
-        "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Localization"
     VERBATIM
 )
 
@@ -1495,6 +1513,14 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-New-Scene")
     set_tests_properties(kb_editor_new_scene_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;scene" TIMEOUT 180)
+    # Every editor language, one after another: each panel's texts fit where they are drawn.
+    add_test(NAME kb_editor_languages_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessLanguagesScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Languages")
+    set_tests_properties(kb_editor_languages_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;localization" TIMEOUT 600)
 
     add_test(
         NAME kb_editor_headless_automation_scenario
