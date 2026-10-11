@@ -154,6 +154,8 @@ add_library(kb_renderer STATIC
     src/renderer/RendererViewportPassResolver.cpp
     src/renderer/RendererViewportPassResolver.hpp
     src/SceneDeferredLightingPass.cpp
+    src/scene/SceneBackdropUniforms.cpp
+    src/scene/SceneSkyReflection.cpp
     src/SceneFramebuffer.cpp
     src/SceneGBuffer.cpp
     src/SceneRenderTarget.cpp
@@ -579,6 +581,8 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_taa_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_ssgi_resolve.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_capture.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_sky_prefilter.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_selection_outline.sc

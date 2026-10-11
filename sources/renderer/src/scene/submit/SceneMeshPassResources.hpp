@@ -94,6 +94,9 @@ public:
     [[nodiscard]] SceneMeshGraphMaterialDrawStats GraphMaterialDrawStats() const noexcept;
 
 private:
+    // The sky reflection of the forward lighting at this sampler stage (the fallback cube when none).
+    void BindSkyReflection(const PackedSceneLighting& lighting, std::uint8_t stage) const;
+
     struct RetiredGraphUniform {
         bgfx::UniformHandle handle = BGFX_INVALID_HANDLE;
         std::uint64_t destroyFrame = 0U;
@@ -167,6 +170,9 @@ private:
     bgfx::UniformHandle environmentZenithUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle environmentGroundUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle environmentParamsUniform_ = BGFX_INVALID_HANDLE;
+    // The sky light's prefiltered cube (sky_reflection.sh) of the forward lighting.
+    bgfx::UniformHandle skyReflectionSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle skyReflectionParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
     ShadowCascadeUniforms shadowCascades_{};

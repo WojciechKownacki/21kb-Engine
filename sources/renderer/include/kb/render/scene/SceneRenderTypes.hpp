@@ -103,7 +103,7 @@ struct SceneRenderAmbientRadiance {
     std::uint64_t environmentAssetId = 0U;
     float intensity = 1.0F;
     float diffuseIntensity = 1.0F;
-    float specularIntensity = 0.25F;
+    float specularIntensity = 1.0F;
 };
 
 enum class SceneRenderLightingPath : std::uint8_t {
@@ -303,7 +303,7 @@ struct SceneRenderLightingConfig {
     std::array<float, 3> environmentZenithColor{ 0.36F, 0.42F, 0.52F };
     std::array<float, 3> environmentGroundColor{ 0.08F, 0.075F, 0.065F };
     float environmentDiffuseIntensity = 1.0F;
-    float environmentSpecularIntensity = 0.25F;
+    float environmentSpecularIntensity = 1.0F;
     bool editorPreviewKeyLightEnabled = false;
     std::array<float, 3> editorPreviewKeyLightDirection{ 0.35F, -0.62F, 0.70F };
     std::array<float, 3> editorPreviewKeyLightColor{ 1.0F, 0.96F, 0.90F };
@@ -341,6 +341,10 @@ struct SceneRenderLightingConfig {
     bool contactShadowsEnabled = false;
     bool volumetricLightingEnabled = false;
     SceneRenderDebugView debugView = SceneRenderDebugView::None;
+    // The sky light's prefiltered cube (SceneSkyReflection) and its last mip; invalid while there is
+    // none, and reflections then use the environment colour.
+    bgfx::TextureHandle skyReflection = BGFX_INVALID_HANDLE;
+    float skyReflectionMaxMip = 0.0F;
 };
 
 // Cube shadows of up to four point lights share one depth atlas: face f of light s occupies the

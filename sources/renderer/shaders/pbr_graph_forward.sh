@@ -8,6 +8,9 @@
 #include "point_shadow.sh"
 #include "gbuffer_contract.sh"
 #include "shading_models.sh"
+// The prefiltered sky takes a free builtin stage of graph shaders (they own the stages from 6 up).
+SAMPLERCUBE(s_skyReflection, 3);
+#include "sky_reflection.sh"
 
 uniform vec4 u_cameraPosition;
 uniform vec4 u_lightDirKind[32];
@@ -143,7 +146,7 @@ vec3 KbEvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metalli
     vec3 diffuseEnv = KbEnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
-    vec3 specularEnv = KbEnvironmentColor(reflectionDir) * fresnel * specularEnergy * u_environmentParams.z;
+    vec3 specularEnv = KbSkyReflection(reflectionDir, roughness, KbEnvironmentColor(reflectionDir)) * fresnel * specularEnergy * u_environmentParams.z;
     return diffuseEnv + specularEnv;
 }
 
@@ -154,7 +157,8 @@ vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, flo
     vec3 viewDir = normalize(u_cameraPosition.xyz - worldPos);
     vec3 lighting = KbEvaluateEnvironment(worldNormal, viewDir, albedo, metallic, roughness, specular, occlusion);
     if (KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_CLEAR_COAT) && u_environmentParams.x > 0.5) {
-        vec3 coatReflection = KbEnvironmentColor(reflect(-viewDir, worldNormal)) * u_environmentParams.z;
+        vec3 coatDirection = reflect(-viewDir, worldNormal);
+        vec3 coatReflection = KbSkyReflection(coatDirection, customData1, KbEnvironmentColor(coatDirection)) * u_environmentParams.z;
         lighting = KbClearCoatEnvironment(lighting, coatReflection, dot(worldNormal, viewDir), customData0);
     }
     vec2 lightList = KbLightGridList(worldPos, u_lightParams.x);
