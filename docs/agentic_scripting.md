@@ -53,6 +53,8 @@ scene in the editor and press Play.
 |---|---|
 | `kb_cli init-agent --project <dir>` | prepare a project for AI agents |
 | `kb_cli api --project <dir>` | refresh the API reference after engine updates |
+| `kb_cli script-new --project <dir> --name <Name> --language lua\|cpp` | create a Lua or C++ script from the template (never overwrites) |
+| `kb_cli script-build --project <dir> [--script <path>]` | build the project's C++ scripts |
 | `kb_cli validate <file.lua>` | check a script for errors |
 | `kb_cli scene-list --project <dir> --scene <path>` | show what's in a scene |
 | `kb_cli scene-attach --project <dir> --scene <path> --node <name> --script <path>` | attach a script to a node |

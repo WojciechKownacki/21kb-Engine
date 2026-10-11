@@ -22,6 +22,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
+#include "engine/script/ScriptProjectFiles.hpp"
 #include "engine/world/WorldCellBuilder.hpp"
 #include "kb/render/ShaderManifest.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
@@ -1342,10 +1343,7 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
                 return false;
             }
             if (descriptor->build.enabled) {
-                auto build = descriptor->build;
-                if (build.workingDirectory.empty()) build.workingDirectory = projectRoot;
-                else if (build.workingDirectory.is_relative())
-                    build.workingDirectory = metadata.physicalPath.parent_path() / build.workingDirectory;
+                const auto build = kb::script::ScriptProjectFiles::BuildOf(*descriptor, metadata.physicalPath, projectRoot);
                 const auto built = kb::script::NativeScriptBuildPipeline::Build(build);
                 if (!built.Succeeded()) {
                     error = "native behaviour build failed: " +
