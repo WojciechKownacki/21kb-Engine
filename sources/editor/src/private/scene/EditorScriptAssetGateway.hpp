@@ -21,7 +21,9 @@ public:
 
     // Writes a new "NewScript.lua" (uniquified) under the resolved folder, then
     // discovers and selects it. Returns the created file's physical path.
-    [[nodiscard]] std::optional<std::filesystem::path> CreateLuaScript(const std::filesystem::path& virtualFolder);
+    // Nothing, with `error` filled, when the script cannot be made.
+    [[nodiscard]] std::optional<std::filesystem::path> CreateLuaScript(const std::filesystem::path& virtualFolder,
+        std::string& error);
     [[nodiscard]] std::optional<std::filesystem::path> CreateNativeScript(const std::filesystem::path& virtualFolder, std::string& error);
 
     [[nodiscard]] static std::string ReadSource(const std::filesystem::path& path);

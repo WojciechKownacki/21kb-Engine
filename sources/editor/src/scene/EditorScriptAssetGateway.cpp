@@ -302,13 +302,23 @@ void EditorScriptAssetGateway::DiscoverAndSelect(const std::filesystem::path& pa
     }
 }
 
-std::optional<std::filesystem::path> EditorScriptAssetGateway::CreateLuaScript(const std::filesystem::path& virtualFolder) {
+std::optional<std::filesystem::path> EditorScriptAssetGateway::CreateLuaScript(const std::filesystem::path& virtualFolder,
+    std::string& error) {
     const std::optional<std::filesystem::path> folder = ResolveFolder(virtualFolder);
     if (!folder.has_value()) {
+        error = virtualFolder.generic_string() + " is not a folder of this project.";
+        return std::nullopt;
+    }
+    // A folder the project names but the disk does not have yet (a fresh project's Scripts) is made.
+    std::error_code folderError;
+    std::filesystem::create_directories(*folder, folderError);
+    if (folderError) {
+        error = "the folder " + virtualFolder.generic_string() + " could not be created: " + folderError.message();
         return std::nullopt;
     }
     const std::filesystem::path path = UniqueFilePath(*folder, "NewScript");
     if (!WriteSource(path, kLuaTemplate)) {
+        error = "the file " + path.filename().generic_string() + " could not be written in " + virtualFolder.generic_string() + ".";
         return std::nullopt;
     }
     DiscoverAndSelect(path);

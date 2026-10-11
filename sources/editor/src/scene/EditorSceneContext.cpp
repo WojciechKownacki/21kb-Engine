@@ -2285,11 +2285,12 @@ bool EditorSceneContext::MoveAssetFolderToFolder(const std::filesystem::path& so
 }
 
 bool EditorSceneContext::CopyAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
-    const bool copied = EditorSceneAssetBrowserCommands::CopyAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder);
+    std::string reason;
+    const bool copied = EditorSceneAssetBrowserCommands::CopyAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder, reason);
     if (copied) {
         console_.Info("Assets", "Asset copied to " + destinationVirtualFolder.generic_string());
     } else {
-        console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset copy failed."));
+        console_.Error("Assets", "The asset was not copied: " + reason);
     }
     return copied;
 }
@@ -2813,9 +2814,10 @@ bool EditorSceneContext::DuplicateAsset(kb::assets::AssetId assetId) {
 
 bool EditorSceneContext::CreateLuaScriptAsset(const std::filesystem::path& virtualFolder) {
     EditorScriptAssetGateway gateway{ *scene_, assetBrowser_ };
-    const std::optional<std::filesystem::path> path = gateway.CreateLuaScript(virtualFolder);
+    std::string error;
+    const std::optional<std::filesystem::path> path = gateway.CreateLuaScript(virtualFolder, error);
     if (!path.has_value()) {
-        console_.Error("Scripts", "Lua script could not be created in folder: " + virtualFolder.generic_string());
+        console_.Error("Scripts", "Lua script could not be created: " + error);
         return false;
     }
     console_.Info("Scripts", "Lua script created: " + path->generic_string());

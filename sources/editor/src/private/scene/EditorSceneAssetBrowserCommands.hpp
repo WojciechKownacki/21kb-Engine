@@ -5,6 +5,7 @@
 #include "engine/assets/AssetImportTypes.hpp"
 
 #include <filesystem>
+#include <string>
 #include <span>
 
 namespace kb::scene {
@@ -44,11 +45,13 @@ public:
         const std::filesystem::path& sourceVirtualFolder,
         const std::filesystem::path& destinationVirtualFolder,
         const EditorProtectedScenes& protectedScenes = {});
+    // False with `reason` filled when the copy cannot be made.
     [[nodiscard]] static bool CopyAssetToFolder(
         kb::scene::Scene& scene,
         EditorAssetBrowserState& assetBrowser,
         kb::assets::AssetId id,
-        const std::filesystem::path& destinationVirtualFolder);
+        const std::filesystem::path& destinationVirtualFolder,
+        std::string& reason);
     [[nodiscard]] static bool CopyFolderToFolder(
         kb::scene::Scene& scene,
         EditorAssetBrowserState& assetBrowser,

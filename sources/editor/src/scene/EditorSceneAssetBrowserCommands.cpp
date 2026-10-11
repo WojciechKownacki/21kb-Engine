@@ -625,10 +625,12 @@ bool EditorSceneAssetBrowserCommands::CopyAssetToFolder(
     kb::scene::Scene& scene,
     EditorAssetBrowserState& assetBrowser,
     kb::assets::AssetId id,
-    const std::filesystem::path& destinationVirtualFolder) {
+    const std::filesystem::path& destinationVirtualFolder,
+    std::string& reason) {
     kb::assets::AssetManager& manager = AssetManager(scene);
     const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
     if (metadata == nullptr) {
+        reason = "The asset to copy is no longer in the project.";
         return false;
     }
 
@@ -636,21 +638,35 @@ bool EditorSceneAssetBrowserCommands::CopyAssetToFolder(
         ? manager.Mounts().Resolve(metadata->virtualPath).value_or(std::filesystem::path{})
         : metadata->physicalPath;
     const std::optional<std::filesystem::path> destinationFolder = manager.Mounts().Resolve(destinationVirtualFolder);
-    if (source.empty() || !destinationFolder.has_value()) {
+    if (source.empty()) {
+        reason = metadata->virtualPath.generic_string() + " has no file on disk to copy.";
+        return false;
+    }
+    if (!destinationFolder.has_value()) {
+        reason = destinationVirtualFolder.generic_string() + " is not a folder of this project.";
         return false;
     }
 
     std::error_code error;
-    if (!std::filesystem::is_regular_file(source, error) || !std::filesystem::is_directory(*destinationFolder, error)) {
+    if (!std::filesystem::is_regular_file(source, error)) {
+        reason = "The file " + source.generic_string() + " is missing.";
+        return false;
+    }
+    if (!std::filesystem::is_directory(*destinationFolder, error)) {
+        reason = "The folder " + destinationVirtualFolder.generic_string() + " does not exist.";
         return false;
     }
 
     const std::filesystem::path destination = UniquePathInFolder(*destinationFolder, source.filename());
     if (destination.empty()) {
+        reason = "There is no free name for a copy of " + source.filename().generic_string() + " in " +
+            destinationVirtualFolder.generic_string() + ".";
         return false;
     }
     std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, error);
     if (error) {
+        reason = source.filename().generic_string() + " could not be copied to " + destinationVirtualFolder.generic_string() +
+            ": " + error.message();
         return false;
     }
     CopyMetaSidecarIfPresent(source, destination);
