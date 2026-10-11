@@ -12,6 +12,7 @@
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorTerrainService.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <array>
@@ -90,7 +91,7 @@ namespace {
 void DrawTextAt(HDC dc, RECT rect, const char* text, COLORREF color, UINT format) {
     SetTextColor(dc, color);
     SetBkMode(dc, TRANSPARENT);
-    DrawTextA(dc, text, -1, &rect, format | DT_NOPREFIX | DT_SINGLELINE);
+    kb::editor::DrawTextUtf8(dc, text, -1, &rect, format | DT_NOPREFIX | DT_SINGLELINE);
 }
 
 void DrawBrushShapePreview(HDC dc, const RECT& rect, kb::terrain_editor::TerrainBrushShape shape) {

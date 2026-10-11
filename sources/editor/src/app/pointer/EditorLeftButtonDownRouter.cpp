@@ -68,6 +68,7 @@
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorTerrainService.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <array>
@@ -561,7 +562,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 for (UINT index = 0U; index < static_cast<UINT>(labels.size()); ++index) {
                     const UINT flags = index == static_cast<UINT>(kb::scene::ParticleModuleType::SubEmitter) &&
                         rows.size() < 2U ? MF_STRING | MF_GRAYED : MF_STRING;
-                    AppendMenuA(menu, flags, 100U + index, labels[index].c_str());
+                    kb::editor::AppendMenuUtf8(menu, flags, 100U + index, labels[index].c_str());
                 }
                 POINT point{x, y}; ClientToScreen(messageWindow, &point);
                 const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
@@ -577,7 +578,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     for (const auto& row : rows) {
                         if (row.emitterId == inspector.emitterId) continue;
                         targetIds[targetCount] = row.emitterId;
-                        AppendMenuA(targets, MF_STRING, 200U + targetCount, row.name.c_str());
+                        kb::editor::AppendMenuUtf8(targets, MF_STRING, 200U + targetCount, row.name.c_str());
                         ++targetCount;
                     }
                     const UINT targetChoice = TrackPopupMenu(targets, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
@@ -1325,13 +1326,13 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     if (menu != nullptr) {
                         const std::optional<std::uint32_t> forced =
                             sceneContext_.SkeletalMeshEditorForcedPreviewLod();
-                        AppendMenuA(menu, MF_STRING | (!forced.has_value() ? MF_CHECKED : 0U), 1U,
+                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (!forced.has_value() ? MF_CHECKED : 0U), 1U,
                             std::string{ EditorText("skeletalMeshEditor.lodAuto", "Auto") }.c_str());
                         const std::uint32_t lodCount = sceneContext_.SkeletalMeshEditorLodCount();
                         for (std::uint32_t lod = 0U; lod < lodCount; ++lod) {
                             const std::string label = EditorLocalization::Format("skeletalMeshEditor.lod", "LOD {index}",
                                 { { "index", std::to_string(lod) } });
-                            AppendMenuA(menu, MF_STRING | (forced == lod ? MF_CHECKED : 0U),
+                            kb::editor::AppendMenuUtf8(menu, MF_STRING | (forced == lod ? MF_CHECKED : 0U),
                                 100U + lod, label.c_str());
                         }
                         POINT point{ x, y };
@@ -1644,7 +1645,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     HMENU menu = CreatePopupMenu();
                     if (menu == nullptr) return;
                     for (std::size_t index = 0; index < row.choices.size(); ++index) {
-                        AppendMenuA(menu, MF_STRING | (std::stoul(row.value) == index ? MF_CHECKED : 0),
+                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (std::stoul(row.value) == index ? MF_CHECKED : 0),
                             index + 1, std::string{row.choices[index]}.c_str());
                     }
                     POINT anchor{x, y};

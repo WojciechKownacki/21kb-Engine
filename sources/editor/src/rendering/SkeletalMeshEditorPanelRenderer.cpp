@@ -15,6 +15,7 @@
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <array>
@@ -35,12 +36,12 @@ void PaintPanel(HDC dc, const RECT& rect, const char* title, const char* subtitl
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(207, 214, 222));
     RECT titleRect{ rect.left + 10, rect.top + 8, rect.right - 8, rect.top + 28 };
-    DrawTextA(dc, title, -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, title, -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     const ScopedFont subtitleFont{ 11, FW_NORMAL };
     const ScopedGdiObject selectedSubtitleFont(dc, subtitleFont.handle);
     SetTextColor(dc, RGB(139, 149, 161));
     RECT subtitleRect{ rect.left + 10, rect.top + 34, rect.right - 8, rect.bottom - 8 };
-    DrawTextA(dc, subtitle, -1, &subtitleRect, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, subtitle, -1, &subtitleRect, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
 constexpr int kTreeHeaderHeight = 56;
@@ -148,7 +149,7 @@ void DrawDisclosure(HDC dc, const RECT& rect, bool expanded) {
 }
 
 void DrawTextView(HDC dc, std::string_view text, RECT& rect, UINT format) {
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, format);
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, format);
 }
 
 [[nodiscard]] std::string AssetLabel(
@@ -200,7 +201,7 @@ void PaintLinkedDocuments(
         SetTextColor(dc, !enabled[index] ? RGB(92, 99, 109) : RGB(211, 217, 225));
         RECT text{ buttons[index].left + 10, buttons[index].top,
             buttons[index].right - 8, buttons[index].bottom };
-        DrawTextA(dc, labels[index].c_str(), -1, &text,
+        kb::editor::DrawTextUtf8(dc, labels[index].c_str(), -1, &text,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
 }
@@ -268,7 +269,7 @@ void PaintCommands(HDC dc, const SkeletalMeshEditorPanelLayout& layout, const Ed
         GdiDrawing::DrawSharpFrame(dc, clipped, fill, border);
         SetTextColor(dc, commands[index].enabled ? RGB(211, 217, 225) : RGB(92, 99, 109));
         RECT text{ clipped.left + 7, clipped.top, clipped.right - 7, clipped.bottom };
-        DrawTextA(dc, commands[index].label.c_str(), -1, &text,
+        kb::editor::DrawTextUtf8(dc, commands[index].label.c_str(), -1, &text,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
 }
@@ -347,7 +348,7 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
     RECT filter{ rect.left + 29, rect.top + 31, rect.right - 12, rect.top + 49 };
     const std::string filterText = sceneContext.SkeletalMeshEditorTreeFilter().empty()
         ? std::string{ EditorText("skeletalMeshEditor.searchTree", "Search Skeleton Tree...") } : sceneContext.SkeletalMeshEditorTreeFilter();
-    DrawTextA(dc, filterText.c_str(), -1, &filter, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, filterText.c_str(), -1, &filter, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
     const std::vector<SkeletalMeshEditorTreeRow> rows = sceneContext.SkeletalMeshEditorTreeRows();
     const RECT list = TreeListRectForTree(rect);
@@ -393,7 +394,7 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
             dc, itemIcon, socket ? HeroIconKind::Bolt : HeroIconKind::Skeleton, itemColor, 1);
         RECT label{ itemIcon.right + 4, row.top, row.right - 6, row.bottom };
         SetTextColor(dc, socket ? RGB(120, 196, 176) : RGB(211, 217, 225));
-        DrawTextA(dc, rows[index].label.c_str(), -1, &label,
+        kb::editor::DrawTextUtf8(dc, rows[index].label.c_str(), -1, &label,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
     RestoreDC(dc, savedDc);
@@ -432,7 +433,7 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
         std::min(rect.bottom, tabWell.bottom + kDetailsObjectHeaderHeight) };
     const std::string titleText = (sceneContext.HasDirtySkeletalMeshEditorAssetEdit() ? "* " : "") +
         (model.title.empty() ? std::string{ EditorText("skeletalMeshEditor.assetDetails", "Asset Details") } : model.title);
-    DrawTextA(dc, titleText.c_str(), -1, &title,
+    kb::editor::DrawTextUtf8(dc, titleText.c_str(), -1, &title,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     const ScopedFont bodyFont{ 11, FW_NORMAL };
     const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
@@ -453,7 +454,7 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
             sectionRect.left + 18, sectionRect.bottom - 3 }, section.expanded);
         SetTextColor(dc, RGB(211, 217, 225));
         RECT sectionText{ sectionRect.left + 22, sectionRect.top, sectionRect.right - 7, sectionRect.bottom };
-        DrawTextA(dc, section.title.c_str(), -1, &sectionText,
+        kb::editor::DrawTextUtf8(dc, section.title.c_str(), -1, &sectionText,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         y += kDetailsCategoryHeight;
         if (!section.expanded) continue;
@@ -467,7 +468,7 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
             RECT label{ row.left + 10, row.top, split - 7, row.bottom };
             RECT value{ split + 6, row.top + 2, row.right - 6, row.bottom - 2 };
             SetTextColor(dc, RGB(154, 164, 176));
-            DrawTextA(dc, field.label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            kb::editor::DrawTextUtf8(dc, field.label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             const bool editable = field.action != SkeletalMeshEditorDetailsAction::None;
             if (editable) {
                 GdiDrawing::DrawSharpFrame(dc, value, RGB(20, 22, 25), RGB(67, 73, 82));
@@ -475,12 +476,12 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
                 value.right -= 16;
             }
             SetTextColor(dc, editable ? RGB(225, 230, 236) : RGB(182, 190, 201));
-            DrawTextA(dc, field.value.c_str(), -1, &value,
+            kb::editor::DrawTextUtf8(dc, field.value.c_str(), -1, &value,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             if (editable) {
                 SetTextColor(dc, RGB(132, 143, 156));
                 RECT affordance{ value.right + 3, row.top, row.right - 5, row.bottom };
-                DrawTextA(dc,
+                kb::editor::DrawTextUtf8(dc,
                     field.action == SkeletalMeshEditorDetailsAction::SectionMaterial ||
                     field.action == SkeletalMeshEditorDetailsAction::PreviewLod ? "v" : "...",
                     -1, &affordance, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);

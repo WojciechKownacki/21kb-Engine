@@ -1,4 +1,6 @@
 #include "app/EditorAutomationScenarioRunner.hpp"
+#include "localization/EditorLocalization.hpp"
+#include "editor/ParticleEditorText.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
@@ -1915,6 +1917,18 @@ ReadScriptValue(
         const bool configured = state.context.SetProjectPhysicsLayersAsset(
             kb::assets::NormalizeAssetPath(virtualPath));
         return { configured, configured ? virtualPath.generic_string() : "physics layers project setting failed" };
+    }
+
+    if (*operation == "set_language") {
+        // The editor's language for the steps after it (Editor Settings > General > Language).
+        const auto language = StringMember(step, "language", error);
+        if (!language) return { false, error };
+        std::string languageError;
+        if (!EditorLocalization::SetLanguage(*language, EditorLocalization::DefaultCatalogFolder(), languageError)) {
+            return { false, languageError };
+        }
+        kb::particle_editor::SetTextSource(&EditorLocalization::Text);
+        return { true, std::string{ EditorLocalization::Current() } };
     }
 
     if (*operation == "select_project_settings_category") {

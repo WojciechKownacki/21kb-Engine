@@ -23,6 +23,7 @@
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 #include "scene/material_preview/EditorMaterialPreviewTelemetry.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #pragma warning(push, 0)
 #include <objidl.h>
@@ -98,7 +99,7 @@ void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int poin
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 void EnsureMaterialGraphFontRegistered() {
@@ -174,7 +175,7 @@ void DrawGraphText(HDC dc, RECT rect, std::string_view text, COLORREF color, int
     const ScopedGdiObject selectedFont(dc, font);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 void DrawCommandButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view label, bool emphasized) {

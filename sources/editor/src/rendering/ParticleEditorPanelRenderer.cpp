@@ -14,6 +14,7 @@
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #pragma warning(push, 0)
 #include <objidl.h>
@@ -101,7 +102,7 @@ void DrawTextUtf8(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT
     const int length = static_cast<int>(text.size());
     const int wideLength = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), length, nullptr, 0);
     if (wideLength <= 0) {
-        DrawTextA(dc, text.data(), length, &rect, format | DT_NOPREFIX);
+        kb::editor::DrawTextUtf8(dc, text.data(), length, &rect, format | DT_NOPREFIX);
         return;
     }
     std::wstring wide(static_cast<std::size_t>(wideLength), L'\0');

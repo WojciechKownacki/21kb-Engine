@@ -9,6 +9,7 @@
 #include "rendering/gdi/ScopedBrush.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <string>
 
@@ -55,7 +56,7 @@ void DrawRenameField(HDC dc, RECT labelRect, const EditorTheme& theme, std::stri
     RECT textRect = Shrink(field, 6, 0, 4, 0);
     if (selectingAll && !value.empty()) {
         SIZE textSize{};
-        const int textWidth = GetTextExtentPoint32A(dc, value.data(), static_cast<int>(value.size()), &textSize) ? textSize.cx : 0;
+        const int textWidth = kb::editor::GetTextExtentPoint32Utf8(dc, value.data(), static_cast<int>(value.size()), &textSize) ? textSize.cx : 0;
         RECT selection = textRect;
         selection.right = std::min(selection.right, selection.left + textWidth + 2);
         selection.top += 2;
@@ -65,7 +66,7 @@ void DrawRenameField(HDC dc, RECT labelRect, const EditorTheme& theme, std::stri
 
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, GdiDrawing::ToColorRef(theme.textPrimary));
-    DrawTextA(dc, value.data(), static_cast<int>(value.size()), &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, value.data(), static_cast<int>(value.size()), &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
 } // namespace

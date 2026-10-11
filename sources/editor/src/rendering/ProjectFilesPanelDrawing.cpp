@@ -8,6 +8,7 @@
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "rendering/gdi/ScopedPen.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <string>
 
@@ -52,13 +53,13 @@ bool ProjectFilesPanelDrawing::SameVirtualPath(const std::filesystem::path& left
 void ProjectFilesPanelDrawing::DrawLabel(HDC dc, RECT rect, std::string_view text, COLORREF color) {
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
 void ProjectFilesPanelDrawing::DrawCenteredLabel(HDC dc, RECT rect, std::string_view text, COLORREF color) {
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
 void ProjectFilesPanelDrawing::DrawTextWithFont(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize, int weight, UINT flags) {
@@ -66,7 +67,7 @@ void ProjectFilesPanelDrawing::DrawTextWithFont(HDC dc, RECT rect, std::string_v
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 void ProjectFilesPanelDrawing::DrawHairline(HDC dc, RECT rect, COLORREF color) {

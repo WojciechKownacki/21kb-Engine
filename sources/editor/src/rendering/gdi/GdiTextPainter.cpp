@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 namespace kb::editor {
 namespace {
@@ -12,7 +13,7 @@ void DrawWithUiFont(HDC dc, RECT rect, std::string_view text, COLORREF color, UI
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
 }
 
 } // namespace

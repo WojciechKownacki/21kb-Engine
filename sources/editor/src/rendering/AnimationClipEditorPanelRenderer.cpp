@@ -7,6 +7,7 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -74,7 +75,7 @@ void PaintTimeline(HDC dc, const RECT& rect, const AnimationClipTimelineState& t
     SetTextColor(dc, ThemeColor(theme.textSecondary));
     RECT outlinerTitle{ left + 8, top, tracksLeft - 4, top + headerHeight };
     const std::string_view trackTitle = EditorText("animationClipEditor.track", "Track");
-    DrawTextA(dc, trackTitle.data(), static_cast<int>(trackTitle.size()), &outlinerTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, trackTitle.data(), static_cast<int>(trackTitle.size()), &outlinerTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     const float visibleDuration = std::max(0.001F, timeline.VisibleDurationSeconds());
     const float visibleStart = timeline.PanSeconds();
@@ -84,7 +85,7 @@ void PaintTimeline(HDC dc, const RECT& rect, const AnimationClipTimelineState& t
         GdiDrawing::FillRectColor(dc, RECT{ x, top + headerHeight, x + 1, bottom }, ThemeColor(theme.gridLine));
         const std::string label = std::to_string(visibleStart + (visibleDuration * static_cast<float>(division)) / 4.0F) + "s";
         RECT tick{ x + 3, top, std::min(right, x + 60), top + headerHeight };
-        DrawTextA(dc, label.c_str(), -1, &tick, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        kb::editor::DrawTextUtf8(dc, label.c_str(), -1, &tick, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
     const std::vector<AnimationClipTimelineTrack>& tracks = timeline.Tracks();
@@ -100,7 +101,7 @@ void PaintTimeline(HDC dc, const RECT& rect, const AnimationClipTimelineState& t
         }
         SetTextColor(dc, TrackColor(tracks[index].kind));
         RECT label{ left + 8, rowTop, tracksLeft - 6, rowBottom };
-        DrawTextA(dc, tracks[index].label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        kb::editor::DrawTextUtf8(dc, tracks[index].label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         for (const AnimationClipTimelineKey& key : tracks[index].keys) {
             const float normalized = std::clamp((key.timeSeconds - visibleStart) / visibleDuration, 0.0F, 1.0F);
             if (key.timeSeconds < visibleStart || key.timeSeconds > visibleStart + visibleDuration) continue;
@@ -130,7 +131,7 @@ void AnimationClipEditorPanelRenderer::Paint(
         SetTextColor(dc, ThemeColor(theme.textSecondary));
         RECT text = content;
         const std::string_view empty = EditorText("animationClipEditor.empty", "Open an Animation Clip asset to begin editing.");
-        DrawTextA(dc, empty.data(), static_cast<int>(empty.size()), &text,
+        kb::editor::DrawTextUtf8(dc, empty.data(), static_cast<int>(empty.size()), &text,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
@@ -169,7 +170,7 @@ void AnimationClipEditorPanelRenderer::Paint(
         ? std::string{}
         : "  |  " + EditorLocalization::Format("animationClipEditor.previewMesh", "Preview {mesh}", { { "mesh", previewMeshMetadata->name } });
     const std::string text = name + transportText + preview + selection;
-    DrawTextA(dc, text.c_str(), -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, text.c_str(), -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
     const char* labels[kTransportControlCount] = { "]", "[", "+", "-", "S", "L", ">|", transport.IsPlaying() ? "||" : ">", "|<" };
     for (std::uint8_t index = 0U; index < kTransportControlCount; ++index) {
@@ -181,7 +182,7 @@ void AnimationClipEditorPanelRenderer::Paint(
             active ? ThemeColor(theme.accent) : ThemeColor(theme.borderPanel));
         SetTextColor(dc, ThemeColor(theme.textPrimary));
         RECT textRect = button;
-        DrawTextA(dc, labels[index], -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        kb::editor::DrawTextUtf8(dc, labels[index], -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
     const int timelineHeight = std::clamp((static_cast<int>(content.bottom) - static_cast<int>(content.top)) / 3, 150, 300);
