@@ -2094,11 +2094,35 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             case BuildGameField::LaunchAfterBuild:
                 changed = sceneContext_.ToggleBuildGameLaunchAfterBuild();
                 break;
+            case BuildGameField::StartupMap: {
+                // A list of the project's scenes, like Unreal's Game Default Map, not a free path.
+                const std::vector<std::string> scenes = sceneContext_.ProjectScenePaths();
+                HMENU menu = CreatePopupMenu();
+                if (menu != nullptr) {
+                    if (scenes.empty()) {
+                        kb::editor::AppendMenuUtf8(menu, MF_STRING | MF_GRAYED, 0U,
+                            EditorText("buildGame.noScenes", "This project has no scenes yet").data());
+                    }
+                    for (std::size_t index = 0; index < scenes.size(); ++index) {
+                        const bool current = scenes[index] == sceneContext_.ProjectConfiguration().defaultMap;
+                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (current ? MF_CHECKED : 0U),
+                            static_cast<UINT_PTR>(index + 1U), scenes[index].c_str());
+                    }
+                    POINT cursor{};
+                    GetCursorPos(&cursor);
+                    const int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY,
+                        cursor.x, cursor.y, 0, mainWindow_, nullptr);
+                    DestroyMenu(menu);
+                    if (chosen > 0 && static_cast<std::size_t>(chosen) <= scenes.size()) {
+                        changed = sceneContext_.SetStartupScene(scenes[static_cast<std::size_t>(chosen - 1)]);
+                    }
+                }
+                break;
+            }
             case BuildGameField::Publisher:
             case BuildGameField::Version:
             case BuildGameField::ProductName:
             case BuildGameField::ExecutableName:
-            case BuildGameField::StartupMap:
             case BuildGameField::AndroidApplicationId:
             case BuildGameField::AndroidVersionCode:
             case BuildGameField::AndroidLabel:

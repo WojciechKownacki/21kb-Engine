@@ -23,7 +23,8 @@ enum class BuildGameField : std::uint8_t {
     CrashReportUrl,
     WindowsCertificateThumbprint, WindowsCertificateFile, WindowsCertificatePassword, WindowsTimestampUrl,
 };
-enum class BuildGameRowKind : std::uint8_t { ReadOnly, Text, Password, FolderPicker, FilePicker, IconPicker, Checkbox };
+// ScenePicker: chosen from the project's scenes (a list), not typed.
+enum class BuildGameRowKind : std::uint8_t { ReadOnly, Text, Password, FolderPicker, FilePicker, IconPicker, Checkbox, ScenePicker };
 
 struct BuildGameRowSpec {
     BuildGameField field = BuildGameField::None;

@@ -119,6 +119,15 @@
       "op": "save_scene"
     },
     {
+      "op": "set_startup_scene",
+      "path": "/Game/Scenes/Level1.21kbscene"
+    },
+    {
+      "op": "set_startup_scene",
+      "path": "/Game/Scenes/Missing.21kbscene",
+      "refused_with": "is not one"
+    },
+    {
       "op": "save_scene",
       "outside_project": "../Outside.21kbscene",
       "refused_with": "inside the project's Assets folder"

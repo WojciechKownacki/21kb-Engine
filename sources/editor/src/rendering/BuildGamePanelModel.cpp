@@ -41,7 +41,7 @@ constexpr std::array<BuildGameRowSpec, 5> kAndroidApplicationRows{{
     { BuildGameField::ApplicationIcon, [] { return EditorText("buildGame.field.applicationIcon", "Application icon"); }, BuildGameRowKind::IconPicker, false },
 }};
 constexpr std::array<BuildGameRowSpec, 1> kContentRows{{
-    { BuildGameField::StartupMap, [] { return EditorText("buildGame.field.startupMap", "Startup map"); }, BuildGameRowKind::Text, true },
+    { BuildGameField::StartupMap, [] { return EditorText("buildGame.field.startupMap", "Startup map"); }, BuildGameRowKind::ScenePicker, true },
 }};
 constexpr std::array<BuildGameRowSpec, 4> kReleaseSigningRows{{
     { BuildGameField::AndroidKeystore, [] { return EditorText("buildGame.field.keystore", "Keystore"); }, BuildGameRowKind::FilePicker, true },
