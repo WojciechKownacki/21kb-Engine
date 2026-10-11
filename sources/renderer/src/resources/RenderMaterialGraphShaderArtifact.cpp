@@ -1034,8 +1034,9 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    vec3 graphNormal = surface.normal;\n";
             wrapper += "    graphNormal = (u_materialParams.z > 0.0) ? normalize(vec3(graphNormal.xy * u_materialParams.z, graphNormal.z)) : vec3(0.0, 0.0, 1.0);\n";
             wrapper += "    vec3 worldNormal = normalize(basisTangent * graphNormal.x + basisBitangent * graphNormal.y + basisNormal * graphNormal.z);\n";
-            wrapper += "    gl_FragData[0] = vec4(surface.baseColor.rgb, 1.0);\n";
-            wrapper += "    gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, 1.0);\n";
+            // Alpha of the albedo and normal targets: the shading model's CustomData0/1 (gbuffer_contract.sh).
+            wrapper += "    gl_FragData[0] = vec4(surface.baseColor.rgb, clamp(surface.clearCoat, 0.0, 1.0));\n";
+            wrapper += "    gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, KbEncodeGBufferCustomData1(surface.clearCoatRoughness));\n";
             wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), KbEncodeGBufferShadingModel(" + std::to_string(shadingModelId) + ".0));\n";
             wrapper += "    gl_FragData[3] = vec4(surface.emissive, clamp(surface.specular, 0.0, 1.0));\n";
         } else if (shader.reflection.shadingModel == RenderMaterialShadingModel::Unlit) {
@@ -1058,7 +1059,9 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    float roughness = clamp(surface.roughness, 0.04, 1.0);\n";
             wrapper += "    float occlusion = clamp(surface.occlusion, 0.0, 1.0);\n";
             wrapper += "    float specular = clamp(surface.specular, 0.0, 1.0);\n";
-            wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion);\n";
+            const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
+            wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
+                std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0));\n";
             wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);\n";
         }
     }

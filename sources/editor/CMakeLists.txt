@@ -1586,8 +1586,10 @@ if(BUILD_TESTING)
         src/rendering/material_graph/EditorMaterialGraphPinPresentation.cpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
         src/rendering/material_graph/MaterialGraphCanvas.cpp
-        # The canvas tests check node rects against the panel layout, which owns ResolveLayout.
+        # The canvas tests check node rects against the panel layout, which owns ResolveLayout and
+        # measures its labels with the editor's fonts.
         src/rendering/MaterialEditorPanelLayout.cpp
+        src/rendering/gdi/EditorFontCache.cpp
         # The panel's labels are in the editor language.
         src/localization/EditorLocalization.cpp
     )

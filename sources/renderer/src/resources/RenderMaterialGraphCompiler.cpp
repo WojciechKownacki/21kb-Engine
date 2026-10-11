@@ -1023,7 +1023,10 @@ void AppendCustomCodeFunctionDefinitions(
         "    " + v + ".alpha = 1.0;\n"
         "    " + v + ".alphaClipThreshold = 0.5;\n"
         "    " + v + ".specular = 0.5;\n"
-        "    " + v + ".tangentOutput = vec3(1.0, 0.0, 0.0);\n";
+        "    " + v + ".tangentOutput = vec3(1.0, 0.0, 0.0);\n"
+        // Unreal's defaults of the Clear Coat pins.
+        "    " + v + ".clearCoat = 1.0;\n"
+        "    " + v + ".clearCoatRoughness = 0.1;\n";
 }
 
 // MAT-39: parse a compile-time boolean from a node's value hint.
@@ -1364,6 +1367,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".alphaClipThreshold = " + CompileInputExpression(cg, node, "alphaClipThreshold", RenderMaterialGraphPinType::Float, "0.5") + ";\n";
         cg.statements += "    " + tmp + ".specular = " + CompileInputExpression(cg, node, "specular", RenderMaterialGraphPinType::Float, "0.5") + ";\n";
         cg.statements += "    " + tmp + ".tangentOutput = " + CompileInputExpression(cg, node, "tangentOutput", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)") + ";\n";
+        cg.statements += "    " + tmp + ".clearCoat = " + CompileInputExpression(cg, node, "clearCoat", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
+        cg.statements += "    " + tmp + ".clearCoatRoughness = " + CompileInputExpression(cg, node, "clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.1") + ";\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1401,6 +1406,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".alphaClipThreshold = mix((" + a + ").alphaClipThreshold, (" + b + ").alphaClipThreshold, " + fv + ");\n";
         cg.statements += "    " + tmp + ".specular = mix((" + a + ").specular, (" + b + ").specular, " + fv + ");\n";
         cg.statements += "    " + tmp + ".tangentOutput = normalize(mix((" + a + ").tangentOutput, (" + b + ").tangentOutput, " + fv + "));\n";
+        cg.statements += "    " + tmp + ".clearCoat = mix((" + a + ").clearCoat, (" + b + ").clearCoat, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".clearCoatRoughness = mix((" + a + ").clearCoatRoughness, (" + b + ").clearCoatRoughness, " + fv + ");\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1459,6 +1466,12 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         }
         if (FindInputLink(cg.graph, node.id, "tangentOutput") != nullptr) {
             cg.statements += "    " + tmp + ".tangentOutput = " + CompileInputExpression(cg, node, "tangentOutput", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "clearCoat") != nullptr) {
+            cg.statements += "    " + tmp + ".clearCoat = " + CompileInputExpression(cg, node, "clearCoat", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "clearCoatRoughness") != nullptr) {
+            cg.statements += "    " + tmp + ".clearCoatRoughness = " + CompileInputExpression(cg, node, "clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.1") + ";\n";
         }
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
@@ -1970,6 +1983,8 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
         if (outputPin == "alphaClipThreshold") return "(" + baseRef + ").alphaClipThreshold";
         if (outputPin == "specular") return "(" + baseRef + ").specular";
         if (outputPin == "tangentOutput") return "(" + baseRef + ").tangentOutput";
+        if (outputPin == "clearCoat") return "(" + baseRef + ").clearCoat";
+        if (outputPin == "clearCoatRoughness") return "(" + baseRef + ").clearCoatRoughness";
         AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "Material attribute output pin is not supported.");
         return "0.0";
     case RenderMaterialGraphNodeKind::BreakVector:
@@ -3379,6 +3394,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    float alphaClipThreshold;\n";
     source += "    float specular;\n";
     source += "    vec3 tangentOutput;\n";
+    source += "    float clearCoat;\n";
+    source += "    float clearCoatRoughness;\n";
     source += "};\n\n";
 
     if (usesHsv) {
@@ -3540,6 +3557,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     std::string alphaClipThresholdExpr;
     std::string specularExpr;
     std::string tangentOutputExpr;
+    std::string clearCoatExpr;
+    std::string clearCoatRoughnessExpr;
 
     // MAT-36: when a single MaterialAttributes set is wired into MaterialOutput.attributes it drives the
     // whole surface (the "use material attributes" mode); the per-channel pins are bypassed entirely.
@@ -3556,6 +3575,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         alphaClipThresholdExpr = compileOutput("alphaClipThreshold", RenderMaterialGraphPinType::Float, "0.5");
         specularExpr = compileOutput("specular", RenderMaterialGraphPinType::Float, "0.5");
         tangentOutputExpr = compileOutput("tangentOutput", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)");
+        clearCoatExpr = compileOutput("clearCoat", RenderMaterialGraphPinType::Float, "1.0");
+        clearCoatRoughnessExpr = compileOutput("clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.1");
     }
     {
         std::ostringstream row;
@@ -3586,6 +3607,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "    material.alphaClipThreshold = " + alphaClipThresholdExpr + ";\n";
         source += "    material.specular = " + specularExpr + ";\n";
         source += "    material.tangentOutput = " + tangentOutputExpr + ";\n";
+        source += "    material.clearCoat = " + clearCoatExpr + ";\n";
+        source += "    material.clearCoatRoughness = " + clearCoatRoughnessExpr + ";\n";
     }
     source += "    return material;\n";
     source += "}\n";
