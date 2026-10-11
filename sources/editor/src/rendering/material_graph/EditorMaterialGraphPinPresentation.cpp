@@ -53,6 +53,7 @@ PreferredInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
             {"clearCoat", std::string{ EditorText("materialEditor.pin.clearCoat", "Clear Coat") }},
             {"clearCoatRoughness", std::string{ EditorText("materialEditor.pin.clearCoatRoughness", "Clear Coat Roughness") }},
             {"pixelDepthOffset", std::string{ EditorText("materialEditor.pin.pixelDepthOffset", "Pixel Depth Offset") }},
+            {"refraction", std::string{ EditorText("materialEditor.pin.refraction", "Refraction") }},
         };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return {{"texture", std::string{ EditorText("materialEditor.pin.tex", "Tex.") }}, {"uv", "UV"}};

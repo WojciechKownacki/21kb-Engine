@@ -1594,7 +1594,7 @@ namespace bgfx
 	{
 		BGFX_PROFILER_SCOPE("bgfx/Sort", kColorSubmit);
 
-		ViewId viewRemap[BGFX_CONFIG_MAX_VIEWS];
+		ViewId* viewRemap = m_viewOrder;
 		for (uint32_t ii = 0; ii < BGFX_CONFIG_MAX_VIEWS; ++ii)
 		{
 			viewRemap[m_viewRemap[ii] ] = ViewId(ii);

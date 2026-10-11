@@ -55,6 +55,7 @@ namespace {
             "clearCoat",
             "clearCoatRoughness",
             "pixelDepthOffset",
+            "refraction",
         };
     }
     return kb::render::RenderMaterialGraphNodeInputPinNames(node);
