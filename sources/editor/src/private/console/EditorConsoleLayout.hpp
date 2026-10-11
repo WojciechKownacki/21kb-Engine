@@ -1,6 +1,8 @@
 #pragma once
 
 #include "console/EditorConsoleState.hpp"
+#include "localization/EditorLocalization.hpp"
+#include "rendering/gdi/EditorTextMeasure.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -105,9 +107,14 @@ struct EditorConsoleLayoutRects {
     layout.infoButton = RECT{ layout.toolbar.left + toolbarPadX, layout.toolbar.top + toolbarPadY, layout.toolbar.left + toolbarPadX + pillWidth, layout.toolbar.top + toolbarPadY + buttonHeight };
     layout.warningButton = RECT{ layout.infoButton.right + toolbarGap, layout.toolbar.top + toolbarPadY, layout.infoButton.right + toolbarGap + pillWidth, layout.toolbar.top + toolbarPadY + buttonHeight };
     layout.errorButton = RECT{ layout.warningButton.right + toolbarGap, layout.toolbar.top + toolbarPadY, layout.warningButton.right + toolbarGap + pillWidth, layout.toolbar.top + toolbarPadY + buttonHeight };
-    layout.clearButton = RECT{ layout.toolbar.right - toolbarPadX - 80, layout.toolbar.top + toolbarPadY, layout.toolbar.right - toolbarPadX, layout.toolbar.top + toolbarPadY + buttonHeight };
-    layout.saveLogButton = RECT{ layout.clearButton.left - toolbarGap - 88, layout.toolbar.top + toolbarPadY, layout.clearButton.left - toolbarGap, layout.toolbar.top + toolbarPadY + buttonHeight };
-    layout.copyLineButton = RECT{ layout.saveLogButton.left - toolbarGap - 88, layout.toolbar.top + toolbarPadY, layout.saveLogButton.left - toolbarGap, layout.toolbar.top + toolbarPadY + buttonHeight };
+    // The buttons are as wide as their labels in the editor's language (12 pt, 8 px each side).
+    constexpr int labelPadding = 18;
+    const int clearWidth = FitTextWidth(80, { EditorText("console.clear", "Clear") }, 12, FW_NORMAL, labelPadding);
+    const int saveLogWidth = FitTextWidth(88, { EditorText("console.saveLog", "Save Log") }, 12, FW_NORMAL, labelPadding);
+    const int copyLineWidth = FitTextWidth(88, { EditorText("console.copyLine", "Copy Line") }, 12, FW_NORMAL, labelPadding);
+    layout.clearButton = RECT{ layout.toolbar.right - toolbarPadX - clearWidth, layout.toolbar.top + toolbarPadY, layout.toolbar.right - toolbarPadX, layout.toolbar.top + toolbarPadY + buttonHeight };
+    layout.saveLogButton = RECT{ layout.clearButton.left - toolbarGap - saveLogWidth, layout.toolbar.top + toolbarPadY, layout.clearButton.left - toolbarGap, layout.toolbar.top + toolbarPadY + buttonHeight };
+    layout.copyLineButton = RECT{ layout.saveLogButton.left - toolbarGap - copyLineWidth, layout.toolbar.top + toolbarPadY, layout.saveLogButton.left - toolbarGap, layout.toolbar.top + toolbarPadY + buttonHeight };
     layout.list = RECT{ content.left, layout.toolbar.bottom, content.right, content.bottom };
     layout.listScrollbarTrack = EditorConsoleInsetRect(RECT{ layout.list.right - 18, layout.list.top, layout.list.right - 6, layout.list.bottom }, 0, 6);
     layout.listRows = RECT{ layout.list.left, layout.list.top, layout.listScrollbarTrack.left - 4, layout.list.bottom };

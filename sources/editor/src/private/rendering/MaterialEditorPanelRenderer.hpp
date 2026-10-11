@@ -638,6 +638,11 @@ public:
     [[nodiscard]] static std::uint64_t DebugGraphContentRenderCount() noexcept;
 
     [[nodiscard]] static MaterialEditorPanelLayout ResolveLayout(const RECT& content) noexcept;
+    // The header buttons' labels in the editor's language; the layout sizes each button for the
+    // widest label it can show.
+    [[nodiscard]] static std::string_view PreviewPrimitiveLabel(EditorMaterialPreviewPrimitiveKind kind);
+    [[nodiscard]] static std::string_view PreviewSceneLabel(EditorMaterialPreviewLightingPreset preset);
+    [[nodiscard]] static std::string_view PreviewQualityLabel(kb::render::RenderMaterialGraphQualityLevel level);
 
     /// Live material preview target rect (sphere) inside this panel's content area, or
     /// std::nullopt when no material document is selected. Consumed by the editor frame
