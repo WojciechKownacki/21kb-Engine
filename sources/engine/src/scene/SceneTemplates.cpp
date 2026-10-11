@@ -150,7 +150,7 @@ NewScenePath SceneTemplates::ResolveNewScene(const std::filesystem::path& projec
     return { std::move(file), std::move(virtualPath), {} };
 }
 
-std::string SceneTemplates::CreateFile(const std::filesystem::path& scenePath, SceneTemplate kind,
+std::string SceneTemplates::WriteSceneFile(const std::filesystem::path& scenePath, SceneTemplate kind,
     const kb::project::ProjectDescriptor& project) {
     std::error_code error;
     if (std::filesystem::exists(scenePath, error)) {

@@ -97,7 +97,6 @@
 #include "engine/scene/SceneTransforms.hpp"
 
 #include "scene/EditorAssetErrorMessage.hpp"
-#include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"

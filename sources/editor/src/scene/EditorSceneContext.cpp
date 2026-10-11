@@ -112,7 +112,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 
 #include "scene/EditorAssetErrorMessage.hpp"
-#include "scene/EditorDefaultSceneFactory.hpp"
+#include "engine/scene/SceneTemplates.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
@@ -402,8 +402,18 @@ EditorSceneContext::EditorSceneContext()
     const std::size_t discovered = scene_->Assets().Discover();
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
     static_cast<void>(ActivateProjectPhysicsLayers(*scene_));
-    currentScenePath_ = ResolveDefaultScenePath();
+    // Like Unity: the scene that was open when the editor was last closed, else the startup scene.
     std::error_code error;
+    currentScenePath_ = ResolveDefaultScenePath();
+    std::string_view openedAs = "startup scene";
+    if (!projectConfig_.lastOpenMap.empty()) {
+        if (const std::optional<std::filesystem::path> last =
+                scene_->Assets().Manager().Mounts().Resolve(std::filesystem::path{ projectConfig_.lastOpenMap });
+            last.has_value() && std::filesystem::is_regular_file(*last, error) && !error) {
+            currentScenePath_ = *last;
+            openedAs = "last scene";
+        }
+    }
     kb::scene::SceneDocumentLoadResult loaded;
     const bool sceneFileExists = !currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error;
     if (sceneFileExists) {
@@ -412,7 +422,7 @@ EditorSceneContext::EditorSceneContext()
     if (loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
         EditorSceneAudioSettingsService::PrepareDocument(*scene_);
         SelectFirstSceneEntityOrClear();
-        console_.Info("Project", "Opened default scene: " + currentScenePath_.generic_string());
+        console_.Info("Project", "Opened the " + std::string{ openedAs } + ": " + currentScenePath_.generic_string());
         UpgradePrefabLinksOnSave(loaded.document);
     } else if (sceneFileExists) {
         // A scene that cannot be read is still the project's work: leave the file alone and start on a new
@@ -423,17 +433,25 @@ EditorSceneContext::EditorSceneContext()
         for (const kb::scene::SceneEntity root : scene_->Hierarchy().RootEntities()) {
             scene_->Entities().Destroy(root);
         }
-        hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
-        currentScenePath_ = EditorProjectPaths::UniqueScenePath("Untitled");
-        MarkSceneDocumentDirty();
+        StartUntitledBasicScene();
     } else {
-        hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
-        if (SaveCurrentScene()) {
-            console_.Info("Project", "Created default scene: " + currentScenePath_.generic_string());
-        }
+        // Nothing is written in the missing scene's place: the editor starts on a new, unsaved scene
+        // and Save asks where it goes.
+        console_.Warning("Project", "The startup scene " + projectConfig_.defaultMap +
+            " was not found. The editor started on a new, unsaved scene.");
+        StartUntitledBasicScene();
     }
     console_.Info("Editor", "Editor scene initialized.");
     CompleteLoadedUIComponents();
+}
+
+void EditorSceneContext::StartUntitledBasicScene() {
+    if (std::string filled = kb::scene::SceneTemplates::Fill(*scene_, kb::scene::SceneTemplate::Basic, Project()); !filled.empty()) {
+        console_.Error("Project", filled);
+    }
+    SelectFirstSceneEntityOrClear();
+    currentScenePath_ = EditorProjectPaths::UniqueScenePath("Untitled");
+    MarkSceneDocumentDirty();
 }
 
 EditorSceneContext::~EditorSceneContext() {

@@ -1,3 +1,4 @@
+#include "app/EditorSceneLifecycleGuard.hpp"
 #include "app/pointer/EditorLeftButtonDownRouter.hpp"
 #include "app/EditorKeyState.hpp"
 
@@ -1994,7 +1995,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (sceneContext_.BuildGamePackageSnapshot().state == EditorPackageJobState::Running) {
                 sceneContext_.CancelBuildGamePackage();
             } else {
-                if (sceneContext_.StartBuildGamePackage()) {
+                const std::optional<EditorDirtySceneResolution> resolution =
+                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow_, sceneContext_, L"building the game");
+                if (resolution.has_value() && sceneContext_.StartBuildGamePackage(*resolution)) {
                     static_cast<void>(SetTimer(messageWindow, kEditorPackageStatusTimer, 100U, nullptr));
                 }
             }

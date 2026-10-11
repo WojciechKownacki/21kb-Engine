@@ -4,6 +4,7 @@
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "app/EditorPlayModeState.hpp"
+#include "engine/scene/SceneTemplates.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
@@ -3931,8 +3932,13 @@ ReadScriptValue(
     }
 
     if (*operation == "new_scene") {
+        const auto templateName = StringMember(step, "template", error, false);
+        if (!error.empty()) return { false, error };
+        const std::optional<kb::scene::SceneTemplate> sceneTemplate =
+            kb::scene::SceneTemplates::Parse(templateName.value_or("Empty"));
+        if (!sceneTemplate.has_value()) return { false, "unknown template " + templateName.value_or("") };
         return {
-            state.context.NewScene(EditorDirtySceneResolution::Discard),
+            state.context.NewScene(EditorDirtySceneResolution::Discard, *sceneTemplate),
             "new scene" };
     }
 
@@ -3986,6 +3992,73 @@ ReadScriptValue(
             autosave.NotificationText().empty()
                 ? std::string{ "no autosave notification" }
                 : autosave.NotificationText() };
+    }
+
+    // File > New Scene without its window: the dialog's validation, then CreateScene.
+    if (*operation == "create_scene") {
+        const auto name = StringMember(step, "name", error);
+        if (!name) return { false, error };
+        const auto folder = StringMember(step, "folder", error, false);
+        const auto templateName = StringMember(step, "template", error, false);
+        const auto startup = BoolMember(step, "startup", error, false);
+        const auto refusedWith = StringMember(step, "refused_with", error, false);
+        if (!error.empty()) return { false, error };
+        const std::optional<kb::scene::SceneTemplate> sceneTemplate =
+            kb::scene::SceneTemplates::Parse(templateName.value_or("Basic"));
+        if (!sceneTemplate.has_value()) return { false, "unknown template " + templateName.value_or("") };
+        const std::string folderText{ folder.value_or("Assets/Scenes") };
+        const std::string refusal = state.context.NewScenePathError(folderText, *name);
+        if (refusedWith.has_value()) {
+            const bool refused = refusal.find(*refusedWith) != std::string::npos &&
+                !state.context.CreateScene(folderText, *name, *sceneTemplate, false, EditorDirtySceneResolution::Discard);
+            return { refused, refusal.empty() ? std::string{ "not refused" } : refusal };
+        }
+        if (!refusal.empty()) return { false, refusal };
+        return {
+            state.context.CreateScene(folderText, *name, *sceneTemplate, startup.value_or(false), EditorDirtySceneResolution::Discard),
+            state.context.CurrentScenePath().generic_string() };
+    }
+
+    // The open scene, its root objects in order and the scene the game starts in.
+    if (*operation == "assert_current_scene") {
+        const auto path = StringMember(step, "path", error);
+        const auto roots = StringMember(step, "roots", error, false);
+        const auto startup = StringMember(step, "startup", error, false);
+        const auto dirty = BoolMember(step, "dirty", error, false);
+        if (!path || !error.empty()) return { false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return { false, error };
+        std::error_code same;
+        bool matches = std::filesystem::equivalent(state.context.CurrentScenePath(), *resolved, same) && !same;
+        std::string names;
+        for (const kb::scene::SceneEntity root : state.context.Scene().Hierarchy().RootEntities()) {
+            names += (names.empty() ? "" : ",") + std::string{ state.context.Scene().Entities().Name(root) };
+        }
+        if (roots.has_value()) matches = matches && names == *roots;
+        if (startup.has_value()) matches = matches && state.context.ProjectConfiguration().defaultMap == *startup;
+        if (dirty.has_value()) matches = matches && state.context.SceneDocumentDirty() == *dirty;
+        return { matches, state.context.CurrentScenePath().generic_string() + " roots=" + names + " startup=" +
+            state.context.ProjectConfiguration().defaultMap + (state.context.SceneDocumentDirty() ? " unsaved" : " saved") };
+    }
+
+    // Opening the project again, as the editor does on its next start: which scene comes up.
+    if (*operation == "assert_reopened_scene") {
+        const auto path = StringMember(step, "path", error);
+        if (!path) return { false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return { false, error };
+        const auto roots = StringMember(step, "roots", error, false);
+        if (!error.empty()) return { false, error };
+        EditorSceneContext reopened;
+        std::error_code same;
+        bool matches = std::filesystem::equivalent(reopened.CurrentScenePath(), *resolved, same) && !same &&
+            !reopened.SceneDocumentDirty();
+        std::string names;
+        for (const kb::scene::SceneEntity root : reopened.Scene().Hierarchy().RootEntities()) {
+            names += (names.empty() ? "" : ",") + std::string{ reopened.Scene().Entities().Name(root) };
+        }
+        if (roots.has_value()) matches = matches && names == *roots;
+        return { matches, reopened.CurrentScenePath().generic_string() + " roots=" + names };
     }
 
     if (*operation == "open_scene") {

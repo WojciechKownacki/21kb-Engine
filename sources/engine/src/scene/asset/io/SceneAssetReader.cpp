@@ -6,6 +6,7 @@
 #include "scene/asset/io/SceneAssetFormat.hpp"
 #include "scene/asset/io/SceneAssetIntegrity.hpp"
 #include "scene/asset/io/SceneAssetMetaReader.hpp"
+#include "scene/asset/io/SceneAssetWriter.hpp"
 #include "scene/asset/io/SceneAssetPrimitiveCodec.hpp"
 #include "scene/document/SceneDocumentAudioValidation.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
@@ -141,6 +142,14 @@ SceneDocumentLoadResult SceneAssetReader::Read(const std::filesystem::path& path
     }
     const std::uint32_t rootCount = RootCount(loaded.document.worldPrefab);
     const std::uint32_t nodeCount = static_cast<std::uint32_t>(loaded.document.worldPrefab.NodeCount());
+    // Like Unity's import: a scene that lost its .meta (copied or renamed outside the editor) gets a
+    // new one made from the file, which has just been read in full. A .meta that is there but does
+    // not match still refuses the scene - that is a damaged or foreign file.
+    if (std::error_code missing; !std::filesystem::exists(SceneAssetMetaPath(path), missing) && !missing &&
+        !SceneAssetWriter::WriteMeta(path, loaded.document)) {
+        return SceneDocumentLoadResult{ .succeeded = false, .document = {},
+            .error = "Scene .meta was missing and could not be written next to the scene." };
+    }
     SceneDocumentLoadResult metaValidation = ValidateMeta(path, loaded.document, rootCount, nodeCount);
     if (!metaValidation.succeeded) {
         return metaValidation;

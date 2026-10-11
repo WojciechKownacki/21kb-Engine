@@ -341,7 +341,7 @@ bool EditorSceneContext::ToggleBuildGameLaunchAfterBuild() {
     return true;
 }
 
-bool EditorSceneContext::StartBuildGamePackage() {
+bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyResolution) {
     if (buildGamePackageService_ == nullptr) return false;
     if (IsBuildGameTextEditing() && !CommitBuildGameTextEdit()) return false;
     const bool release = buildGameSelectedProfile_ == 1;
@@ -352,8 +352,12 @@ bool EditorSceneContext::StartBuildGamePackage() {
         console_.Error("Packaging", validation.reason);
         return false;
     }
-    if (!SaveCurrentScene() || !SaveProjectConfiguration()) {
-        console_.Error("Packaging", "The current map and project settings must be saved before packaging.");
+    // Like Unity's Build: Save writes the edited scene first, Don't Save packages the saved one.
+    if (dirtyResolution == EditorDirtySceneResolution::Save && !SaveDirtySceneDocument("building the game")) {
+        return false;
+    }
+    if (!SaveProjectConfiguration()) {
+        console_.Error("Packaging", "The project settings must be saved before packaging.");
         return false;
     }
 

@@ -51,7 +51,7 @@ public:
         std::string_view name);
     // Writes a new scene file (and its .meta) made from the template. Refuses an existing file.
     // Returns why nothing was written, or an empty string.
-    [[nodiscard]] static std::string CreateFile(const std::filesystem::path& scenePath, SceneTemplate kind,
+    [[nodiscard]] static std::string WriteSceneFile(const std::filesystem::path& scenePath, SceneTemplate kind,
         const kb::project::ProjectDescriptor& project);
 };
 
