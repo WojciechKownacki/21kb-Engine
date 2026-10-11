@@ -19,12 +19,14 @@ SOURCE = (
     'auto a = EditorText("panel.close", "Close");\n'
     'auto b = EditorLocalization::Format("panel.saved", "Saved {scene}", {});\n'
     'auto c = EditorLocalization::Plural("panel.files", n, "{count} file", "{count} files");\n'
+    'auto d = ParticleText("panel.spread", "Spread");\n'
 )
 
 GOOD = (
     'schema 1\nfallback "en"\nlanguage "pl"\n'
     'text "panel.close" "Zamknij"\n'
     'text "panel.saved" "Zapisano {scene}"\n'
+    'text "panel.spread" "Rozrzut"\n'
     'plural "panel.files" "one" "{count} plik"\n'
     'plural "panel.files" "few" "{count} pliki"\n'
     'plural "panel.files" "many" "{count} plików"\n'
@@ -45,7 +47,7 @@ class EditorLocalizationGateTests(unittest.TestCase):
             os.makedirs(catalogs)
             Path(sources, 'Panel.cpp').write_text(SOURCE, encoding='utf-8')
             Path(catalogs, 'pl.kbloc').write_text(catalog, encoding='utf-8')
-            editor_localization.ROOT, editor_localization.SOURCES = temp, sources
+            editor_localization.ROOT, editor_localization.SOURCES = temp, [sources]
             editor_localization.CATALOGS, editor_localization.LANGUAGES = catalogs, ['pl']
             try:
                 with redirect_stdout(io.StringIO()):
@@ -65,6 +67,9 @@ class EditorLocalizationGateTests(unittest.TestCase):
 
     def test_text_the_editor_dropped_fails(self) -> None:
         self.assertEqual(self.run_check(GOOD + 'text "panel.old" "Stary"\n'), 1)
+
+    def test_missing_particle_text_fails(self) -> None:
+        self.assertEqual(self.run_check(GOOD.replace('text "panel.spread" "Rozrzut"\n', '')), 1)
 
     def test_missing_other_plural_fails(self) -> None:
         self.assertEqual(self.run_check(GOOD.replace('plural "panel.files" "other" "{count} pliku"\n', '')), 1)

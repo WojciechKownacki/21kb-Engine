@@ -9,6 +9,7 @@
 #include "platform/win32/EditorMainWindow.hpp"
 #include "platform/win32/EditorWindowClassRegistry.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "editor/ParticleEditorText.hpp"
 
 #include <string>
 #include <string_view>
@@ -96,6 +97,8 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
 
 bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     state.instance = GetModuleHandleW(nullptr);
+    // The particle editor's text comes from the editor's catalogs too.
+    kb::particle_editor::SetTextSource(&EditorLocalization::Text);
     // The user's editor language (Editor Settings > General), or the system's. A missing or damaged
     // catalog leaves the editor in English and says so.
     {

@@ -1,5 +1,5 @@
-"""The editor's text in 33 languages: collects every EditorText / EditorLocalization call of the
-editor sources and checks the catalogs in sources/editor/content/EditorShell/Localization.
+"""The editor's text in 33 languages: collects every EditorText / EditorLocalization / ParticleText
+call of the editor sources and checks the catalogs in sources/editor/content/EditorShell/Localization.
 
   python scripts/editor_localization.py extract   writes source.kbloc (every key with its English text)
   python scripts/editor_localization.py check     fails when a catalog misses a key, has a key the
@@ -12,7 +12,10 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SOURCES = os.path.join(ROOT, 'sources', 'editor', 'src')
+# The editor and the particle editor (a plugin library the editor links), which installs the
+# editor's catalogs as its text source (ParticleText).
+SOURCES = [os.path.join(ROOT, 'sources', 'editor', 'src'),
+           os.path.join(ROOT, 'sources', 'plugins', '21kb_particle', 'editor')]
 CATALOGS = os.path.join(ROOT, 'sources', 'editor', 'content', 'EditorShell', 'Localization')
 LANGUAGES = ['pl', 'de', 'fr', 'es', 'it', 'ru', 'ja', 'zh-Hans', 'ko', 'pt-PT', 'pt-BR', 'nl', 'cs', 'hu',
              'ro', 'uk', 'sv', 'tr', 'hi', 'el', 'da', 'nb', 'fi', 'sk', 'bg', 'sr', 'hr', 'ar', 'id', 'th',
@@ -22,7 +25,7 @@ STRING = r'"((?:[^"\\]|\\.)*)"'
 # An argument may be several adjacent literals the compiler joins: "part one " "part two".
 LITERALS = r'((?:"(?:[^"\\]|\\.)*"\s*)+)'
 
-TEXT_CALL = re.compile(r'\b(?:EditorText|EditorLocalization::Text|EditorLocalization::Format)\s*\(\s*' + STRING +
+TEXT_CALL = re.compile(r'\b(?:EditorText|EditorLocalization::Text|EditorLocalization::Format|ParticleText|ParticleFormat)\s*\(\s*' + STRING +
                        r'\s*,\s*' + LITERALS, re.S)
 PLURAL_CALL = re.compile(r'\bEditorLocalization::Plural\s*\(\s*' + STRING + r'\s*,[^,]+,\s*' + LITERALS + r'\s*,\s*' +
                          LITERALS, re.S)
@@ -41,7 +44,7 @@ def collect():
     """key -> {'text': english} or {'one': ..., 'other': ...}, plus the problems found."""
     messages = {}
     problems = []
-    for directory, _, names in os.walk(SOURCES):
+    for directory, _, names in (entry for base in SOURCES for entry in os.walk(base)):
         for name in names:
             if not name.endswith(('.cpp', '.hpp', '.h')):
                 continue

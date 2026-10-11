@@ -34,6 +34,8 @@ kb_apply_quality_gates(kb_21kb_particle_plugin)
 
 if(KB_BUILD_RENDERER)
     add_library(kb_21kb_particle_editor_core STATIC
+        editor/ParticleEditorText.hpp
+        editor/ParticleEditorText.cpp
         editor/ParticleEditorDocument.hpp
         editor/ParticleEditorDocument.cpp
         editor/ParticleEmitterListModel.hpp

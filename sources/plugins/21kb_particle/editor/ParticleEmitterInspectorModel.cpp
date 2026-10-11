@@ -1,5 +1,7 @@
 #include "ParticleEmitterInspectorModel.hpp"
 
+#include "ParticleEditorText.hpp"
+
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/library/EngineLibraryParsing.hpp"
@@ -17,43 +19,47 @@
 namespace kb::particle_editor {
 namespace {
 
-[[nodiscard]] const char* OutputName(kb::scene::ParticleOutputType type) noexcept {
+[[nodiscard]] std::string_view OutputName(kb::scene::ParticleOutputType type) {
     switch (type) {
-    case kb::scene::ParticleOutputType::Billboard: return "Billboard";
-    case kb::scene::ParticleOutputType::StretchedBillboard: return "Stretched Billboard";
-    case kb::scene::ParticleOutputType::PointSprite: return "Point Sprite";
-    case kb::scene::ParticleOutputType::Mesh: return "Mesh";
-    case kb::scene::ParticleOutputType::Trail: return "Trail";
-    case kb::scene::ParticleOutputType::Ribbon: return "Ribbon";
-    case kb::scene::ParticleOutputType::Beam: return "Beam";
-    case kb::scene::ParticleOutputType::Volumetric: return "Volumetric";
+    case kb::scene::ParticleOutputType::Billboard: return ParticleText("particle.output.billboard", "Billboard");
+    case kb::scene::ParticleOutputType::StretchedBillboard: return ParticleText("particle.output.stretched_billboard", "Stretched Billboard");
+    case kb::scene::ParticleOutputType::PointSprite: return ParticleText("particle.output.point_sprite", "Point Sprite");
+    case kb::scene::ParticleOutputType::Mesh: return ParticleText("particle.output.mesh", "Mesh");
+    case kb::scene::ParticleOutputType::Trail: return ParticleText("particle.output.trail", "Trail");
+    case kb::scene::ParticleOutputType::Ribbon: return ParticleText("particle.output.ribbon", "Ribbon");
+    case kb::scene::ParticleOutputType::Beam: return ParticleText("particle.output.beam", "Beam");
+    case kb::scene::ParticleOutputType::Volumetric: return ParticleText("particle.output.volumetric", "Volumetric");
     }
-    return "Invalid";
+    return ParticleText("particle.invalid", "Invalid");
 }
 
-[[nodiscard]] const char* ModuleName(kb::scene::ParticleModuleType type) noexcept {
+[[nodiscard]] std::string_view ModuleName(kb::scene::ParticleModuleType type) {
     switch (type) {
-    case kb::scene::ParticleModuleType::InitialVelocity: return "Initial Velocity";
-    case kb::scene::ParticleModuleType::Gravity: return "Gravity";
-    case kb::scene::ParticleModuleType::Wind: return "Wind";
-    case kb::scene::ParticleModuleType::Drag: return "Drag";
-    case kb::scene::ParticleModuleType::ColorOverLife: return "Color Over Life";
-    case kb::scene::ParticleModuleType::SizeOverLife: return "Size Over Life";
-    case kb::scene::ParticleModuleType::AlphaOverLife: return "Alpha Over Life";
-    case kb::scene::ParticleModuleType::CollisionPlane: return "Collision Plane";
-    case kb::scene::ParticleModuleType::SubEmitter: return "Sub Emitter";
+    case kb::scene::ParticleModuleType::InitialVelocity: return ParticleText("particle.module.initial_velocity", "Initial Velocity");
+    case kb::scene::ParticleModuleType::Gravity: return ParticleText("particle.module.gravity", "Gravity");
+    case kb::scene::ParticleModuleType::Wind: return ParticleText("particle.module.wind", "Wind");
+    case kb::scene::ParticleModuleType::Drag: return ParticleText("particle.module.drag", "Drag");
+    case kb::scene::ParticleModuleType::ColorOverLife: return ParticleText("particle.module.color_over_life", "Color Over Life");
+    case kb::scene::ParticleModuleType::SizeOverLife: return ParticleText("particle.module.size_over_life", "Size Over Life");
+    case kb::scene::ParticleModuleType::AlphaOverLife: return ParticleText("particle.module.alpha_over_life", "Alpha Over Life");
+    case kb::scene::ParticleModuleType::CollisionPlane: return ParticleText("particle.module.collision_plane", "Collision Plane");
+    case kb::scene::ParticleModuleType::SubEmitter: return ParticleText("particle.module.sub_emitter", "Sub Emitter");
     }
-    return "Invalid";
+    return ParticleText("particle.invalid", "Invalid");
 }
 
 [[nodiscard]] std::string ModuleSummary(const kb::scene::ParticleModuleAsset& module) {
     if (const auto* value = std::get_if<kb::scene::ParticleColorOverLifeModule>(&module.payload))
-        return std::to_string(value->gradient.stops.size()) + " gradient stops";
+        return ParticleFormat("particle.gradient_stops", "{count} gradient stops",
+            { { "count", std::to_string(value->gradient.stops.size()) } });
     if (const auto* value = std::get_if<kb::scene::ParticleSizeOverLifeModule>(&module.payload))
-        return std::to_string(value->curve.keyframes.size()) + " size keys";
+        return ParticleFormat("particle.size_keys", "{count} size keys",
+            { { "count", std::to_string(value->curve.keyframes.size()) } });
     if (const auto* value = std::get_if<kb::scene::ParticleAlphaOverLifeModule>(&module.payload))
-        return std::to_string(value->curve.keyframes.size()) + " alpha keys";
-    return module.enabled ? "Enabled" : "Disabled";
+        return ParticleFormat("particle.alpha_keys", "{count} alpha keys",
+            { { "count", std::to_string(value->curve.keyframes.size()) } });
+    return std::string{ module.enabled ? ParticleText("particle.enabled", "Enabled")
+                                       : ParticleText("particle.disabled", "Disabled") };
 }
 
 [[nodiscard]] std::string VecText(const kb::math::Vec3& value) {
@@ -117,13 +123,13 @@ void AddToggle(ParticleEditorPropertyRow& row, bool value) {
     row.boolValue = value;
 }
 
-void AddEnum(ParticleEditorPropertyRow& row, std::uint32_t value, std::initializer_list<const char*> labels) {
+void AddEnum(ParticleEditorPropertyRow& row, std::uint32_t value, std::initializer_list<std::string_view> labels) {
     row.widget = ParticleEditorPropertyWidget::Enum;
     row.enumValue = value;
     row.enumCount = 0U;
-    for (const char* label : labels) {
+    for (const std::string_view label : labels) {
         if (row.enumCount >= row.enumLabels.size()) break;
-        row.enumLabels[row.enumCount++] = label;
+        row.enumLabels[row.enumCount++] = label.data(); // a literal or a catalog text: both end in a null
     }
 }
 
@@ -158,36 +164,36 @@ void AddModuleProperties(ParticleEmitterInspectorView& view, const kb::scene::Pa
     std::visit([&](const auto& payload) {
         using T = std::decay_t<decltype(payload)>;
         if constexpr (std::is_same_v<T, kb::scene::ParticleInitialVelocityModule>) {
-            AddVector(add("Direction", VecText(payload.direction)), payload.direction);
-            AddSlider(add("Speed min", ScalarText(payload.speedMin)), payload.speedMin, 0.0F, 40.0F);
-            AddSlider(add("Speed max", ScalarText(payload.speedMax)), payload.speedMax, 0.0F, 40.0F);
-            AddSlider(add("Randomization", ScalarText(payload.randomization)), payload.randomization, 0.0F, 1.0F);
-            AddSlider(add("Spread", ScalarText(payload.spreadDegrees)), payload.spreadDegrees, 0.0F, 180.0F);
+            AddVector(add(std::string{ ParticleText("particle.property.direction", "Direction") }, VecText(payload.direction)), payload.direction);
+            AddSlider(add(std::string{ ParticleText("particle.property.speed_min", "Speed min") }, ScalarText(payload.speedMin)), payload.speedMin, 0.0F, 40.0F);
+            AddSlider(add(std::string{ ParticleText("particle.property.speed_max", "Speed max") }, ScalarText(payload.speedMax)), payload.speedMax, 0.0F, 40.0F);
+            AddSlider(add(std::string{ ParticleText("particle.property.randomization", "Randomization") }, ScalarText(payload.randomization)), payload.randomization, 0.0F, 1.0F);
+            AddSlider(add(std::string{ ParticleText("particle.property.spread", "Spread") }, ScalarText(payload.spreadDegrees)), payload.spreadDegrees, 0.0F, 180.0F);
         } else if constexpr (std::is_same_v<T, kb::scene::ParticleGravityModule>) {
-            AddVector(add("Acceleration", VecText(payload.acceleration)), payload.acceleration);
-            AddSlider(add("Scene gravity scale", ScalarText(payload.sceneGravityScale)), payload.sceneGravityScale, 0.0F, 4.0F);
+            AddVector(add(std::string{ ParticleText("particle.property.acceleration", "Acceleration") }, VecText(payload.acceleration)), payload.acceleration);
+            AddSlider(add(std::string{ ParticleText("particle.property.scene_gravity_scale", "Scene gravity scale") }, ScalarText(payload.sceneGravityScale)), payload.sceneGravityScale, 0.0F, 4.0F);
         } else if constexpr (std::is_same_v<T, kb::scene::ParticleWindModule>)
-            AddVector(add("Acceleration", VecText(payload.acceleration)), payload.acceleration);
+            AddVector(add(std::string{ ParticleText("particle.property.acceleration", "Acceleration") }, VecText(payload.acceleration)), payload.acceleration);
         else if constexpr (std::is_same_v<T, kb::scene::ParticleDragModule>)
-            AddSlider(add("Coefficient", ScalarText(payload.coefficient)), payload.coefficient, 0.0F, 12.0F);
+            AddSlider(add(std::string{ ParticleText("particle.property.coefficient", "Coefficient") }, ScalarText(payload.coefficient)), payload.coefficient, 0.0F, 12.0F);
         else if constexpr (std::is_same_v<T, kb::scene::ParticleColorOverLifeModule>)
-            AddGradient(add("Gradient", GradientText(payload.gradient)), payload.gradient);
+            AddGradient(add(std::string{ ParticleText("particle.property.gradient", "Gradient") }, GradientText(payload.gradient)), payload.gradient);
         else if constexpr (std::is_same_v<T, kb::scene::ParticleSizeOverLifeModule>)
-            AddCurve(add("Curve", CurveText(payload.curve)), payload.curve);
+            AddCurve(add(std::string{ ParticleText("particle.property.curve", "Curve") }, CurveText(payload.curve)), payload.curve);
         else if constexpr (std::is_same_v<T, kb::scene::ParticleAlphaOverLifeModule>)
-            AddCurve(add("Curve", CurveText(payload.curve)), payload.curve);
+            AddCurve(add(std::string{ ParticleText("particle.property.curve", "Curve") }, CurveText(payload.curve)), payload.curve);
         else if constexpr (std::is_same_v<T, kb::scene::ParticleCollisionPlaneModule>) {
-            AddVector(add("Normal", VecText(payload.normal)), payload.normal);
-            AddSlider(add("Distance", ScalarText(payload.distance)), payload.distance, -20.0F, 20.0F);
-            AddSlider(add("Restitution", ScalarText(payload.restitution)), payload.restitution, 0.0F, 1.0F);
-            AddSlider(add("Friction", ScalarText(payload.friction)), payload.friction, 0.0F, 1.0F);
-            AddIntegerSlider(add("Max events", ScalarText(payload.maxEventsPerStep)), payload.maxEventsPerStep, 1U, 256U);
+            AddVector(add(std::string{ ParticleText("particle.property.normal", "Normal") }, VecText(payload.normal)), payload.normal);
+            AddSlider(add(std::string{ ParticleText("particle.property.distance", "Distance") }, ScalarText(payload.distance)), payload.distance, -20.0F, 20.0F);
+            AddSlider(add(std::string{ ParticleText("particle.property.restitution", "Restitution") }, ScalarText(payload.restitution)), payload.restitution, 0.0F, 1.0F);
+            AddSlider(add(std::string{ ParticleText("particle.property.friction", "Friction") }, ScalarText(payload.friction)), payload.friction, 0.0F, 1.0F);
+            AddIntegerSlider(add(std::string{ ParticleText("particle.property.max_events", "Max events") }, ScalarText(payload.maxEventsPerStep)), payload.maxEventsPerStep, 1U, 256U);
         } else if constexpr (std::is_same_v<T, kb::scene::ParticleSubEmitterModule>) {
-            add("Target emitter", ScalarText(payload.targetEmitterId));
-            AddEnum(add("Trigger", ScalarText(static_cast<std::uint32_t>(payload.trigger))),
-                static_cast<std::uint32_t>(payload.trigger), {"Birth", "Death", "Collision"});
-            AddIntegerSlider(add("Count", ScalarText(payload.count)), payload.count, 1U, 16U);
-            AddIntegerSlider(add("Max depth", ScalarText(payload.maxDepth)), payload.maxDepth, 1U, 3U);
+            add(std::string{ ParticleText("particle.property.target_emitter", "Target emitter") }, ScalarText(payload.targetEmitterId));
+            AddEnum(add(std::string{ ParticleText("particle.property.trigger", "Trigger") }, ScalarText(static_cast<std::uint32_t>(payload.trigger))),
+                static_cast<std::uint32_t>(payload.trigger), {ParticleText("particle.choice.birth", "Birth"), ParticleText("particle.choice.death", "Death"), ParticleText("particle.choice.collision", "Collision")});
+            AddIntegerSlider(add(std::string{ ParticleText("particle.property.count", "Count") }, ScalarText(payload.count)), payload.count, 1U, 16U);
+            AddIntegerSlider(add(std::string{ ParticleText("particle.property.max_depth", "Max depth") }, ScalarText(payload.maxDepth)), payload.maxDepth, 1U, 3U);
         }
     }, module.payload);
 }
@@ -360,7 +366,7 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
             return diagnostic.emitterId != selectedEmitterId ||
                    diagnostic.propertyPath.find(".output.type") == std::string::npos;
         });
-        view.outputChoices.push_back({.type = type, .label = OutputName(type),
+        view.outputChoices.push_back({.type = type, .label = std::string{ OutputName(type) },
                                       .enabled = diagnostics.empty(), .diagnostics = std::move(diagnostics)});
     }
     const auto selected = std::find_if(asset.emitters.begin(), asset.emitters.end(),
@@ -373,86 +379,86 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
                                        .value = std::move(value), .editable = editable});
             return view.properties.back();
         };
-        AddCurve(addProperty(ParticleEditorProperty::SpawnRateCurve, "Rate curve", CurveText(spawn.rateOverTime)),
+        AddCurve(addProperty(ParticleEditorProperty::SpawnRateCurve, std::string{ ParticleText("particle.property.rate_curve", "Rate curve") }, CurveText(spawn.rateOverTime)),
             spawn.rateOverTime);
-        addProperty(ParticleEditorProperty::SpawnBurstsSummary, "Bursts",
+        addProperty(ParticleEditorProperty::SpawnBurstsSummary, std::string{ ParticleText("particle.property.bursts", "Bursts") },
             std::to_string(spawn.bursts.size()) + " entries", false);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnLifetimeMin, "Lifetime min", ScalarText(spawn.lifetimeMin)),
+        AddSlider(addProperty(ParticleEditorProperty::SpawnLifetimeMin, std::string{ ParticleText("particle.property.lifetime_min", "Lifetime min") }, ScalarText(spawn.lifetimeMin)),
             spawn.lifetimeMin, 0.05F, 10.0F);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnLifetimeMax, "Lifetime max", ScalarText(spawn.lifetimeMax)),
+        AddSlider(addProperty(ParticleEditorProperty::SpawnLifetimeMax, std::string{ ParticleText("particle.property.lifetime_max", "Lifetime max") }, ScalarText(spawn.lifetimeMax)),
             spawn.lifetimeMax, 0.05F, 10.0F);
-        AddColor(addProperty(ParticleEditorProperty::SpawnStartColor, "Start color",
+        AddColor(addProperty(ParticleEditorProperty::SpawnStartColor, std::string{ ParticleText("particle.property.start_color", "Start color") },
             FormatColor(spawn.startColor)), spawn.startColor);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnStartSize, "Start size", ScalarText(spawn.startSize)),
+        AddSlider(addProperty(ParticleEditorProperty::SpawnStartSize, std::string{ ParticleText("particle.property.start_size", "Start size") }, ScalarText(spawn.startSize)),
             spawn.startSize, 0.01F, 8.0F);
         // X, Y, Z in degrees; Z turns a billboard, a mesh is turned by all three (Euler: X, then Y, then Z).
-        AddVector(addProperty(ParticleEditorProperty::SpawnRotationMin, "Rotation min XYZ (deg)", VecText(spawn.initialRotationMinDegrees)),
+        AddVector(addProperty(ParticleEditorProperty::SpawnRotationMin, std::string{ ParticleText("particle.property.rotation_min_xyz_deg", "Rotation min XYZ (deg)") }, VecText(spawn.initialRotationMinDegrees)),
             spawn.initialRotationMinDegrees);
-        AddVector(addProperty(ParticleEditorProperty::SpawnRotationMax, "Rotation max XYZ (deg)", VecText(spawn.initialRotationMaxDegrees)),
+        AddVector(addProperty(ParticleEditorProperty::SpawnRotationMax, std::string{ ParticleText("particle.property.rotation_max_xyz_deg", "Rotation max XYZ (deg)") }, VecText(spawn.initialRotationMaxDegrees)),
             spawn.initialRotationMaxDegrees);
-        AddVector(addProperty(ParticleEditorProperty::SpawnAngularVelocityMin, "Spin min XYZ (deg/s)", VecText(spawn.angularVelocityMinDegrees)),
+        AddVector(addProperty(ParticleEditorProperty::SpawnAngularVelocityMin, std::string{ ParticleText("particle.property.spin_min_xyz_deg_s", "Spin min XYZ (deg/s)") }, VecText(spawn.angularVelocityMinDegrees)),
             spawn.angularVelocityMinDegrees);
-        AddVector(addProperty(ParticleEditorProperty::SpawnAngularVelocityMax, "Spin max XYZ (deg/s)", VecText(spawn.angularVelocityMaxDegrees)),
+        AddVector(addProperty(ParticleEditorProperty::SpawnAngularVelocityMax, std::string{ ParticleText("particle.property.spin_max_xyz_deg_s", "Spin max XYZ (deg/s)") }, VecText(spawn.angularVelocityMaxDegrees)),
             spawn.angularVelocityMaxDegrees);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnSpeedMin, "Speed min", ScalarText(spawn.speedMin)),
+        AddSlider(addProperty(ParticleEditorProperty::SpawnSpeedMin, std::string{ ParticleText("particle.property.speed_min", "Speed min") }, ScalarText(spawn.speedMin)),
             spawn.speedMin, 0.0F, 40.0F);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnSpeedMax, "Speed max", ScalarText(spawn.speedMax)),
+        AddSlider(addProperty(ParticleEditorProperty::SpawnSpeedMax, std::string{ ParticleText("particle.property.speed_max", "Speed max") }, ScalarText(spawn.speedMax)),
             spawn.speedMax, 0.0F, 40.0F);
-        AddVector(addProperty(ParticleEditorProperty::SpawnDirection, "Direction", VecText(spawn.direction)),
+        AddVector(addProperty(ParticleEditorProperty::SpawnDirection, std::string{ ParticleText("particle.property.direction", "Direction") }, VecText(spawn.direction)),
             spawn.direction);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnSpreadDegrees, "Spread", ScalarText(spawn.spreadDegrees)),
+        AddSlider(addProperty(ParticleEditorProperty::SpawnSpreadDegrees, std::string{ ParticleText("particle.property.spread", "Spread") }, ScalarText(spawn.spreadDegrees)),
             spawn.spreadDegrees, 0.0F, 180.0F);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnRandomization, "Randomization", ScalarText(spawn.randomization)),
+        AddSlider(addProperty(ParticleEditorProperty::SpawnRandomization, std::string{ ParticleText("particle.property.randomization", "Randomization") }, ScalarText(spawn.randomization)),
             spawn.randomization, 0.0F, 1.0F);
-        AddSlider(addProperty(ParticleEditorProperty::SpawnPrewarmSeconds, "Prewarm", ScalarText(spawn.prewarmSeconds)),
+        AddSlider(addProperty(ParticleEditorProperty::SpawnPrewarmSeconds, std::string{ ParticleText("particle.property.prewarm", "Prewarm") }, ScalarText(spawn.prewarmSeconds)),
             spawn.prewarmSeconds, 0.0F, 8.0F);
-        AddEnum(addProperty(ParticleEditorProperty::OutputBlend, "Blend",
+        AddEnum(addProperty(ParticleEditorProperty::OutputBlend, std::string{ ParticleText("particle.property.blend", "Blend") },
             ScalarText(static_cast<std::uint32_t>(selected->output.blend))),
             static_cast<std::uint32_t>(selected->output.blend),
-            {"Opaque", "Alpha", "Add", "Multiply", "Subtract", "Premul"});
-        AddEnum(addProperty(ParticleEditorProperty::OutputSort, "Sort",
+            {ParticleText("particle.choice.opaque", "Opaque"), ParticleText("particle.choice.alpha", "Alpha"), ParticleText("particle.choice.add", "Add"), ParticleText("particle.choice.multiply", "Multiply"), ParticleText("particle.choice.subtract", "Subtract"), ParticleText("particle.choice.premul", "Premul")});
+        AddEnum(addProperty(ParticleEditorProperty::OutputSort, std::string{ ParticleText("particle.property.sort", "Sort") },
             ScalarText(static_cast<std::uint32_t>(selected->output.sort))),
             static_cast<std::uint32_t>(selected->output.sort),
-            {"None", "Back to Front", "Front to Back", "Distance", "Age"});
-        AddToggle(addProperty(ParticleEditorProperty::OutputDepthTest, "Depth test",
+            {ParticleText("particle.choice.none", "None"), ParticleText("particle.choice.back_to_front", "Back to Front"), ParticleText("particle.choice.front_to_back", "Front to Back"), ParticleText("particle.choice.distance", "Distance"), ParticleText("particle.choice.age", "Age")});
+        AddToggle(addProperty(ParticleEditorProperty::OutputDepthTest, std::string{ ParticleText("particle.property.depth_test", "Depth test") },
             selected->output.depthTest ? "true" : "false"), selected->output.depthTest);
-        AddToggle(addProperty(ParticleEditorProperty::OutputDepthWrite, "Depth write",
+        AddToggle(addProperty(ParticleEditorProperty::OutputDepthWrite, std::string{ ParticleText("particle.property.depth_write", "Depth write") },
             selected->output.depthWrite ? "true" : "false"), selected->output.depthWrite);
-        AddToggle(addProperty(ParticleEditorProperty::OutputSoftParticles, "Soft particles",
+        AddToggle(addProperty(ParticleEditorProperty::OutputSoftParticles, std::string{ ParticleText("particle.property.soft_particles", "Soft particles") },
             selected->output.softParticles ? "true" : "false"), selected->output.softParticles);
-        AddToggle(addProperty(ParticleEditorProperty::OutputAntiAliasing, "Anti-aliasing",
+        AddToggle(addProperty(ParticleEditorProperty::OutputAntiAliasing, std::string{ ParticleText("particle.property.anti_aliasing", "Anti-aliasing") },
             selected->output.antiAliasing ? "true" : "false"), selected->output.antiAliasing);
-        AddEnum(addProperty(ParticleEditorProperty::OutputAlignment, "Alignment",
+        AddEnum(addProperty(ParticleEditorProperty::OutputAlignment, std::string{ ParticleText("particle.property.alignment", "Alignment") },
             ScalarText(static_cast<std::uint32_t>(selected->output.alignment))),
             static_cast<std::uint32_t>(selected->output.alignment),
-            {"Camera", "Velocity", "World Up", "Local"});
+            {ParticleText("particle.choice.camera", "Camera"), ParticleText("particle.choice.velocity", "Velocity"), ParticleText("particle.choice.world_up", "World Up"), ParticleText("particle.choice.local", "Local")});
         std::visit([&](const auto& payload) {
             using T = std::decay_t<decltype(payload)>;
             if constexpr (std::is_same_v<T, kb::scene::ParticleBillboardOutput> ||
                           std::is_same_v<T, kb::scene::ParticleStretchedBillboardOutput> ||
                           std::is_same_v<T, kb::scene::ParticlePointSpriteOutput>) {
-                AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookColumns, "Atlas columns",
+                AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookColumns, std::string{ ParticleText("particle.property.atlas_columns", "Atlas columns") },
                     ScalarText(payload.flipbook.columns)), payload.flipbook.columns, 1U, 16U);
-                AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookRows, "Atlas rows",
+                AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookRows, std::string{ ParticleText("particle.property.atlas_rows", "Atlas rows") },
                     ScalarText(payload.flipbook.rows)), payload.flipbook.rows, 1U, 16U);
-                AddSlider(addProperty(ParticleEditorProperty::FlipbookFramesPerSecond, "Frame rate",
+                AddSlider(addProperty(ParticleEditorProperty::FlipbookFramesPerSecond, std::string{ ParticleText("particle.property.frame_rate", "Frame rate") },
                     ScalarText(payload.flipbook.framesPerSecond)), payload.flipbook.framesPerSecond, 0.0F, 60.0F);
-                AddToggle(addProperty(ParticleEditorProperty::FlipbookLooping, "Flipbook loop",
+                AddToggle(addProperty(ParticleEditorProperty::FlipbookLooping, std::string{ ParticleText("particle.property.flipbook_loop", "Flipbook loop") },
                     payload.flipbook.looping ? "true" : "false"), payload.flipbook.looping);
                 if constexpr (std::is_same_v<T, kb::scene::ParticleStretchedBillboardOutput>) {
-                    AddSlider(addProperty(ParticleEditorProperty::OutputVelocityScale, "Velocity scale",
+                    AddSlider(addProperty(ParticleEditorProperty::OutputVelocityScale, std::string{ ParticleText("particle.property.velocity_scale", "Velocity scale") },
                         ScalarText(payload.velocityScale)), payload.velocityScale, 0.0F, 8.0F);
-                    AddSlider(addProperty(ParticleEditorProperty::OutputMinimumLength, "Minimum length",
+                    AddSlider(addProperty(ParticleEditorProperty::OutputMinimumLength, std::string{ ParticleText("particle.property.minimum_length", "Minimum length") },
                         ScalarText(payload.minimumLength)), payload.minimumLength, 0.0F, 4.0F);
                 } else if constexpr (std::is_same_v<T, kb::scene::ParticlePointSpriteOutput>)
-                    AddSlider(addProperty(ParticleEditorProperty::OutputPointDiameter, "Point diameter",
+                    AddSlider(addProperty(ParticleEditorProperty::OutputPointDiameter, std::string{ ParticleText("particle.property.point_diameter", "Point diameter") },
                         ScalarText(payload.diameter)), payload.diameter, 0.02F, 4.0F);
             }
         }, selected->output.payload);
         view.modules.reserve(selected->modules.size());
         for (const auto& module : selected->modules) {
             view.modules.push_back({.moduleId = module.moduleId, .authoringOrder = module.authoringOrder,
-                .type = module.type, .label = ModuleName(module.type), .summary = ModuleSummary(module),
+                .type = module.type, .label = std::string{ ModuleName(module.type) }, .summary = ModuleSummary(module),
                 .enabled = module.enabled, .selected = module.moduleId == selectedModuleId});
             AddModuleProperties(view, module);
         }
