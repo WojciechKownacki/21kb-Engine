@@ -1,0 +1,35 @@
+# KB material instance
+version 1
+parentMaterialAssetId 11557387528661665102
+materialType builtin.pbr
+materialTypeVersion 1
+baseColor 1 1 1 1
+metallicFactor 0
+roughnessFactor 1
+normalScale 1
+occlusionStrength 1
+emissiveColor 0 0 0
+emissiveStrength 1
+alphaMode OPAQUE
+alphaCutoff 0.5
+translucencyBlend ALPHA
+doubleSided false
+writesDepth true
+tiling 1 1
+offset 0 0
+clearcoatFactor 0
+clearcoatRoughnessFactor 0
+sheenColor 0 0 0
+sheenRoughnessFactor 0
+transmissionFactor 0
+thicknessFactor 0
+attenuationColor 1 1 1
+attenuationDistance 0
+subsurfaceColor 1 1 1
+subsurfaceFactor 0
+anisotropyStrength 0
+anisotropyRotation 0
+layerWeight 1
+decalBlendMode DISABLED
+layerBlendMode REPLACE
+graphParameterValue color4 Color 0.215860993 0.0295567997 0.527114987 1

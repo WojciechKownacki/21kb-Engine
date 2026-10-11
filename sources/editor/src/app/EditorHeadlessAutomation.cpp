@@ -33,6 +33,8 @@
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/MaterialPreviewPresentSettings.hpp"
+#include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/ParticleThumbnailTimeline.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
@@ -764,6 +766,23 @@ struct EditorHeadlessAutomation::Impl {
         viewport.EndPaintLayout();
         return std::string_view{ viewport.ActiveBackendLabel() } !=
             "Not initialized";
+    }
+
+    // The Material Editor's preview, presented with the panel's own settings (camera, lighting,
+    // graph variant) into the offscreen target a capture reads.
+    [[nodiscard]] bool RenderMaterialPreview(EditorSceneContext& context, const RECT& bounds) {
+        if (window == nullptr) return false;
+        const kb::assets::AssetId asset = context.MaterialEditor().OpenAssetId();
+        if (MaterialPreviewMetadata(context, asset) == nullptr) return false;
+        const kb::scene::Scene& previewScene = context.MaterialPreviewScene(asset, EditorMaterialPreviewSurface::MaterialEditor);
+        EditorSceneBgfxViewport::PresentSettings settings =
+            BuildMaterialPreviewPresentSettings(context, bounds, kMaterialEditorPreviewViewportKey);
+        settings.presentToHost = false;
+        viewport.SetGraphShaderCacheRoot(context.GraphShaderCacheRoot());
+        viewport.BeginPaintLayout(window);
+        viewport.Present(window, bounds, previewScene, settings);
+        viewport.EndPaintLayout();
+        return std::string_view{ viewport.ActiveBackendLabel() } != "Not initialized";
     }
 
     HWND window = nullptr;
@@ -3595,6 +3614,46 @@ bool EditorHeadlessAutomation::CaptureSceneViewport(std::string_view checkpoint)
     return CaptureScene("capture_scene_viewport", checkpoint, [this] {
         return impl_->RenderSceneViewport(context_, sceneViewportKey);
     });
+}
+
+bool EditorHeadlessAutomation::CaptureMaterialPreview(std::string_view checkpoint, int width, int height) {
+    if (width < 64 || width > 3840 || height < 64 || height > 2160) {
+        Trace("capture_material_preview", false, "size");
+        return false;
+    }
+    const RECT bounds{ 0, 0, width, height };
+    const std::filesystem::path output = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".png");
+    // The first present makes the preview scene (and asks for the open graph's preview cook).
+    if (!impl_->RenderMaterialPreview(context_, bounds)) {
+        Trace("capture_material_preview", false, "no-open-material");
+        return false;
+    }
+    const std::uint64_t capture = context_.RequestMaterialPreviewCapture(EditorMaterialPreviewSurface::MaterialEditor, output);
+    if (capture == 0U) {
+        Trace("capture_material_preview", false, "request-rejected");
+        return false;
+    }
+    for (const auto deadline = std::chrono::steady_clock::now() + kCaptureDeadline;
+         std::chrono::steady_clock::now() < deadline;) {
+        if (!impl_->RenderMaterialPreview(context_, bounds) || !impl_->viewport.AdvanceAsyncReadbacks()) {
+            Trace("capture_material_preview", false, "present-failed");
+            return false;
+        }
+        const kb::scene::SceneScreenCaptureStatus status =
+            context_.MaterialPreviewCaptureStatus(EditorMaterialPreviewSurface::MaterialEditor, capture);
+        if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
+            const bool valid = ValidateCapturedImage(output, true);
+            Trace("capture_material_preview", valid, output.filename().string());
+            return valid;
+        }
+        if (status == kb::scene::SceneScreenCaptureStatus::Failed) {
+            Trace("capture_material_preview", false, "capture-failed");
+            return false;
+        }
+        Sleep(5U);
+    }
+    Trace("capture_material_preview", false, "capture-timeout");
+    return false;
 }
 
 std::optional<kb::render::ScenePostProcessSettings> EditorHeadlessAutomation::SceneViewportPostProcessSettings() {

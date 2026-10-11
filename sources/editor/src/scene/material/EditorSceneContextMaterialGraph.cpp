@@ -1526,6 +1526,7 @@ bool EditorSceneContext::CycleMaterialPreviewPrimitive() {
 const kb::scene::Scene& EditorSceneContext::MaterialThumbnailScene(kb::assets::AssetId id) {
     if (materialThumbnailScene_ == nullptr) {
         materialThumbnailScene_ = std::make_unique<EditorMaterialPreviewScene>();
+        materialThumbnailScene_->SetReleaseHandler(renderSceneReleaseHandler_);
         static_cast<void>(materialThumbnailScene_->SetSceneSettings(materialPreviewScene_->SceneSettings()));
         static_cast<void>(materialThumbnailScene_->SetPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy::Sphere()));
     }
@@ -1575,6 +1576,29 @@ kb::scene::SceneScreenCaptureStatus EditorSceneContext::MaterialThumbnailCapture
         return kb::scene::SceneScreenCaptureStatus::Unknown;
     }
     return kb::scene::SceneRenderFeedback::ScreenCaptureStatus(*thumbnailScene, captureId);
+}
+
+std::uint64_t EditorSceneContext::RequestMaterialPreviewCapture(EditorMaterialPreviewSurface surface, const std::filesystem::path& path) {
+    EditorMaterialPreviewScene* previewScene = surface == EditorMaterialPreviewSurface::Inspector
+        ? inspectorMaterialPreviewScene_.get()
+        : materialPreviewScene_.get();
+    kb::scene::Scene* scene = previewScene == nullptr ? nullptr : previewScene->MutableScene();
+    if (scene == nullptr || path.empty()) {
+        return 0U;
+    }
+    return kb::scene::SceneRenderFeedback::RequestScreenCapture(*scene, path.generic_string());
+}
+
+kb::scene::SceneScreenCaptureStatus EditorSceneContext::MaterialPreviewCaptureStatus(
+    EditorMaterialPreviewSurface surface, std::uint64_t captureId) const noexcept {
+    EditorMaterialPreviewScene* previewScene = surface == EditorMaterialPreviewSurface::Inspector
+        ? inspectorMaterialPreviewScene_.get()
+        : materialPreviewScene_.get();
+    const kb::scene::Scene* scene = previewScene == nullptr ? nullptr : previewScene->MutableScene();
+    if (scene == nullptr || captureId == 0U) {
+        return kb::scene::SceneScreenCaptureStatus::Unknown;
+    }
+    return kb::scene::SceneRenderFeedback::ScreenCaptureStatus(*scene, captureId);
 }
 
 const EditorMaterialPreviewSceneSettings& EditorSceneContext::MaterialPreviewSceneSettings() const noexcept {

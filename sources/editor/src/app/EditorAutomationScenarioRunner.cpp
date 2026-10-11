@@ -4781,6 +4781,16 @@ ReadScriptValue(
         return {changed >= 100U, "changed pixels: " + std::to_string(changed) + " (minimum 100)"};
     }
 
+    if (*operation == "capture_material_preview") {
+        // The Material Editor's preview of the open material, as the panel shows it.
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        if (!checkpoint) return { false, error };
+        const double width = NumberMember(step, "width", error, false).value_or(512.0);
+        const double height = NumberMember(step, "height", error, false).value_or(512.0);
+        return { state.automation.CaptureMaterialPreview(*checkpoint, static_cast<int>(width), static_cast<int>(height)),
+                 "material_preview:" + *checkpoint };
+    }
+
     if (*operation == "capture_scene_viewport") {
         // The Scene panel's viewport as the GPU renders it in edit mode (its camera, its
         // overlays such as the world cell grid), read back to a PNG.

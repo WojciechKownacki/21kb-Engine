@@ -7,6 +7,7 @@
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "scene/audio/EditorSceneAudioSettingsService.hpp"
+#include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -172,6 +173,12 @@ void EditorSceneContext::DiscardDirtySceneDocument(std::string_view reason) {
 void EditorSceneContext::SetRenderSceneReleaseHandler(
     std::function<void(const kb::scene::Scene&)> handler) {
     renderSceneReleaseHandler_ = std::move(handler);
+    // The material previews render through the same renderer as the main scene.
+    for (EditorMaterialPreviewScene* preview : { materialPreviewScene_.get(), inspectorMaterialPreviewScene_.get(), materialThumbnailScene_.get() }) {
+        if (preview != nullptr) {
+            preview->SetReleaseHandler(renderSceneReleaseHandler_);
+        }
+    }
 }
 
 void EditorSceneContext::ReleaseRenderedSceneResources() {

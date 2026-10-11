@@ -2814,12 +2814,10 @@ struct MaterialEditorDocumentView {
     std::vector<std::uint32_t> diagnosticNodeIds;
     bool hasErrorDiagnostic = false;
 
-    // Call once after building, so `material` points at whatever the view ended up owning.
-    [[nodiscard]] MaterialEditorDocumentView&& Resolved() && noexcept {
-        if (material == nullptr && ownedMaterial.has_value()) {
-            material = &*ownedMaterial;
-        }
-        return std::move(*this);
+    // The material the view shows: the borrowed working copy, else its own copy. Resolved on every call:
+    // a pointer into ownedMaterial taken before the view is moved into its optional would dangle.
+    [[nodiscard]] const kb::render::RenderMaterialAssetData* Material() const noexcept {
+        return material != nullptr ? material : (ownedMaterial.has_value() ? &*ownedMaterial : nullptr);
     }
 };
 
@@ -2893,7 +2891,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
             .parentMaterialAssetId = {},
             .diagnostics = { "Error file_open_failed: Material document path could not be resolved." },
             .hasErrorDiagnostic = true,
-        }.Resolved();
+        };
     }
 
     if (metadata.type == "RenderMaterial") {
@@ -2906,7 +2904,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
                 .diagnostics = std::move(diagnostics),
                 .diagnosticNodeIds = sceneContext.MaterialEditor().DiagnosticNodeIds(),
                 .hasErrorDiagnostic = sceneContext.MaterialEditor().DiagnosticsHaveError(),
-            }.Resolved();
+            };
         }
         kb::render::RenderMaterialAssetParseResult result = kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata.id);
         std::vector<std::string> diagnostics;
@@ -2921,7 +2919,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
             .parentMaterialAssetId = {},
             .diagnostics = std::move(diagnostics),
             .hasErrorDiagnostic = hasError,
-        }.Resolved();
+        };
     }
 
     if (metadata.type == kb::render::kRenderMaterialGraphAssetType) {
@@ -2935,7 +2933,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
                 .diagnostics = std::move(diagnostics),
                 .diagnosticNodeIds = sceneContext.MaterialEditor().DiagnosticNodeIds(),
                 .hasErrorDiagnostic = sceneContext.MaterialEditor().DiagnosticsHaveError(),
-            }.Resolved();
+            };
         }
         kb::render::RenderMaterialAssetParseResult result =
             kb::render::RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(path, metadata.id);
@@ -2957,7 +2955,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
             .parentMaterialAssetId = {},
             .diagnostics = std::move(diagnostics),
             .hasErrorDiagnostic = hasError,
-        }.Resolved();
+        };
     }
 
     if (metadata.type != "RenderMaterialInstance") {
@@ -2975,7 +2973,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
             .parentMaterialAssetId = {},
             .diagnostics = std::move(diagnostics),
             .hasErrorDiagnostic = true,
-        }.Resolved();
+        };
     }
 
     const kb::assets::AssetMetadata* parentMetadata = manager.Registry().Find(instance.asset->parentMaterialAssetId);
@@ -2995,7 +2993,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
         .parentMaterialAssetId = instance.asset->parentMaterialAssetId,
         .diagnostics = std::move(diagnostics),
         .hasErrorDiagnostic = hasError,
-    }.Resolved();
+    };
 }
 
 void DrawGraphOverlay(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
@@ -3255,8 +3253,8 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         return;
     }
 
-    if (document->material != nullptr) {
-        DrawGraphCanvas(dc, content, *document->material, sceneContext, metadata.id, sceneContext.SelectedMaterialGraphNodeId());
+    if (document->Material() != nullptr) {
+        DrawGraphCanvas(dc, content, *document->Material(), sceneContext, metadata.id, sceneContext.SelectedMaterialGraphNodeId());
     } else {
         DrawGraphGrid(dc, layout.graphCanvas);
         DrawText(dc, layout.graphCanvas, EditorText("materialEditor.documentUnparsable", "Material document could not be parsed."), RGB(232, 112, 112), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -3265,10 +3263,10 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         MakeEditorMaterialGraphCookBanner(sceneContext.OpenMaterialGraphCookResult().status);
     DrawPreviewOverlay(dc, layout, telemetry, cookBanner);
     DrawDiagnosticsPanel(dc, layout, *document);
-    if (sceneContext.MaterialEditor().InfoPanelVisible() && document->material != nullptr) {
+    if (sceneContext.MaterialEditor().InfoPanelVisible() && document->Material() != nullptr) {
         const MaterialEditorPanelDetailsRows details = MaterialEditorPanelRenderer::DetailsRowsForDocument(
             sceneContext,
-            *document->material,
+            *document->Material(),
             metadata.type == "RenderMaterialInstance");
         const MaterialEditorDetailsLayout detailsLayout = MaterialEditorPanelRenderer::ResolveDetailsLayout(
             content,

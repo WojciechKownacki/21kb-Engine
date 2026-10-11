@@ -188,6 +188,8 @@ public:
     // The Scene panel's viewport exactly as the editor presents it: its own camera and the
     // production present settings, editor overlays included (grid lines, the world cell grid).
     [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
+    // The Material Editor's preview of the open material, presented as the panel presents it.
+    [[nodiscard]] bool CaptureMaterialPreview(std::string_view checkpoint, int width, int height);
     // The post-process settings the Scene panel's viewport renders with now (its own present
     // settings, as a paint builds them); nullopt when it renders the renderer's defaults.
     [[nodiscard]] std::optional<kb::render::ScenePostProcessSettings> SceneViewportPostProcessSettings();
