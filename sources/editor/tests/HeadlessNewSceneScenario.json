@@ -119,6 +119,16 @@
       "op": "save_scene"
     },
     {
+      "op": "create_asset",
+      "id": "freshFolderScript",
+      "type": "lua_script",
+      "folder": "/Game/Gameplay/Scripts"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Gameplay/Scripts/NewScript.lua"
+    },
+    {
       "op": "set_startup_scene",
       "path": "/Game/Scenes/Level1.21kbscene"
     },

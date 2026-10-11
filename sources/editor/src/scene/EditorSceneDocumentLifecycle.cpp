@@ -377,8 +377,14 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         }
     } else if (!currentScenePath_.empty()) {
         loaded = kb::scene::SceneDocumentService::Load(currentScenePath_);
-        if (!loaded.succeeded || !kb::scene::SceneDocumentService::LoadIntoScene(*nextScene, loaded.document)) {
-            console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string());
+        if (!loaded.succeeded) {
+            console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string() + " could not be read" +
+                (loaded.error.empty() ? std::string{ "." } : ": " + loaded.error));
+            return false;
+        }
+        if (!kb::scene::SceneDocumentService::LoadIntoScene(*nextScene, loaded.document)) {
+            console_.Error("Project", "Scene could not be reloaded: the content of " + currentScenePath_.generic_string() +
+                " could not be built into the scene.");
             return false;
         }
     }
