@@ -185,37 +185,6 @@ void DrawCommandButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::
     DrawText(dc, RECT{ rect.left + 8, rect.top, rect.right - 8, rect.bottom }, label, GdiDrawing::ToColorRef(emphasized ? theme.textPrimary : theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-[[nodiscard]] std::string_view PreviewPrimitiveButtonLabel(EditorMaterialPreviewPrimitiveKind kind) {
-    switch (kind) {
-    case EditorMaterialPreviewPrimitiveKind::Sphere: return EditorText("materialEditor.preview.sphere", "Sphere");
-    case EditorMaterialPreviewPrimitiveKind::Cylinder: return EditorText("materialEditor.preview.cylinder", "Cylinder");
-    case EditorMaterialPreviewPrimitiveKind::Cube: return EditorText("materialEditor.preview.cube", "Cube");
-    case EditorMaterialPreviewPrimitiveKind::Plane: return EditorText("materialEditor.preview.plane", "Plane");
-    case EditorMaterialPreviewPrimitiveKind::CustomMesh: return EditorText("materialEditor.preview.custom", "Custom");
-    case EditorMaterialPreviewPrimitiveKind::Fallback: return EditorText("materialEditor.preview.fallback", "Fallback");
-    }
-    return EditorText("materialEditor.preview.preview", "Preview");
-}
-
-[[nodiscard]] std::string_view PreviewSceneButtonLabel(EditorMaterialPreviewLightingPreset preset) {
-    switch (preset) {
-    case EditorMaterialPreviewLightingPreset::Studio: return EditorText("materialEditor.preview.studio", "Studio");
-    case EditorMaterialPreviewLightingPreset::Neutral: return EditorText("materialEditor.preview.neutral", "Neutral");
-    case EditorMaterialPreviewLightingPreset::HighContrast: return EditorText("materialEditor.preview.highContrast", "High");
-    }
-    return EditorText("materialEditor.preview.scene", "Scene");
-}
-
-[[nodiscard]] std::string_view PreviewQualityButtonLabel(kb::render::RenderMaterialGraphQualityLevel qualityLevel) {
-    switch (qualityLevel) {
-    case kb::render::RenderMaterialGraphQualityLevel::Low: return EditorText("materialEditor.quality.low", "Low");
-    case kb::render::RenderMaterialGraphQualityLevel::Medium: return EditorText("materialEditor.quality.medium", "Med");
-    case kb::render::RenderMaterialGraphQualityLevel::High: return EditorText("materialEditor.quality.high", "High");
-    case kb::render::RenderMaterialGraphQualityLevel::Epic: return EditorText("materialEditor.quality.epic", "Epic");
-    }
-    return EditorText("materialEditor.quality.quality", "Quality");
-}
-
 void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext, bool dirty, bool infoVisible) {
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     GdiDrawing::FillRectColor(dc, layout.header, GdiDrawing::ToColorRef(theme.strip));
@@ -228,9 +197,9 @@ void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const Edi
     const std::string title = std::string{ EditorText("panel.materialEditor", "Material Editor") } + (dirty ? "  *" : "");
     DrawText(dc, layout.title, title, dirty ? RGB(242, 193, 103) : GdiDrawing::ToColorRef(theme.textPrimary), 14, FW_SEMIBOLD);
     DrawCommandButton(dc, layout.infoButton, theme, EditorText("materialEditor.info", "Info"), infoVisible);
-    DrawCommandButton(dc, layout.previewPrimitiveButton, theme, PreviewPrimitiveButtonLabel(sceneContext.MaterialPreviewPrimitivePolicy().kind), false);
-    DrawCommandButton(dc, layout.previewSceneButton, theme, PreviewSceneButtonLabel(sceneContext.MaterialPreviewSceneSettings().lightingPreset), false);
-    DrawCommandButton(dc, layout.previewQualityButton, theme, PreviewQualityButtonLabel(sceneContext.MaterialPreviewSceneSettings().qualityLevel), false);
+    DrawCommandButton(dc, layout.previewPrimitiveButton, theme, MaterialEditorPanelRenderer::PreviewPrimitiveLabel(sceneContext.MaterialPreviewPrimitivePolicy().kind), false);
+    DrawCommandButton(dc, layout.previewSceneButton, theme, MaterialEditorPanelRenderer::PreviewSceneLabel(sceneContext.MaterialPreviewSceneSettings().lightingPreset), false);
+    DrawCommandButton(dc, layout.previewQualityButton, theme, MaterialEditorPanelRenderer::PreviewQualityLabel(sceneContext.MaterialPreviewSceneSettings().qualityLevel), false);
     DrawCommandButton(dc, layout.previewNormalButton, theme, EditorText("materialEditor.normalDebug", "Normal"), sceneContext.MaterialPreviewNormalDebugViewEnabled());
     DrawCommandButton(dc, layout.previewNodeButton, theme, EditorText("materialEditor.nodePreview", "Node"), sceneContext.MaterialPreviewNodePreviewEnabled());
     DrawCommandButton(dc, layout.applyButton, theme, layout.compactToolbar ? EditorText("common.apply", "Apply")
