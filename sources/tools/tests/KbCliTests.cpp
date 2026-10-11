@@ -3449,6 +3449,28 @@ void RunMaterialAuthoringCommandTests() {
     Require(wrongPin.exitCode != 0 && Contains(wrongPin.output, "baseColor"), "an unknown pin must be refused with the inputs: " + wrongPin.output);
     const CommandRun outputValue = graph({ "set", "--node", "Output", "--value", "1" });
     Require(outputValue.exitCode != 0, "the Material Output has no value to set");
+    // A node's settings (here a Rotator's speed and centre), a constant above 1 and the material's
+    // Blend Mode are set as the Material Editor sets them and survive the save.
+    Require(graph({ "add-node", "--kind", "Rotator", "--name", "Spin", "--value", "1 0.25 0.75" }).exitCode == 0, "Rotator node failed");
+    Require(graph({ "add-node", "--kind", "Constant", "--name", "Forty", "--value", "40" }).exitCode == 0, "a constant of 40 failed");
+    Require(graph({ "setting", "--name", "Blend Mode", "--value", "translucent" }).exitCode == 0, "setting Blend Mode failed");
+    const CommandRun badSetting = graph({ "setting", "--name", "Blend Mode", "--value", "glass" });
+    Require(badSetting.exitCode != 0 && Contains(badSetting.output, "Blend Mode does not take"), "an unknown blend mode must be refused: " + badSetting.output);
+    {
+        const std::optional<kb::render::RenderMaterialAssetData> saved = kb::render::RenderMaterialAssetLoader::LoadMaterial(
+            std::filesystem::path{ project } / "Assets" / "Materials" / "Car.kbmat");
+        Require(saved.has_value() && saved->graph.blendMode == "translucent", "Blend Mode was not saved");
+        const auto named = [&](std::string_view name) {
+            return std::ranges::find_if(saved->graph.nodes, [&](const kb::render::RenderMaterialGraphNode& node) {
+                return node.parameter.displayName == name;
+            });
+        };
+        Require(named("Spin") != saved->graph.nodes.end() && named("Spin")->parameter.defaultValueHint == "1 0.25 0.75",
+            "the Rotator's speed and centre were not saved");
+        Require(named("Forty") != saved->graph.nodes.end() && named("Forty")->parameter.defaultValueHint == "40",
+            "a constant must keep a value above 1");
+    }
+    Require(graph({ "setting", "--name", "Blend Mode", "--value", "opaque" }).exitCode == 0, "setting Blend Mode back failed");
     const CommandRun graphShown = graph({ "show" });
     Require(graphShown.exitCode == 0 && Contains(graphShown.output, "Compiles: yes") && Contains(graphShown.output, "Color (color") &&
             Contains(graphShown.output, "Roughness (scalar") && Contains(graphShown.output, "Metallic (scalar"),

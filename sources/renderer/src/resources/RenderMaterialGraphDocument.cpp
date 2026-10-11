@@ -125,7 +125,11 @@ void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
           node.kind == RenderMaterialGraphNodeKind::TextureSample2DArray ||
           node.kind == RenderMaterialGraphNodeKind::TextureObject2DArray) &&
             !node.parameter.stableId.empty()) ||
-        (node.kind == RenderMaterialGraphNodeKind::Uv && !node.parameter.defaultValueHint.empty());
+        (node.kind == RenderMaterialGraphNodeKind::Uv && !node.parameter.defaultValueHint.empty()) ||
+        // Any other node keeps the settings and the title its properties gave it (Rotator speed and
+        // centre, Panner speed, Fresnel exponent, Texture Coordinate tiling, a renamed node, ...).
+        (node.kind != RenderMaterialGraphNodeKind::MaterialOutput &&
+            (!node.parameter.defaultValueHint.empty() || !node.parameter.displayName.empty()));
 }
 
 [[nodiscard]] std::string_view ParameterGroupName(RenderMaterialParameterGroup group) noexcept {

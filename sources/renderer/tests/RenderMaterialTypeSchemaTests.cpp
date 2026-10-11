@@ -975,6 +975,39 @@ void RunMaterialAssetAtomicSaveAndRoundTripTest() {
     std::filesystem::remove(tmpFile, ec);
 }
 
+// A node's settings and title are what its properties in the Material Editor set (Rotator speed and
+// centre, Panner speed, Fresnel exponent, a renamed node); a save and load must keep them all.
+void RunMaterialGraphNodeSettingsRoundTripTest() {
+    RenderMaterialAssetData original{};
+    original.graph = MakeDefaultRenderMaterialGraphDocument();
+    original.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::Rotator, .positionX = -200, .positionY = 0 });
+    original.graph.nodes.back().parameter.defaultValueHint = "1 0.25 0.75";
+    original.graph.nodes.back().parameter.displayName = "Obrot";
+    original.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::Fresnel, .positionX = -200, .positionY = 120 });
+    original.graph.nodes.back().parameter.defaultValueHint = "3 0.04";
+    original.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::Multiply, .positionX = -200, .positionY = 240 });
+    original.graph.nodes.back().parameter.displayName = "Razy";
+
+    const std::filesystem::path file = std::filesystem::temp_directory_path() / "kbmat_node_settings_round_trip.kbmat";
+    Require(RenderMaterialAssetWriter::Save(file, original), "Node settings material must save");
+    const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(file);
+    std::error_code error;
+    std::filesystem::remove(file, error);
+    Require(result.asset.has_value(), "Node settings material must load again");
+    for (const RenderMaterialAssetParseDiagnostic& diagnostic : result.diagnostics) {
+        Require(diagnostic.severity != RenderMaterialAssetParseDiagnosticSeverity::Error,
+            "Node settings must load without errors");
+    }
+    const RenderMaterialGraphNode* rotator = FindRenderMaterialGraphNode(result.asset->graph, 2U);
+    const RenderMaterialGraphNode* fresnel = FindRenderMaterialGraphNode(result.asset->graph, 3U);
+    const RenderMaterialGraphNode* multiply = FindRenderMaterialGraphNode(result.asset->graph, 4U);
+    Require(rotator != nullptr && rotator->parameter.defaultValueHint == "1 0.25 0.75" && rotator->parameter.displayName == "Obrot",
+        "A Rotator's speed, centre and title must survive a save");
+    Require(fresnel != nullptr && fresnel->parameter.defaultValueHint == "3 0.04",
+        "A Fresnel's exponent and base reflect fraction must survive a save");
+    Require(multiply != nullptr && multiply->parameter.displayName == "Razy", "A renamed node's title must survive a save");
+}
+
 #if defined(_WIN32)
 [[nodiscard]] bool HasMaterialWriterTempArtifacts(const std::filesystem::path& destination) {
     const std::string prefix = destination.filename().string() + ".tmp.";
@@ -2646,8 +2679,10 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
     Require(mathResult.Succeeded(), "KBMAT-GRAPH-0202: Math graph should compile to shader source");
     Require(mathResult.shader.source.find(" - ") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit Subtract expression");
-    Require(mathResult.shader.source.find("/ max(abs(") != std::string::npos,
-        "KBMAT-GRAPH-0202: Shader compiler should emit guarded Divide expression");
+    // Divide is a plain a / b as in Unreal: a guard on |b| would flip the sign of a negative divisor.
+    Require(mathResult.shader.source.find(" / ") != std::string::npos &&
+            mathResult.shader.source.find("/ max(abs(") == std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit a sign-preserving Divide expression");
     Require(mathResult.shader.source.find("pow(max(") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit Power expression");
     Require(mathResult.shader.source.find("vec4_splat(1.0) -") != std::string::npos,
@@ -3044,7 +3079,7 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
             .sourcePath = "/Game/Materials/CompiledSurfaceUtility.kbmat",
         });
     Require(surfaceResult.Succeeded(), "KBMAT-GRAPH-0202: Surface utility graph should compile to shader source");
-    Require(surfaceResult.shader.source.find("vec3(0.299, 0.587, 0.114)") != std::string::npos,
+    Require(surfaceResult.shader.source.find("vec3(0.2126, 0.7152, 0.0722)") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit Desaturate luminance expression");
     Require(surfaceResult.shader.source.find("pow(1.0 -") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit Fresnel falloff expression");
@@ -6645,6 +6680,7 @@ void RunRenderMaterialTypeSchemaTests() {
     RunBuiltInPbrSchemaParserUsesSchemaForUnsupportedFieldsTest();
     RunBuiltInPbrSchemaParserWarnsForEveryIgnoredAdvancedFieldTest();
     RunMaterialAssetAtomicSaveAndRoundTripTest();
+    RunMaterialGraphNodeSettingsRoundTripTest();
 #if defined(_WIN32)
     RunMaterialAtomicSaveFailurePreservesPreviousVersionTest();
 #endif

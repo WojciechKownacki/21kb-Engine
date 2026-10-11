@@ -45,9 +45,6 @@ RenderMaterialGraphParameterMetadata DefaultRenderMaterialGraphParameterMetadata
             .stableId = "scalar" + std::to_string(nodeId),
             .displayName = "Scalar " + std::to_string(nodeId),
             .defaultValueHint = "0",
-            .hasRange = true,
-            .rangeMin = 0.0F,
-            .rangeMax = 1.0F,
             .overrideSupported = true,
         };
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
@@ -62,9 +59,6 @@ RenderMaterialGraphParameterMetadata DefaultRenderMaterialGraphParameterMetadata
             .stableId = "color" + std::to_string(nodeId),
             .displayName = "Color " + std::to_string(nodeId),
             .defaultValueHint = "1 1 1 1",
-            .hasRange = true,
-            .rangeMin = 0.0F,
-            .rangeMax = 1.0F,
             .overrideSupported = true,
         };
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
@@ -151,9 +145,6 @@ RenderMaterialGraphParameterMetadata DefaultRenderMaterialGraphParameterMetadata
         return kb::render::RenderMaterialGraphParameterMetadata{
             .displayName = "Scalar",
             .defaultValueHint = "0",
-            .hasRange = true,
-            .rangeMin = 0.0F,
-            .rangeMax = 1.0F,
             .overrideSupported = false,
         };
     case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
@@ -178,9 +169,6 @@ RenderMaterialGraphParameterMetadata DefaultRenderMaterialGraphParameterMetadata
         return kb::render::RenderMaterialGraphParameterMetadata{
             .displayName = "RGBA Node",
             .defaultValueHint = "1 1 1 1",
-            .hasRange = true,
-            .rangeMin = 0.0F,
-            .rangeMax = 1.0F,
             .overrideSupported = false,
         };
     case kb::render::RenderMaterialGraphNodeKind::CustomCode:
@@ -302,13 +290,13 @@ RenderMaterialGraphParameterMetadata DefaultRenderMaterialGraphParameterMetadata
     case kb::render::RenderMaterialGraphNodeKind::Panner:
         return kb::render::RenderMaterialGraphParameterMetadata{
             .displayName = "Panner",
-            .defaultValueHint = "0.1 0",
+            .defaultValueHint = "0 0",
             .overrideSupported = false,
         };
     case kb::render::RenderMaterialGraphNodeKind::Rotator:
         return kb::render::RenderMaterialGraphParameterMetadata{
             .displayName = "Rotator",
-            .defaultValueHint = "1 0.5 0.5",
+            .defaultValueHint = "0.25 0.5 0.5",
             .overrideSupported = false,
         };
     case kb::render::RenderMaterialGraphNodeKind::BumpOffset:
@@ -338,7 +326,7 @@ RenderMaterialGraphParameterMetadata DefaultRenderMaterialGraphParameterMetadata
     case kb::render::RenderMaterialGraphNodeKind::Fresnel:
         return kb::render::RenderMaterialGraphParameterMetadata{
             .displayName = "Fresnel",
-            .defaultValueHint = "5 0",
+            .defaultValueHint = "5 0.04",
             .overrideSupported = false,
         };
     case kb::render::RenderMaterialGraphNodeKind::SphereMask:
@@ -778,12 +766,6 @@ bool SetRenderMaterialGraphConstantValue(
     node->parameter.overrideSupported = false;
     if (node->parameter.displayName.empty()) {
         node->parameter.displayName = RenderMaterialGraphConstantDisplayName(node->kind);
-    }
-    if ((node->kind == RenderMaterialGraphNodeKind::ConstantScalar || node->kind == RenderMaterialGraphNodeKind::ConstantColor) &&
-        !node->parameter.hasRange) {
-        node->parameter.hasRange = true;
-        node->parameter.rangeMin = 0.0F;
-        node->parameter.rangeMax = 1.0F;
     }
     if (normalizedHint != nullptr) {
         *normalizedHint = nextValueHint;

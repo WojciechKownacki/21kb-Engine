@@ -221,6 +221,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMaterialParameterCollection.cpp
     src/resources/RenderMaterialGraphProgramBindingBuilder.cpp
     src/resources/RenderMaterialGraphShaderArtifact.cpp
+    src/resources/RenderMaterialGraphShaderToolchain.cpp
     src/resources/RenderMaterialSemanticHash.cpp
     src/resources/RenderMaterialGraphFieldParser.cpp
     src/resources/RenderMaterialGraphFieldParser.hpp
