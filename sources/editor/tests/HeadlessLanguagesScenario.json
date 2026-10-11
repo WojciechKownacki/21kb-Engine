@@ -1,0 +1,2329 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "continueOnFailure": true,
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "Languages"
+    },
+    {
+      "op": "create_entity",
+      "id": "crate",
+      "name": "Crate"
+    },
+    {
+      "op": "select_entity",
+      "entity": "crate"
+    },
+    {
+      "op": "set_language",
+      "language": "pl"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "pl-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "pl-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "pl-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "pl-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pl-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "pl-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "pl-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "pl-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "pl-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "pl-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "pl-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "de"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "de-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "de-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "de-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "de-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "de-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "de-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "de-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "de-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "de-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "de-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "de-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "fr"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "fr-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "fr-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "fr-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "fr-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "fr-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "fr-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "fr-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "fr-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "fr-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "fr-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "fr-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "es"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "es-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "es-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "es-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "es-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "es-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "es-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "es-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "es-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "es-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "es-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "es-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "it"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "it-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "it-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "it-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "it-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "it-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "it-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "it-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "it-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "it-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "it-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "it-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "ru"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "ru-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "ru-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "ru-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "ru-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ru-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "ru-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "ru-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "ru-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "ru-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "ru-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "ru-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "ja"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "ja-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "ja-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "ja-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "ja-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ja-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "ja-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "ja-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "ja-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "ja-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "ja-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "ja-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "zh-Hans"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "zh-Hans-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "zh-Hans-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "zh-Hans-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "zh-Hans-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "zh-Hans-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "zh-Hans-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "zh-Hans-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "zh-Hans-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "zh-Hans-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "zh-Hans-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "zh-Hans-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "ko"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "ko-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "ko-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "ko-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "ko-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ko-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "ko-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "ko-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "ko-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "ko-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "ko-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "ko-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "pt-PT"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "pt-PT-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "pt-PT-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "pt-PT-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "pt-PT-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pt-PT-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "pt-PT-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "pt-PT-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "pt-PT-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "pt-PT-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "pt-PT-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "pt-PT-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "pt-BR"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "pt-BR-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "pt-BR-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "pt-BR-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "pt-BR-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "pt-BR-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "pt-BR-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "pt-BR-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "pt-BR-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "pt-BR-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "pt-BR-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "pt-BR-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "nl"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "nl-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "nl-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "nl-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "nl-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "nl-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "nl-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "nl-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "nl-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "nl-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "nl-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "nl-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "cs"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "cs-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "cs-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "cs-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "cs-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "cs-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "cs-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "cs-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "cs-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "cs-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "cs-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "cs-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "hu"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "hu-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "hu-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "hu-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "hu-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hu-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "hu-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "hu-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "hu-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "hu-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "hu-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "hu-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "ro"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "ro-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "ro-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "ro-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "ro-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ro-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "ro-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "ro-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "ro-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "ro-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "ro-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "ro-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "uk"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "uk-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "uk-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "uk-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "uk-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "uk-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "uk-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "uk-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "uk-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "uk-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "uk-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "uk-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "sv"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "sv-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "sv-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "sv-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "sv-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sv-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "sv-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "sv-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "sv-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "sv-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "sv-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "sv-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "tr"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "tr-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "tr-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "tr-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "tr-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "tr-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "tr-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "tr-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "tr-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "tr-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "tr-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "tr-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "hi"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "hi-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "hi-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "hi-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "hi-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hi-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "hi-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "hi-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "hi-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "hi-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "hi-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "hi-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "el"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "el-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "el-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "el-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "el-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "el-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "el-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "el-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "el-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "el-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "el-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "el-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "da"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "da-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "da-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "da-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "da-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "da-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "da-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "da-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "da-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "da-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "da-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "da-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "nb"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "nb-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "nb-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "nb-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "nb-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "nb-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "nb-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "nb-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "nb-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "nb-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "nb-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "nb-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "fi"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "fi-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "fi-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "fi-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "fi-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "fi-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "fi-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "fi-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "fi-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "fi-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "fi-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "fi-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "sk"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "sk-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "sk-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "sk-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "sk-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sk-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "sk-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "sk-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "sk-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "sk-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "sk-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "sk-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "bg"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "bg-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "bg-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "bg-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "bg-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "bg-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "bg-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "bg-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "bg-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "bg-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "bg-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "bg-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "sr"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "sr-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "sr-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "sr-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "sr-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "sr-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "sr-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "sr-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "sr-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "sr-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "sr-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "sr-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "hr"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "hr-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "hr-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "hr-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "hr-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "hr-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "hr-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "hr-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "hr-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "hr-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "hr-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "hr-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "ar"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "ar-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "ar-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "ar-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "ar-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ar-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "ar-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "ar-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "ar-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "ar-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "ar-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "ar-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "id"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "id-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "id-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "id-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "id-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "id-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "id-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "id-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "id-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "id-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "id-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "id-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "th"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "th-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "th-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "th-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "th-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "th-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "th-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "th-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "th-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "th-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "th-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "th-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "vi"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "vi-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "vi-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "vi-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "vi-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "vi-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "vi-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "vi-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "vi-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "vi-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "vi-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "vi-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "ms"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "ms-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "ms-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "ms-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "ms-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "ms-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "ms-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "ms-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "ms-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "ms-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "ms-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "ms-skeletal_mesh_editor",
+      "text_fits": true
+    },
+    {
+      "op": "set_language",
+      "language": "en"
+    },
+    {
+      "op": "capture",
+      "panel": "hierarchy",
+      "checkpoint": "en-hierarchy",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "inspector",
+      "checkpoint": "en-inspector",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "assets",
+      "checkpoint": "en-assets",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "console",
+      "checkpoint": "en-console",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "project_settings",
+      "checkpoint": "en-project_settings",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "plugins",
+      "checkpoint": "en-plugins",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "material_editor",
+      "checkpoint": "en-material_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "script_editor",
+      "checkpoint": "en-script_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animation_clip_editor",
+      "checkpoint": "en-animation_clip_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "animator_editor",
+      "checkpoint": "en-animator_editor",
+      "text_fits": true
+    },
+    {
+      "op": "capture",
+      "panel": "skeletal_mesh_editor",
+      "checkpoint": "en-skeletal_mesh_editor",
+      "text_fits": true
+    }
+  ]
+}

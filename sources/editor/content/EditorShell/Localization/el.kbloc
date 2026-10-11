@@ -1688,7 +1688,6 @@ text "prefabDirty.beforeCloseEditor" "Να αποθηκευτούν οι αλλ�
 text "prefabDirty.beforeClosePrefab" "Να αποθηκευτούν οι αλλαγές στο prefab πριν κλείσει; ({prefab})"
 text "prefabDirty.supporting" "Επιλέξτε αν θα διατηρηθούν οι τρέχουσες αλλαγές του prefab."
 text "prefabDirty.title" "Μη αποθηκευμένο Prefab"
-text "projectFiles.contentRoot" "Περιεχόμενο"
 text "projectFiles.copyHere" "Αντιγραφή εδώ"
 text "projectFiles.currentFolder" "Τρέχον"
 text "projectFiles.deleteConfirm.body" "Τα αντικείμενα της λίστας πηγαίνουν στον Κάδο ανακύκλωσης, από όπου μπορείτε να τα επαναφέρετε."

@@ -30,6 +30,12 @@ TEXT_CALL = re.compile(r'\b(?:EditorText|EditorLocalization::Text|EditorLocaliza
 PLURAL_CALL = re.compile(r'\bEditorLocalization::Plural\s*\(\s*' + STRING + r'\s*,[^,]+,\s*' + LITERALS + r'\s*,\s*' +
                          LITERALS, re.S)
 PLACEHOLDER = re.compile(r'\{[A-Za-z_][A-Za-z0-9_]*\}')
+# Plural forms that stand for exactly one number (CLDR, whole numbers): such a form may say "the
+# selected object" without {count}, as English "one" does. Russian "one" is also 21 and 31 and French
+# "one" also 0, so there the number stays.
+EXACT_FORMS = {'ar': {'zero', 'one', 'two'}}
+EXACT_FORMS.update({language: {'one'} for language in ('pl', 'de', 'es', 'it', 'pt-PT', 'nl', 'cs', 'hu', 'ro', 'sv',
+                                                       'tr', 'el', 'da', 'nb', 'fi', 'sk', 'bg')})
 KEY = re.compile(r'^[A-Za-z0-9._-]{1,256}$')
 
 
@@ -130,7 +136,9 @@ def check():
                 continue
             english = set(PLACEHOLDER.findall(' '.join(message.values())))
             for category, text in translated.items():
-                if set(PLACEHOLDER.findall(text)) != english:
+                found = set(PLACEHOLDER.findall(text))
+                droppable = {'{count}'} if 'text' not in message and category in EXACT_FORMS.get(language, ()) else set()
+                if not english - droppable <= found <= english:
                     problems.append(f'{language}: "{key}" ({category}) changes the placeholders {sorted(english)}')
             if ('text' in message) != ('text' in translated):
                 problems.append(f'{language}: "{key}" must be {"a text" if "text" in message else "a plural"}')
