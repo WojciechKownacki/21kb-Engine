@@ -3976,10 +3976,18 @@ ReadScriptValue(
         }
         const auto path = StringMember(step, "path", error, false);
         if (!error.empty()) return { false, error };
+        // "outside_project": a path relative to the project root that may leave it ("../x"), to
+        // prove the editor refuses it; "refused_with": the refusal the console must show.
+        const auto outside = StringMember(step, "outside_project", error, false);
+        const auto refusedWith = StringMember(step, "refused_with", error, false);
+        if (!error.empty()) return { false, error };
         const auto started = std::chrono::steady_clock::now();
         bool saved = false;
         std::filesystem::path savedPath;
-        if (!path.has_value()) {
+        if (outside.has_value()) {
+            savedPath = (EditorProjectPaths::ProjectRoot() / *outside).lexically_normal();
+            saved = state.context.SaveCurrentSceneAs(savedPath);
+        } else if (!path.has_value()) {
             saved = state.context.SaveCurrentScene();
             savedPath = state.context.CurrentScenePath();
         } else {
@@ -3987,6 +3995,13 @@ ReadScriptValue(
             if (!resolved) return { false, error };
             saved = state.context.SaveCurrentSceneAs(*resolved);
             savedPath = *resolved;
+        }
+        if (refusedWith.has_value()) {
+            const auto& entries = state.context.Console().Entries();
+            const std::string reason = entries.empty() ? std::string{} : entries.back().message;
+            std::error_code missing;
+            return { !saved && !std::filesystem::exists(savedPath, missing) && reason.find(*refusedWith) != std::string::npos,
+                reason };
         }
 
         const double elapsedMilliseconds =

@@ -18,7 +18,10 @@ public:
     EditorSceneFileDialog() = delete;
 
     [[nodiscard]] static std::optional<std::filesystem::path> Open(HWND owner, const std::filesystem::path& initialDirectory);
-    [[nodiscard]] static std::optional<std::filesystem::path> SaveAs(HWND owner, const std::filesystem::path& initialPath, const std::filesystem::path& fallbackDirectory);
+    // The scene's new path inside `assetsFolder` (asked again for a place outside it), with the
+    // .21kbscene extension appended to the name as typed.
+    [[nodiscard]] static std::optional<std::filesystem::path> SaveAs(HWND owner, const std::filesystem::path& initialPath,
+        const std::filesystem::path& fallbackDirectory, const std::filesystem::path& assetsFolder);
 };
 
 #endif
