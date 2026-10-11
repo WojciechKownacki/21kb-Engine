@@ -48,6 +48,19 @@ Commands:
                (fields: Base Color, Roughness, Metallic, Emissive Color, Emissive
                Strength, Normal Scale, Occlusion Strength, Alpha Cutoff; a colour is
                #RRGGBB as in a colour picker, or linear r,g,b 0..1)
+  post-process-new Create a post-process profile: the image settings (tonemapping,
+               exposure, bloom, anti-aliasing) a scene can use, as a Unity Volume
+               Profile. Existing files are never overwritten.
+                 --project <dir> --name <Name> [--folder Assets/PostProcess]
+                 [--set field=value ...]
+  post-process-set Change values of a post-process profile.
+                 --project <dir> --profile /Game/<path>.kbppfx --set field=value [...]
+               (fields as the .kbppfx file names them, e.g. tonemapEnabled=0,
+               outputTransform.tonemap=None, outputTransform.autoExposure.enabled=0,
+               outputTransform.exposureStops=0, bloomEnabled=0)
+  scene-post-process Give a scene (the startup scene unless --scene) its post-process
+               profile, or none for the renderer's defaults.
+                 --project <dir> [--scene <path>] --profile /Game/<path>.kbppfx|none
   script-build Build the project's C++ scripts (or one), as Play and the cooker
                do. Exits 1 when a build fails.
                  --project <dir> [--script <path>]
@@ -264,6 +277,16 @@ int Dispatch(int argc, char** argv) {
         if (command == "material-new") return kb::cli::RunMaterialNewCommand(arguments, io);
         if (command == "material-set") return kb::cli::RunMaterialSetCommand(arguments, io);
         return kb::cli::RunMaterialShowCommand(arguments, io);
+#else
+        std::cerr << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
+        return 1;
+#endif
+    }
+    if (command == "post-process-new" || command == "post-process-set" || command == "scene-post-process") {
+#if KB_CLI_RENDERER
+        if (command == "post-process-new") return kb::cli::RunPostProcessNewCommand(arguments, io);
+        if (command == "post-process-set") return kb::cli::RunPostProcessSetCommand(arguments, io);
+        return kb::cli::RunScenePostProcessCommand(arguments, io);
 #else
         std::cerr << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
         return 1;

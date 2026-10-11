@@ -6,21 +6,23 @@
 
 namespace kb::render {
 
+SceneDisplayOutputTransform RendererFinalCompositeSubmitter::DisplayTransform(const PostProcessOutput& postProcessOutput) noexcept {
+    SceneDisplayOutputTransform outputTransform = postProcessOutput.outputTransform;
+    if (!postProcessOutput.tonemapEnabled) {
+        // Exposure and the display encoding still apply, or linear scene light would reach the
+        // screen as display values.
+        outputTransform.tonemap = SceneDisplayTonemapOperator::None;
+    }
+    return outputTransform;
+}
+
 bool RendererFinalCompositeSubmitter::Submit(
     const FinalCompositePass& finalCompositePass,
     const RenderViewportPlan& viewportPlan,
     const RenderSceneSubmitDesc& desc,
     const PostProcessOutput& postProcessOutput,
     bgfx::TextureHandle scenePostProcessOutput) {
-    SceneDisplayOutputTransform outputTransform = postProcessOutput.outputTransform;
-    if (!postProcessOutput.tonemapEnabled) {
-        outputTransform = SceneDisplayOutputTransform{
-            .exposureStops = 0.0F,
-            .gamma = 1.0F,
-            .tonemap = SceneDisplayTonemapOperator::None,
-            .colorGradingLutStrength = 0.0F,
-        };
-    }
+    const SceneDisplayOutputTransform outputTransform = DisplayTransform(postProcessOutput);
 
     {
         std::ostringstream message;

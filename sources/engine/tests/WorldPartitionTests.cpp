@@ -25,6 +25,7 @@
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -884,13 +885,11 @@ void RunFarWorldTests() {
     legacy.header.nodeCount = 1U;
     std::vector<std::uint8_t> bytes = WorldObjectFileIO::Serialize(legacy, error);
     Check(!bytes.empty(), "the legacy object must serialize: " + error);
-    const std::size_t payloadSizeOffset = [&] {
-        for (std::size_t offset = bytes.size() - 4U;; --offset) {
-            std::uint32_t size = 0U;
-            std::memcpy(&size, bytes.data() + offset, 4U);
-            if (offset + 4U + size == bytes.size()) return offset;
-        }
-    }();
+    // The scene payload is the file's tail: its byte count, then the scene magic.
+    const std::array<std::uint8_t, 8U> sceneMagic{ '2', '1', 'K', 'B', 'S', 'C', 'N', 0 };
+    const auto magic = std::search(bytes.begin(), bytes.end(), sceneMagic.begin(), sceneMagic.end());
+    Check(magic != bytes.end() && magic - bytes.begin() >= 4, "the legacy object must carry a scene payload");
+    const std::size_t payloadSizeOffset = static_cast<std::size_t>(magic - bytes.begin()) - 4U;
     const double doubles[3]{ 120.5, 0.0, -40.25 };
     std::vector<std::uint8_t> doubleBytes(24U);
     std::vector<std::uint8_t> floatBytes(12U);
@@ -903,6 +902,7 @@ void RunFarWorldTests() {
     Check(found != bytes.end(), "the legacy object payload holds its double translation");
     const auto at = bytes.erase(found, found + 24);
     bytes.insert(at, floatBytes.begin(), floatBytes.end());
+    bytes.resize(bytes.size() - sizeof(std::uint64_t)); // a v41 payload has no v44 post-process profile id
     const std::uint32_t legacySize = static_cast<std::uint32_t>(bytes.size() - payloadSizeOffset - 4U);
     const std::uint32_t legacyVersion = 41U;
     std::memcpy(bytes.data() + payloadSizeOffset, &legacySize, 4U);

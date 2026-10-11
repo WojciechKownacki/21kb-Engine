@@ -1893,15 +1893,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite submit end");
 
         if (!screenUIFrame.elements.empty()) {
-            SceneDisplayOutputTransform uiOutputTransform = postProcessOutput.outputTransform;
-            if (!postProcessOutput.tonemapEnabled) {
-                uiOutputTransform = SceneDisplayOutputTransform{
-                    .exposureStops = 0.0F,
-                    .gamma = 1.0F,
-                    .tonemap = SceneDisplayTonemapOperator::None,
-                    .colorGradingLutStrength = 0.0F,
-                };
-            }
+            const SceneDisplayOutputTransform uiOutputTransform = RendererFinalCompositeSubmitter::DisplayTransform(postProcessOutput);
             if (screenUIRenderer_ == nullptr || !screenUIRenderer_->Submit(ScreenUISubmitDesc{
                     .sceneId = scene.Id(),
                     .viewportIndex = desc.target.viewport.viewportIndex,

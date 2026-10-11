@@ -259,6 +259,10 @@ SceneDocumentLoadResult SceneAssetReader::Read(std::vector<std::uint8_t> bytes) 
         }
         scene.audioOcclusionSettings.enabled = occlusionEnabled;
     }
+    if (fileVersion >= SceneDocument::PostProcessProfileFileVersion &&
+        !input.ReadUInt64(scene.postProcessProfileAssetId)) {
+        return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset post-process profile is invalid." };
+    }
 
     if (!input.Exhausted()) {
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset contains trailing data." };
