@@ -4,6 +4,7 @@
 #if defined(_WIN32)
 #include "console/EditorConsoleLayout.hpp"
 #include "rendering/ConsoleDetailTextOverlay.hpp"
+#include "rendering/gdi/CutTextAudit.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HierarchyPanelRenderer.hpp"
 #include "rendering/HeroIconPainter.hpp"
@@ -219,7 +220,10 @@ void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorCons
     GdiDrawing::FillRectColor(dc, category, Color(theme.chrome));
     DrawText(dc, EditorConsoleInsetRect(category, 6, 0), entry.category.c_str(), Color(theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-    DrawText(dc, RECT{ row.left + 230, row.top, row.right - 10, row.bottom }, entry.message.c_str(), MessageColor(entry.level), 12);
+    {
+        const CutTextDataScope logMessage;
+        DrawText(dc, RECT{ row.left + 230, row.top, row.right - 10, row.bottom }, entry.message.c_str(), MessageColor(entry.level), 12);
+    }
 
     GdiDrawing::FillRectColor(dc, RECT{ row.left, row.bottom - 1, row.right, row.bottom }, Color(theme.borderChrome));
 }
