@@ -7,7 +7,7 @@
 #include "engine/scene/SkeletalMeshGltfImportPublisher.hpp"
 #include "engine/scene/SkeletalMeshFbxImportPlanner.hpp"
 #include "engine/scene/SkeletalMeshFbxImportPublisher.hpp"
-#include "scene/EditorMeshImportArtifacts.hpp"
+#include "kb/render/resources/RenderMeshImportArtifacts.hpp"
 
 #include <array>
 #include <optional>
@@ -187,7 +187,7 @@ void RefreshAssets(kb::scene::Scene& scene) {
         }
 
         std::string error;
-        auto prepared = EditorMeshImportArtifacts::Prepare(
+        auto prepared = kb::render::RenderMeshImportArtifacts::Prepare(
             manager, sourcePath, destinationVirtualFolder, options, &error);
         if (!prepared) {
             item.status = kb::assets::AssetImportItemStatus::Failed;
@@ -198,7 +198,7 @@ void RefreshAssets(kb::scene::Scene& scene) {
         kb::scene::SkeletalMeshGltfImportOptions importOptions{};
         importOptions.combineMeshes = options.mesh.combineMeshes;
         if (options.mesh.importMaterials) {
-            importOptions.materialResolver = &EditorMeshImportArtifacts::ResolveMaterial;
+            importOptions.materialResolver = &kb::render::RenderMeshImportArtifacts::ResolveMaterial;
             importOptions.materialResolverUserData = &prepared->materialAssetIds;
         }
         const auto plan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
@@ -257,7 +257,7 @@ void RefreshAssets(kb::scene::Scene& scene) {
             continue;
         }
         std::string error;
-        auto prepared = EditorMeshImportArtifacts::Prepare(
+        auto prepared = kb::render::RenderMeshImportArtifacts::Prepare(
             manager, sourcePath, destinationVirtualFolder, options, &error);
         if (!prepared) {
             item.status = kb::assets::AssetImportItemStatus::Failed;
@@ -269,7 +269,7 @@ void RefreshAssets(kb::scene::Scene& scene) {
         importOptions.importMaterialSlots = options.mesh.importMaterialSlots;
         importOptions.combineMeshes = options.mesh.combineMeshes;
         if (options.mesh.importMaterials) {
-            importOptions.materialResolver = &EditorMeshImportArtifacts::ResolveMaterial;
+            importOptions.materialResolver = &kb::render::RenderMeshImportArtifacts::ResolveMaterial;
             importOptions.materialResolverUserData = &prepared->materialAssetIds;
         }
         const auto plan = kb::scene::SkeletalMeshFbxImportPlanner::Plan(
@@ -319,53 +319,6 @@ void RefreshAssets(kb::scene::Scene& scene) {
             : ImportSkeletalFbxFiles(scene, oneSource, destinationVirtualFolder, options);
         result.items.insert(result.items.end(),
             std::make_move_iterator(one.items.begin()), std::make_move_iterator(one.items.end()));
-    }
-    return result;
-}
-
-[[nodiscard]] kb::assets::AssetImportResult ImportStaticFiles(
-    kb::scene::Scene& scene,
-    std::span<const std::filesystem::path> sourceFiles,
-    const std::filesystem::path& destinationVirtualFolder,
-    const kb::assets::AssetImportOptions& options) {
-    kb::assets::AssetManager& manager = AssetManager(scene);
-    kb::assets::AssetImportResult result{};
-    result.items.reserve(sourceFiles.size());
-    for (const std::filesystem::path& sourcePath : sourceFiles) {
-        const bool meshSource = IsGltfSkeletalSource(sourcePath) || IsFbxSkeletalSource(sourcePath);
-        std::string error;
-        std::optional<EditorPreparedMeshImportArtifacts> prepared;
-        if (meshSource && (options.mesh.importTextures || options.mesh.importMaterials)) {
-            prepared = EditorMeshImportArtifacts::Prepare(
-                manager, sourcePath, destinationVirtualFolder, options, &error);
-            if (!prepared) {
-                result.items.push_back({
-                    .sourcePath = sourcePath,
-                    .category = kb::assets::AssetImportCategory::Model,
-                    .status = kb::assets::AssetImportItemStatus::Failed,
-                    .error = error.empty() ? "Static mesh auxiliary asset planning failed." : std::move(error),
-                });
-                continue;
-            }
-        }
-        const std::array<std::filesystem::path, 1U> oneSource{ sourcePath };
-        kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(
-            manager, oneSource, destinationVirtualFolder, options);
-        if (imported.items.empty()) continue;
-        kb::assets::AssetImportItemResult item = std::move(imported.items.front());
-        if (item.Succeeded() && prepared.has_value() &&
-            !EditorMeshImportArtifacts::PublishStandalone(manager, prepared->artifacts, &error)) {
-            if (item.status == kb::assets::AssetImportItemStatus::Created) {
-                std::error_code removeError;
-                std::filesystem::remove(item.assetPhysicalPath, removeError);
-                removeError.clear();
-                if (!item.metaPhysicalPath.empty()) std::filesystem::remove(item.metaPhysicalPath, removeError);
-                static_cast<void>(manager.DiscoverMountedAssets());
-            }
-            item.status = kb::assets::AssetImportItemStatus::Failed;
-            item.error = error.empty() ? "Static mesh auxiliary asset publication failed." : std::move(error);
-        }
-        result.items.push_back(std::move(item));
     }
     return result;
 }
@@ -737,9 +690,23 @@ kb::assets::AssetImportResult EditorSceneAssetBrowserCommands::ImportFilesWithRe
     }
 
     kb::assets::AssetManager& manager = AssetManager(scene);
+    if (options.mesh.importSkeletalMesh && !options.mesh.transform.IsIdentity()) {
+        // The skeleton, its clips and the skinned mesh would all have to take the scale and
+        // rotation; the skeletal publication does not apply them, so it refuses them by name.
+        kb::assets::AssetImportResult refused{};
+        for (const std::filesystem::path& sourcePath : sourceFiles) {
+            refused.items.push_back(kb::assets::AssetImportItemResult{
+                .sourcePath = sourcePath,
+                .category = kb::assets::AssetImportCategory::Model,
+                .status = kb::assets::AssetImportItemStatus::Failed,
+                .error = "Import scale and rotation apply to static meshes; a skeletal import keeps the source scale and orientation.",
+            });
+        }
+        return refused;
+    }
     const kb::assets::AssetImportResult imported = options.mesh.importSkeletalMesh
         ? ImportSkeletalFiles(scene, sourceFiles, destinationVirtualFolder, options)
-        : ImportStaticFiles(scene, sourceFiles, destinationVirtualFolder, options);
+        : kb::render::RenderMeshImportArtifacts::ImportStaticFiles(manager, sourceFiles, destinationVirtualFolder, options);
     if (imported.ImportedCount() == 0U) {
         return imported;
     }

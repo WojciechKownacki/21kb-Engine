@@ -1113,6 +1113,13 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     }
     SceneRenderLightingConfig effectiveLightingConfig = ApplyAmbientRadiance(
         RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_), renderScene.AmbientRadiance());
+    // The resolved profile (or a default the application set with ambient occlusion on) decides
+    // the screen-space ambient occlusion; without either, the lighting config keeps its own.
+    if (resolvedPostProcessSettings.has_value()) {
+        RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, *resolvedPostProcessSettings);
+    } else if (defaultPostProcessSettings_.ambientOcclusionEnabled) {
+        RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, defaultPostProcessSettings_);
+    }
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;
     }
@@ -2253,6 +2260,9 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
     settings.outputTransform.autoExposure.middleGray = std::max(settings.outputTransform.autoExposure.middleGray, 0.0001F);
     settings.outputTransform.autoExposure.brightAdaptationRate = std::max(settings.outputTransform.autoExposure.brightAdaptationRate, 0.0F);
     settings.outputTransform.autoExposure.darkAdaptationRate = std::max(settings.outputTransform.autoExposure.darkAdaptationRate, 0.0F);
+    settings.vignetteIntensity = std::clamp(settings.vignetteIntensity, 0.0F, 1.0F);
+    settings.ambientOcclusionIntensity = std::max(settings.ambientOcclusionIntensity, 0.0F);
+    settings.ambientOcclusionRadius = std::max(settings.ambientOcclusionRadius, 0.01F);
     defaultPostProcessSettings_ = settings;
     if (std::optional<PostProcessPass> antiAliasing = postProcessChain_.FindPass(PostProcessPassKind::AntiAliasing); antiAliasing.has_value()) {
         antiAliasing->enabled = settings.temporalAntiAliasingEnabled || settings.fxaaEnabled;

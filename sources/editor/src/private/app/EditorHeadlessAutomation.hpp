@@ -5,6 +5,8 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputTouchPoint.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
+#include "inspection/InspectorPanelState.hpp"
+#include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
 
 #include <cstddef>
@@ -12,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -164,6 +167,9 @@ public:
     [[nodiscard]] bool InspectorPointerUp();
     [[nodiscard]] bool InspectorChar(wchar_t character);
     [[nodiscard]] bool InspectorKey(std::uintptr_t key);
+    // Presses the Inspector row the panel itself hit-tests as `property` (and `index`, -1 for any)
+    // with a hit of `kind`: the click a person makes on that row, wherever the layout puts it.
+    [[nodiscard]] bool InspectorClickRow(InspectorPropertyId property, int index, InspectorHitKind kind);
 
     [[nodiscard]] bool CaptureInspector(
         std::string_view checkpoint);
@@ -182,6 +188,9 @@ public:
     // The Scene panel's viewport exactly as the editor presents it: its own camera and the
     // production present settings, editor overlays included (grid lines, the world cell grid).
     [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
+    // The post-process settings the Scene panel's viewport renders with now (its own present
+    // settings, as a paint builds them); nullopt when it renders the renderer's defaults.
+    [[nodiscard]] std::optional<kb::render::ScenePostProcessSettings> SceneViewportPostProcessSettings();
     [[nodiscard]] bool VerifySceneRenderTargetAfterSecondary(
         std::string_view checkpoint);
     [[nodiscard]] bool CaptureRuntime(

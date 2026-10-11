@@ -2,6 +2,8 @@
 
 #include "engine/assets/AssetId.hpp"
 
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -35,6 +37,25 @@ enum class AssetImportItemStatus : std::uint8_t {
     Failed,
 };
 
+// The size and orientation a model is brought in with, as Unity's ModelImporter Scale Factor
+// and Unreal Interchange's Import Uniform Scale / Import Rotation: applied to the mesh data after
+// the automatic right- to left-handed conversion. Rotation is engine Euler degrees (Z, then X,
+// then Y, as kb::math::FromEulerDegrees and the Inspector).
+struct AssetMeshImportTransform {
+    float scale = 1.0F;
+    std::array<float, 3> rotationDegrees{ 0.0F, 0.0F, 0.0F };
+
+    [[nodiscard]] bool IsIdentity() const noexcept {
+        return scale == 1.0F && rotationDegrees[0] == 0.0F && rotationDegrees[1] == 0.0F && rotationDegrees[2] == 0.0F;
+    }
+    // A scale above zero and finite angles; anything else is refused at import.
+    [[nodiscard]] bool IsValid() const noexcept {
+        return std::isfinite(scale) && scale > 0.0F && std::isfinite(rotationDegrees[0]) &&
+            std::isfinite(rotationDegrees[1]) && std::isfinite(rotationDegrees[2]);
+    }
+    [[nodiscard]] bool operator==(const AssetMeshImportTransform&) const noexcept = default;
+};
+
 struct AssetMeshImportOptions {
     bool importMaterialSlots = true;
     bool importTextures = false;
@@ -43,6 +64,7 @@ struct AssetMeshImportOptions {
     // The editor routes this mode through the canonical skeletal publication
     // pipeline rather than the generic static-mesh container importer.
     bool importSkeletalMesh = false;
+    AssetMeshImportTransform transform{};
 };
 
 struct AssetImportOptions {

@@ -57,6 +57,7 @@
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "../src/scene/submit/SceneMeshDrawCommandSubmitter.hpp"
+#include "renderer/RendererFinalCompositeSubmitter.hpp"
 #include "../src/scene/pipeline/MeshPipelineVisibility.hpp"
 #include "../src/shadow/ShadowCasterBoundsCollector.hpp"
 
@@ -66,6 +67,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <array>
 #include <cmath>
@@ -1842,6 +1844,11 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
     settings.outputTransform.autoExposure.temporalAdaptationEnabled = false;
     settings.outputTransform.autoExposure.brightAdaptationRate = 3.0F;
     settings.outputTransform.autoExposure.darkAdaptationRate = 1.0F;
+    settings.vignetteEnabled = true;
+    settings.vignetteIntensity = 0.45F;
+    settings.ambientOcclusionEnabled = true;
+    settings.ambientOcclusionIntensity = 1.5F;
+    settings.ambientOcclusionRadius = 0.9F;
 
     Require(PostProcessProfileAssetLoader::SaveProfile(path, settings), "PostProcess profile asset save failed");
     const std::optional<ScenePostProcessSettings> loaded = PostProcessProfileAssetLoader::LoadProfile(path);
@@ -1862,6 +1869,33 @@ void RunPostProcessProfileAssetSaveLoadRoundTripTest() {
             !loaded->outputTransform.autoExposure.temporalAdaptationEnabled && NearlyEqual(loaded->outputTransform.autoExposure.brightAdaptationRate, 3.0F) &&
             NearlyEqual(loaded->outputTransform.autoExposure.darkAdaptationRate, 1.0F),
         "PostProcess profile asset round trip lost outputTransform.autoExposure fields");
+    Require(loaded->vignetteEnabled && NearlyEqual(loaded->vignetteIntensity, 0.45F),
+        "PostProcess profile asset round trip lost the vignette");
+    Require(loaded->ambientOcclusionEnabled && NearlyEqual(loaded->ambientOcclusionIntensity, 1.5F) &&
+            NearlyEqual(loaded->ambientOcclusionRadius, 0.9F),
+        "PostProcess profile asset round trip lost the ambient occlusion");
+
+    // A profile written before vignette and ambient occlusion existed loads with today's look.
+    {
+        std::ofstream legacy{ path, std::ios::trunc };
+        Require(legacy.is_open(), "PostProcess profile legacy file could not be written");
+        legacy << "bloomEnabled 1" << '\n' << "tonemapEnabled 1" << '\n';
+    }
+    const std::optional<ScenePostProcessSettings> legacy = PostProcessProfileAssetLoader::LoadProfile(path);
+    Require(legacy.has_value() && !legacy->vignetteEnabled && !legacy->ambientOcclusionEnabled &&
+            NearlyEqual(legacy->ambientOcclusionRadius, SceneRenderLightingConfig{}.aoRadius) &&
+            NearlyEqual(legacy->ambientOcclusionIntensity, SceneRenderLightingConfig{}.aoIntensity),
+        "A profile without the vignette and ambient occlusion keys must keep them off at the renderer's defaults");
+    ScenePostProcessSettings edited{};
+    Require(PostProcessProfileAssetLoader::SetField(edited, "vignetteIntensity", "0.8") && NearlyEqual(edited.vignetteIntensity, 0.8F) &&
+            PostProcessProfileAssetLoader::SetField(edited, "ambientOcclusionEnabled", "1") && edited.ambientOcclusionEnabled,
+        "SetField must take the vignette and ambient occlusion fields");
+    Require(!PostProcessProfileAssetLoader::SetField(edited, "vignetteIntensity", "1.5") &&
+            !PostProcessProfileAssetLoader::SetField(edited, "ambientOcclusionRadius", "0") && NearlyEqual(edited.vignetteIntensity, 0.8F),
+        "SetField must refuse a vignette intensity above 1 and a zero occlusion radius");
+    const std::vector<std::string> names = PostProcessProfileAssetLoader::FieldNames();
+    Require(std::ranges::find(names, "vignetteEnabled") != names.end() && std::ranges::find(names, "ambientOcclusionRadius") != names.end(),
+        "FieldNames must list the vignette and ambient occlusion fields");
 
     const std::optional<ScenePostProcessSettings> missing = PostProcessProfileAssetLoader::LoadProfile(
         std::filesystem::temp_directory_path() / "21kb_post_process_profile_does_not_exist.kbppfx");
@@ -6931,8 +6965,10 @@ struct SsBox {
         "Screen-space test could not register render asset loaders");
     Require(manager.Mounts().Mount("Game", root) && manager.DiscoverMountedAssets() >= 1U,
         "Screen-space test could not discover its mesh");
-    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/cube.obj");
-    Require(mesh != nullptr, "Screen-space test lost its cube mesh");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/cube.obj");
+    Require(meshMetadata != nullptr, "Screen-space test lost its cube mesh");
+    // The id, not the registry entry: registering the materials below may move the registry's storage.
+    const kb::assets::AssetId meshId = meshMetadata->id;
     const auto publishMaterial = [&](const char* name, std::array<float, 3> color, float roughness,
                                      RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque) {
         const kb::assets::AssetId id = kb::assets::MakeAssetId(name);
@@ -6960,7 +6996,7 @@ struct SsBox {
             .transform = kb::scene::TransformComponent{ .localPosition = box.position, .localScale = box.scale },
         });
         scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
-            .meshAssetId = mesh->id.value,
+            .meshAssetId = meshId.value,
             .materialAssetId = box.material == SsMaterial::Red ? red : box.material == SsMaterial::Glossy ? glossy
                 : box.material == SsMaterial::Blend ? blend : 0U,
             .castsShadow = false });
@@ -7077,6 +7113,111 @@ void RunRendererRendersScreenSpaceReflectionsTest() {
     const double with = redExcess(on);
     std::fprintf(stderr, "ssr_pixels red_minus_blue without=%.1f with=%.1f%c", without, with, 10);
     Require(with > without + 15.0, "SSR test: the glossy floor must reflect the red wall when screen-space reflections are on");
+}
+
+// The scene's post-process profile owns screen-space ambient occlusion: with the lighting config
+// leaving it off, a profile asset that turns it on darkens the floor at the base of a wall.
+void RunRendererPostProcessProfileDrivesAmbientOcclusionTest() {
+    constexpr std::uint16_t kSize = 64U;
+    const std::vector<SsBox> boxes{
+        { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } },
+        { { 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F } },
+    };
+    const SceneRenderLightingConfig lighting{};
+    const std::filesystem::path profileRoot = std::filesystem::temp_directory_path() /
+        ("21kb_ao_profile_" + std::to_string(GetCurrentProcessId()));
+    std::error_code error;
+    std::filesystem::remove_all(profileRoot, error);
+    std::filesystem::create_directories(profileRoot, error);
+    Require(!error, "AO profile test could not create its profile folder");
+    ScenePostProcessSettings profile{};
+    profile.ambientOcclusionEnabled = true;
+    profile.ambientOcclusionIntensity = 1.0F;
+    profile.ambientOcclusionRadius = 1.0F;
+    Require(PostProcessProfileAssetLoader::SaveProfile(profileRoot / "Occlusion.kbppfx", profile),
+        "AO profile test could not save its profile");
+    const auto assignProfile = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 0) {
+            return;
+        }
+        kb::assets::AssetManager& manager = scene.Assets().Manager();
+        Require(manager.RegisterLoader(std::make_unique<PostProcessProfileAssetLoader>()) &&
+                manager.Mounts().Mount("Fx", profileRoot) && manager.DiscoverMountedAssets() >= 1U,
+            "AO profile test could not discover its profile");
+        const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Fx/Occlusion.kbppfx");
+        Require(metadata != nullptr, "AO profile test lost its profile metadata");
+        kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, metadata->id.value);
+    };
+    const auto without = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.55F, 0.0F, 0.0F }, 30.0F, lighting, 30, kSize);
+    const auto with = RenderScreenSpaceScene(boxes, {}, bx::Vec3{ -2.0F, 4.0F, -8.0F }, bx::Vec3{ 2.55F, 0.0F, 0.0F }, 30.0F, lighting, 30, kSize,
+        SceneRenderMeshPassMode::OpaqueOnly, assignProfile);
+    std::filesystem::remove_all(profileRoot, error);
+    const double nearWithout = MeanBrightness(without, kSize, 28, 30, 36, 38);
+    const double nearWith = MeanBrightness(with, kSize, 28, 30, 36, 38);
+    const double farWithout = MeanBrightness(without, kSize, 4, 44, 12, 52);
+    const double farWith = MeanBrightness(with, kSize, 4, 44, 12, 52);
+    std::fprintf(stderr, "ao_profile_pixels near without=%.1f with=%.1f far without=%.1f with=%.1f%c", nearWithout, nearWith, farWithout, farWith, 10);
+    Require(nearWith < nearWithout * 0.9, "AO profile test: the profile's ambient occlusion must darken the floor at the wall base");
+    Require(farWith > farWithout * 0.98, "AO profile test: open floor must stay unoccluded");
+}
+
+// The profile's vignette darkens the corners of the final composite and leaves its centre; off,
+// a uniform image stays uniform. The composite runs the shipped present shader on the GPU.
+void RunRendererVignetteDarkensFinalCompositeCornersTest() {
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Vignette test could not create a hidden native surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Vignette test renderer did not initialize");
+    constexpr std::uint32_t kSize = NativeTestSurface::kExtent;
+    const std::array<std::uint8_t, 4U> grey{ 128U, 128U, 128U, 255U };
+    const bgfx::TextureHandle source = bgfx::createTexture2D(
+        1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+        bgfx::copy(grey.data(), static_cast<std::uint32_t>(grey.size())));
+    FinalCompositePass composite;
+    Require(bgfx::isValid(source) && composite.Initialize(), "Vignette test could not create its composite");
+    const auto render = [&](bool vignette) {
+        FinalCompositeReadbackTarget target;
+        Require(target.Initialize(), "Vignette test could not allocate its target");
+        PostProcessOutput output;
+        output.postProcessSettings.vignetteEnabled = vignette;
+        output.postProcessSettings.vignetteIntensity = 0.6F;
+        output.tonemapEnabled = false;
+        const RenderFinalCompositeTargetBinding binding = target.Binding();
+        Require(composite.Submit(FinalCompositePassDesc{
+                    .viewId = 200U,
+                    .postProcessColor = source,
+                    .frameBuffer = binding.frameBuffer,
+                    .extent = binding.extent,
+                    .outputRect = binding.outputRect,
+                    .outputTransform = RendererFinalCompositeSubmitter::DisplayTransform(output),
+                    .clearTarget = true,
+                    .vignetteIntensity = RendererFinalCompositeSubmitter::VignetteIntensity(output),
+                }),
+            "Vignette test could not submit the composite");
+        bgfx::frame();
+        return target.ReadPixels();
+    };
+    const auto luminance = [&](const std::vector<std::uint8_t>& pixels, std::uint32_t x, std::uint32_t y) {
+        const std::size_t offset = (static_cast<std::size_t>(y) * kSize + x) * 4U;
+        Require(offset + 2U < pixels.size(), "Vignette test read outside the final composite");
+        return static_cast<int>(pixels[offset]) + pixels[offset + 1U] + pixels[offset + 2U];
+    };
+    const std::vector<std::uint8_t> plain = render(false);
+    const std::vector<std::uint8_t> vignetted = render(true);
+    composite.Shutdown();
+    bgfx::destroy(source);
+    renderer.Shutdown();
+    const int plainCenter = luminance(plain, kSize / 2U, kSize / 2U);
+    const int plainCorner = luminance(plain, 1U, 1U);
+    const int center = luminance(vignetted, kSize / 2U, kSize / 2U);
+    const int corner = luminance(vignetted, 1U, 1U);
+    std::fprintf(stderr, "vignette_pixels plain center=%d corner=%d vignette center=%d corner=%d%c", plainCenter, plainCorner, center, corner, 10);
+    Require(plainCenter > 60 && std::abs(plainCenter - plainCorner) <= 6, "Vignette test: without a vignette the uniform image must stay uniform");
+    Require(std::abs(center - plainCenter) <= 6, "Vignette test: the vignette must leave the image centre");
+    Require(corner * 10 < plainCorner * 8, "Vignette test: the vignette must darken the corners");
 }
 
 // A red wall that is outside the camera's view must tint the floor in view only when the bounce light is
@@ -9315,6 +9456,16 @@ void RunExposureReadbackResetTest() {
     bgfx::destroy(source);
     bgfx::destroy(brightSource);
     renderer.Shutdown();
+#endif
+}
+
+void RunRendererPostProcessProfileAuthoringTests() {
+    RunPostProcessProfileAssetSaveLoadRoundTripTest();
+    RunRendererAppliesScenePostProcessProfileTest();
+#if defined(_WIN32)
+    RunRendererRendersScreenSpaceAmbientOcclusionTest();
+    RunRendererPostProcessProfileDrivesAmbientOcclusionTest();
+    RunRendererVignetteDarkensFinalCompositeCornersTest();
 #endif
 }
 

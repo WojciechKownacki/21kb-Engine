@@ -5,6 +5,7 @@
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneJointComponents.hpp"
@@ -55,11 +56,13 @@ constexpr std::uint32_t kNoSiblingIndex = SceneHistoryObjectChange::NoSiblingInd
         .audioMixerAssetId = SceneAudioMixerAccess::ActiveMixer(scene),
         .audioMixerSnapshot = SceneAudioMixerAccess::ActiveSnapshot(scene),
         .audioOcclusionSettings = SceneAudioOcclusionAccess::Settings(scene),
+        .postProcessProfileAssetId = ScenePostProcessAccess::ActiveProfile(scene),
     };
 }
 
 [[nodiscard]] bool ApplySettings(Scene& scene, const SceneHistorySettings& settings) {
     SceneAudioMixerAccess::SetActiveMixer(scene, settings.audioMixerAssetId);
+    ScenePostProcessAccess::SetActiveProfile(scene, settings.postProcessProfileAssetId);
     if (!SceneAudioMixerAccess::SetActiveSnapshot(scene, settings.audioMixerSnapshot)
         || !SceneAudioOcclusionAccess::Configure(scene, settings.audioOcclusionSettings)) {
         return false;

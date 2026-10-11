@@ -96,6 +96,15 @@ enum class InspectorSectionId : std::uint8_t {
     UIWidgetSwitcher,
     Prefab,
     NavLink,
+    // A post-process profile asset (.kbppfx): one section per effect, as Unity's Volume overrides.
+    PostProcessTonemap,
+    PostProcessExposure,
+    PostProcessBloom,
+    PostProcessAntiAliasing,
+    PostProcessVignette,
+    PostProcessAmbientOcclusion,
+    // The scene's post-process profile, shown on the scene's environment (World Backdrop) object.
+    ScenePostProcess,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -563,6 +572,10 @@ enum class InspectorPropertyId : std::uint16_t {
     NavLinkArea,
     NavLinkBidirectional,
     NavLinkEnabled,
+    // A row of a post-process profile asset; the hit's index is the row (InspectorPostProcessProfileModel).
+    PostProcessProfileField,
+    ScenePostProcessProfile,
+    ScenePostProcessProfileClear,
 };
 
 struct InspectorDynamicRowIdentity {

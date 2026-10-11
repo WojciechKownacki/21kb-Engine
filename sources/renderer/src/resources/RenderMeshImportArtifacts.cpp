@@ -1,4 +1,6 @@
-#include "scene/EditorMeshImportArtifacts.hpp"
+#include "kb/render/resources/RenderMeshImportArtifacts.hpp"
+
+#include "engine/assets/AssetImportService.hpp"
 
 #include "engine/assets/AssetManager.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -21,7 +23,7 @@
 #include <system_error>
 #include <utility>
 
-namespace kb::editor {
+namespace kb::render {
 namespace {
 
 template <typename T>
@@ -164,14 +166,14 @@ void Rollback(std::vector<PublishedEntry>& entries) noexcept {
 
 } // namespace
 
-std::optional<EditorPreparedMeshImportArtifacts> EditorMeshImportArtifacts::Prepare(
+std::optional<RenderPreparedMeshImportArtifacts> RenderMeshImportArtifacts::Prepare(
     kb::assets::AssetManager& manager,
     const std::filesystem::path& sourcePath,
     const std::filesystem::path& destinationVirtualFolder,
     const kb::assets::AssetImportOptions& options,
     std::string* error) {
     if (error != nullptr) error->clear();
-    EditorPreparedMeshImportArtifacts result{};
+    RenderPreparedMeshImportArtifacts result{};
     if (!options.mesh.importTextures && !options.mesh.importMaterials) return result;
     auto manifest = kb::render::RenderMeshSourceImport::Inspect(sourcePath, error);
     if (!manifest) return std::nullopt;
@@ -185,7 +187,7 @@ std::optional<EditorPreparedMeshImportArtifacts> EditorMeshImportArtifacts::Prep
                 !material.anisotropyTexturePath.empty() || !material.decalTexturePath.empty() ||
                 !material.layerMaskTexturePath.empty();
         })) {
-        return Fail<EditorPreparedMeshImportArtifacts>(error,
+        return Fail<RenderPreparedMeshImportArtifacts>(error,
             "Material import requires texture import because the source materials reference images.");
     }
 
@@ -198,7 +200,7 @@ std::optional<EditorPreparedMeshImportArtifacts> EditorMeshImportArtifacts::Prep
             if (!texture.IsEmbedded()) {
                 std::error_code fileError;
                 if (!std::filesystem::is_regular_file(texture.sourcePath, fileError) || fileError) {
-                    return Fail<EditorPreparedMeshImportArtifacts>(error,
+                    return Fail<RenderPreparedMeshImportArtifacts>(error,
                         "Referenced mesh texture does not exist: " + texture.sourcePath.string());
                 }
             }
@@ -241,18 +243,18 @@ std::optional<EditorPreparedMeshImportArtifacts> EditorMeshImportArtifacts::Prep
     std::set<std::string> uniquePaths;
     for (const kb::scene::SkeletalMeshImportArtifact& artifact : result.artifacts) {
         const std::string normalized = kb::assets::NormalizeAssetPath(artifact.virtualPath);
-        if (!uniquePaths.insert(normalized).second) return Fail<EditorPreparedMeshImportArtifacts>(error,
+        if (!uniquePaths.insert(normalized).second) return Fail<RenderPreparedMeshImportArtifacts>(error,
             "Mesh import generated two auxiliary assets at the same virtual path.");
         if (const kb::assets::AssetMetadata* existing = manager.Registry().FindByPath(artifact.virtualPath);
             existing != nullptr && existing->type != artifact.expectedAssetType) {
-            return Fail<EditorPreparedMeshImportArtifacts>(error,
+            return Fail<RenderPreparedMeshImportArtifacts>(error,
                 "Mesh import auxiliary path is occupied by an incompatible asset: " + normalized);
         }
     }
     return result;
 }
 
-bool EditorMeshImportArtifacts::PublishStandalone(
+bool RenderMeshImportArtifacts::PublishStandalone(
     kb::assets::AssetManager& manager,
     std::span<const kb::scene::SkeletalMeshImportArtifact> artifacts,
     std::string* error) {
@@ -291,11 +293,67 @@ bool EditorMeshImportArtifacts::PublishStandalone(
     return true;
 }
 
-std::uint64_t EditorMeshImportArtifacts::ResolveMaterial(std::string_view name, void* userData) noexcept {
+std::uint64_t RenderMeshImportArtifacts::ResolveMaterial(std::string_view name, void* userData) noexcept {
     if (userData == nullptr) return 0U;
     const auto& ids = *static_cast<const std::unordered_map<std::string, std::uint64_t>*>(userData);
     const auto found = ids.find(std::string{ name });
     return found == ids.end() ? 0U : found->second;
 }
 
-} // namespace kb::editor
+namespace {
+
+[[nodiscard]] bool CarriesSourceMaterials(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    return extension == ".gltf" || extension == ".glb" || extension == ".fbx";
+}
+
+} // namespace
+
+kb::assets::AssetImportResult RenderMeshImportArtifacts::ImportStaticFiles(
+    kb::assets::AssetManager& manager,
+    std::span<const std::filesystem::path> sourceFiles,
+    const std::filesystem::path& destinationVirtualFolder,
+    const kb::assets::AssetImportOptions& options) {
+    kb::assets::AssetImportResult result{};
+    result.items.reserve(sourceFiles.size());
+    for (const std::filesystem::path& sourcePath : sourceFiles) {
+        const bool meshSource = CarriesSourceMaterials(sourcePath);
+        std::string error;
+        std::optional<RenderPreparedMeshImportArtifacts> prepared;
+        if (meshSource && (options.mesh.importTextures || options.mesh.importMaterials)) {
+            prepared = Prepare(manager, sourcePath, destinationVirtualFolder, options, &error);
+            if (!prepared) {
+                result.items.push_back({
+                    .sourcePath = sourcePath,
+                    .category = kb::assets::AssetImportCategory::Model,
+                    .status = kb::assets::AssetImportItemStatus::Failed,
+                    .error = error.empty() ? "Static mesh auxiliary asset planning failed." : std::move(error),
+                });
+                continue;
+            }
+        }
+        const std::array<std::filesystem::path, 1U> oneSource{ sourcePath };
+        kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(
+            manager, oneSource, destinationVirtualFolder, options);
+        if (imported.items.empty()) continue;
+        kb::assets::AssetImportItemResult item = std::move(imported.items.front());
+        if (item.Succeeded() && prepared.has_value() && !PublishStandalone(manager, prepared->artifacts, &error)) {
+            if (item.status == kb::assets::AssetImportItemStatus::Created) {
+                std::error_code removeError;
+                std::filesystem::remove(item.assetPhysicalPath, removeError);
+                removeError.clear();
+                if (!item.metaPhysicalPath.empty()) std::filesystem::remove(item.metaPhysicalPath, removeError);
+                static_cast<void>(manager.DiscoverMountedAssets());
+            }
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = error.empty() ? "Static mesh auxiliary asset publication failed." : std::move(error);
+        }
+        result.items.push_back(std::move(item));
+    }
+    return result;
+}
+
+} // namespace kb::render

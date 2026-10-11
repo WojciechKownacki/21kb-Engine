@@ -23,6 +23,8 @@ struct ImportedAsset {
     std::uint64_t sourceSize = 0;
     std::uint64_t sourceHash = 0;
     std::uint16_t importOptions = 0;
+    // Scale and rotation the model's mesh data takes (identity for a container written without them).
+    AssetMeshImportTransform meshTransform{};
     std::vector<std::byte> payload;
     std::vector<ImportedAssetResource> resources;
 };

@@ -1,4 +1,5 @@
 #include "scene/material/MaterialEditorState.hpp"
+#include "kb/render/resources/RenderMaterialAuthoring.hpp"
 #include "localization/EditorLocalization.hpp"
 
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
@@ -525,31 +526,20 @@ bool MaterialEditorState::AddGraphNode(
     std::int32_t positionY,
     std::uint32_t* createdNodeId
 ) {
-    if (!workingCopy_.has_value() || kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput) {
+    if (!workingCopy_.has_value()) {
         return false;
     }
 
     kb::render::RenderMaterialAssetData document = *workingCopy_;
-    EnsureEditableGraph(document.graph);
-    const std::uint32_t nodeId = NextGraphNodeId(document.graph);
-    kb::render::RenderMaterialGraphNode node{
-        .id = nodeId,
-        .kind = kind,
-        .positionX = positionX,
-        .positionY = positionY,
-        .parameter = DefaultParameterMetadata(kind, nodeId),
-    };
-    if (kind == kb::render::RenderMaterialGraphNodeKind::CustomCode) {
-        node.customCode = DefaultCustomCode();
-    } else if (kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
-        node.customCode = DefaultMaterialFunctionCall();
+    const std::optional<std::uint32_t> nodeId = kb::render::AddRenderMaterialGraphNode(document.graph, kind, positionX, positionY);
+    if (!nodeId.has_value()) {
+        return false;
     }
-    document.graph.nodes.push_back(std::move(node));
     if (createdNodeId != nullptr) {
-        *createdNodeId = nodeId;
+        *createdNodeId = *nodeId;
     }
     SetWorkingCopy(std::move(document));
-    SelectNode(nodeId);
+    SelectNode(*nodeId);
     return true;
 }
 
@@ -748,39 +738,8 @@ bool MaterialEditorState::PromoteSelectedGraphNodeToParameter(std::uint32_t* pro
     }
 
     kb::render::RenderMaterialAssetData document = *workingCopy_;
-    kb::render::RenderMaterialGraphNode* node = FindMutableGraphNode(document.graph, selectedNodeId_);
-    if (node == nullptr) {
+    if (!kb::render::PromoteRenderMaterialGraphNodeToParameter(document.graph, selectedNodeId_)) {
         return false;
-    }
-    const kb::render::RenderMaterialGraphNodeKind sourceKind = node->kind;
-    const std::optional<kb::render::RenderMaterialGraphNodeKind> targetKind = PromotedParameterKind(sourceKind);
-    if (!targetKind.has_value()) {
-        return false;
-    }
-
-    const std::string sourcePin = PromotedSourceOutputPin(sourceKind);
-    const std::string targetPin = PromotedTargetOutputPin(*targetKind);
-    kb::render::RenderMaterialGraphParameterMetadata metadata = DefaultParameterMetadata(*targetKind, node->id);
-    metadata.defaultValueHint = PromotedParameterDefaultValueHint(*node, *targetKind);
-    if (node->parameter.hasRange) {
-        metadata.hasRange = node->parameter.hasRange;
-        metadata.rangeMin = node->parameter.rangeMin;
-        metadata.rangeMax = node->parameter.rangeMax;
-    }
-    metadata.overrideSupported = true;
-
-    node->kind = *targetKind;
-    node->parameter = std::move(metadata);
-    const std::uint32_t targetPinId = kb::render::RenderMaterialGraphStablePinId(*node, targetPin, true);
-    if (targetPinId == 0U) {
-        return false;
-    }
-    for (kb::render::RenderMaterialGraphLink& link : document.graph.links) {
-        if (link.fromNodeId == node->id && link.fromPin == sourcePin) {
-            link.fromPin = targetPin;
-            link.fromPinId = targetPinId;
-            link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
-        }
     }
 
     SetWorkingCopy(std::move(document));
@@ -797,30 +756,9 @@ bool MaterialEditorState::SetGraphConstantValue(std::uint32_t nodeId, std::strin
     }
 
     kb::render::RenderMaterialAssetData document = *workingCopy_;
-    kb::render::RenderMaterialGraphNode* node = FindMutableGraphNode(document.graph, nodeId);
-    if (node == nullptr || !IsGraphConstantNode(node->kind)) {
+    std::string nextValueHint;
+    if (!kb::render::SetRenderMaterialGraphConstantValue(document.graph, nodeId, valueText, &nextValueHint)) {
         return false;
-    }
-
-    std::optional<std::array<float, 4U>> parsed = ParseConstantValue(node->kind, valueText);
-    if (!parsed.has_value()) {
-        return false;
-    }
-    ClampConstantValues(*node, *parsed);
-
-    const std::string nextValueHint = ConstantDefaultValueHint(node->kind, *parsed);
-    node->parameter.defaultValueHint = nextValueHint;
-    node->parameter.overrideSupported = false;
-    if (node->parameter.displayName.empty()) {
-        node->parameter.displayName = ConstantDisplayName(node->kind);
-    }
-    if (node->kind == kb::render::RenderMaterialGraphNodeKind::ConstantScalar ||
-        node->kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor) {
-        if (!node->parameter.hasRange) {
-            node->parameter.hasRange = true;
-            node->parameter.rangeMin = 0.0F;
-            node->parameter.rangeMax = 1.0F;
-        }
     }
 
     SetWorkingCopy(std::move(document));
@@ -1807,15 +1745,11 @@ bool MaterialEditorState::RenameGraphNode(std::uint32_t nodeId, std::string_view
     }
 
     kb::render::RenderMaterialAssetData document = *workingCopy_;
-    kb::render::RenderMaterialGraphNode* node = FindMutableGraphNode(document.graph, nodeId);
-    if (node == nullptr) {
+    const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(document.graph, nodeId);
+    if (node == nullptr ||
+        !kb::render::RenameRenderMaterialGraphNode(document.graph, nodeId, displayName, GraphNodeDisplayName(node->kind))) {
         return false;
     }
-    const std::string normalized = NormalizeGraphNodeDisplayName(displayName, node->kind);
-    if (node->parameter.displayName == normalized) {
-        return false;
-    }
-    node->parameter.displayName = normalized;
     SetWorkingCopy(std::move(document));
     SelectNode(nodeId);
     return true;
@@ -1886,40 +1820,13 @@ bool MaterialEditorState::ConnectGraphPins(
     std::uint32_t toNodeId,
     std::string_view toPin
 ) {
-    if (!workingCopy_.has_value() || fromNodeId == 0U || toNodeId == 0U || fromNodeId == toNodeId) {
+    if (!workingCopy_.has_value()) {
         return false;
     }
 
     kb::render::RenderMaterialAssetData document = *workingCopy_;
-    EnsureEditableGraph(document.graph);
-    const kb::render::RenderMaterialGraphNode* fromNode = kb::render::FindRenderMaterialGraphNode(document.graph, fromNodeId);
-    const kb::render::RenderMaterialGraphNode* toNode = kb::render::FindRenderMaterialGraphNode(document.graph, toNodeId);
-    if (fromNode == nullptr || toNode == nullptr ||
-        !kb::render::IsRenderMaterialGraphOutputPin(*fromNode, fromPin) ||
-        !kb::render::IsRenderMaterialGraphInputPin(*toNode, toPin) ||
-        !kb::render::AreRenderMaterialGraphPinsCompatible(*fromNode, fromPin, *toNode, toPin)) {
+    if (!kb::render::ConnectRenderMaterialGraphPins(document.graph, fromNodeId, fromPin, toNodeId, toPin)) {
         return false;
-    }
-
-    kb::render::RenderMaterialGraphLink link{
-        .fromNodeId = fromNodeId,
-        .fromPinId = kb::render::RenderMaterialGraphStablePinId(*fromNode, fromPin, true),
-        .fromPin = std::string{ fromPin },
-        .toNodeId = toNodeId,
-        .toPinId = kb::render::RenderMaterialGraphStablePinId(*toNode, toPin, false),
-        .toPin = std::string{ toPin },
-    };
-    if (link.fromPinId == 0U || link.toPinId == 0U) {
-        return false;
-    }
-    link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
-
-    const auto oldInputEnd = std::remove_if(document.graph.links.begin(), document.graph.links.end(), [toNodeId, toPin](const kb::render::RenderMaterialGraphLink& existing) {
-        return existing.toNodeId == toNodeId && existing.toPin == toPin;
-    });
-    document.graph.links.erase(oldInputEnd, document.graph.links.end());
-    if (kb::render::FindRenderMaterialGraphLink(document.graph, link.id) == nullptr) {
-        document.graph.links.push_back(std::move(link));
     }
     SetWorkingCopy(std::move(document));
     SelectNode(toNodeId);
@@ -2773,63 +2680,22 @@ void MaterialEditorState::ClearDiagnostics() {
 std::optional<kb::render::RenderMaterialGraphNodeKind> MaterialEditorState::PromotedParameterKind(
     kb::render::RenderMaterialGraphNodeKind sourceKind
 ) noexcept {
-    switch (sourceKind) {
-    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-        return kb::render::RenderMaterialGraphNodeKind::ParameterScalar;
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return kb::render::RenderMaterialGraphNodeKind::ParameterVector;
-    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        return kb::render::RenderMaterialGraphNodeKind::ParameterColor;
-    default:
-        return std::nullopt;
-    }
+    return kb::render::RenderMaterialGraphPromotedParameterKind(sourceKind);
 }
 
 std::string MaterialEditorState::PromotedSourceOutputPin(kb::render::RenderMaterialGraphNodeKind sourceKind) {
-    switch (sourceKind) {
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-        return "xy";
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return "xyz";
-    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        return "rgba";
-    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-    default:
-        return "value";
-    }
+    return kb::render::RenderMaterialGraphPromotedSourceOutputPin(sourceKind);
 }
 
 std::string MaterialEditorState::PromotedTargetOutputPin(kb::render::RenderMaterialGraphNodeKind targetKind) {
-    switch (targetKind) {
-    case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
-        return "xyz";
-    case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return "rgba";
-    case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
-    default:
-        return "value";
-    }
+    return kb::render::RenderMaterialGraphPromotedTargetOutputPin(targetKind);
 }
 
 std::string MaterialEditorState::PromotedParameterDefaultValueHint(
     const kb::render::RenderMaterialGraphNode& sourceNode,
     kb::render::RenderMaterialGraphNodeKind targetKind
 ) {
-    std::array<float, 4U> values{};
-    if (const std::optional<std::array<float, 4U>> parsed = ParseConstantValue(sourceNode.kind, sourceNode.parameter.defaultValueHint)) {
-        values = *parsed;
-    }
-    switch (targetKind) {
-    case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
-        return ConstantDefaultValueHint(kb::render::RenderMaterialGraphNodeKind::ConstantScalar, values);
-    case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
-        return ConstantDefaultValueHint(kb::render::RenderMaterialGraphNodeKind::ConstantVector, values);
-    case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return ConstantDefaultValueHint(kb::render::RenderMaterialGraphNodeKind::ConstantColor, values);
-    default:
-        return sourceNode.parameter.defaultValueHint;
-    }
+    return kb::render::RenderMaterialGraphPromotedParameterDefaultValueHint(sourceNode, targetKind);
 }
 
 bool MaterialEditorState::SelectGraphLinkedNodes(bool downstream) {
@@ -3078,110 +2944,30 @@ std::vector<float> MaterialEditorState::ParseDefaultNumbers(std::string_view tex
 }
 
 bool MaterialEditorState::IsGraphConstantNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
-    return kind == kb::render::RenderMaterialGraphNodeKind::ConstantScalar ||
-        kind == kb::render::RenderMaterialGraphNodeKind::ConstantBool ||
-        kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector2 ||
-        kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector ||
-        kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor;
+    return kb::render::IsRenderMaterialGraphConstantNode(kind);
 }
 
 std::string_view MaterialEditorState::ConstantDisplayName(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
-    switch (kind) {
-    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-        return "Scalar";
-    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
-        return "Bool";
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-        return "XY";
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return "RGB Node";
-    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        return "RGBA Node";
-    default:
-        return "Constant";
-    }
+    return kb::render::RenderMaterialGraphConstantDisplayName(kind);
 }
 
 std::size_t MaterialEditorState::ConstantComponentCount(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
-    switch (kind) {
-    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
-        return 1U;
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-        return 2U;
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return 3U;
-    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        return 4U;
-    default:
-        return 0U;
-    }
+    return kb::render::RenderMaterialGraphConstantComponentCount(kind);
 }
 
 std::optional<std::array<float, 4U>> MaterialEditorState::ParseConstantValue(
     kb::render::RenderMaterialGraphNodeKind kind,
     std::string_view text
 ) {
-    std::array<float, 4U> value{ 0.0F, 0.0F, 0.0F, 1.0F };
-    std::vector<float> numericValues;
-    switch (kind) {
-    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-        if (kb::render::ParseFiniteMaterialFloatSequence(text, numericValues, 1U, 1U)) {
-            value[0] = numericValues[0];
-            return value;
-        }
-        return std::nullopt;
-    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
-        if (const std::optional<bool> parsed = ParseConstantBool(text)) {
-            value[0] = *parsed ? 1.0F : 0.0F;
-            return value;
-        }
-        return std::nullopt;
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-        if (kb::render::ParseFiniteMaterialFloatSequence(text, numericValues, 2U, 2U)) {
-            std::copy(numericValues.begin(), numericValues.end(), value.begin());
-            return value;
-        }
-        return std::nullopt;
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        if (kb::render::ParseFiniteMaterialFloatSequence(text, numericValues, 3U, 3U)) {
-            std::copy(numericValues.begin(), numericValues.end(), value.begin());
-            return value;
-        }
-        return std::nullopt;
-    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        if (kb::render::ParseFiniteMaterialFloatSequence(text, numericValues, 3U, 4U)) {
-            std::copy(numericValues.begin(), numericValues.end(), value.begin());
-            value[3] = numericValues.size() == 4U ? numericValues[3] : 1.0F;
-            return value;
-        }
-        return std::nullopt;
-    default:
-        return std::nullopt;
-    }
+    return kb::render::ParseRenderMaterialGraphConstantValue(kind, text);
 }
 
 std::optional<bool> MaterialEditorState::ParseConstantBool(std::string_view text) noexcept {
-    std::string normalized;
-    normalized.reserve(text.size());
-    for (const unsigned char ch : text) {
-        if (!std::isspace(ch)) {
-            normalized.push_back(static_cast<char>(std::tolower(ch)));
-        }
-    }
-    if (normalized == "true" || normalized == "1") {
-        return true;
-    }
-    if (normalized == "false" || normalized == "0") {
-        return false;
-    }
-    return std::nullopt;
+    return kb::render::ParseRenderMaterialGraphConstantBool(text);
 }
 
 std::string MaterialEditorState::FloatText(float value) {
-    std::ostringstream output;
-    output << value;
-    return output.str();
+    return kb::render::RenderMaterialGraphFloatText(value);
 }
 
 std::span<const GraphHintNumericPropertyDefinition> MaterialEditorState::GraphHintNumericProperties(
@@ -3417,32 +3203,13 @@ std::string MaterialEditorState::ConstantDefaultValueHint(
     kb::render::RenderMaterialGraphNodeKind kind,
     const std::array<float, 4U>& value
 ) {
-    switch (kind) {
-    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-        return FloatText(value[0]);
-    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
-        return ConstantBoolDefaultValueHint(value[0] != 0.0F);
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-        return FloatText(value[0]) + " " + FloatText(value[1]);
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return FloatText(value[0]) + " " + FloatText(value[1]) + " " + FloatText(value[2]);
-    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        return FloatText(value[0]) + " " + FloatText(value[1]) + " " + FloatText(value[2]) + " " + FloatText(value[3]);
-    default:
-        return {};
-    }
+    return kb::render::RenderMaterialGraphConstantValueHint(kind, value);
 }
 
 std::optional<kb::render::RenderMaterialParameterRange> MaterialEditorState::ConstantRange(
     const kb::render::RenderMaterialGraphNode& node
 ) noexcept {
-    if (!node.parameter.hasRange) {
-        return std::nullopt;
-    }
-    return kb::render::RenderMaterialParameterRange{
-        .min = node.parameter.rangeMin,
-        .max = node.parameter.rangeMax,
-    };
+    return kb::render::RenderMaterialGraphConstantRange(node);
 }
 
 float MaterialEditorState::ClampConstantComponentValue(
@@ -3460,10 +3227,7 @@ void MaterialEditorState::ClampConstantValues(
     const kb::render::RenderMaterialGraphNode& node,
     std::array<float, 4U>& values
 ) noexcept {
-    const std::size_t componentCount = ConstantComponentCount(node.kind);
-    for (std::size_t index = 0U; index < componentCount; ++index) {
-        values[index] = ClampConstantComponentValue(node, values[index]);
-    }
+    kb::render::ClampRenderMaterialGraphConstantValues(node, values);
 }
 
 std::array<std::string_view, 4U> MaterialEditorState::ConstantComponentLabels(
@@ -3524,17 +3288,7 @@ std::string MaterialEditorState::NormalizeGraphNodeDisplayName(
     std::string_view displayName,
     kb::render::RenderMaterialGraphNodeKind kind
 ) {
-    const std::size_t first = displayName.find_first_not_of(" \t\r\n");
-    if (first == std::string_view::npos) {
-        return std::string{ GraphNodeDisplayName(kind) };
-    }
-    const std::size_t last = displayName.find_last_not_of(" \t\r\n");
-    std::string normalized{ displayName.substr(first, last - first + 1U) };
-    constexpr std::size_t kMaxGraphNodeDisplayNameLength = 64U;
-    if (normalized.size() > kMaxGraphNodeDisplayNameLength) {
-        normalized.resize(kMaxGraphNodeDisplayNameLength);
-    }
-    return normalized;
+    return kb::render::NormalizeRenderMaterialGraphNodeDisplayName(displayName, GraphNodeDisplayName(kind));
 }
 
 std::vector<MaterialEditorGraphNodePropertyOption> MaterialEditorState::GraphNodeEnumOptions(
@@ -4305,29 +4059,18 @@ std::vector<MaterialEditorParameter> MaterialEditorState::BuildInstanceParameter
 }
 
 void MaterialEditorState::EnsureEditableGraph(kb::render::RenderMaterialGraphDocument& graph) {
-    if (graph.nodes.empty()) {
-        graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
-    }
+    kb::render::EnsureEditableRenderMaterialGraph(graph);
 }
 
 std::uint32_t MaterialEditorState::NextGraphNodeId(const kb::render::RenderMaterialGraphDocument& graph) noexcept {
-    std::uint32_t next = 1U;
-    for (const kb::render::RenderMaterialGraphNode& node : graph.nodes) {
-        next = std::max(next, node.id + 1U);
-    }
-    return next;
+    return kb::render::NextRenderMaterialGraphNodeId(graph);
 }
 
 kb::render::RenderMaterialGraphNode* MaterialEditorState::FindMutableGraphNode(
     kb::render::RenderMaterialGraphDocument& graph,
     std::uint32_t nodeId
 ) noexcept {
-    for (kb::render::RenderMaterialGraphNode& node : graph.nodes) {
-        if (node.id == nodeId) {
-            return &node;
-        }
-    }
-    return nullptr;
+    return kb::render::FindMutableRenderMaterialGraphNode(graph, nodeId);
 }
 
 std::uint32_t MaterialEditorState::NextGraphCommentId(const kb::render::RenderMaterialGraphDocument& graph) noexcept {
@@ -4515,455 +4258,18 @@ void MaterialEditorState::ReplaceSelectedGraphNodeRenameText() {
 }
 
 kb::render::RenderMaterialGraphCustomCode MaterialEditorState::DefaultCustomCode() {
-    return kb::render::RenderMaterialGraphCustomCode{
-        .body = "return A * B;",
-        .outputType = kb::render::RenderMaterialGraphPinType::Float4,
-        .inputs = {
-            kb::render::RenderMaterialGraphCustomPin{ .name = "A", .type = kb::render::RenderMaterialGraphPinType::Float4 },
-            kb::render::RenderMaterialGraphCustomPin{ .name = "B", .type = kb::render::RenderMaterialGraphPinType::Float4 },
-        },
-        .outputs = {},
-    };
+    return kb::render::DefaultRenderMaterialGraphCustomCode();
 }
 
 kb::render::RenderMaterialGraphCustomCode MaterialEditorState::DefaultMaterialFunctionCall() {
-    return kb::render::RenderMaterialGraphCustomCode{
-        .body = {},
-        .outputType = kb::render::RenderMaterialGraphPinType::Float4,
-        .inputs = {
-            kb::render::RenderMaterialGraphCustomPin{ .name = "Input", .type = kb::render::RenderMaterialGraphPinType::Float4 },
-        },
-        .outputs = {
-            kb::render::RenderMaterialGraphCustomPin{ .name = "Output", .type = kb::render::RenderMaterialGraphPinType::Float4 },
-        },
-    };
+    return kb::render::DefaultRenderMaterialGraphFunctionCall();
 }
 
 kb::render::RenderMaterialGraphParameterMetadata MaterialEditorState::DefaultParameterMetadata(
     kb::render::RenderMaterialGraphNodeKind kind,
     std::uint32_t nodeId
 ) {
-    switch (kind) {
-    case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "scalar" + std::to_string(nodeId),
-            .displayName = "Scalar " + std::to_string(nodeId),
-            .defaultValueHint = "0",
-            .hasRange = true,
-            .rangeMin = 0.0F,
-            .rangeMax = 1.0F,
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "vector" + std::to_string(nodeId),
-            .displayName = "Vector " + std::to_string(nodeId),
-            .defaultValueHint = "0 0 0",
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "color" + std::to_string(nodeId),
-            .displayName = "Color " + std::to_string(nodeId),
-            .defaultValueHint = "1 1 1 1",
-            .hasRange = true,
-            .rangeMin = 0.0F,
-            .rangeMax = 1.0F,
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "texture" + std::to_string(nodeId),
-            .displayName = "Texture " + std::to_string(nodeId),
-            .textureRole = "baseColor",
-            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::TextureObject:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "textureObject" + std::to_string(nodeId),
-            .displayName = "Texture Object " + std::to_string(nodeId),
-            .textureRole = "baseColor",
-            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::TextureObjectCube:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "textureCubeObject" + std::to_string(nodeId),
-            .displayName = "Texture Cube Object " + std::to_string(nodeId),
-            .textureRole = "baseColor",
-            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "textureVolumeObject" + std::to_string(nodeId),
-            .displayName = "Texture Volume Object " + std::to_string(nodeId),
-            .textureRole = "baseColor",
-            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "textureArrayObject" + std::to_string(nodeId),
-            .displayName = "Texture 2D Array Object " + std::to_string(nodeId),
-            .textureRole = "baseColor",
-            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "collectionParam" + std::to_string(nodeId),
-            .displayName = "Collection Parameter " + std::to_string(nodeId),
-            .defaultValueHint = "0",
-            .overrideSupported = false,
-            .description = "Material parameter collection value",
-        };
-    case kb::render::RenderMaterialGraphNodeKind::TextureSample:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "textureSample" + std::to_string(nodeId),
-            .displayName = "Texture Sample " + std::to_string(nodeId),
-            .textureRole = "baseColor",
-            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::TextureSampleCube:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "textureCubeSample" + std::to_string(nodeId),
-            .displayName = "Texture Cube Sample " + std::to_string(nodeId),
-            .textureRole = "baseColor",
-            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "textureVolumeSample" + std::to_string(nodeId),
-            .displayName = "Texture Volume Sample " + std::to_string(nodeId),
-            .textureRole = "baseColor",
-            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "textureArraySample" + std::to_string(nodeId),
-            .displayName = "Texture 2D Array Sample " + std::to_string(nodeId),
-            .textureRole = "baseColor",
-            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
-            .overrideSupported = true,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Scalar",
-            .defaultValueHint = "0",
-            .hasRange = true,
-            .rangeMin = 0.0F,
-            .rangeMax = 1.0F,
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Bool",
-            .defaultValueHint = "false",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "XY",
-            .defaultValueHint = "0 0",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "RGB Node",
-            .defaultValueHint = "0 0 0",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "RGBA Node",
-            .defaultValueHint = "1 1 1 1",
-            .hasRange = true,
-            .rangeMin = 0.0F,
-            .rangeMax = 1.0F,
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::CustomCode:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Custom Code",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Switch",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::StaticSwitch:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Static Switch",
-            .defaultValueHint = "false",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::StaticComponentMask:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Static Component Mask",
-            .defaultValueHint = "rgba",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::QualitySwitch:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Quality Switch",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::FeatureLevelSwitch:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Feature Level Switch",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ShadingPathSwitch:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Shading Path Switch",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ShaderStageSwitch:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Shader Stage Switch",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::Reroute:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Reroute",
-            .defaultValueHint = "float4",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "NamedReroute",
-            .displayName = "Named Reroute",
-            .defaultValueHint = "float4",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteUsage:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "NamedReroute",
-            .displayName = "Named Reroute",
-            .defaultValueHint = "float4",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::CompositeInput:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Composite Input",
-            .defaultValueHint = "float4",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::CompositeOutput:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Composite Output",
-            .defaultValueHint = "float4",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::FunctionInput:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "Input",
-            .displayName = "Function Input",
-            .defaultValueHint = "float4",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::FunctionOutput:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "Output",
-            .displayName = "Function Output",
-            .defaultValueHint = "float4",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = {},
-            .displayName = "Material Function",
-            .defaultValueHint = {},
-            .overrideSupported = false,
-            .description = "Assign a RenderMaterialFunction asset id to call a reusable material function.",
-        };
-    case kb::render::RenderMaterialGraphNodeKind::LayerStack:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "surfaceLayers",
-            .displayName = "Layer Stack",
-            .defaultValueHint = {},
-            .overrideSupported = false,
-            .description = "Composes material layer functions with material blend functions.",
-        };
-    case kb::render::RenderMaterialGraphNodeKind::Uv:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "UV",
-            .defaultValueHint = "0",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::TextureCoordinate:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Texture Coordinate",
-            .defaultValueHint = "1 1 0",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::Panner:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Panner",
-            .defaultValueHint = "0.1 0",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::Rotator:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Rotator",
-            .defaultValueHint = "1 0.5 0.5",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::BumpOffset:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Bump Offset",
-            .defaultValueHint = "0.05",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ConstantBiasScale:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Constant Bias Scale",
-            .defaultValueHint = "0 1",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::RotateAboutAxis:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Rotate About Axis",
-            .defaultValueHint = "0 0 1 0",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::Desaturate:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Desaturate",
-            .defaultValueHint = "1",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::Fresnel:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Fresnel",
-            .defaultValueHint = "5 0",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::SphereMask:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Sphere Mask",
-            .defaultValueHint = "1 0.5",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Antialiased Texture Mask",
-            .defaultValueHint = "0.5",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::Transform:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Transform",
-            .defaultValueHint = "tangent world",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::TransformPosition:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Transform Position",
-            .defaultValueHint = "tangent world",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ViewProperty:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "View Property",
-            .defaultValueHint = "viewSize",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::SceneTexture:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Scene Texture",
-            .defaultValueHint = "color",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::CameraDepthFade:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Camera Depth Fade",
-            .defaultValueHint = "1 0",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::DepthFade:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Depth Fade",
-            .defaultValueHint = "0.01",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
-        return kb::render::RenderMaterialGraphParameterMetadata{
-            .displayName = "Color Ramp",
-            .defaultValueHint = "0 0 0 0 1 1 1 1",
-            .overrideSupported = false,
-        };
-    case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
-    case kb::render::RenderMaterialGraphNodeKind::Add:
-    case kb::render::RenderMaterialGraphNodeKind::Subtract:
-    case kb::render::RenderMaterialGraphNodeKind::Multiply:
-    case kb::render::RenderMaterialGraphNodeKind::Divide:
-    case kb::render::RenderMaterialGraphNodeKind::Power:
-    case kb::render::RenderMaterialGraphNodeKind::OneMinus:
-    case kb::render::RenderMaterialGraphNodeKind::Absolute:
-    case kb::render::RenderMaterialGraphNodeKind::Minimum:
-    case kb::render::RenderMaterialGraphNodeKind::Maximum:
-    case kb::render::RenderMaterialGraphNodeKind::Saturate:
-    case kb::render::RenderMaterialGraphNodeKind::Floor:
-    case kb::render::RenderMaterialGraphNodeKind::Ceil:
-    case kb::render::RenderMaterialGraphNodeKind::Fraction:
-    case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
-    case kb::render::RenderMaterialGraphNodeKind::Sine:
-    case kb::render::RenderMaterialGraphNodeKind::Cosine:
-    case kb::render::RenderMaterialGraphNodeKind::Exponential:
-    case kb::render::RenderMaterialGraphNodeKind::Exponential2:
-    case kb::render::RenderMaterialGraphNodeKind::Logarithm:
-    case kb::render::RenderMaterialGraphNodeKind::Logarithm2:
-    case kb::render::RenderMaterialGraphNodeKind::SrgbToLinear:
-    case kb::render::RenderMaterialGraphNodeKind::LinearToSrgb:
-    case kb::render::RenderMaterialGraphNodeKind::Logarithm10:
-    case kb::render::RenderMaterialGraphNodeKind::HsvToRgb:
-    case kb::render::RenderMaterialGraphNodeKind::RgbToHsv:
-    case kb::render::RenderMaterialGraphNodeKind::DeriveNormalZ:
-    case kb::render::RenderMaterialGraphNodeKind::Fmod:
-    case kb::render::RenderMaterialGraphNodeKind::InverseLerp:
-    case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeX:
-    case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeY:
-    case kb::render::RenderMaterialGraphNodeKind::BlackBody:
-    case kb::render::RenderMaterialGraphNodeKind::Noise:
-    case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
-    case kb::render::RenderMaterialGraphNodeKind::Sobol:
-    case kb::render::RenderMaterialGraphNodeKind::AppendVector:
-    case kb::render::RenderMaterialGraphNodeKind::DotProduct:
-    case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
-    case kb::render::RenderMaterialGraphNodeKind::Normalize:
-    case kb::render::RenderMaterialGraphNodeKind::Length:
-    case kb::render::RenderMaterialGraphNodeKind::Distance:
-    case kb::render::RenderMaterialGraphNodeKind::BreakVector:
-    case kb::render::RenderMaterialGraphNodeKind::MakeVector:
-    case kb::render::RenderMaterialGraphNodeKind::Step:
-    case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
-    case kb::render::RenderMaterialGraphNodeKind::If:
-    case kb::render::RenderMaterialGraphNodeKind::Negate:
-    case kb::render::RenderMaterialGraphNodeKind::Sign:
-    case kb::render::RenderMaterialGraphNodeKind::Round:
-    case kb::render::RenderMaterialGraphNodeKind::Truncate:
-    case kb::render::RenderMaterialGraphNodeKind::Tangent:
-    case kb::render::RenderMaterialGraphNodeKind::ArcSine:
-    case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
-    case kb::render::RenderMaterialGraphNodeKind::ArcSineFast:
-    case kb::render::RenderMaterialGraphNodeKind::ArcCosineFast:
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangentFast:
-    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast:
-    case kb::render::RenderMaterialGraphNodeKind::Clamp:
-    case kb::render::RenderMaterialGraphNodeKind::Lerp:
-    case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
-        break;
-    }
-    return {};
+    return kb::render::DefaultRenderMaterialGraphParameterMetadata(kind, nodeId);
 }
 
 std::string MaterialEditorState::TextureDimensionName(kb::render::RenderMaterialGraphTextureDimension dimension) {

@@ -64,6 +64,8 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/RenderMaterialGraphDocument.hpp
     include/kb/render/resources/RenderMaterialGraphVariantKey.hpp
     include/kb/render/resources/RenderMaterialParameterCollection.hpp
+    include/kb/render/resources/RenderMaterialAuthoring.hpp
+    include/kb/render/resources/RenderMeshImportArtifacts.hpp
     include/kb/render/resources/RenderMaterialInstanceAssetLoader.hpp
     include/kb/render/resources/RenderMaterialInstanceAssetWriter.hpp
     include/kb/render/resources/RenderMaterialTypeAssetLoader.hpp
@@ -222,6 +224,8 @@ add_library(kb_renderer STATIC
     src/resources/RenderMaterialSemanticHash.cpp
     src/resources/RenderMaterialGraphFieldParser.cpp
     src/resources/RenderMaterialGraphFieldParser.hpp
+    src/resources/RenderMaterialAuthoring.cpp
+    src/resources/RenderMeshImportArtifacts.cpp
     src/resources/RenderMaterialInstanceAssetLoader.cpp
     src/resources/RenderMaterialInstanceAssetWriter.cpp
     src/resources/RenderMaterialTypeAssetLoader.cpp

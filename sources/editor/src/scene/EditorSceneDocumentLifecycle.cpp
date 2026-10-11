@@ -21,6 +21,7 @@
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
+#include "engine/assets/AssetImportPreset.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialParameterValidation.hpp"
@@ -139,6 +140,8 @@ void RegisterEditorSceneDocumentAssetLoaders(kb::scene::Scene& scene) {
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialParameterCollectionAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialTypeAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::PostProcessProfileAssetLoader>()));
+    // Import presets (.kbimportpreset): Project Files lists them and the import dialog offers them.
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::assets::AssetImportPresetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()));
     kb::render::InstallRuntimeMaterialParameterValidation(scene);
     // ParticleEffectAssetLoader is registered unconditionally by every kb::scene::Scene's own

@@ -6,6 +6,7 @@ SAMPLER2D(s_kbFullscreenColor, 0);
 SAMPLER3D(s_kbFullscreenColorGradeLut, 1);
 uniform vec4 u_tonemapParams;
 uniform vec4 u_colorGradeParams;
+uniform vec4 u_vignetteParams;
 
 vec3 aces_fitted(vec3 color)
 {
@@ -37,10 +38,19 @@ vec3 apply_color_grade_lut(vec3 displayLinear)
     return mix(displayLinear, graded, saturate(u_colorGradeParams.y));
 }
 
+// Darkening toward the corners: 1 at the centre, 1 - intensity at the corners, smooth in between.
+float vignette_factor(vec2 uv)
+{
+    vec2 offset = (uv - vec2_splat(0.5)) * 2.0;
+    float falloff = saturate(1.0 - 0.5 * u_vignetteParams.x * dot(offset, offset));
+    return falloff * falloff;
+}
+
 void main()
 {
     vec4 scene = texture2D(s_kbFullscreenColor, v_texcoord0);
     vec3 hdr = scene.rgb * exp2(u_tonemapParams.x);
+    hdr = hdr * vignette_factor(v_texcoord0);
     vec3 display = tonemap_display(hdr);
     display = apply_color_grade_lut(display);
     display = pow(max(display, vec3_splat(0.0)), vec3_splat(u_tonemapParams.y));

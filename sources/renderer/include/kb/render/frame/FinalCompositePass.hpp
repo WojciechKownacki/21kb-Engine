@@ -18,6 +18,8 @@ struct FinalCompositePassDesc {
     SceneDisplayOutputTransform outputTransform{};
     std::uint32_t clearRgba = 0x000000FFU;
     bool clearTarget = false;
+    // The profile's vignette: 0 = none.
+    float vignetteIntensity = 0.0F;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

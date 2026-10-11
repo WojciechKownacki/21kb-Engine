@@ -21,6 +21,7 @@ struct SceneDisplayCompositeDesc {
     SceneDisplayOutputTransform outputTransform{};
     std::uint32_t clearRgba = 0x000000FFU;
     bool clearTarget = false;
+    float vignetteIntensity = 0.0F;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

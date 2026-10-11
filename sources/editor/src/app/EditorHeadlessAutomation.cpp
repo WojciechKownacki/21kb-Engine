@@ -3594,6 +3594,11 @@ bool EditorHeadlessAutomation::CaptureSceneViewport(std::string_view checkpoint)
     });
 }
 
+std::optional<kb::render::ScenePostProcessSettings> EditorHeadlessAutomation::SceneViewportPostProcessSettings() {
+    const DockPanel panel{ .id = 1U, .kind = DockPanelKind::Scene };
+    return ScenePanelContentRenderer::BuildSettings(RECT{ 0, -34, 640, 360 }, panel, context_, impl_->backendSettings).postProcessSettings;
+}
+
 bool EditorHeadlessAutomation::CaptureScene(
     std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render) {
 
@@ -3676,6 +3681,27 @@ bool EditorHeadlessAutomation::InspectorPointerDrag(
             context_, x, y);
     Trace("inspector_pointer_drag", routed);
     return routed;
+}
+
+bool EditorHeadlessAutomation::InspectorClickRow(InspectorPropertyId property, int index, InspectorHitKind kind) {
+    // Scrolled the way a person scrolls to a row below the panel's height.
+    for (int offset = 0; offset <= 4000; offset += 150) {
+        static_cast<void>(context_.Inspector().SetScrollOffset(offset, std::numeric_limits<int>::max()));
+        for (int y = kInspectorContent.top + 1; y < kInspectorContent.bottom; y += 2) {
+            for (int x = kInspectorContent.left + 8; x < kInspectorContent.right; x += 16) {
+                const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kInspectorContent, context_, x, y);
+                if (hit.property != property || hit.kind != kind || (index >= 0 && hit.index != index)) {
+                    continue;
+                }
+                const bool pressed = InspectorPointerDown(x, y);
+                const bool released = InspectorPointerUp();
+                Trace("inspector_click_row", pressed);
+                return pressed || released;
+            }
+        }
+    }
+    Trace("inspector_click_row", false);
+    return false;
 }
 
 bool EditorHeadlessAutomation::InspectorPointerUp() {

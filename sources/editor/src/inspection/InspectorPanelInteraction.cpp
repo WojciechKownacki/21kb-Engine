@@ -2,6 +2,8 @@
 #include "app/EditorKeyState.hpp"
 #include "rendering/EditorPanelStyle.hpp"
 #include "inspection/InspectorAudioMixerAssetInteraction.hpp"
+#include "inspection/InspectorPostProcessProfileModel.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 
@@ -3195,6 +3197,38 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
     const bool assetSelected = sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset;
+    if (assetSelected && hit.property == InspectorPropertyId::PostProcessProfileField &&
+        InspectorPostProcessProfileModel::IsSection(hit.section)) {
+        // A checkbox toggles and a choice steps to the next value at once; a number opens its
+        // field, and Enter writes it (HandleKeyDown).
+        const kb::assets::AssetId profile = sceneContext.AssetBrowser().InspectorAsset();
+        const std::optional<kb::render::ScenePostProcessSettings> settings = sceneContext.ReadPostProcessProfile(profile);
+        if (!settings.has_value()) {
+            sceneContext.Inspector().EndTextEdit();
+            return true;
+        }
+        const std::span<const InspectorPostProcessProfileRow> rows = InspectorPostProcessProfileModel::Rows();
+        if (hit.index < 0 || static_cast<std::size_t>(hit.index) >= rows.size()) {
+            return true;
+        }
+        const InspectorPostProcessProfileRow& row = rows[static_cast<std::size_t>(hit.index)];
+        if (row.kind == InspectorPostProcessProfileRowKind::Number) {
+            if (hit.kind == InspectorHitKind::TextField) {
+                sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::PostProcessProfileField,
+                    InspectorPostProcessProfileModel::ValueText(*settings, hit.index));
+                sceneContext.Inspector().SetEditIndex(hit.index);
+            }
+            return true;
+        }
+        sceneContext.Inspector().EndTextEdit();
+        if ((row.kind == InspectorPostProcessProfileRowKind::Bool && hit.kind == InspectorHitKind::BoolField) ||
+            (row.kind == InspectorPostProcessProfileRowKind::Choice && hit.kind == InspectorHitKind::TextField)) {
+            if (const std::optional<kb::render::ScenePostProcessSettings> changed = InspectorPostProcessProfileModel::Clicked(*settings, hit.index)) {
+                static_cast<void>(sceneContext.SetPostProcessProfile(profile, *changed));
+            }
+        }
+        return true;
+    }
     if (assetSelected && hit.section == InspectorSectionId::InputAction) {
         return InspectorInputInteraction::HandleActionAssetClick(sceneContext, hit);
     }
@@ -3406,6 +3440,20 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::WorldBackdrop) {
         return HandleWorldBackdropClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::ScenePostProcess) {
+        // The profile field opens the asset picker (EditorLeftButtonDownRouter); here Clear and,
+        // on the field itself, selecting the profile in Project Files.
+        sceneContext.Inspector().EndTextEdit();
+        if (hit.property == InspectorPropertyId::ScenePostProcessProfileClear) {
+            static_cast<void>(sceneContext.SetScenePostProcessProfile(kb::assets::AssetId{}));
+        } else if (hit.property == InspectorPropertyId::ScenePostProcessProfile) {
+            const kb::assets::AssetId profile{ kb::scene::ScenePostProcessAccess::ActiveProfile(sceneContext.Scene()) };
+            if (profile.IsValid()) {
+                SelectAssetInProjectFiles(sceneContext, profile);
+            }
+        }
+        return true;
     }
     if (hit.section == InspectorSectionId::AmbientRadiance) {
         return HandleAmbientRadianceClick(sceneContext, entity, hit);
@@ -3713,6 +3761,21 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         }
         if (inspector.EditedProperty() == InspectorPropertyId::InputActionName) {
             static_cast<void>(sceneContext.SetInputActionName(sceneContext.AssetBrowser().InspectorAsset(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (inspector.EditedProperty() == InspectorPropertyId::PostProcessProfileField) {
+            const kb::assets::AssetId profile = sceneContext.AssetBrowser().InspectorAsset();
+            const std::optional<kb::render::ScenePostProcessSettings> settings = sceneContext.ReadPostProcessProfile(profile);
+            const std::optional<kb::render::ScenePostProcessSettings> edited = settings.has_value()
+                ? InspectorPostProcessProfileModel::Edited(*settings, inspector.EditIndex(), inspector.EditBuffer())
+                : std::nullopt;
+            if (edited.has_value()) {
+                static_cast<void>(sceneContext.SetPostProcessProfile(profile, *edited));
+            } else {
+                sceneContext.Console().Warning("Post Processing", "'" + std::string{ inspector.EditBuffer() } + "' is not a value of " +
+                    std::string{ InspectorPostProcessProfileModel::RowLabel(inspector.EditIndex()) } + ".");
+            }
             inspector.EndTextEdit();
             return true;
         }

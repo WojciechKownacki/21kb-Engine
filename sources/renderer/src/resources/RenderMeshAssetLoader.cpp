@@ -48,7 +48,7 @@ namespace {
     });
 
     std::istringstream input{ text };
-    return RenderMeshAssetBuilder::LoadObj(input);
+    return RenderMeshAssetBuilder::LoadObj(input, RenderMeshObjImportDesc{ .transform = imported.meshTransform });
 }
 
 [[nodiscard]] std::optional<RenderMeshAssetData> LoadGltfPayload(const kb::assets::AssetLoadRequest& request, const kb::assets::ImportedAsset& imported) {
@@ -62,6 +62,7 @@ namespace {
     std::optional<RenderMeshAssetData> mesh = RenderMeshAssetBuilder::LoadGltf(payload, {}, RenderMeshGltfImportDesc{
         .externalResources = resources,
         .externalResourceCount = resourceCount,
+        .transform = imported.meshTransform,
     });
     if (mesh.has_value() &&
         (imported.importOptions & kb::assets::kAssetImportOptionMeshImportMaterials) != 0U) {
@@ -81,6 +82,7 @@ namespace {
             .materialBindingCount = static_cast<std::uint32_t>(bindings.size()),
             .externalResources = resources,
             .externalResourceCount = resourceCount,
+            .transform = imported.meshTransform,
         });
     }
     return mesh;
@@ -111,6 +113,7 @@ namespace {
             payload,
             RenderMeshFbxImportDesc{
                 .importMaterialSlots = (imported->importOptions & kb::assets::kAssetImportOptionMeshDisableMaterialSlots) == 0U,
+                .transform = imported->meshTransform,
             });
         if (!mesh.has_value() ||
             (imported->importOptions & kb::assets::kAssetImportOptionMeshImportMaterials) == 0U) return mesh;
@@ -129,6 +132,7 @@ namespace {
             .materialBindings = bindings.data(),
             .materialBindingCount = static_cast<std::uint32_t>(bindings.size()),
             .importMaterialSlots = (imported->importOptions & kb::assets::kAssetImportOptionMeshDisableMaterialSlots) == 0U,
+            .transform = imported->meshTransform,
         });
     }
     return std::nullopt;

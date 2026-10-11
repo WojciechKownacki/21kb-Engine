@@ -47,17 +47,50 @@ Commands:
                  --project <dir> --material /Game/<path>.kbmat
                (fields: Base Color, Roughness, Metallic, Emissive Color, Emissive
                Strength, Normal Scale, Occlusion Strength, Alpha Cutoff; a colour is
-               #RRGGBB as in a colour picker, or linear r,g,b 0..1)
+               #RRGGBB as in a colour picker, or linear r,g,b 0..1; textures: Base
+               Color Texture, Normal Texture, Metallic Roughness Texture, Occlusion
+               Texture, Emissive Texture = an image of the project, e.g.
+               /Game/Textures/Albedo.png, or none)
+  material-graph Edit a material's graph, as the Material Editor does; every change
+               is saved and checked as the editor's Save checks it.
+                 show --project <dir> --material /Game/<path>.kbmat
+                 kinds
+                 add-node --project <dir> --material <path> --kind <Kind>
+                          [--name <Name>] [--value <value>] [--at x,y]
+                 connect --project <dir> --material <path> --from <node> [--from-pin <pin>]
+                         --to <node> --to-pin <pin>
+                 set --project <dir> --material <path> --node <node> --value <value>
+                 promote --project <dir> --material <path> --node <node> [--name <Name>]
+                 rename --project <dir> --material <path> --node <node> --name <Name>
+               (<node> is a node id, its name, its parameter id, or Output; kinds as
+               kinds lists them, also ScalarParameter, VectorParameter,
+               TextureParameter, Constant, Constant3Vector, Constant4Vector; a value is a
+               number, r g b [a], #RRGGBB, or a texture path)
+  material-instance-new Create a material instance of a material, as Create Material
+               Instance does (beside its parent unless --folder), with overrides.
+                 --project <dir> --parent /Game/<path>.kbmat [--name <Name>]
+                 [--folder Assets/...] [--set Parameter=value ...]
+  material-instance-set Change or clear overrides of a material instance.
+                 --project <dir> --instance /Game/<path>.kbmatinst
+                 [--set Parameter=value ...] [--clear Parameter ...]
+  material-instance-show Print a material instance: its parent and effective values.
+                 --project <dir> --instance /Game/<path>.kbmatinst
+               (a Parameter is one the parent's graph exposes, by name, or a material
+               field as material-set names it; a Mesh Renderer takes the instance as
+               its material: component set ... --set material=<path>.kbmatinst)
   post-process-new Create a post-process profile: the image settings (tonemapping,
-               exposure, bloom, anti-aliasing) a scene can use, as a Unity Volume
-               Profile. Existing files are never overwritten.
+               exposure, bloom, anti-aliasing, vignette, ambient occlusion) a scene
+               can use, as a Unity Volume Profile. Existing files are never overwritten.
                  --project <dir> --name <Name> [--folder Assets/PostProcess]
                  [--set field=value ...]
   post-process-set Change values of a post-process profile.
                  --project <dir> --profile /Game/<path>.kbppfx --set field=value [...]
                (fields as the .kbppfx file names them, e.g. tonemapEnabled=0,
                outputTransform.tonemap=None, outputTransform.autoExposure.enabled=0,
-               outputTransform.exposureStops=0, bloomEnabled=0)
+               outputTransform.exposureStops=0, bloomEnabled=0, vignetteEnabled=1,
+               vignetteIntensity=0.3, ambientOcclusionEnabled=1,
+               ambientOcclusionIntensity=1, ambientOcclusionRadius=0.6; an unknown
+               field or a value it does not take is refused with the field list)
   scene-post-process Give a scene (the startup scene unless --scene) its post-process
                profile, or none for the renderer's defaults.
                  --project <dir> [--scene <path>] --profile /Game/<path>.kbppfx|none
@@ -92,8 +125,19 @@ Commands:
                .luarc.json, .kb/api/*).
                  --project <dir>
   import       Import external source assets into the project's runtime asset
-               format (.21kb plus metadata).
+               format (.21kb plus metadata), as the editor's Import... does.
                  --project <dir> --destination /Game/<folder> <file> [more files...]
+                 [--preset /Game/<path>.kbimportpreset] [--scale <factor>]
+                 [--rotation x,y,z (degrees)] [--import-materials yes|no]
+                 [--import-textures yes|no]
+               (a model keeps its scale and rotation in its import, as Unity's
+               Scale Factor; flags override the preset)
+  import-preset-new Create an import preset (.kbimportpreset), as the editor's
+               Create > Import Preset; the import dialog and import --preset use it.
+                 --project <dir> --name <Name> [--folder Assets/ImportPresets]
+                 [--set field=value ...]
+               (fields: scale, rotation, importMaterialSlots, importTextures,
+               importMaterials, combineMeshes, importSkeletalMesh)
   validate     Validate Lua behaviour scripts (syntax + sandbox load).
                  [--project <dir>] <file.lua> [more files...]
   scene-list   List nodes, components, and behaviours of a scene file.
@@ -257,6 +301,9 @@ int Dispatch(int argc, char** argv) {
     if (command == "import") {
         return kb::cli::RunImportCommand(arguments, io);
     }
+    if (command == "import-preset-new") {
+        return kb::cli::RunImportPresetNewCommand(arguments, io);
+    }
     if (command == "validate") {
         return kb::cli::RunValidateCommand(arguments, io);
     }
@@ -272,10 +319,16 @@ int Dispatch(int argc, char** argv) {
     if (command == "script-new") {
         return kb::cli::RunScriptNewCommand(arguments, io);
     }
-    if (command == "material-new" || command == "material-set" || command == "material-show") {
+    if (command == "material-new" || command == "material-set" || command == "material-show" ||
+        command == "material-graph" || command == "material-instance-new" || command == "material-instance-set" ||
+        command == "material-instance-show") {
 #if KB_CLI_RENDERER
         if (command == "material-new") return kb::cli::RunMaterialNewCommand(arguments, io);
         if (command == "material-set") return kb::cli::RunMaterialSetCommand(arguments, io);
+        if (command == "material-graph") return kb::cli::RunMaterialGraphCommand(arguments, io);
+        if (command == "material-instance-new") return kb::cli::RunMaterialInstanceNewCommand(arguments, io);
+        if (command == "material-instance-set") return kb::cli::RunMaterialInstanceSetCommand(arguments, io);
+        if (command == "material-instance-show") return kb::cli::RunMaterialInstanceShowCommand(arguments, io);
         return kb::cli::RunMaterialShowCommand(arguments, io);
 #else
         std::cerr << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";

@@ -29,15 +29,25 @@
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "engine/world/WorldObjectFile.hpp"
+#include "engine/assets/ImportedAsset.hpp"
+#include "engine/assets/ImportedAssetLoader.hpp"
+#if KB_CLI_RENDERER
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <memory>
 #include <span>
 #include <sstream>
 #include <string>
@@ -3301,11 +3311,213 @@ void RunNavMeshCommandTests() {
     Require(chunks.exitCode == 0 && Contains(chunks.output, "/Game/Level.cells/nav/r_0_0/"), chunks.output.c_str());
 }
 
+#if KB_CLI_RENDERER
+[[nodiscard]] std::string NewAuthoringProject(std::string_view folder) {
+    const std::filesystem::path parent = TestRoot() / std::string{ folder };
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Studio", "--template", "Empty" }).exitCode == 0,
+        "new failed for an authoring project");
+    return (parent / "Studio").string();
+}
+
+void WriteRedPixelPng(const std::filesystem::path& path) {
+    static constexpr std::array<std::uint8_t, 69U> kPng{
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+        0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+        0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D, 0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+        0x44, 0xAE, 0x42, 0x60, 0x82,
+    };
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    output.write(reinterpret_cast<const char*>(kPng.data()), static_cast<std::streamsize>(kPng.size()));
+    Require(output.good(), "the test texture could not be written");
+}
+
+// post-process-new/set take the vignette and ambient occlusion fields through the profile's own
+// field list, and refuse a value out of range naming the fields.
+void RunPostProcessCommandTests() {
+    const std::string project = NewAuthoringProject("post_process_project");
+    const CommandRun created = Run(&kb::cli::RunPostProcessNewCommand, { "--project", project, "--name", "Look",
+        "--set", "vignetteEnabled=1", "--set", "vignetteIntensity=0.45", "--set", "ambientOcclusionEnabled=1",
+        "--set", "ambientOcclusionRadius=0.9" });
+    Require(created.exitCode == 0 && Contains(created.output, "vignetteIntensity 0.45") &&
+            Contains(created.output, "ambientOcclusionEnabled 1") && Contains(created.output, "ambientOcclusionRadius 0.9"),
+        "post-process-new must write the vignette and ambient occlusion fields: " + created.output);
+    const std::optional<kb::render::ScenePostProcessSettings> saved = kb::render::PostProcessProfileAssetLoader::LoadProfile(
+        std::filesystem::path{ project } / "Assets" / "PostProcess" / "Look.kbppfx");
+    Require(saved.has_value() && saved->vignetteEnabled && saved->ambientOcclusionEnabled &&
+            std::abs(saved->ambientOcclusionRadius - 0.9F) < 0.0001F,
+        "the profile file did not keep the vignette and ambient occlusion");
+    const CommandRun refused = Run(&kb::cli::RunPostProcessSetCommand, { "--project", project,
+        "--profile", "/Game/PostProcess/Look.kbppfx", "--set", "vignetteIntensity=2" });
+    Require(refused.exitCode != 0 && Contains(refused.output, "vignetteIntensity") && Contains(refused.output, "ambientOcclusionRadius"),
+        "a vignette intensity above 1 must be refused with the field list: " + refused.output);
+}
+
+// import keeps a model's scale and rotation from a preset (import-preset-new) or flags, as the
+// editor's import dialog does; a preset's value is overridden by a flag and nonsense is refused.
+void RunImportSettingsCommandTests() {
+    const std::string project = NewAuthoringProject("import_settings_project");
+    const std::filesystem::path source = TestRoot() / "External" / "Crate.obj";
+    WriteTextFile(source, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+
+    const CommandRun preset = Run(&kb::cli::RunImportPresetNewCommand, { "--project", project, "--name", "Centimetres",
+        "--set", "scale=0.01", "--set", "rotation=-90,0,0" });
+    Require(preset.exitCode == 0 && Contains(preset.output, "/Game/ImportPresets/Centimetres.kbimportpreset") &&
+            Contains(preset.output, "scale 0.01") && Contains(preset.output, "rotation -90 0 0"),
+        "import-preset-new did not write the preset: " + preset.output);
+    Require(Run(&kb::cli::RunImportPresetNewCommand, { "--project", project, "--name", "Broken", "--set", "scale=-1" }).exitCode != 0,
+        "import-preset-new must refuse a negative scale");
+
+    const CommandRun withPreset = Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models",
+        "--preset", "/Game/ImportPresets/Centimetres.kbimportpreset", source.string() });
+    Require(withPreset.exitCode == 0 && Contains(withPreset.output, "created /Game/Models/Crate.21kb") &&
+            Contains(withPreset.output, "scale 0.01, rotation -90,0,0"),
+        "import --preset did not import with the preset's settings: " + withPreset.output);
+    const auto containerTransform = [&](const std::string& name) {
+        kb::assets::ImportedAssetLoader loader;
+        const std::filesystem::path file = std::filesystem::path{ project } / "Assets" / "Models" / name;
+        const kb::assets::AssetMetadata metadata{ .type = "RenderMesh", .physicalPath = file, .sourceExtension = ".21kb" };
+        const kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{ metadata, file });
+        Require(loaded.Succeeded(), "the imported model container could not be read: " + name);
+        return std::static_pointer_cast<kb::assets::ImportedAsset>(loaded.asset)->meshTransform;
+    };
+    const kb::assets::AssetMeshImportTransform fromPreset = containerTransform("Crate.21kb");
+    Require(std::abs(fromPreset.scale - 0.01F) < 0.00001F && fromPreset.rotationDegrees[0] == -90.0F,
+        "the imported model did not keep the preset's scale and rotation");
+
+    const CommandRun overridden = Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models",
+        "--preset", "/Game/ImportPresets/Centimetres.kbimportpreset", "--scale", "2", source.string() });
+    Require(overridden.exitCode == 0 && Contains(overridden.output, "created /Game/Models/Crate_1.21kb") &&
+            Contains(overridden.output, "scale 2, rotation -90,0,0"),
+        "--scale must override the preset's scale in a separate import: " + overridden.output);
+    Require(containerTransform("Crate_1.21kb").scale == 2.0F, "the flag's scale did not reach the import");
+
+    const CommandRun zero = Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models",
+        "--scale", "0", source.string() });
+    Require(zero.exitCode != 0 && Contains(zero.output, "--scale"), "import must refuse a zero scale: " + zero.output);
+    const CommandRun badRotation = Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models",
+        "--rotation", "90,0", source.string() });
+    Require(badRotation.exitCode != 0 && Contains(badRotation.output, "--rotation"), "import must refuse two angles: " + badRotation.output);
+    const CommandRun badFlag = Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models",
+        "--import-materials", "maybe", source.string() });
+    Require(badFlag.exitCode != 0 && Contains(badFlag.output, "yes or no"), "import must refuse --import-materials maybe: " + badFlag.output);
+}
+
+// material-set takes the built-in texture slots by a texture path of the project; material-graph
+// builds Unreal's VectorParameter Color -> Base Color, ScalarParameter Roughness and Metallic
+// graph; material-instance-new/set/show override those parameters and a Mesh Renderer takes the
+// instance as its material.
+void RunMaterialAuthoringCommandTests() {
+    const std::string project = NewAuthoringProject("material_authoring_project");
+    WriteRedPixelPng(std::filesystem::path{ project } / "Assets" / "Textures" / "Paint.png");
+
+    Require(Run(&kb::cli::RunMaterialNewCommand, { "--project", project, "--name", "Body",
+        "--set", "Base Color Texture=/Game/Textures/Paint.png" }).exitCode == 0,
+        "material-new did not take a base colour texture");
+    const std::optional<kb::render::RenderMaterialAssetData> body = kb::render::RenderMaterialAssetLoader::LoadMaterial(
+        std::filesystem::path{ project } / "Assets" / "Materials" / "Body.kbmat");
+    const std::uint64_t paintId = kb::assets::MakeAssetId("/Game/Textures/Paint.png:RenderTexture").value;
+    Require(body.has_value() && body->desc.albedoTextureAssetId == paintId, "the base colour texture was not written");
+    const CommandRun shown = Run(&kb::cli::RunMaterialShowCommand, { "--project", project, "--material", "/Game/Materials/Body.kbmat" });
+    Require(Contains(shown.output, "Base Color Texture = /Game/Textures/Paint.png"), "material-show must name the texture: " + shown.output);
+    const CommandRun missingTexture = Run(&kb::cli::RunMaterialSetCommand, { "--project", project,
+        "--material", "/Game/Materials/Body.kbmat", "--set", "Normal Texture=/Game/Textures/None.png" });
+    Require(missingTexture.exitCode != 0 && Contains(missingTexture.output, "not a texture"),
+        "a missing texture must be refused: " + missingTexture.output);
+
+    Require(Run(&kb::cli::RunMaterialNewCommand, { "--project", project, "--name", "Car" }).exitCode == 0, "material-new Car failed");
+    const std::vector<std::string> base{ "--project", project, "--material", "/Game/Materials/Car.kbmat" };
+    const auto graph = [&](std::vector<std::string> tail) {
+        std::vector<std::string> arguments{ tail.front() };
+        arguments.insert(arguments.end(), base.begin(), base.end());
+        arguments.insert(arguments.end(), tail.begin() + 1, tail.end());
+        return Run(&kb::cli::RunMaterialGraphCommand, arguments);
+    };
+    const CommandRun color = graph({ "add-node", "--kind", "VectorParameter", "--name", "Color", "--value", "#C8202A" });
+    Require(color.exitCode == 0 && Contains(color.output, "ParameterColor 'Color'"), "add-node VectorParameter failed: " + color.output);
+    Require(graph({ "connect", "--from", "Color", "--to", "Output", "--to-pin", "BaseColor" }).exitCode == 0, "Color -> Base Color failed");
+    Require(graph({ "add-node", "--kind", "ScalarParameter", "--name", "Roughness", "--value", "0.4" }).exitCode == 0, "Roughness node failed");
+    Require(graph({ "connect", "--from", "Roughness", "--to", "Output", "--to-pin", "roughness" }).exitCode == 0, "Roughness link failed");
+    const CommandRun metallic = graph({ "add-node", "--kind", "Constant", "--value", "1" });
+    Require(metallic.exitCode == 0, "Constant node failed: " + metallic.output);
+    Require(graph({ "promote", "--node", "Scalar", "--name", "Metallic" }).exitCode == 0, "promote to parameter failed");
+    Require(graph({ "connect", "--from", "Metallic", "--to", "Output", "--to-pin", "metallic" }).exitCode == 0, "Metallic link failed");
+    const CommandRun wrongPin = graph({ "connect", "--from", "Color", "--to", "Output", "--to-pin", "Shine" });
+    Require(wrongPin.exitCode != 0 && Contains(wrongPin.output, "baseColor"), "an unknown pin must be refused with the inputs: " + wrongPin.output);
+    const CommandRun outputValue = graph({ "set", "--node", "Output", "--value", "1" });
+    Require(outputValue.exitCode != 0, "the Material Output has no value to set");
+    const CommandRun graphShown = graph({ "show" });
+    Require(graphShown.exitCode == 0 && Contains(graphShown.output, "Compiles: yes") && Contains(graphShown.output, "Color (color") &&
+            Contains(graphShown.output, "Roughness (scalar") && Contains(graphShown.output, "Metallic (scalar"),
+        "material-graph show must list the three parameters of a compiling graph: " + graphShown.output);
+
+    const std::optional<kb::render::RenderMaterialAssetData> car = kb::render::RenderMaterialAssetLoader::LoadMaterial(
+        std::filesystem::path{ project } / "Assets" / "Materials" / "Car.kbmat");
+    Require(car.has_value() && car->graph.links.size() == 3U, "the graph must hold its three links");
+    const auto parameterValue = [](const kb::render::RenderMaterialAssetData& material, std::string_view prefix) {
+        const auto found = std::ranges::find_if(material.graphParameterValues, [&](const kb::render::RenderMaterialGraphParameterValue& value) {
+            return value.stableId.starts_with(prefix);
+        });
+        return found != material.graphParameterValues.end() ? std::optional{ *found } : std::nullopt;
+    };
+    const std::optional<kb::render::RenderMaterialGraphParameterValue> carColor = parameterValue(*car, "color");
+    Require(carColor.has_value() && std::abs(carColor->numbers[0] - 0.578F) < 0.01F, "the Color parameter value was not written (sRGB #C8 is linear 0.578)");
+
+    const CommandRun instance = Run(&kb::cli::RunMaterialInstanceNewCommand, { "--project", project, "--name", "CarRed",
+        "--parent", "/Game/Materials/Car.kbmat", "--set", "Color=#FF0000", "--set", "Roughness=0.2" });
+    Require(instance.exitCode == 0 && Contains(instance.output, "/Game/Materials/CarRed.kbmatinst") &&
+            Contains(instance.output, "Color = 1 0 0 1 (override)") && Contains(instance.output, "Roughness = 0.2 (override)"),
+        "material-instance-new did not override Color and Roughness: " + instance.output);
+    const CommandRun unknown = Run(&kb::cli::RunMaterialInstanceSetCommand, { "--project", project,
+        "--instance", "/Game/Materials/CarRed.kbmatinst", "--set", "Sparkle=1" });
+    Require(unknown.exitCode != 0 && Contains(unknown.output, "Sparkle") && Contains(unknown.output, "Metallic"),
+        "an unknown instance parameter must be refused with the parameter list: " + unknown.output);
+    const CommandRun changed = Run(&kb::cli::RunMaterialInstanceSetCommand, { "--project", project,
+        "--instance", "/Game/Materials/CarRed.kbmatinst", "--set", "Metallic=0.5", "--clear", "Roughness" });
+    Require(changed.exitCode == 0 && Contains(changed.output, "Metallic = 0.5 (override)") && Contains(changed.output, "Roughness = 0.4") &&
+            !Contains(changed.output, "Roughness = 0.4 (override)"),
+        "material-instance-set did not override Metallic and clear Roughness: " + changed.output);
+
+    const std::optional<kb::render::RenderMaterialInstanceAssetData> saved = kb::render::RenderMaterialInstanceAssetLoader::LoadInstance(
+        std::filesystem::path{ project } / "Assets" / "Materials" / "CarRed.kbmatinst");
+    Require(saved.has_value() && saved->parentMaterialAssetId == kb::assets::MakeAssetId("/Game/Materials/Car.kbmat:RenderMaterial"),
+        "the instance must name its parent");
+    const kb::render::RenderMaterialAssetData effective = kb::render::BuildEffectiveRenderMaterialInstanceAsset(*car, *saved);
+    const std::optional<kb::render::RenderMaterialGraphParameterValue> red = parameterValue(effective, "color");
+    Require(red.has_value() && red->numbers[0] == 1.0F && red->numbers[1] == 0.0F, "the effective instance colour must be the override");
+
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Cube", "--name", "Car" }).exitCode == 0,
+        "entity add Cube failed");
+    const CommandRun assigned = Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Car",
+        "--type", "MeshRenderer", "--set", "material=/Game/Materials/CarRed.kbmatinst" });
+    Require(assigned.exitCode == 0, "a Mesh Renderer must take a material instance: " + assigned.output);
+    kb::scene::Scene scene;
+    const kb::scene::SceneDocumentLoadResult loaded =
+        kb::scene::SceneDocumentService::Load(std::filesystem::path{ project } / "Assets" / "Scenes" / "Main.21kbscene");
+    Require(loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(scene, loaded.document), "the scene could not be reloaded");
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    const auto carEntity = std::ranges::find_if(roots, [&](kb::scene::SceneEntity entity) { return scene.Entities().Name(entity) == "Car"; });
+    Require(carEntity != roots.end(), "the Car entity is missing");
+    const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(*carEntity);
+    Require(renderer != nullptr &&
+            renderer->materialAssetId == kb::assets::MakeAssetId("/Game/Materials/CarRed.kbmatinst:RenderMaterialInstance").value,
+        "the Mesh Renderer did not keep the material instance");
+}
+#endif
+
 int main() {
     RunMiniJsonTests();
     RunArgumentListTests();
     RunValidateCommandTests();
     RunImportCommandTests();
+#if KB_CLI_RENDERER
+    RunPostProcessCommandTests();
+    RunImportSettingsCommandTests();
+    RunMaterialAuthoringCommandTests();
+#endif
     RunSceneCommandTests();
     RunRunCommandTests();
     RunPlayerControllerTemplateTests();

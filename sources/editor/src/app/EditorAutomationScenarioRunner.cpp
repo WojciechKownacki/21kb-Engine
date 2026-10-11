@@ -1,4 +1,10 @@
 #include "app/EditorAutomationScenarioRunner.hpp"
+#include "engine/assets/AssetImportPreset.hpp"
+#include "engine/assets/ImportedAsset.hpp"
+#include "engine/assets/ImportedAssetLoader.hpp"
+#include "inspection/InspectorPostProcessProfileModel.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "editor/ParticleEditorText.hpp"
 #include "rendering/gdi/CutTextAudit.hpp"
@@ -981,6 +987,99 @@ ReadScriptValue(
 }
 
 // Navigation operations: baking a scene's navigation mesh, its debug view and agents walking on it.
+// Post-process profiles (.kbppfx) and the scene's profile, through the Inspector's own rows:
+// a click lands where the panel hit-tests the row, a number is typed and committed with Enter.
+[[nodiscard]] std::optional<StepOutcome> ExecutePostProcessStep(
+    ScenarioState& state, const JsonValue& step, std::string_view operation) {
+    std::string error;
+    EditorSceneContext& context = state.context;
+    const auto rowOf = [](std::string_view field) {
+        const std::span<const InspectorPostProcessProfileRow> rows = InspectorPostProcessProfileModel::Rows();
+        for (std::size_t index = 0U; index < rows.size(); ++index) {
+            if (rows[index].field == field) return static_cast<int>(index);
+        }
+        return -1;
+    };
+    if (operation == "post_process_row") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto field = StringMember(step, "field", error);
+        const auto text = StringMember(step, "text", error, false);
+        if (!asset || !field) return StepOutcome{ false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        const int row = rowOf(*field);
+        if (!id.IsValid() || row < 0) return StepOutcome{ false, "unknown profile or field " + *field };
+        if (!context.AssetBrowser().SelectAsset(id, context.Scene().Assets().Manager())) return StepOutcome{ false, "profile not selectable" };
+        const InspectorPostProcessProfileRow& entry = InspectorPostProcessProfileModel::Rows()[static_cast<std::size_t>(row)];
+        const InspectorHitKind kind = entry.kind == InspectorPostProcessProfileRowKind::Bool ? InspectorHitKind::BoolField : InspectorHitKind::TextField;
+        if (!state.automation.InspectorClickRow(InspectorPropertyId::PostProcessProfileField, row, kind)) {
+            return StepOutcome{ false, "the Inspector shows no row for " + *field };
+        }
+        if (text.has_value()) {
+            if (entry.kind != InspectorPostProcessProfileRowKind::Number) return StepOutcome{ false, *field + " takes no typed value" };
+            for (int erase = 0; erase < 32; ++erase) static_cast<void>(state.automation.InspectorKey(VK_BACK));
+            for (const unsigned char character : *text) {
+                if (!state.automation.InspectorChar(static_cast<wchar_t>(character))) return StepOutcome{ false, "typing was not routed" };
+            }
+            if (!state.automation.InspectorKey(VK_RETURN)) return StepOutcome{ false, "Enter was not routed" };
+        }
+        return StepOutcome{ true, *field };
+    }
+    if (operation == "assert_post_process_profile") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto field = StringMember(step, "field", error);
+        const auto value = StringMember(step, "value", error);
+        if (!asset || !field || !value) return StepOutcome{ false, error };
+        const std::optional<kb::render::ScenePostProcessSettings> settings = context.ReadPostProcessProfile(ResolveAsset(state, *asset));
+        if (!settings.has_value()) return StepOutcome{ false, "the profile could not be read" };
+        std::istringstream lines{ kb::render::PostProcessProfileAssetLoader::Describe(*settings) };
+        std::string line;
+        while (std::getline(lines, line)) {
+            if (line.rfind(*field + " ", 0U) == 0U) {
+                const std::string actual = line.substr(field->size() + 1U);
+                return StepOutcome{ actual == *value, *field + " = " + actual };
+            }
+        }
+        return StepOutcome{ false, "the profile has no field " + *field };
+    }
+    if (operation == "set_scene_post_process_profile") {
+        // What the Scene Profile picker does when a profile is chosen.
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return StepOutcome{ false, error };
+        const kb::assets::AssetId id = *asset == "none" ? kb::assets::AssetId{} : ResolveAsset(state, *asset);
+        return StepOutcome{ context.SetScenePostProcessProfile(id), *asset };
+    }
+    if (operation == "clear_scene_post_process_profile") {
+        // The Inspector's Clear Scene Profile row on the selected environment object.
+        return StepOutcome{ state.automation.InspectorClickRow(InspectorPropertyId::ScenePostProcessProfileClear, -1, InspectorHitKind::TextField),
+            "Clear Scene Profile" };
+    }
+    if (operation == "assert_viewport_post_process") {
+        // What the Scene panel's viewport renders with: a field of its post-process settings.
+        const auto field = StringMember(step, "field", error);
+        const auto value = StringMember(step, "value", error);
+        if (!field || !value) return StepOutcome{ false, error };
+        const std::optional<kb::render::ScenePostProcessSettings> settings = state.automation.SceneViewportPostProcessSettings();
+        if (!settings.has_value()) return StepOutcome{ false, "the viewport renders the renderer's defaults" };
+        std::istringstream lines{ kb::render::PostProcessProfileAssetLoader::Describe(*settings) };
+        std::string line;
+        while (std::getline(lines, line)) {
+            if (line.rfind(*field + " ", 0U) == 0U) {
+                const std::string actual = line.substr(field->size() + 1U);
+                return StepOutcome{ actual == *value, *field + " = " + actual };
+            }
+        }
+        return StepOutcome{ false, "no field " + *field };
+    }
+    if (operation == "assert_scene_post_process_profile") {
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return StepOutcome{ false, error };
+        const std::uint64_t expected = *asset == "none" ? 0U : ResolveAsset(state, *asset).value;
+        const std::uint64_t actual = kb::scene::ScenePostProcessAccess::ActiveProfile(context.Scene());
+        return StepOutcome{ actual == expected, "profile " + std::to_string(actual) };
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] std::optional<StepOutcome> ExecuteNavigationStep(
     ScenarioState& state, const JsonValue& step, std::string_view operation) {
     std::string error;
@@ -1087,6 +1186,9 @@ ReadScriptValue(
     }
     if (std::optional<StepOutcome> navigation = ExecuteNavigationStep(state, step, *operation)) {
         return *navigation;
+    }
+    if (std::optional<StepOutcome> postProcess = ExecutePostProcessStep(state, step, *operation)) {
+        return *postProcess;
     }
 
     if (*operation == "verify_prefab_round_trip") {
@@ -2166,14 +2268,35 @@ ReadScriptValue(
         const auto combineMeshes = BoolMember(step, "combine_meshes", error, false);
         if (!combineMeshes && step.Find("combine_meshes") != nullptr) return { false, error };
         kb::assets::AssetImportOptions options{};
-        options.mesh.importSkeletalMesh = skeletal.value_or(false);
-        options.mesh.importTextures = importTextures.value_or(false);
-        options.mesh.importMaterials = importMaterials.value_or(false);
-        options.mesh.combineMeshes = combineMeshes.value_or(false);
-        return {
-            state.context.ImportAssetFiles(
-                sources, std::filesystem::path{ *destination }, options),
-            sourcePath->string() };
+        // "preset": an import preset of the project (the dialog's Import preset row), whose
+        // options the members below then change, as the dialog's rows do.
+        if (const auto preset = StringMember(step, "preset", error, false)) {
+            const kb::assets::AssetMetadata* metadata =
+                state.context.Scene().Assets().Manager().Registry().Find(ResolveAsset(state, *preset));
+            std::string presetError;
+            const std::optional<kb::assets::AssetImportOptions> loaded = metadata == nullptr
+                ? std::nullopt : kb::assets::AssetImportPresetIO::Load(metadata->physicalPath, &presetError);
+            if (!loaded.has_value()) return { false, "import preset not readable: " + presetError };
+            options = *loaded;
+        }
+        if (skeletal.has_value()) options.mesh.importSkeletalMesh = *skeletal;
+        if (importTextures.has_value()) options.mesh.importTextures = *importTextures;
+        if (importMaterials.has_value()) options.mesh.importMaterials = *importMaterials;
+        if (combineMeshes.has_value()) options.mesh.combineMeshes = *combineMeshes;
+        if (const auto scale = NumberMember(step, "scale", error, false)) {
+            options.mesh.transform.scale = static_cast<float>(*scale);
+        }
+        if (const JsonValue* rotation = step.Find("rotation"); rotation != nullptr) {
+            if (rotation->GetKind() != JsonValue::Kind::Array || rotation->Size() != 3U) return { false, "rotation must be [x, y, z]" };
+            for (std::size_t axis = 0U; axis < 3U; ++axis) {
+                if (rotation->At(axis)->GetKind() != JsonValue::Kind::Number) return { false, "rotation must be [x, y, z]" };
+                options.mesh.transform.rotationDegrees[axis] = static_cast<float>(rotation->At(axis)->AsNumber());
+            }
+        }
+        // "refused": the import must fail (and say why), as the editor refuses it.
+        const bool refused = BoolMember(step, "refused", error, false).value_or(false);
+        const bool imported = state.context.ImportAssetFiles(sources, std::filesystem::path{ *destination }, options);
+        return { imported != refused, sourcePath->string() };
     }
 
     if (*operation == "create_entity") {
@@ -2969,6 +3092,31 @@ ReadScriptValue(
             metadata == nullptr ? "absent" : metadata->type };
     }
 
+    if (*operation == "assert_import_transform") {
+        // The scale and rotation an imported model's container keeps (and every load applies).
+        const auto path = StringMember(step, "path", error);
+        const auto scale = NumberMember(step, "scale", error);
+        const JsonValue* rotation = Member(step, "rotation", JsonValue::Kind::Array, error);
+        if (!path || !scale || rotation == nullptr || rotation->Size() != 3U) return { false, error.empty() ? "rotation must be [x, y, z]" : error };
+        const kb::assets::AssetMetadata* metadata =
+            state.context.Scene().Assets().Manager().Registry().FindByPath(std::filesystem::path{ *path });
+        if (metadata == nullptr) return { false, "asset is absent" };
+        for (std::size_t axis = 0U; axis < 3U; ++axis) {
+            if (rotation->At(axis)->GetKind() != JsonValue::Kind::Number) return { false, "rotation must be [x, y, z]" };
+        }
+        kb::assets::ImportedAssetLoader loader;
+        const kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{ *metadata, metadata->physicalPath });
+        const auto imported = std::static_pointer_cast<kb::assets::ImportedAsset>(loaded.asset);
+        if (!loaded.Succeeded() || imported == nullptr) return { false, "container not readable" };
+        const kb::assets::AssetMeshImportTransform& transform = imported->meshTransform;
+        const bool matched = std::fabs(transform.scale - *scale) < 0.0001 &&
+            std::fabs(transform.rotationDegrees[0] - rotation->At(0)->AsNumber()) < 0.0001 &&
+            std::fabs(transform.rotationDegrees[1] - rotation->At(1)->AsNumber()) < 0.0001 &&
+            std::fabs(transform.rotationDegrees[2] - rotation->At(2)->AsNumber()) < 0.0001;
+        return { matched, "scale " + std::to_string(transform.scale) + " rotation " + std::to_string(transform.rotationDegrees[0]) + ',' +
+            std::to_string(transform.rotationDegrees[1]) + ',' + std::to_string(transform.rotationDegrees[2]) };
+    }
+
     if (*operation == "assert_asset_compatibility") {
         const auto asset = StringMember(step, "asset", error);
         const auto expected = BoolMember(step, "compatible", error);
@@ -3197,6 +3345,10 @@ ReadScriptValue(
                 state.context.CreateMaterialTypeAsset(virtualFolder);
         } else if (*type == "particle_effect") {
             created = state.context.CreateParticleEffectAsset(virtualFolder);
+        } else if (*type == "post_process_profile") {
+            created = state.context.CreatePostProcessProfileAsset(virtualFolder);
+        } else if (*type == "import_preset") {
+            created = state.context.CreateImportPresetAsset(virtualFolder);
         } else {
             return { false, "unsupported asset type" };
         }

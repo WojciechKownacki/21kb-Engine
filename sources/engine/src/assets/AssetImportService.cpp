@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <fstream>
 #include <iterator>
@@ -27,6 +28,10 @@ constexpr std::uint32_t ImportFormatVersion = 1U;
 // An asset container that also carries the files its source referenced (ImportedAssetResource):
 // the version-1 header and names, then a resource table, then the payload.
 constexpr std::uint32_t ImportContainerWithResourcesVersion = 2U;
+// A model container imported with a scale or rotation (AssetMeshImportTransform): the version-1
+// header and names, the transform (scale, then Euler degrees x y z, as IEEE floats), the resource
+// table (possibly empty), then the payload. Imports without a transform keep writing 1 or 2.
+constexpr std::uint32_t ImportContainerWithTransformVersion = 3U;
 constexpr std::uint64_t FnvPrime = 1099511628211ULL;
 [[nodiscard]] std::string SanitizeStem(std::string name) {
     for (char& character : name) {
@@ -115,6 +120,25 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
         value |= static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[index])) << (index * 8);
     }
     return true;
+}
+
+void WriteF32(std::ostream& output, float value) {
+    WriteU32(output, std::bit_cast<std::uint32_t>(value));
+}
+
+[[nodiscard]] bool ReadF32(std::istream& input, float& value) {
+    std::uint32_t bits = 0U;
+    if (!ReadU32(input, bits)) {
+        return false;
+    }
+    value = std::bit_cast<float>(bits);
+    return true;
+}
+
+[[nodiscard]] bool ReadTransform(std::istream& input, AssetMeshImportTransform& transform) {
+    return ReadF32(input, transform.scale) && ReadF32(input, transform.rotationDegrees[0]) &&
+        ReadF32(input, transform.rotationDegrees[1]) && ReadF32(input, transform.rotationDegrees[2]) &&
+        transform.IsValid();
 }
 
 [[nodiscard]] bool WriteString(std::ostream& output, std::string_view text) {
@@ -211,8 +235,10 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
     std::uint64_t sourceSize,
     std::uint64_t sourceHash,
     std::uint16_t importOptions,
+    const AssetMeshImportTransform& transform,
     std::span<const ImportedAssetResource> resources) {
     const std::filesystem::path tempPath = outputPath.string() + ".tmp";
+    const bool writesTransform = !transform.IsIdentity();
     bool wrote = false;
     {
         std::ofstream output{ tempPath, std::ios::binary | std::ios::trunc };
@@ -220,14 +246,22 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
             return false;
         }
         output.write(AssetMagic.data(), static_cast<std::streamsize>(AssetMagic.size()));
-        WriteU32(output, resources.empty() ? ImportFormatVersion : ImportContainerWithResourcesVersion);
+        WriteU32(output, writesTransform ? ImportContainerWithTransformVersion
+                : resources.empty() ? ImportFormatVersion : ImportContainerWithResourcesVersion);
         WriteU16(output, static_cast<std::uint16_t>(category));
         WriteU16(output, importOptions);
         WriteU64(output, sourceSize);
         WriteU64(output, sourceHash);
         wrote = WriteString(output, sourcePath.filename().string())
-            && WriteString(output, sourcePath.extension().string())
-            && (resources.empty() || WriteResources(output, resources))
+            && WriteString(output, sourcePath.extension().string());
+        if (wrote && writesTransform) {
+            WriteF32(output, transform.scale);
+            WriteF32(output, transform.rotationDegrees[0]);
+            WriteF32(output, transform.rotationDegrees[1]);
+            WriteF32(output, transform.rotationDegrees[2]);
+        }
+        wrote = wrote
+            && ((resources.empty() && !writesTransform) || WriteResources(output, resources))
             && CopyPayload(output, sourcePath)
             && output.good();
     }
@@ -300,6 +334,7 @@ struct ImportedAssetHeader {
     std::uint16_t importOptions = 0U;
     std::string sourceName;
     std::string sourceExtension;
+    AssetMeshImportTransform transform{};
 };
 
 [[nodiscard]] std::optional<ImportedAssetHeader> ReadImportedAssetHeader(const std::filesystem::path& assetPath) {
@@ -316,13 +351,15 @@ struct ImportedAssetHeader {
     if (!input.read(magic.data(), static_cast<std::streamsize>(magic.size())) ||
         magic != AssetMagic ||
         !ReadU32(input, version) ||
-        (version != ImportFormatVersion && version != ImportContainerWithResourcesVersion) ||
+        (version != ImportFormatVersion && version != ImportContainerWithResourcesVersion &&
+            version != ImportContainerWithTransformVersion) ||
         !ReadU16(input, category) ||
         !ReadU16(input, flags) ||
         !ReadU64(input, header.sourceSize) ||
         !ReadU64(input, header.sourceHash) ||
         !ReadString(input, header.sourceName) ||
-        !ReadString(input, header.sourceExtension)) {
+        !ReadString(input, header.sourceExtension) ||
+        (version == ImportContainerWithTransformVersion && !ReadTransform(input, header.transform))) {
         return std::nullopt;
     }
 
@@ -341,7 +378,8 @@ struct ImportedAssetHeader {
     const std::filesystem::path& sourcePath,
     AssetImportCategory category,
     std::uint64_t sourceHash,
-    std::uint16_t importOptions) {
+    std::uint16_t importOptions,
+    const AssetMeshImportTransform& transform) {
     for (const AssetMetadata& metadata : manager.Registry().All()) {
         if (metadata.type != RuntimeAssetType(category) ||
             metadata.importCategory != ToString(category) ||
@@ -355,6 +393,7 @@ struct ImportedAssetHeader {
             header->category == category &&
             header->sourceHash == sourceHash &&
             header->importOptions == importOptions &&
+            header->transform == transform &&
             header->sourceName == sourcePath.filename().string() &&
             header->sourceExtension == sourcePath.extension().string()) {
             return &metadata;
@@ -419,7 +458,16 @@ struct ImportedAssetHeader {
     }
 
     const std::uint16_t importOptions = AssetImportOptionFlags(options);
-    if (const AssetMetadata* reusable = FindReusableImportedAsset(manager, destinationVirtualFolder, sourcePath, result.category, result.sourceHash, importOptions);
+    // Scale and rotation are model import settings, as in Unity's ModelImporter; other sources
+    // carry none.
+    const AssetMeshImportTransform transform = result.category == AssetImportCategory::Model
+        ? options.mesh.transform : AssetMeshImportTransform{};
+    if (!transform.IsValid()) {
+        result.error = "Model import scale must be above zero and its rotation finite.";
+        result.status = AssetImportItemStatus::Failed;
+        return result;
+    }
+    if (const AssetMetadata* reusable = FindReusableImportedAsset(manager, destinationVirtualFolder, sourcePath, result.category, result.sourceHash, importOptions, transform);
         reusable != nullptr) {
         result.id = reusable->id;
         result.assetPhysicalPath = reusable->physicalPath;
@@ -441,7 +489,7 @@ struct ImportedAssetHeader {
     const std::string runtimeType{ RuntimeAssetType(result.category) };
     result.id = MakeAssetId(NormalizeAssetPath(result.virtualPath) + ":" + runtimeType);
 
-    if (!WriteAssetContainer(result.assetPhysicalPath, sourcePath, result.category, sourceSize, result.sourceHash, importOptions, *resources)) {
+    if (!WriteAssetContainer(result.assetPhysicalPath, sourcePath, result.category, sourceSize, result.sourceHash, importOptions, transform, *resources)) {
         result.error = "Imported asset container could not be written.";
         result.status = AssetImportItemStatus::Failed;
         return result;

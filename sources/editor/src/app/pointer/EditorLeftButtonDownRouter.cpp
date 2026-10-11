@@ -64,6 +64,8 @@
 #include "platform/win32/EditorFileDialogFilter.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
 #include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
+#include "platform/win32/EditorPostProcessProfileAssetPickerDialog.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "platform/win32/EditorChoiceDialog.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
@@ -1727,6 +1729,21 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     }
                 }
             }
+        }
+        if (hit.section == InspectorSectionId::ScenePostProcess
+            && hit.property == InspectorPropertyId::ScenePostProcessProfile) {
+            const EditorPostProcessProfileAssetPickerDialog::Result result =
+                EditorPostProcessProfileAssetPickerDialog::Show(
+                    mainWindow_,
+                    MakeEditorDarkTheme(),
+                    sceneContext_,
+                    kb::assets::AssetId{ kb::scene::ScenePostProcessAccess::ActiveProfile(sceneContext_.Scene()) });
+            if (result.accepted) {
+                static_cast<void>(sceneContext_.SetScenePostProcessProfile(result.assetId));
+                sceneViewport_.RequestPresent();
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
         }
         if (hit.section == InspectorSectionId::SceneAudioRouting
             && hit.property == InspectorPropertyId::SceneAudioMixerPicker) {

@@ -1,5 +1,7 @@
 #include "resources/RenderMeshAssetFinalizer.hpp"
 
+#include "engine/math/EngineMath.hpp"
+
 #include <meshoptimizer/src/meshoptimizer.h>
 
 #include <algorithm>
@@ -519,6 +521,37 @@ void RenderMeshAssetFinalizer::ConvertRightHandedSource(RenderMeshAssetData& ass
     }
     for (std::size_t index = 0U; index + 2U < asset.indices16.size(); index += 3U) {
         std::swap(asset.indices16[index + 1U], asset.indices16[index + 2U]);
+    }
+}
+
+void RenderMeshAssetFinalizer::ApplyImportTransform(
+    RenderMeshAssetData& asset, const kb::assets::AssetMeshImportTransform& transform) noexcept {
+    if (transform.IsIdentity()) {
+        return;
+    }
+    const kb::math::Quat rotation = kb::math::FromEulerDegrees(kb::math::Vec3{
+        transform.rotationDegrees[0], transform.rotationDegrees[1], transform.rotationDegrees[2] });
+    const float scale = transform.scale;
+    const auto place = [&](float& x, float& y, float& z) noexcept {
+        const kb::math::Vec3 moved = kb::math::Rotate(rotation, kb::math::Vec3{ x, y, z });
+        x = moved.x * scale;
+        y = moved.y * scale;
+        z = moved.z * scale;
+    };
+    const auto turn = [&](float& x, float& y, float& z) noexcept {
+        const kb::math::Vec3 turned = kb::math::Rotate(rotation, kb::math::Vec3{ x, y, z });
+        x = turned.x;
+        y = turned.y;
+        z = turned.z;
+    };
+    for (RenderStaticMeshVertexP3N3UV2& vertex : asset.vertices) {
+        place(vertex.x, vertex.y, vertex.z);
+        turn(vertex.nx, vertex.ny, vertex.nz);
+    }
+    for (RenderStaticMeshVertexP3N3T4UV2& vertex : asset.tangentVertices) {
+        place(vertex.x, vertex.y, vertex.z);
+        turn(vertex.nx, vertex.ny, vertex.nz);
+        turn(vertex.tx, vertex.ty, vertex.tz);
     }
 }
 

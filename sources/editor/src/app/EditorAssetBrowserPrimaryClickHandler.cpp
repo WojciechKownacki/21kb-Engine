@@ -17,6 +17,19 @@
 namespace kb::editor {
 namespace {
 
+// The project's import presets for the import dialog.
+[[nodiscard]] std::vector<EditorAssetImportPreset> ImportPresetChoices(EditorSceneContext& sceneContext) {
+    std::vector<EditorAssetImportPreset> presets;
+    for (auto& [name, options] : sceneContext.ImportPresets()) {
+        presets.push_back(EditorAssetImportPreset{ .name = std::move(name), .options = options });
+    }
+    return presets;
+}
+
+} // namespace
+
+namespace {
+
 void PrepareBrowserAction(EditorAssetBrowserState& state) noexcept {
     state.FocusSearch(false);
     state.CancelTextEdit();
@@ -91,7 +104,7 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
         return true;
     case EditorAssetBrowserHitKind::Import: {
         PrepareBrowserAction(state);
-        const std::optional<EditorAssetImportSelection> selection = EditorAssetImportDialog::Open(GetActiveWindow());
+        const std::optional<EditorAssetImportSelection> selection = EditorAssetImportDialog::Open(GetActiveWindow(), ImportPresetChoices(sceneContext));
         return !selection.has_value() || selection->files.empty()
             ? true
             : sceneContext.BeginAssetImport(selection->files, sceneContext.AssetBrowser().SelectedFolder(), selection->options);

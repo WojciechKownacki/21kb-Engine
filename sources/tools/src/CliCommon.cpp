@@ -8,6 +8,11 @@
 #include "engine/assets/AssetManager.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#if KB_CLI_RENDERER
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#endif
+#include "engine/assets/AssetImportPreset.hpp"
 #endif
 
 #include <cmath>
@@ -94,7 +99,13 @@ bool MountProjectAssets(
     static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
     // Post-process profiles (.kbppfx) likewise, for scene-post-process.
     static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::PostProcessProfileAssetLoader>()));
+    // Material instances (.kbmatinst) for material-instance-* and MeshRenderer material=, and
+    // textures (images under Assets, imported textures) for the materials' texture slots.
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>()));
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()));
 #endif
+    // Import presets (.kbimportpreset) for import --preset, as the editor's import dialog lists them.
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::assets::AssetImportPresetLoader>()));
     const std::size_t discovered = scene.Assets().Discover();
     if (discoveredCount != nullptr) {
         *discoveredCount = discovered;

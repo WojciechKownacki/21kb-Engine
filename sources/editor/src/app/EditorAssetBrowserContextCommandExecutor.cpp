@@ -12,6 +12,19 @@
 #include <optional>
 
 namespace kb::editor {
+namespace {
+
+// The project's import presets for the import dialog.
+[[nodiscard]] std::vector<EditorAssetImportPreset> ImportPresetChoices(EditorSceneContext& sceneContext) {
+    std::vector<EditorAssetImportPreset> presets;
+    for (auto& [name, options] : sceneContext.ImportPresets()) {
+        presets.push_back(EditorAssetImportPreset{ .name = std::move(name), .options = options });
+    }
+    return presets;
+}
+
+} // namespace
+
 
 bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand command, EditorSceneContext& sceneContext, HWND owner) {
     EditorAssetBrowserState& state = sceneContext.AssetBrowser();
@@ -31,7 +44,7 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         return false;
     case EditorAssetContextCommand::Import: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
-        const std::optional<EditorAssetImportSelection> selection = EditorAssetImportDialog::Open(GetActiveWindow());
+        const std::optional<EditorAssetImportSelection> selection = EditorAssetImportDialog::Open(GetActiveWindow(), ImportPresetChoices(sceneContext));
         return !selection.has_value() || selection->files.empty()
             ? true
             : sceneContext.BeginAssetImport(selection->files, destinationFolder, selection->options);
@@ -107,6 +120,14 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
     case EditorAssetContextCommand::NewAudioMixer: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateAudioMixerAsset(destinationFolder);
+    }
+    case EditorAssetContextCommand::NewPostProcessProfile: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreatePostProcessProfileAsset(destinationFolder);
+    }
+    case EditorAssetContextCommand::NewImportPreset: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateImportPresetAsset(destinationFolder);
     }
     case EditorAssetContextCommand::NewParticleEffect: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();

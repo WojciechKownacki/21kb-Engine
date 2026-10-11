@@ -67,6 +67,8 @@ struct SceneHistorySettings {
     std::uint64_t audioMixerAssetId = 0U;
     std::string audioMixerSnapshot;
     AudioOcclusionSettings audioOcclusionSettings;
+    // The scene's post-process profile (ScenePostProcessAccess), so giving a scene a profile undoes.
+    std::uint64_t postProcessProfileAssetId = 0U;
 };
 
 // One recorded command: only the objects and prefab instances it changed.
