@@ -76,6 +76,9 @@ private:
     ShadowCascadeUniforms shadowCascades_{};
     PointShadowUniforms pointShadows_{};
     SceneGiUniforms giUniforms_{};
+    bgfx::UniformHandle skyReflectionSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle skyReflectionParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackSkyReflection_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropHorizonUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropZenithUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropParamsUniform_ = BGFX_INVALID_HANDLE;

@@ -50,6 +50,10 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_deferred_lighting.sc", .stage = ShaderStage::Fragment},
     // Optional: without it (no Metal variant is generated on Windows hosts) screen-space GI stays off.
     ShaderManifestEntry{.name = "fs_ssgi_resolve.sc", .stage = ShaderStage::Fragment, .required = false},
+    // Optional likewise: without them (no Metal variant is generated on Windows hosts) reflections keep
+    // the environment colour instead of the captured sky.
+    ShaderManifestEntry{.name = "fs_sky_capture.sc", .stage = ShaderStage::Fragment, .required = false},
+    ShaderManifestEntry{.name = "fs_sky_prefilter.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_mesh.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_gbuffer_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_instanced.sc", .stage = ShaderStage::Fragment},

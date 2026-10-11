@@ -153,6 +153,8 @@ PackedSceneLighting SceneLightingPacker::Build(
         std::max(config.environmentSpecularIntensity, 0.0F),
         0.0F,
     };
+    lighting.skyReflection = config.skyReflection;
+    lighting.skyReflectionParams = { bgfx::isValid(config.skyReflection) ? 1.0F : 0.0F, config.skyReflectionMaxMip, 0.0F, 0.0F };
     stats.submittedEnvironmentLightingCount = config.environmentMode == SceneRenderEnvironmentMode::Disabled ? 0U : 1U;
     stats.environmentLightingMode = static_cast<std::uint32_t>(config.environmentMode) + 1U;
     stats.environmentLightingSampleCount = EnvironmentSampleCount(config.environmentMode);

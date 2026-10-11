@@ -354,6 +354,8 @@ bool SceneMeshPassResources::Initialize() {
     environmentZenithUniform_ = bgfx::createUniform("u_environmentZenith", bgfx::UniformType::Vec4);
     environmentGroundUniform_ = bgfx::createUniform("u_environmentGround", bgfx::UniformType::Vec4);
     environmentParamsUniform_ = bgfx::createUniform("u_environmentParams", bgfx::UniformType::Vec4);
+    skyReflectionSampler_ = bgfx::createUniform("s_skyReflection", bgfx::UniformType::Sampler);
+    skyReflectionParamsUniform_ = bgfx::createUniform("u_skyReflectionParams", bgfx::UniformType::Vec4);
     shadowViewProjUniform_ = bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
     shadowParamsUniform_ = bgfx::createUniform("u_shadowParams", bgfx::UniformType::Vec4);
     shadowCascades_.Create();
@@ -457,6 +459,14 @@ void SceneMeshPassResources::Shutdown() {
     if (bgfx::isValid(environmentParamsUniform_)) {
         bgfx::destroy(environmentParamsUniform_);
         environmentParamsUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(skyReflectionSampler_)) {
+        bgfx::destroy(skyReflectionSampler_);
+        skyReflectionSampler_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(skyReflectionParamsUniform_)) {
+        bgfx::destroy(skyReflectionParamsUniform_);
+        skyReflectionParamsUniform_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(environmentGroundUniform_)) {
         bgfx::destroy(environmentGroundUniform_);
@@ -589,6 +599,12 @@ void SceneMeshPassResources::Shutdown() {
     shadowProgram_ = BGFX_INVALID_HANDLE;
 }
 
+void SceneMeshPassResources::BindSkyReflection(const PackedSceneLighting& lighting, std::uint8_t stage) const {
+    bgfx::setTexture(stage, skyReflectionSampler_,
+        bgfx::isValid(lighting.skyReflection) ? lighting.skyReflection : fallbackWhiteCubeTexture_);
+    bgfx::setUniform(skyReflectionParamsUniform_, lighting.skyReflectionParams.data());
+}
+
 bool SceneMeshPassResources::IsInitialized() const noexcept {
     return bgfx::isValid(meshProgram_) &&
         bgfx::isValid(gbufferProgram_) &&
@@ -620,6 +636,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(environmentZenithUniform_) &&
         bgfx::isValid(environmentGroundUniform_) &&
         bgfx::isValid(environmentParamsUniform_) &&
+        bgfx::isValid(skyReflectionSampler_) && bgfx::isValid(skyReflectionParamsUniform_) &&
         bgfx::isValid(shadowViewProjUniform_) &&
         bgfx::isValid(shadowParamsUniform_) && shadowCascades_.IsValid() && pointShadows_.IsValid() &&
         bgfx::isValid(fallbackWhiteTexture_) &&
@@ -1083,6 +1100,10 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         bgfx::setUniform(environmentZenithUniform_, desc.lighting.environmentZenith.data());
         bgfx::setUniform(environmentGroundUniform_, desc.lighting.environmentGround.data());
         bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
+        if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent) {
+            // The sky reflection (pbr_graph_forward.sh) takes graph stage 3, free of the builtin textures.
+            BindSkyReflection(desc.lighting, 3U);
+        }
         pointShadows_.Set(desc.shadowMap != nullptr ? &desc.shadowMap->point : nullptr, desc.lighting.pointShadowSlot,
             fallbackWhiteTexture_, PointShadowUniforms::kGraphSamplerStage);
 
@@ -1214,6 +1235,9 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(environmentZenithUniform_, desc.lighting.environmentZenith.data());
     bgfx::setUniform(environmentGroundUniform_, desc.lighting.environmentGround.data());
     bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
+    if (desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::BaseTransparent) {
+        BindSkyReflection(desc.lighting, 12U);
+    }
     bgfx::setUniform(shadowViewProjUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->lightViewProjection.data() : disabledShadowViewProj.data());
     bgfx::setUniform(shadowParamsUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->params.data() : disabledShadowParams.data());
     shadowCascades_.Set(desc.shadowMap);

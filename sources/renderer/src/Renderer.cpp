@@ -361,6 +361,8 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     }
     // Optional: without its shader screen-space GI simply contributes nothing.
     static_cast<void>(giResolvePass_.Initialize());
+    // Without it (no shader variant or renderable cube map) reflections keep the environment colour.
+    static_cast<void>(skyReflection_.Initialize());
     static_cast<void>(giVoxelGrid_.Initialize());
     if (displayConfig_.enableEditorRendering && !editorPassSubmitter_.Initialize()) {
         Shutdown();
@@ -440,6 +442,7 @@ void Renderer::Shutdown() {
     }
     giVoxelGrid_.Shutdown();
     giResolvePass_.Shutdown();
+    skyReflection_.Shutdown();
     if (deferredLightingPass_ != nullptr) {
         deferredLightingPass_->Shutdown();
         deferredLightingPass_.reset();
@@ -489,6 +492,7 @@ void Renderer::EndFrame() {
 
     lastCompletedFrame_ = context_->EndFrame();
     if (deferredLightingPass_ != nullptr) deferredLightingPass_->EndFrame();
+    skyReflection_.EndFrame();
     if (screenCapture_ != nullptr) {
         screenCapture_->Poll(
             static_cast<std::uint32_t>(lastCompletedFrame_));
@@ -1301,6 +1305,16 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             texture != nullptr && texture->dimension == RenderTextureDimension::Texture2D) {
             worldBackdropEnvironment = texture->texture;
         }
+    }
+    {
+        // Reflections of the sky the camera sees (Unreal's SkyLight, Unity's skybox reflections): the
+        // backdrop is captured over a few frames; until then the lighting uses the environment colour.
+        const SceneBackdropUniformValues backdropUniforms = BuildSceneBackdropUniforms(
+            worldBackdrop.has_value() ? &*worldBackdrop : nullptr, bgfx::isValid(worldBackdropEnvironment), renderScene);
+        const bgfx::Caps* caps = bgfx::getCaps();
+        skyReflection_.Update(backdropUniforms, worldBackdropEnvironment, caps != nullptr && caps->originBottomLeft);
+        effectiveLightingConfig.skyReflection = skyReflection_.ReflectionFor(backdropUniforms, worldBackdropEnvironment);
+        effectiveLightingConfig.skyReflectionMaxMip = SceneSkyReflection::MaxMip();
     }
     if (deferredLighting) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");

@@ -12,6 +12,7 @@ SAMPLER2D(s_occlusion, 3);
 SAMPLER2D(s_emissive, 4);
 SAMPLER2D(s_shadowMap, 5);
 SAMPLER2D(s_terrainLayerWeights, 15);
+SAMPLERCUBE(s_skyReflection, 12);
 uniform vec4 u_materialParams;
 uniform vec4 u_materialEmissive;
 uniform vec4 u_materialFlags;
@@ -27,6 +28,7 @@ uniform vec4 u_ambientColor;
 uniform vec4 u_environmentZenith;
 uniform vec4 u_environmentGround;
 uniform vec4 u_environmentParams;
+#include "sky_reflection.sh"
 uniform vec4 u_shadowParams;
 uniform vec4 u_terrainLayerParams;
 
@@ -165,7 +167,7 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     vec3 diffuseEnv = EnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
-    vec3 specularEnv = EnvironmentColor(reflectionDir) * fresnel * specularEnergy * u_environmentParams.z;
+    vec3 specularEnv = KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir)) * fresnel * specularEnergy * u_environmentParams.z;
     return diffuseEnv + specularEnv;
 }
 
