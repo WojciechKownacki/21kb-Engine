@@ -50,6 +50,8 @@
 #include "app/EditorEditCommandPolicy.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
+#include "localization/EditorLocalization.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -319,6 +321,28 @@ void InvalidateSceneToolbars(EditorApplicationState& state) {
     invalidate(state.window);
     for (HWND window : state.floatingWindows.Queries().Windows()) {
         invalidate(window);
+    }
+}
+
+// The window title names the open scene, with * while it has unsaved changes, and the project,
+// like Unity's "Level1* - MyGame - Unity".
+void SyncWindowTitle(const EditorApplicationState& state) {
+    if (state.window == nullptr) {
+        return;
+    }
+    const std::u8string stem = state.sceneContext.CurrentScenePath().stem().u8string();
+    std::string scene = stem.empty() ? std::string{ EditorText("window.untitledScene", "Untitled") }
+                                     : std::string{ stem.begin(), stem.end() };
+    if (state.sceneContext.SceneDocumentDirty()) {
+        scene += "*";
+    }
+    const std::string& project = state.sceneContext.ProjectConfiguration().name;
+    const std::wstring title = kb::editor::WidenUtf8((scene + " - " + (project.empty() ? std::string{} : project + " - ") +
+        "21kb Engine").c_str());
+    static std::wstring shown;
+    if (title != shown) {
+        SetWindowTextW(state.window, title.c_str());
+        shown = title;
     }
 }
 
@@ -1540,6 +1564,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
         if (!state.running) {
             break;
         }
+        SyncWindowTitle(state);
 
         const auto currentTick = std::chrono::steady_clock::now();
         if (!state.playMode.IsPaused() && currentTick < nextEditorFrame) {

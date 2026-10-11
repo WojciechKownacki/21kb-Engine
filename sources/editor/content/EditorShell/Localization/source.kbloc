@@ -339,6 +339,12 @@ text "fileDialog.selectOutputDirectoryTitle" "Select package output directory"
 text "fileDialog.selectSshIdentityTitle" "Select SSH identity file"
 text "fileDialog.sshKeyFilter" "SSH private key (id_*)"
 text "files.rename" "Rename"
+text "help.aboutText" "21kb Engine editor
+Built {date}
+
+MIT License, Copyright (c) 2026 WojciechKownacki.
+{url}"
+text "help.aboutTitle" "About 21kb Engine"
 text "hierarchy.create" "Create"
 text "hierarchy.create.advanced" "Advanced"
 text "hierarchy.create.areaLight" "Area"
@@ -2252,6 +2258,7 @@ text "viewport.renderProfile.game" "Game"
 text "viewport.renderProfile.interactive" "Interactive"
 text "viewport.renderProfile.lit" "Lit"
 text "viewport.rotationSnapOff" "Off"
+text "window.untitledScene" "Untitled"
 text "world.addDataLayerTitle" "Add Data Layer"
 text "world.dataLayerNameHint" "Letters, digits, '_', '-' or '.'. New layers start active."
 text "world.dataLayerNameLabel" "Layer name"
