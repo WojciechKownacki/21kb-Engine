@@ -1,3 +1,4 @@
+#include "rendering/EditorPanelStyle.hpp"
 #include "EditorTestSupport.hpp"
 #include "EditorTestSuites.hpp"
 
@@ -146,7 +147,7 @@ void ReplaceEditText(kb::editor::InspectorPanelState& state, std::string_view te
     if (row.kind == kb::editor::InspectorSceneAudioRowKind::Text) {
         x = bounds->left + ((bounds->right - bounds->left) * 70 / 100);
     } else if (row.kind == kb::editor::InspectorSceneAudioRowKind::Bool) {
-        x = bounds->left + ((bounds->right - bounds->left) * 36 / 100) + 8;
+        x = kb::editor::panel_style::InspectorLabelColumnRight(*bounds) + 8;
     }
     const int y = (bounds->top + bounds->bottom) / 2;
     const kb::editor::InspectorSceneAudioHit hit =

@@ -321,7 +321,7 @@ void DrawDeleteConfirmDialogRect(HDC dc, const RECT& dialog, const EditorTheme& 
         });
 
     RECT body{ dialog.left + 24, dialog.top + 84, dialog.right - 24, dialog.top + 104 };
-    Draw::DrawTextWithFont(dc, body, "This action will permanently remove the listed object(s) from Project Files.", Draw::Color(theme.textSecondary), 12, FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    Draw::DrawTextWithFont(dc, body, "The listed object(s) go to the Recycle Bin, where you can restore them.", Draw::Color(theme.textSecondary), 12, FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     const RECT list = DeleteConfirmListRectForDialog(dialog);
     DrawSelectionSummary(dc, list, theme, deleteRows, state.DeleteConfirmListScrollOffset(), DeleteConfirmMaxScrollForList(list, state, manager));
 

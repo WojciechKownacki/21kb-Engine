@@ -25,6 +25,7 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "commands/EditorCommandStack.hpp"
 #include "console/EditorConsoleState.hpp"
+#include "scene/EditorSceneAssetBrowserCommands.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRow.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
@@ -1416,6 +1417,8 @@ private:
     void RememberLastOpenMap();
     // The editor's start when no saved scene can be opened: a new, unsaved Untitled scene from Basic.
     void StartUntitledBasicScene();
+    // The open scene and the startup scene, which Project Files does not delete, rename or move.
+    [[nodiscard]] EditorProtectedScenes ProtectedScenes() const;
     [[nodiscard]] static std::string SceneDocumentName(const std::filesystem::path& scenePath);
     void ClearSceneDocumentDirty() noexcept;
     void ReleaseRenderedSceneResources();

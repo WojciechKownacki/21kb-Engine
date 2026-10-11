@@ -320,7 +320,7 @@ void RunDependencySafetyBlocksRenameAndDeleteTest() {
     state.SetTextEditValue("RenamedGraphSurface");
     kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::CommitTextEdit(scene, state),
         "KBMAT-GRAPH-0005: Project Files should block renaming an asset referenced by another asset dependency");
-    kb::editor::tests::Require(manager.LastError().find("depends on it") != std::string::npos,
+    kb::editor::tests::Require(manager.LastError().find(" uses it.") != std::string::npos,
         "KBMAT-GRAPH-0005: Rename dependency safety should report the dependent asset");
 
     kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::DeleteAsset(scene, state, typeId),

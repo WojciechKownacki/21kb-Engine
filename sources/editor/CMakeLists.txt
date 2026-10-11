@@ -855,6 +855,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorColliderTextBuilder.cpp
     src/inspection/InspectorComponentCatalog.cpp
     src/inspection/InspectorSceneColor.cpp
+    src/inspection/InspectorSceneColorEdit.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
     src/inspection/InspectorPhysicsModel.cpp
     src/inspection/ui/InspectorUIComponentModel.cpp

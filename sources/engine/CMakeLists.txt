@@ -698,6 +698,7 @@ add_library(kb_engine STATIC
     src/gameplay/GameInstance.cpp
     src/network/NetworkObject.cpp
     src/platform/FileSystemPath.cpp
+    src/platform/Trash.cpp
     src/platform/UserStorage.cpp
     src/platform/CrashReportConsent.cpp
     src/security/Crypto.cpp
@@ -1612,7 +1613,7 @@ if(WIN32)
         src/platform/win32/Win32InputKeyMap.cpp
         src/platform/win32/Win32XInputHapticsBackend.cpp
     )
-    target_link_libraries(kb_engine PRIVATE user32 xinput bcrypt)
+    target_link_libraries(kb_engine PRIVATE user32 xinput bcrypt shell32)
 
     # Crash capture shared by the game and the editor. dbghelp and version are
     # loaded from System32 by the reporter's own thread, and WinHTTP is delay-loaded,

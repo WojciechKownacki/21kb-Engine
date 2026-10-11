@@ -1,6 +1,7 @@
 #include "assets/AssetFolderOperations.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
+#include "engine/platform/Trash.hpp"
 #include "assets/AssetFileSystem.hpp"
 #include "assets/AssetPathUtilities.hpp"
 
@@ -147,9 +148,9 @@ bool AssetFolderOperations::DeleteFolder(
         errorMessage = "Asset folder does not exist";
         return false;
     }
-    std::filesystem::remove_all(*physical, error);
-    if (error) {
-        errorMessage = "Asset folder could not be deleted";
+    // To the Recycle Bin / Trash with everything inside, where the user can restore it.
+    if (std::string trashError; !kb::platform::MoveToTrash(*physical, trashError)) {
+        errorMessage = physical->filename().string() + " could not be deleted: " + trashError;
         return false;
     }
     return true;
