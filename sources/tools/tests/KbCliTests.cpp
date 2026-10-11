@@ -227,6 +227,16 @@ void RunValidateCommandTests() {
     const CommandRun bad = Run(&kb::cli::RunValidateCommand, { "--project", root, "Assets/Logic/Broken.lua" });
     Require(bad.exitCode == 1, "validate passed a broken script");
     Require(Contains(bad.output, "FAIL"), "validate did not report FAIL");
+
+    // A script written the Unity way loads, but its callbacks are never called: validate says so.
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "UnityStyle.lua",
+        "function OnStart(self)\nend\n\nlocal function helper() end\n\nfunction Update(self, dt)\nend\n");
+    const CommandRun unity = Run(&kb::cli::RunValidateCommand, { "--project", root, "Assets/Logic/UnityStyle.lua" });
+    Require(unity.exitCode == 0 && Contains(unity.output, "(2 warnings)") &&
+            Contains(unity.output, "UnityStyle.lua:1: OnStart() is never called - 21kb calls Ready(self, dt)") &&
+            Contains(unity.output, "UnityStyle.lua:6: Update() is never called - 21kb calls Tick(self, dt)"),
+        "validate must name the Unity-style callbacks a script defines: " + unity.output);
+    Require(!Contains(good.output, "WARN"), "a script with 21kb hooks must validate without warnings");
 }
 
 void RunImportCommandTests() {

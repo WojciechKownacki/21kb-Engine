@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
+#include "engine/script/ScriptLifecycle.hpp"
 
 #include <fstream>
 #include <sstream>
@@ -54,7 +55,19 @@ int RunValidateCommand(const ArgumentList& arguments, CommandIo io) {
             ++failures;
             continue;
         }
-        io.out << "OK   " << positional << '\n';
+        // Loads fine, but a Unity- or Godot-style callback is never called: say so instead of a bare OK.
+        const std::vector<kb::script::ForeignLifecycleName> foreign = kb::script::FindForeignLifecycleNames(source);
+        io.out << "OK   " << positional;
+        if (!foreign.empty()) {
+            io.out << " (" << foreign.size() << (foreign.size() == 1U ? " warning)" : " warnings)");
+        }
+        io.out << '\n';
+        for (const kb::script::ForeignLifecycleName& name : foreign) {
+            const char* hook = kb::script::ToString(name.hook);
+            io.out << "WARN " << positional << ':' << name.line << ": " << name.name
+                   << "() is never called - 21kb calls " << hook << "(self, dt). Rename the function to " << hook
+                   << ".\n";
+        }
     }
 
     return failures == 0 ? 0 : 1;
