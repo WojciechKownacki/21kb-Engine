@@ -40,6 +40,9 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "customizedUv0") return PinId(nodeKind, direction, 19U);
         if (!outputPin && pin == "displacement") return PinId(nodeKind, direction, 20U);
         if (!outputPin && pin == "tangentOutput") return PinId(nodeKind, direction, 23U);
+        // Unreal CustomData0/1 of the Clear Coat shading model.
+        if (!outputPin && pin == "clearCoat") return PinId(nodeKind, direction, 24U);
+        if (!outputPin && pin == "clearCoatRoughness") return PinId(nodeKind, direction, 25U);
         return 0U;
     case RenderMaterialGraphNodeKind::TextureSample:
         if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
@@ -321,6 +324,8 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "alphaClipThreshold") return PinId(nodeKind, direction, 9U);
         if (pin == "specular") return PinId(nodeKind, direction, 10U);
         if (pin == "tangentOutput") return PinId(nodeKind, direction, 20U);
+        if (pin == "clearCoat") return PinId(nodeKind, direction, 21U);
+        if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 22U);
         return 0U;
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
         if (outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -340,6 +345,8 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "alphaClipThreshold") return PinId(nodeKind, direction, 9U);
         if (pin == "specular") return PinId(nodeKind, direction, 10U);
         if (pin == "tangentOutput") return PinId(nodeKind, direction, 20U);
+        if (pin == "clearCoat") return PinId(nodeKind, direction, 21U);
+        if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 22U);
         return 0U;
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
         if (!outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -354,6 +361,8 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "alphaClipThreshold") return PinId(nodeKind, direction, 9U);
         if (pin == "specular") return PinId(nodeKind, direction, 10U);
         if (pin == "tangentOutput") return PinId(nodeKind, direction, 20U);
+        if (pin == "clearCoat") return PinId(nodeKind, direction, 21U);
+        if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 22U);
         return 0U;
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);

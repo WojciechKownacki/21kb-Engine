@@ -6,6 +6,7 @@ $input v_texcoord0
 #include "shadow_cascades.sh"
 #include "point_shadow.sh"
 #include "gbuffer_contract.sh"
+#include "shading_models.sh"
 #include "gbuffer_position.sh"
 
 SAMPLER2D(s_gbufferAlbedo, 0);
@@ -210,7 +211,8 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
 
 // Material ambient occlusion darkens only the light from the surroundings (Unreal, Unity); a light
 // shining on the surface is not occluded by it.
-vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular)
+vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular,
+    float shadingModel, float customData0, float customData1)
 {
     vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
     if (u_sceneLightGridDimensions.w > 0.5) {
@@ -251,8 +253,10 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
         }
     }
 
-    float nDotL = max(dot(normal, lightVector), 0.0);
-    if (nDotL <= 0.0) {
+    float nDotLRaw = dot(normal, lightVector);
+    float nDotL = max(nDotLRaw, 0.0);
+    // Light from behind lights only a surface that lets it through (subsurface).
+    if (nDotL <= 0.0 && !KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_SUBSURFACE)) {
         return vec3(0.0, 0.0, 0.0);
     }
 
@@ -265,12 +269,13 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     vec3 fresnel = FresnelSchlick(hDotV, f0);
     float distribution = DistributionGgx(nDotH, roughness);
     float geometry = GeometrySchlickGgx(nDotV, roughness) * GeometrySchlickGgx(nDotL, roughness);
-    vec3 specularTerm = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
+    vec3 specularTerm = nDotL > 0.0 ? (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001) : vec3_splat(0.0);
     vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * DiffuseBurley(nDotV, nDotL, lDotH, roughness));
     // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
     // surface returns its albedo, so the physical BRDF above is taken times pi.
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
-    return (diffuse + specularTerm) * radiance * nDotL;
+    return KbShadingModelLight(shadingModel, customData0, customData1, normal, viewDir, lightVector, nDotLRaw,
+        albedo, metallic, roughness, diffuse, specularTerm) * radiance;
 }
 
 float SampleShadowVisibility(vec3 shadowCoord)
@@ -341,6 +346,8 @@ void main()
     float occlusion = clamp(material.z, 0.0, 1.0);
     float shadingModel = KbDecodeGBufferShadingModel(material.w);
     float specular = clamp(surface.w, 0.0, 1.0);
+    float customData0 = clamp(albedo.a, 0.0, 1.0);
+    float customData1 = KbDecodeGBufferCustomData1(encodedNormal.a);
 
     if (abs(shadingModel - KB_GBUFFER_SHADING_MODEL_UNLIT) < 0.5) {
         gl_FragColor = vec4(albedo.rgb + surface.rgb, 1.0);
@@ -369,12 +376,17 @@ void main()
     aoAccumulated = mix(1.0, aoAccumulated, step(0.0001, u_aoParams.x));
     vec4 reflection = KbScreenSpaceReflection(worldPos, normal, viewDir, roughness, gl_FragCoord.xy);
     vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion * aoAccumulated, reflection);
+    if (KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_CLEAR_COAT) && u_deferredEnvironmentParams.x > 0.5) {
+        vec3 coatReflection = mix(EnvironmentColor(reflect(-viewDir, normal)) * u_deferredEnvironmentParams.z, reflection.rgb * u_ssrParams.x, reflection.a);
+        lighting = KbClearCoatEnvironment(lighting, coatReflection, dot(normal, viewDir), customData0);
+    }
 
     vec2 lightList = KbLightGridList(worldPos, u_deferredLightParams.x);
     for (int entry = 0; entry < int(lightList.y); ++entry) {
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
-            vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, specular);
+            vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, specular,
+                shadingModel, customData0, customData1);
             lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, worldPos);
         }
     }

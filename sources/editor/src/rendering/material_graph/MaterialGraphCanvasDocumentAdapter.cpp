@@ -52,6 +52,8 @@ namespace {
             "worldPositionOffset",
             "customizedUv0",
             "displacement",
+            "clearCoat",
+            "clearCoatRoughness",
         };
     }
     return kb::render::RenderMaterialGraphNodeInputPinNames(node);

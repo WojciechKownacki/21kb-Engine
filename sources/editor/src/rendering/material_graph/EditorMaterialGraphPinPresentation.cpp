@@ -50,6 +50,8 @@ PreferredInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
             {"alphaClipThreshold", std::string{ EditorText("materialEditor.pin.clip", "Clip") }},  {"tangentOutput", std::string{ EditorText("materialEditor.pin.tangentOut", "Tangent Out") }},
             {"attributes", std::string{ EditorText("materialEditor.pin.attributes", "Attributes") }},    {"worldPositionOffset", "WPO"},
             {"customizedUv0", std::string{ EditorText("materialEditor.pin.customUV0", "Custom UV0") }}, {"displacement", std::string{ EditorText("materialEditor.pin.displacement", "Displacement") }},
+            {"clearCoat", std::string{ EditorText("materialEditor.pin.clearCoat", "Clear Coat") }},
+            {"clearCoatRoughness", std::string{ EditorText("materialEditor.pin.clearCoatRoughness", "Clear Coat Roughness") }},
         };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return {{"texture", std::string{ EditorText("materialEditor.pin.tex", "Tex.") }}, {"uv", "UV"}};
