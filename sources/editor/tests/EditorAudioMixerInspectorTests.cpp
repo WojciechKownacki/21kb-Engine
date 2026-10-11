@@ -1,3 +1,4 @@
+#include "rendering/EditorPanelStyle.hpp"
 #include "EditorTestSupport.hpp"
 #include "EditorTestSuites.hpp"
 
@@ -83,7 +84,7 @@ void ResetTestRoot() {
     if (row.kind == kb::editor::InspectorAudioMixerRowKind::Text) {
         x = bounds->left + ((bounds->right - bounds->left) * 70 / 100);
     } else if (row.kind == kb::editor::InspectorAudioMixerRowKind::Bool) {
-        x = bounds->left + ((bounds->right - bounds->left) * 36 / 100) + 8;
+        x = kb::editor::panel_style::InspectorLabelColumnRight(*bounds) + 8;
     }
     const int y = (bounds->top + bounds->bottom) / 2;
     const kb::editor::InspectorAudioMixerAssetHit hit =

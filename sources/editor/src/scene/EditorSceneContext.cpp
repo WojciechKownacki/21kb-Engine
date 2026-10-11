@@ -2092,8 +2092,12 @@ bool EditorSceneContext::BeginAssetFolderRename(const std::filesystem::path& vir
     return assetBrowser_.BeginRenameFolder(virtualFolder, scene_->Assets().Manager());
 }
 
+EditorProtectedScenes EditorSceneContext::ProtectedScenes() const {
+    return EditorProtectedScenes{ .openScene = currentScenePath_, .startupScene = ResolveDefaultScenePath() };
+}
+
 bool EditorSceneContext::CommitAssetTextEdit() {
-    const bool committed = EditorSceneAssetBrowserCommands::CommitTextEdit(*scene_, assetBrowser_);
+    const bool committed = EditorSceneAssetBrowserCommands::CommitTextEdit(*scene_, assetBrowser_, ProtectedScenes());
     if (committed) {
         console_.Info("Assets", "Asset browser text edit committed.");
     } else {
@@ -2107,11 +2111,11 @@ void EditorSceneContext::CancelAssetTextEdit() noexcept {
 }
 
 bool EditorSceneContext::DeleteSelectedAssetBrowserItem() {
-    const bool deleted = EditorSceneAssetBrowserCommands::DeleteSelected(*scene_, assetBrowser_);
+    const bool deleted = EditorSceneAssetBrowserCommands::DeleteSelected(*scene_, assetBrowser_, ProtectedScenes());
     if (deleted) {
-        console_.Info("Assets", "Selected asset browser item deleted.");
+        console_.Info("Assets", "Moved the selection to the Recycle Bin.");
     } else {
-        console_.Warning("Assets", "No asset browser item was deleted.");
+        console_.Warning("Assets", AssetErrorOr(scene_->Assets().Manager(), "Nothing was deleted."));
     }
     return deleted;
 }
@@ -2237,7 +2241,7 @@ bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
         }
     }
 
-    const bool deleted = EditorSceneAssetBrowserCommands::DeleteAsset(*scene_, assetBrowser_, id);
+    const bool deleted = EditorSceneAssetBrowserCommands::DeleteAsset(*scene_, assetBrowser_, id, ProtectedScenes());
     if (deleted) {
         console_.Info("Assets", "Asset deleted.");
     } else {
@@ -2247,7 +2251,7 @@ bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
 }
 
 bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder) {
-    const bool deleted = EditorSceneAssetBrowserCommands::DeleteFolder(*scene_, assetBrowser_, virtualFolder);
+    const bool deleted = EditorSceneAssetBrowserCommands::DeleteFolder(*scene_, assetBrowser_, virtualFolder, ProtectedScenes());
     if (deleted) {
         console_.Info("Assets", "Folder deleted: " + virtualFolder.generic_string());
     } else {
@@ -2260,7 +2264,7 @@ bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::fi
     if (PrefabAssetHasSceneInstances(id, "move")) {
         return false;
     }
-    const bool moved = EditorSceneAssetBrowserCommands::MoveAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder);
+    const bool moved = EditorSceneAssetBrowserCommands::MoveAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder, ProtectedScenes());
     if (moved) {
         console_.Info("Assets", "Asset moved to " + destinationVirtualFolder.generic_string());
     } else {
@@ -2270,7 +2274,7 @@ bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::fi
 }
 
 bool EditorSceneContext::MoveAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder) {
-    const bool moved = EditorSceneAssetBrowserCommands::MoveFolderToFolder(*scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
+    const bool moved = EditorSceneAssetBrowserCommands::MoveFolderToFolder(*scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder, ProtectedScenes());
     if (moved) {
         console_.Info("Assets", "Folder moved to " + destinationVirtualFolder.generic_string());
     } else {

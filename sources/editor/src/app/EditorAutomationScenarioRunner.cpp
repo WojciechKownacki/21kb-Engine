@@ -3196,6 +3196,8 @@ ReadScriptValue(
         const auto destination =
             StringMember(step, "destination", error);
         if (!asset || !destination) return { false, error };
+        const auto refusedWith = StringMember(step, "refused_with", error, false);
+        if (!error.empty()) return { false, error };
         const kb::assets::AssetId id = ResolveAsset(state, *asset);
         if (!id.IsValid()) return { false, "asset was not found" };
         const bool succeeded =
@@ -3204,16 +3206,24 @@ ReadScriptValue(
                 id, std::filesystem::path{ *destination })
             : state.context.MoveAssetToFolder(
                 id, std::filesystem::path{ *destination });
+        if (refusedWith.has_value()) {
+            const std::string reason = state.context.Scene().Assets().Manager().LastError();
+            return { !succeeded && reason.find(*refusedWith) != std::string::npos, reason };
+        }
         return { succeeded, *destination };
     }
 
     if (*operation == "delete_asset") {
         const auto asset = StringMember(step, "asset", error);
-        if (!asset) return { false, error };
+        const auto refusedWith = StringMember(step, "refused_with", error, false);
+        if (!asset || !error.empty()) return { false, error };
         const kb::assets::AssetId id = ResolveAsset(state, *asset);
-        return {
-            id.IsValid() && state.context.DeleteAssetBrowserItem(id),
-            *asset };
+        const bool deleted = id.IsValid() && state.context.DeleteAssetBrowserItem(id);
+        if (refusedWith.has_value()) {
+            const std::string reason = state.context.Scene().Assets().Manager().LastError();
+            return { !deleted && reason.find(*refusedWith) != std::string::npos, reason };
+        }
+        return { deleted, *asset };
     }
 
     if (*operation == "assign_asset") {
