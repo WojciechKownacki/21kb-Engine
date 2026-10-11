@@ -481,7 +481,7 @@ void RunSkeletalMeshAssetTests() {
     const auto reimported = reimportPlan ? kb::scene::SkeletalMeshGltfImportPublisher::Publish(
         plannerScene.Assets().Manager(), *reimportPlan, &importError) : std::nullopt;
     Require(reimported.has_value() && reimported->meshAssetId == published->meshAssetId &&
-            kb::scene::SkeletalMeshAssetIO::Load(publishedMeshPath)->lods[0].vertices[0].position.x == 2.0F,
+            kb::scene::SkeletalMeshAssetIO::Load(publishedMeshPath)->lods[0].vertices[0].position.x == -2.0F,
         "Skeletal glTF reimport did not retain the mesh reference while publishing new content");
     const auto extendedImportRoot = root / "GltfExtendedImport";
     WriteExtendedSkeletalGltfFixture(extendedImportRoot);
@@ -508,11 +508,12 @@ void RunSkeletalMeshAssetTests() {
         "Skeletal glTF import did not resolve material section");
     Require(extendedImported->mesh.lods[0].indices[1] == 2U,
         "Skeletal glTF import did not reverse triangle winding for handedness conversion");
-    Require(extendedImported->mesh.lods[0].vertices[2].position.z == -200.0F,
-        "Skeletal glTF import did not convert source units or handedness");
+    Require(extendedImported->mesh.lods[0].vertices[1].position.x == -100.0F &&
+            extendedImported->mesh.lods[0].vertices[2].position.z == 200.0F,
+        "Skeletal glTF import did not convert source units or handedness (mirror X, keep +Z)");
     Require(extendedImported->mesh.morphTargets.size() == 1U &&
             extendedImported->mesh.morphTargets[0].name == "Smile" &&
-            extendedImported->mesh.morphTargets[0].deltas[0].positionDelta.z == -25.0F,
+            extendedImported->mesh.morphTargets[0].deltas[0].positionDelta.z == 25.0F,
         "Skeletal glTF import did not preserve morph target deltas");
     Require(kb::scene::ValidateSkeletalMeshAsset(extendedImported->mesh).valid,
         "Skeletal glTF import produced an invalid mesh after conversion");
@@ -520,7 +521,7 @@ void RunSkeletalMeshAssetTests() {
             extendedImported->clips[0].durationSeconds == 1.0F &&
             extendedImported->clips.size() == 1U &&
             extendedImported->clips[0].skeletalTracks.size() == 1U &&
-            extendedImported->clips[0].skeletalTracks[0].keyframes[1].transform.position.z == -200.0F &&
+            extendedImported->clips[0].skeletalTracks[0].keyframes[1].transform.position.z == 200.0F &&
             extendedImported->clips[0].morphTracks.size() == 1U &&
             extendedImported->clips[0].morphTracks[0].keyframes[1].weight == 1.0F,
         "Skeletal glTF import did not preserve animation channels or morph weights");

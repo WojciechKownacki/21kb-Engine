@@ -3,6 +3,7 @@
 #include <meshoptimizer/src/meshoptimizer.h>
 
 #include <algorithm>
+#include <utility>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -500,6 +501,25 @@ void OptimizeMeshAssetVertexFetch(std::vector<Vertex>& vertices, std::vector<std
     }
     const float handedness = Dot(Cross(normal, tangent), accum.bitangent) < 0.0F ? -1.0F : 1.0F;
     return { tangent.x, tangent.y, tangent.z, handedness };
+}
+
+void RenderMeshAssetFinalizer::ConvertRightHandedSource(RenderMeshAssetData& asset) noexcept {
+    for (RenderStaticMeshVertexP3N3UV2& vertex : asset.vertices) {
+        vertex.x = -vertex.x;
+        vertex.nx = -vertex.nx;
+    }
+    for (RenderStaticMeshVertexP3N3T4UV2& vertex : asset.tangentVertices) {
+        vertex.x = -vertex.x;
+        vertex.nx = -vertex.nx;
+        vertex.tx = -vertex.tx;
+        vertex.tw = -vertex.tw;
+    }
+    for (std::size_t index = 0U; index + 2U < asset.indices32.size(); index += 3U) {
+        std::swap(asset.indices32[index + 1U], asset.indices32[index + 2U]);
+    }
+    for (std::size_t index = 0U; index + 2U < asset.indices16.size(); index += 3U) {
+        std::swap(asset.indices16[index + 1U], asset.indices16[index + 2U]);
+    }
 }
 
 void RenderMeshAssetFinalizer::EnsureTangentVertexStorage(RenderMeshAssetData& asset) {

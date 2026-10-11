@@ -13,6 +13,7 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshSourceImport.hpp"
 
+#include <cmath>
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -102,10 +103,12 @@ void WriteText(const std::filesystem::path& path, std::string_view text) {
         R"("buffers":[{"byteLength":36,"uri":)" + JsonString(bufferUri) + "}]}";
 }
 
+// How far the mesh reaches along X, whichever side: the import mirrors source X into the
+// left-handed engine, so the source's +X extent lands on engine -X.
 [[nodiscard]] float MaxX(const RenderMeshAssetData& mesh) {
     float maxX = 0.0F;
-    for (const RenderStaticMeshVertexP3N3UV2& vertex : mesh.vertices) maxX = std::max(maxX, vertex.x);
-    for (const RenderStaticMeshVertexP3N3T4UV2& vertex : mesh.tangentVertices) maxX = std::max(maxX, vertex.x);
+    for (const RenderStaticMeshVertexP3N3UV2& vertex : mesh.vertices) maxX = std::max(maxX, std::fabs(vertex.x));
+    for (const RenderStaticMeshVertexP3N3T4UV2& vertex : mesh.tangentVertices) maxX = std::max(maxX, std::fabs(vertex.x));
     return maxX;
 }
 

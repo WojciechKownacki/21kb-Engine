@@ -318,9 +318,21 @@ void ListProperties(std::string_view component, std::ostream& out) {
     if (FindProperty(component, name) != nullptr) {
         writes.emplace_back(std::string{ name }, std::string{ value });
     } else {
-        // A vector property written at once: name.x, name.y, name.z(, name.w).
+        // A vector property written at once: name.x, name.y, name.z(, name.w). A colour may be
+        // written #RRGGBB, as a colour picker shows it (sRGB); the property stores it linear.
+        std::string linearColor;
+        std::string_view vectorText = value;
+        if (!value.empty() && value.front() == '#') {
+            const std::optional<std::array<float, 4>> color = ParseColorText(value, 3U);
+            if (!color.has_value()) {
+                io.err << "error: " << component << '.' << name << " expects #RRGGBB, got '" << value << "'\n";
+                return false;
+            }
+            linearColor = std::to_string((*color)[0]) + "," + std::to_string((*color)[1]) + "," + std::to_string((*color)[2]);
+            vectorText = linearColor;
+        }
         std::vector<std::string_view> parts;
-        for (std::string_view rest = value; ;) {
+        for (std::string_view rest = vectorText; ;) {
             const std::size_t comma = rest.find(',');
             parts.push_back(rest.substr(0, comma));
             if (comma == std::string_view::npos) break;

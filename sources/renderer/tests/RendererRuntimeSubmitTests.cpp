@@ -6826,8 +6826,9 @@ struct GiFloorStats {
     addBox({ 3.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, redId.value); // red wall, floor-side face at x = 2.75
     const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Point Light", .transform = TransformAt(-1.0F, 5.0F, 0.0F) });
+    // 1.27 in Unity's light convention is the 4 this scene was tuned with before (4 / pi).
     scene.Components().Lights().Set(light, kb::scene::LightComponent{
-        .kind = kb::scene::LightKind::Point, .intensity = 4.0F, .range = 40.0F, .castsShadow = false });
+        .kind = kb::scene::LightKind::Point, .intensity = 1.27F, .range = 40.0F, .castsShadow = false });
 
     NativeTestSurface surface;
     Require(surface.IsValid(), "GI test could not create a hidden D3D11 surface");
@@ -6912,7 +6913,7 @@ struct SsBox {
     float fovDegrees, const SceneRenderLightingConfig& lighting, int frames, std::uint16_t size,
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
     const std::function<void(kb::scene::Scene&, int)>& beforeFrame = {}, bool lightsCastShadow = false,
-    float lightIntensity = 4.0F, float lightRange = 40.0F) {
+    float lightIntensity = 1.27F, float lightRange = 40.0F) {  // 4 / pi: Unity's light convention
     static int counter = 0;
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_ss_scene_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(counter++));
@@ -8111,7 +8112,8 @@ void RunRendererRendersSpotLightShadowTest() {
 // The share of light that survives the plate is measured for four lights (the old limit) and for six; it must
 // not grow when lights are added.
 [[nodiscard]] double PointShadowSurvivingShare(int extraPointLights) {
-    ShadowFloorScene scene{ .extraPointLights = extraPointLights, .pointIntensity = 0.5F };
+    // 0.16 in Unity's light convention is the 0.5 this scene was tuned with before (0.5 / pi).
+    ShadowFloorScene scene{ .extraPointLights = extraPointLights, .pointIntensity = 0.16F };
     scene.lightCastsShadow = false;
     const int unshadowed = RenderShadowFloorBrightness(scene);
     scene.lightCastsShadow = true;

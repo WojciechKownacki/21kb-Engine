@@ -288,6 +288,7 @@ std::optional<RenderMeshAssetData> RenderMeshObjImporter::Load(std::istream& inp
         return std::nullopt;
     }
 
+    RenderMeshAssetFinalizer::ConvertRightHandedSource(asset);
     if (!RenderMeshAssetFinalizer::Finalize(asset)) {
         return std::nullopt;
     }
