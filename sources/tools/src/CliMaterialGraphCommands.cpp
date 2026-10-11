@@ -9,6 +9,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 #include "kb/render/resources/RenderMaterialAuthoring.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
@@ -318,7 +319,44 @@ void PrintGraph(const kb::render::RenderMaterialAssetData& asset, const std::str
         kb::render::UpsertRenderMaterialGraphParameterValue(asset, std::move(*value));
         return {};
     }
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput) {
+        return "node " + NodeLabel(node) + " has no value to set";
+    }
+    // Every other node keeps its settings (Panner speed, Rotator speed and centre, Texture
+    // Coordinate tiling, Fresnel exponent, ...) as the space-separated value the Material
+    // Editor's node properties write; the saved material is compiled before it is kept.
+    for (kb::render::RenderMaterialGraphNode& candidate : asset.graph.nodes) {
+        if (candidate.id == node.id) {
+            candidate.parameter.defaultValueHint = std::string{ text };
+            return {};
+        }
+    }
     return "node " + NodeLabel(node) + " has no value to set";
+}
+
+// The material-wide settings of the Material Editor's Details: Domain, Shading Model, Blend Mode.
+[[nodiscard]] std::string SetGraphSetting(kb::render::RenderMaterialAssetData& asset, std::string_view name, std::string_view value) {
+    const std::string wanted = material::Normalized(name);
+    const std::string text = material::Normalized(value);
+    if (wanted == "domain") {
+        const std::string_view canonical = kb::render::RenderMaterialDomainName(kb::render::ParseRenderMaterialDomain(value));
+        if (material::Normalized(canonical) != text) return "Domain does not take '" + std::string{ value } + "'";
+        asset.graph.materialDomain = std::string{ canonical };
+        return {};
+    }
+    if (wanted == "shadingmodel") {
+        const std::string_view canonical = kb::render::RenderMaterialShadingModelName(kb::render::ParseRenderMaterialShadingModel(value));
+        if (material::Normalized(canonical) != text) return "Shading Model does not take '" + std::string{ value } + "'";
+        asset.graph.shadingModel = std::string{ canonical };
+        return {};
+    }
+    if (wanted == "blendmode") {
+        const std::string_view canonical = kb::render::RenderMaterialGraphBlendModeName(kb::render::ParseRenderMaterialGraphBlendMode(value));
+        if (material::Normalized(canonical) != text) return "Blend Mode does not take '" + std::string{ value } + "'";
+        asset.graph.blendMode = std::string{ canonical };
+        return {};
+    }
+    return "material-graph setting --name takes Domain, Shading Model or Blend Mode, not '" + std::string{ name } + "'";
 }
 
 int GraphCommand(std::string_view action, const ArgumentList& arguments, CommandIo io) {
@@ -487,7 +525,22 @@ int GraphCommand(std::string_view action, const ArgumentList& arguments, Command
         io.out << "renamed " << NodeLabel(*kb::render::FindRenderMaterialGraphNode(asset->graph, id)) << '\n';
         return 0;
     }
-    io.err << "error: material-graph expects show, kinds, add-node, connect, set, promote or rename\n";
+    if (action == "setting") {
+        const std::optional<std::string> name = arguments.Option("--name");
+        const std::optional<std::string> value = arguments.Option("--value");
+        if (!name.has_value() || !value.has_value()) {
+            io.err << "error: material-graph setting requires --name <Domain | Shading Model | Blend Mode> --value <value>\n";
+            return 1;
+        }
+        if (const std::string problem = SetGraphSetting(*asset, *name, *value); !problem.empty()) {
+            io.err << "error: " << problem << '\n';
+            return 1;
+        }
+        if (!SaveMaterial(*asset, *located, io)) return 1;
+        io.out << "set " << *name << " = " << *value << '\n';
+        return 0;
+    }
+    io.err << "error: material-graph expects show, kinds, add-node, connect, set, setting, promote or rename\n";
     return 1;
 }
 

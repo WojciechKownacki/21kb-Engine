@@ -1,11 +1,13 @@
 #pragma once
 
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderToolchain.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -101,6 +103,16 @@ public:
     explicit RuntimeMaterialResolver(RenderMaterialGraphBuildContext graphBuildContext) noexcept;
     void SetGraphBuildContext(RenderMaterialGraphBuildContext graphBuildContext) noexcept;
 
+    // An unpackaged project run cooks its graph materials on demand, as Unreal compiles a missing
+    // shader when a material is first drawn: each resolved graph gets its scene passes cooked into
+    // `cacheRoot` with `toolchain` (a cache hit when nothing changed). Unset, graphs draw only from
+    // binaries already cooked by the editor or the packager.
+    struct GraphShaderCook {
+        RenderMaterialGraphShaderToolchain toolchain;
+        std::string cacheRoot;
+    };
+    void SetGraphShaderCook(std::optional<GraphShaderCook> cook);
+
     [[nodiscard]] static std::uint64_t EmbeddedMaterialAssetId(std::uint64_t meshAssetId, std::uint32_t slotIndex, std::string_view materialName) noexcept;
     [[nodiscard]] static std::uint64_t MaterialRuntimeContentHash(
         kb::assets::AssetManager& manager,
@@ -149,7 +161,13 @@ private:
         std::string_view texturePath,
         std::uint32_t& unresolvedTexturePathCount) const;
 
+    void CookGraphShader(
+        const RenderMaterialGraphShaderSource& shader,
+        std::uint32_t materialTypeVersion,
+        std::vector<RenderMaterialGraphDiagnostic>& diagnostics) const;
+
     RenderMaterialGraphBuildContext graphBuildContext_{};
+    std::optional<GraphShaderCook> graphShaderCook_;
 };
 
 } // namespace kb::render

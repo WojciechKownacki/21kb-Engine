@@ -62,10 +62,16 @@ Commands:
                  set --project <dir> --material <path> --node <node> --value <value>
                  promote --project <dir> --material <path> --node <node> [--name <Name>]
                  rename --project <dir> --material <path> --node <node> --name <Name>
+                 setting --project <dir> --material <path> --name <Domain | Shading Model |
+                         Blend Mode> --value <value>
                (<node> is a node id, its name, its parameter id, or Output; kinds as
                kinds lists them, also ScalarParameter, VectorParameter,
                TextureParameter, Constant, Constant3Vector, Constant4Vector; a value is a
-               number, r g b [a], #RRGGBB, or a texture path)
+               number, r g b [a], #RRGGBB, or a texture path; other nodes take their
+               settings as the Material Editor shows them, e.g. Rotator "speed centerU
+               centerV", Panner "speedU speedV", TextureCoordinate "uTile vTile set";
+               Blend Mode: opaque, masked, translucent, additive, modulate; Shading Model:
+               unlit, defaultLit, clearCoat, ...)
   material-instance-new Create a material instance of a material, as Create Material
                Instance does (beside its parent unless --folder), with overrides.
                  --project <dir> --parent /Game/<path>.kbmat [--name <Name>]

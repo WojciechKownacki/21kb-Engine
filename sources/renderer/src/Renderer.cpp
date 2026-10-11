@@ -2209,6 +2209,19 @@ void Renderer::SetGraphShaderCacheRoot(std::string root) {
     if (sceneRenderer_ != nullptr) {
         sceneRenderer_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
     }
+    SetGraphShaderCookToolchain(graphShaderCookToolchain_);
+}
+
+void Renderer::SetGraphShaderCookToolchain(std::optional<RenderMaterialGraphShaderToolchain> toolchain) {
+    graphShaderCookToolchain_ = std::move(toolchain);
+    if (graphShaderCookToolchain_.has_value() && !graphShaderCacheRoot_.empty()) {
+        runtimeMaterialResolver_.SetGraphShaderCook(RuntimeMaterialResolver::GraphShaderCook{
+            .toolchain = *graphShaderCookToolchain_,
+            .cacheRoot = graphShaderCacheRoot_,
+        });
+    } else {
+        runtimeMaterialResolver_.SetGraphShaderCook(std::nullopt);
+    }
 }
 
 const std::string& Renderer::GraphShaderCacheRoot() const noexcept {

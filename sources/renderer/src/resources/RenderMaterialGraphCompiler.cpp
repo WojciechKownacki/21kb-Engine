@@ -1280,7 +1280,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::Panner: {
         // MAT-45: scroll the coordinate by time * speed (hint = "speedU speedV").
         const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
-        const float speedU = values.size() > 0U ? values[0] : 0.1F;
+        const float speedU = values.size() > 0U ? values[0] : 0.0F;
         const float speedV = values.size() > 1U ? values[1] : 0.0F;
         const std::string coord = CompileInputExpression(cg, node, "coordinate", RenderMaterialGraphPinType::Float2, "ctx.uv0");
         const std::string time = CompileInputExpression(cg, node, "time", RenderMaterialGraphPinType::Float, "ctx.time");
@@ -1308,7 +1308,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             return it->second;
         }
         const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
-        const float speed = values.size() > 0U ? values[0] : 1.0F;
+        const float speed = values.size() > 0U ? values[0] : 0.25F;
         const float centerU = values.size() > 1U ? values[1] : 0.5F;
         const float centerV = values.size() > 2U ? values[2] : 0.5F;
         const std::string coord = CompileInputExpression(cg, node, "coordinate", RenderMaterialGraphPinType::Float2, "ctx.uv0");
@@ -1500,9 +1500,9 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::Divide:
         return "(" +
             CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
-            " / max(abs(" +
+            " / " +
             CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
-            "), vec4_splat(0.0001)))";
+            ")";
     case RenderMaterialGraphNodeKind::Power:
         return "pow(max(" +
             CompileInputExpression(cg, node, "base", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
@@ -1619,8 +1619,9 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         hardness = hardness < 0.0F ? 0.0F : (hardness > 0.999F ? 0.999F : hardness);
         const std::string a = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
         const std::string b = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
-        const std::string inner = FloatLiteral(radius * (1.0F - hardness));
-        return "vec4_splat(1.0 - smoothstep(" + inner + ", " + FloatLiteral(radius) + ", distance(" + a + ", " + b + ")))";
+        // Unreal's SphereMask: saturate((1 - distance / radius) / (1 - hardness)).
+        return "vec4_splat(clamp((1.0 - distance(" + a + ", " + b + ") / " + FloatLiteral(radius) + ") / " +
+            FloatLiteral(std::max(1.0F - hardness, 0.00001F)) + ", 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::BlackBody:
         // MAT-50: map a Kelvin temperature (scalar) to the Planckian-locus RGB via the shared prelude helper.
@@ -1791,15 +1792,18 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         const float defaultFraction = values.size() > 0U ? values[0] : 1.0F;
         const std::string color = CompileInputExpression(cg, node, "color", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)");
         const std::string fraction = CompileInputExpression(cg, node, "fraction", RenderMaterialGraphPinType::Float, FloatLiteral(defaultFraction));
-        const std::string luma = "dot((" + color + ").rgb, vec3(0.299, 0.587, 0.114))";
+        // Rec.709 luminance, the working colour space's factors Unreal and Unity use.
+        const std::string luma = "dot((" + color + ").rgb, vec3(0.2126, 0.7152, 0.0722))";
         return "mix(" + color + ", vec4(vec3(" + luma + "), (" + color + ").a), clamp(" + fraction + ", 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::Fresnel: {
         const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
         const float defaultExponent = values.size() > 0U ? std::max(values[0], 0.0001F) : 5.0F;
-        const float defaultBase = values.size() > 1U ? values[1] : 0.0F;
-        const std::string normal = CompileInputExpression(cg, node, "normal", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
-        const std::string view = CompileInputExpression(cg, node, "view", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
+        // As Unreal: an unconnected normal is the pixel normal, the view the camera vector, and
+        // the base reflect fraction 0.04.
+        const float defaultBase = values.size() > 1U ? values[1] : 0.04F;
+        const std::string normal = CompileInputExpression(cg, node, "normal", RenderMaterialGraphPinType::Float3, "ctx.normal");
+        const std::string view = CompileInputExpression(cg, node, "view", RenderMaterialGraphPinType::Float3, "ctx.viewDir");
         const std::string exponent = CompileInputExpression(cg, node, "exponent", RenderMaterialGraphPinType::Float, FloatLiteral(defaultExponent));
         const std::string base = CompileInputExpression(cg, node, "base", RenderMaterialGraphPinType::Float, FloatLiteral(defaultBase));
         const std::string facing = "clamp(dot(normalize(" + normal + "), normalize(" + view + ")), 0.0, 1.0)";

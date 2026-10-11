@@ -3756,8 +3756,9 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     const auto colorProperty = std::ranges::find_if(colorProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
         return property.kind == kb::editor::MaterialEditorGraphNodePropertyKind::Color;
     });
-    kb::editor::tests::Require(colorProperty != colorProperties.end() && colorProperty->range.has_value(),
-        "KBMAT-MAT58: Color constants should expose a typed color property with metadata range");
+    // As Unreal's Constant4Vector: a colour constant has no range, so HDR and negative values stay.
+    kb::editor::tests::Require(colorProperty != colorProperties.end() && !colorProperty->range.has_value(),
+        "KBMAT-MAT58: Color constants should expose a typed color property without a clamping range");
     const std::string colorBeforeInvalidEdit = kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, colorNodeId)->parameter.defaultValueHint;
     kb::editor::tests::Require(!materialEditor.SetGraphConstantColorValue(
             colorNodeId,
@@ -3771,11 +3772,11 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         return property.kind == kb::editor::MaterialEditorGraphNodePropertyKind::Color;
     });
     kb::editor::tests::Require(updatedColor != colorProperties.end() &&
-            updatedColor->value.numbers[0] == 1.0F &&
-            updatedColor->value.numbers[1] == 0.0F &&
+            updatedColor->value.numbers[0] == 1.4F &&
+            updatedColor->value.numbers[1] == -0.25F &&
             updatedColor->value.numbers[2] == 0.5F &&
-            updatedColor->value.numbers[3] == 1.0F,
-        "KBMAT-MAT58: Color picker values should be clamped through node metadata");
+            updatedColor->value.numbers[3] == 2.0F,
+        "KBMAT-MAT58: Color picker values should be kept unclamped (HDR) on a colour constant");
 
     std::vector<kb::editor::MaterialEditorGraphNodeProperty> scalarProperties = materialEditor.GraphNodeProperties(scalarNodeId);
     const auto scalarProperty = std::ranges::find_if(scalarProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
@@ -4128,7 +4129,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     kb::editor::tests::Require(uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Panner, -520, -120, &pannerNodeId),
         "KBMAT-MAT82: Material Editor should create a Panner node for numeric utility property editing");
     std::vector<kb::editor::MaterialEditorGraphNodeProperty> pannerProperties = uvUtilityEditor.GraphNodeProperties(pannerNodeId);
-    requireUtilityNumericProperty(pannerProperties, "panner.speedU", 0.1F, "KBMAT-MAT82: Panner should expose Speed U as a numeric property");
+    requireUtilityNumericProperty(pannerProperties, "panner.speedU", 0.0F, "KBMAT-MAT82: Panner should expose Speed U as a numeric property");
     requireUtilityNumericProperty(pannerProperties, "panner.speedV", 0.0F, "KBMAT-MAT82: Panner should expose Speed V as a numeric property");
     kb::editor::tests::Require(uvUtilityEditor.SetGraphConstantComponentValue(pannerNodeId, 0U, 0.25F) &&
             uvUtilityEditor.SetGraphConstantComponentValue(pannerNodeId, 1U, -0.5F),
@@ -4142,7 +4143,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     kb::editor::tests::Require(uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Rotator, -520, 40, &rotatorNodeId),
         "KBMAT-MAT82: Material Editor should create a Rotator node for numeric utility property editing");
     std::vector<kb::editor::MaterialEditorGraphNodeProperty> rotatorProperties = uvUtilityEditor.GraphNodeProperties(rotatorNodeId);
-    requireUtilityNumericProperty(rotatorProperties, "rotator.speed", 1.0F, "KBMAT-MAT82: Rotator should expose Speed as a numeric property");
+    requireUtilityNumericProperty(rotatorProperties, "rotator.speed", 0.25F, "KBMAT-MAT82: Rotator should expose Speed as a numeric property");
     requireUtilityNumericProperty(rotatorProperties, "rotator.centerU", 0.5F, "KBMAT-MAT82: Rotator should expose Center U as a numeric property");
     requireUtilityNumericProperty(rotatorProperties, "rotator.centerV", 0.5F, "KBMAT-MAT82: Rotator should expose Center V as a numeric property");
     kb::editor::tests::Require(uvUtilityEditor.SetGraphConstantComponentValue(rotatorNodeId, 0U, 2.0F) &&
@@ -4284,7 +4285,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     const kb::render::RenderMaterialGraphNode* fresnelNode =
         kb::render::FindRenderMaterialGraphNode(shadingUtilityEditor.WorkingCopy()->graph, fresnelNodeId);
     kb::editor::tests::Require(desaturateNode != nullptr && desaturateNode->parameter.defaultValueHint == "1" &&
-            fresnelNode != nullptr && fresnelNode->parameter.defaultValueHint == "5 0",
+            fresnelNode != nullptr && fresnelNode->parameter.defaultValueHint == "5 0.04",
         "KBMAT-MAT89: Shading utility nodes should carry explicit editor metadata defaults");
     std::vector<kb::editor::MaterialEditorGraphNodeProperty> desaturateProperties =
         shadingUtilityEditor.GraphNodeProperties(desaturateNodeId);
@@ -4303,7 +4304,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     requireUtilityNumericProperty(
         fresnelProperties,
         "fresnel.base",
-        0.0F,
+        0.04F,
         "KBMAT-MAT89: Fresnel should expose Base as a numeric property");
     kb::editor::tests::Require(shadingUtilityEditor.SetGraphConstantComponentValue(desaturateNodeId, 0U, 0.35F) &&
             shadingUtilityEditor.SetGraphConstantComponentValue(fresnelNodeId, 0U, 3.5F) &&
@@ -4386,7 +4387,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             proceduralMaskEditor.WorkingCopy()->graph,
             kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5813U });
     kb::editor::tests::Require(proceduralMaskCompiled.Succeeded() &&
-            proceduralMaskCompiled.shader.source.find("smoothstep(0.375, 1.5") != std::string::npos &&
+            proceduralMaskCompiled.shader.source.find("/ 1.5) / 0.25, 0.0, 1.0)") != std::string::npos &&
             proceduralMaskCompiled.shader.source.find("smoothstep(0.33 -") != std::string::npos,
         "KBMAT-MAT83: Edited procedural mask properties should compile into production shader expressions");
 

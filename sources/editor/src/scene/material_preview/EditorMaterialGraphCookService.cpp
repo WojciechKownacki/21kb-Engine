@@ -3,6 +3,7 @@
 
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderPrewarmer.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderToolchain.hpp"
 #include "kb/render/resources/RenderMaterialSemanticHash.hpp"
 
 #include <bgfx/bgfx.h>
@@ -16,102 +17,8 @@
 #include <sstream>
 #include <utility>
 
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
-
 namespace kb::editor {
 namespace {
-
-[[nodiscard]] std::filesystem::path ExecutableDirectory() {
-#if defined(_WIN32)
-    std::wstring buffer(1024U, L'\0');
-    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (length == 0U || length >= buffer.size()) {
-        return {};
-    }
-    buffer.resize(length);
-    return std::filesystem::path{ buffer }.parent_path();
-#else
-    return {};
-#endif
-}
-
-// Locate bgfx's shaderc relative to the running editor so a normal build cooks graphs out of the box,
-// without requiring the KB_GRAPH_SHADERC environment variable to be set by hand.
-[[nodiscard]] std::string DiscoverShadercNearExecutable() {
-    std::filesystem::path dir = ExecutableDirectory();
-    if (dir.empty()) {
-        return {};
-    }
-    static constexpr std::array<const char*, 4U> kConfigs{ "Debug", "Release", "RelWithDebInfo", "MinSizeRel" };
-    std::error_code error;
-    for (int level = 0; level < 8 && !dir.empty(); ++level) {
-        for (const char* exe : { "shaderc.exe", "shaderc" }) {
-            const std::filesystem::path candidate = dir / exe;
-            if (std::filesystem::exists(candidate, error)) {
-                return candidate.string();
-            }
-        }
-        for (const char* config : kConfigs) {
-            const std::filesystem::path candidate =
-                dir / "third_party" / "bgfx.cmake" / "cmake" / "bgfx" / config / "shaderc.exe";
-            if (std::filesystem::exists(candidate, error)) {
-                return candidate.string();
-            }
-        }
-        const std::filesystem::path parent = dir.parent_path();
-        if (parent == dir) {
-            break;
-        }
-        dir = parent;
-    }
-    return {};
-}
-
-// Find the engine source root (the directory containing sources/renderer/shaders/varying.def.sc) by
-// walking up from the running editor, so the graph cook has the varying def + shader include dirs even
-// when the compile-time paths were not baked in.
-[[nodiscard]] std::filesystem::path DiscoverEngineShaderRoot() {
-    std::filesystem::path dir = ExecutableDirectory();
-    if (dir.empty()) {
-        return {};
-    }
-    std::error_code error;
-    for (int level = 0; level < 10 && !dir.empty(); ++level) {
-        if (std::filesystem::exists(dir / "sources" / "renderer" / "shaders" / "varying.def.sc", error)) {
-            return dir;
-        }
-        const std::filesystem::path parent = dir.parent_path();
-        if (parent == dir) {
-            break;
-        }
-        dir = parent;
-    }
-    return {};
-}
-
-[[nodiscard]] std::string ReadEnv(const char* name) {
-#if defined(_WIN32)
-    char* buffer = nullptr;
-    std::size_t size = 0U;
-    if (_dupenv_s(&buffer, &size, name) != 0 || buffer == nullptr) {
-        return {};
-    }
-    std::string value{ buffer };
-    std::free(buffer);
-    return value;
-#else
-    const char* value = std::getenv(name);
-    return value != nullptr ? std::string{ value } : std::string{};
-#endif
-}
 
 [[nodiscard]] std::string SeverityTag(kb::render::RenderMaterialGraphDiagnosticSeverity severity) {
     return severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error ? "error" : "warning";
@@ -141,7 +48,7 @@ namespace {
     }
     // BaseOpaque (GPU forward), GBuffer (deferred MRT), ShadowDepth (graph alpha clip) and
     // BaseTransparent (active alpha-blended submit pass) all have a live runtime consumer.
-    return { "BaseOpaque", "GBuffer", "ShadowDepth", "BaseTransparent" };
+    return { kb::render::kRenderMaterialGraphScenePasses.begin(), kb::render::kRenderMaterialGraphScenePasses.end() };
 }
 
 void HashVariantBytes(std::uint64_t& hash, std::string_view value) noexcept {
@@ -410,77 +317,35 @@ EditorMaterialGraphCookBanner MakeEditorMaterialGraphCookBanner(EditorMaterialGr
 }
 
 kb::render::RenderMaterialGraphShaderBackend EditorMaterialGraphCookConfig::BackendForActiveRenderer() noexcept {
-    switch (bgfx::getRendererType()) {
-    case bgfx::RendererType::Direct3D12:
-        return kb::render::RenderMaterialGraphShaderBackend::Dxil;
-    case bgfx::RendererType::Vulkan:
-        return kb::render::RenderMaterialGraphShaderBackend::Spirv;
-    case bgfx::RendererType::OpenGL:
-        return kb::render::RenderMaterialGraphShaderBackend::Glsl;
-    case bgfx::RendererType::OpenGLES:
-        return kb::render::RenderMaterialGraphShaderBackend::Essl;
-    case bgfx::RendererType::Metal:
-        return kb::render::RenderMaterialGraphShaderBackend::Metal;
-    case bgfx::RendererType::Noop:
-    case bgfx::RendererType::Direct3D11:
-    default:
-        return kb::render::RenderMaterialGraphShaderBackend::Dxbc;
-    }
+    return kb::render::RenderMaterialGraphShaderBackendForActiveRenderer();
 }
 
 EditorMaterialGraphCookConfig EditorMaterialGraphCookConfig::Resolve(std::string cacheRoot) {
     EditorMaterialGraphCookConfig config{};
     config.cacheRoot = std::move(cacheRoot);
     config.backend = BackendForActiveRenderer();
-#if defined(_WIN32)
-    config.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Windows;
-#elif defined(__ANDROID__)
-    config.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Android;
-#elif defined(__EMSCRIPTEN__)
-    config.shaderPlatform = kb::assets::bake::ShaderBakePlatform::WebGl;
-#else
-    config.shaderPlatform = kb::assets::bake::ShaderBakePlatform::Linux;
-#endif
 
-    // KB_GRAPH_SHADERC env override takes precedence so a non-default toolchain can be used
-    // without rebuilding the editor; otherwise fall back to the compile-time prebuilt path.
-    std::string shaderc = ReadEnv("KB_GRAPH_SHADERC");
+    // The paths this build baked in; the shared resolution adds the KB_GRAPH_SHADERC override and
+    // the discovery next to the running editor.
+    kb::render::RenderMaterialGraphShaderToolchain builtIn{};
 #if defined(KB_EDITOR_GRAPH_SHADERC_PATH)
-    if (shaderc.empty()) {
-        shaderc = KB_EDITOR_GRAPH_SHADERC_PATH;
-    }
+    builtIn.shadercPath = KB_EDITOR_GRAPH_SHADERC_PATH;
 #endif
-    std::error_code shadercError;
-    if (shaderc.empty() || !std::filesystem::exists(shaderc, shadercError)) {
-        // Neither the env override nor the compile-time path resolved; discover shaderc next to the editor.
-        shaderc = DiscoverShadercNearExecutable();
-    }
-    if (!shaderc.empty() && std::filesystem::exists(shaderc, shadercError)) {
-        config.shadercPath = std::move(shaderc);
-    }
-
 #if defined(KB_EDITOR_GRAPH_SHADER_VARYING_DEF)
-    config.varyingDefPath = KB_EDITOR_GRAPH_SHADER_VARYING_DEF;
+    builtIn.varyingDefPath = KB_EDITOR_GRAPH_SHADER_VARYING_DEF;
 #endif
 #if defined(KB_EDITOR_GRAPH_SHADER_INCLUDE_DIR)
-    config.includeDirs.emplace_back(KB_EDITOR_GRAPH_SHADER_INCLUDE_DIR);
+    builtIn.includeDirs.emplace_back(KB_EDITOR_GRAPH_SHADER_INCLUDE_DIR);
 #endif
 #if defined(KB_EDITOR_GRAPH_BGFX_SHADER_INCLUDE_DIR)
-    config.includeDirs.emplace_back(KB_EDITOR_GRAPH_BGFX_SHADER_INCLUDE_DIR);
+    builtIn.includeDirs.emplace_back(KB_EDITOR_GRAPH_BGFX_SHADER_INCLUDE_DIR);
 #endif
-
-    // If the compile-time shader-source paths were not baked in, discover them next to the editor so the
-    // cook has a valid varying def and the graph/bgfx shader include directories.
-    std::error_code sourceError;
-    if (config.varyingDefPath.empty() || !std::filesystem::exists(config.varyingDefPath, sourceError)) {
-        const std::filesystem::path engineRoot = DiscoverEngineShaderRoot();
-        if (!engineRoot.empty()) {
-            config.varyingDefPath = (engineRoot / "sources" / "renderer" / "shaders" / "varying.def.sc").string();
-            config.includeDirs.clear();
-            config.includeDirs.emplace_back((engineRoot / "sources" / "renderer" / "shaders").string());
-            config.includeDirs.emplace_back((engineRoot / "third_party" / "bgfx.cmake" / "bgfx" / "src").string());
-        }
-    }
+    const kb::render::RenderMaterialGraphShaderToolchain toolchain =
+        kb::render::ResolveRenderMaterialGraphShaderToolchain(builtIn);
+    config.shaderPlatform = toolchain.shaderPlatform;
+    config.shadercPath = toolchain.shadercPath;
+    config.varyingDefPath = toolchain.varyingDefPath;
+    config.includeDirs = toolchain.includeDirs;
     return config;
 }
 

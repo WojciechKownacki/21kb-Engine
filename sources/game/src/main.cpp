@@ -382,14 +382,27 @@ int RunGame(const GameOptions& options) {
             return EXIT_FAILURE;
         }
     } else {
-        // A cache directory whose name cannot be spelled exactly in this
-        // machine's code page is worse than no cache directory.
+        // The project's own graph shader cache, the one the editor cooks into
+        // (EditorSceneContext), so a project run outside the editor draws its
+        // graph materials instead of the built-in fallback. A cache directory
+        // whose name cannot be spelled exactly in this machine's code page is
+        // worse than no cache directory.
         const std::filesystem::path shaderCacheRoot =
-            kb::game::ExecutableDirectory() / ".cache" / "graph_shaders";
+            projectRuntime.projectRoot / ".cache" / "graph_shaders";
         if (std::optional<std::string> cacheRoot =
                 kb::game::TryNarrow(shaderCacheRoot.generic_wstring());
             cacheRoot.has_value()) {
             renderer.SetGraphShaderCacheRoot(*std::move(cacheRoot));
+            // A graph material the editor has not cooked yet is cooked when first drawn.
+            const kb::render::RenderMaterialGraphShaderToolchain toolchain =
+                kb::render::ResolveRenderMaterialGraphShaderToolchain({});
+            if (toolchain.Available()) {
+                renderer.SetGraphShaderCookToolchain(toolchain);
+            } else {
+                std::cerr << "kb_game: graph materials not cooked by the editor draw with the built-in "
+                             "material: bgfx shaderc or the engine shader sources were not found (set "
+                             "KB_GRAPH_SHADERC to shaderc, or build the shaderc target)\n";
+            }
         } else {
             std::cerr << "kb_game: graph shader cache disabled: "
                       << kb::game::NarrowForDiagnostics(shaderCacheRoot)

@@ -244,6 +244,9 @@ public:
     void SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept;
     [[nodiscard]] bool GpuDrivenRuntimeDispatchEnabled() const noexcept;
     void SetGraphShaderCacheRoot(std::string root);
+    // Cook graph materials on demand into the graph shader cache (an unpackaged project run, as
+    // Unreal compiles a missing material shader); std::nullopt draws only already cooked binaries.
+    void SetGraphShaderCookToolchain(std::optional<RenderMaterialGraphShaderToolchain> toolchain);
     [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
     [[nodiscard]] bool SetShaderBinaryProvider(
         std::shared_ptr<const ShaderBinaryProvider> provider) noexcept;
@@ -359,6 +362,7 @@ private:
     std::optional<RenderMaterialGraphShaderStage> lastRuntimeMaterialShaderStage_;
     std::optional<RenderMaterialGraphVariantUsage> lastRuntimeMaterialVariantUsage_;
     std::string graphShaderCacheRoot_;
+    std::optional<RenderMaterialGraphShaderToolchain> graphShaderCookToolchain_;
     std::shared_ptr<const ShaderBinaryProvider> shaderBinaryProvider_;
     float frameDeltaSeconds_ = 1.0F / 60.0F;
     bool gpuDrivenRuntimeDispatchEnabled_ = false;

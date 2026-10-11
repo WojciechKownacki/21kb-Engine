@@ -1256,9 +1256,9 @@ void RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest() {
         MakeGraphLink(RenderMaterialGraphNodeKind::Fresnel, 8U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"),
     };
     const ResolvedRuntimeMaterialDesc surfaceResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, surfaceMaterial);
-    Require(NearlyEqual(surfaceResolved.desc.baseColor[0], 0.299F) &&
-            NearlyEqual(surfaceResolved.desc.baseColor[1], 0.299F) &&
-            NearlyEqual(surfaceResolved.desc.baseColor[2], 0.299F),
+    Require(NearlyEqual(surfaceResolved.desc.baseColor[0], 0.2126F) &&
+            NearlyEqual(surfaceResolved.desc.baseColor[1], 0.2126F) &&
+            NearlyEqual(surfaceResolved.desc.baseColor[2], 0.2126F),
         "KBMAT-RUNTIME: Desaturate graph did not evaluate into Base Color");
     Require(NearlyEqual(surfaceResolved.desc.roughnessFactor, 1.0F), "KBMAT-RUNTIME: Fresnel graph did not evaluate into Roughness");
 

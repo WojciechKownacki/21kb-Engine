@@ -3928,7 +3928,7 @@ void RunForwardGraphExpLogSrgbNodesCookTest() {
         { RenderMaterialGraphNodeKind::InverseLerp, "mix(", "a", 0x500BU },
         { RenderMaterialGraphNodeKind::PartialDerivativeX, "dFdx(", "value", 0x500CU },
         { RenderMaterialGraphNodeKind::PartialDerivativeY, "dFdy(", "value", 0x500DU },
-        { RenderMaterialGraphNodeKind::SphereMask, "smoothstep(", "a", 0x500EU },
+        { RenderMaterialGraphNodeKind::SphereMask, "(1.0 - distance(", "a", 0x500EU },
         { RenderMaterialGraphNodeKind::BlackBody, "kbBlackBody(", "value", 0x500FU },
         { RenderMaterialGraphNodeKind::Noise, "kbValueNoise(", "value", 0x5010U },
         { RenderMaterialGraphNodeKind::VectorNoise, "kbVectorNoise(", "value", 0x5011U },

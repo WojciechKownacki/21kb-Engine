@@ -1439,7 +1439,7 @@ struct MaterialGraphRuntimeValue {
         const MaterialGraphRuntimeValue color = EvaluateGraphInput(materialAsset, node, "color", RuntimeValue(1.0F, 1.0F, 1.0F, 1.0F, RenderMaterialGraphPinType::Color, false), stack);
         const MaterialGraphRuntimeValue fraction = EvaluateGraphInput(materialAsset, node, "fraction", RuntimeValue(1.0F, false), stack);
         const float amount = Clamp01(fraction.value[0]);
-        const float luma = (color.value[0] * 0.299F) + (color.value[1] * 0.587F) + (color.value[2] * 0.114F);
+        const float luma = (color.value[0] * 0.2126F) + (color.value[1] * 0.7152F) + (color.value[2] * 0.0722F);
         const auto blend = [luma, amount](float channel) noexcept {
             return channel + ((luma - channel) * amount);
         };
@@ -1452,7 +1452,7 @@ struct MaterialGraphRuntimeValue {
         const MaterialGraphRuntimeValue normal = EvaluateGraphInput(materialAsset, node, "normal", RuntimeValue(0.0F, 0.0F, 1.0F, 1.0F, RenderMaterialGraphPinType::Float3, false), stack);
         const MaterialGraphRuntimeValue view = EvaluateGraphInput(materialAsset, node, "view", RuntimeValue(0.0F, 0.0F, 1.0F, 1.0F, RenderMaterialGraphPinType::Float3, false), stack);
         const MaterialGraphRuntimeValue exponent = EvaluateGraphInput(materialAsset, node, "exponent", RuntimeValue(5.0F, false), stack);
-        const MaterialGraphRuntimeValue base = EvaluateGraphInput(materialAsset, node, "base", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue base = EvaluateGraphInput(materialAsset, node, "base", RuntimeValue(0.04F, false), stack);
         const float normalLength = std::max(Length3(normal), 0.0001F);
         const float viewLength = std::max(Length3(view), 0.0001F);
         const float facing = Clamp01(
@@ -1753,6 +1753,35 @@ void RuntimeMaterialResolver::SetGraphBuildContext(RenderMaterialGraphBuildConte
     graphBuildContext_ = std::move(graphBuildContext);
 }
 
+void RuntimeMaterialResolver::SetGraphShaderCook(std::optional<GraphShaderCook> cook) {
+    graphShaderCook_ = std::move(cook);
+}
+
+void RuntimeMaterialResolver::CookGraphShader(
+    const RenderMaterialGraphShaderSource& shader,
+    std::uint32_t materialTypeVersion,
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics) const {
+    if (!graphShaderCook_.has_value() || graphShaderCook_->cacheRoot.empty()) {
+        return;
+    }
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackendForActiveRenderer() };
+    for (const std::string_view pass : kRenderMaterialGraphScenePasses) {
+        RenderMaterialGraphShaderArtifactRequest request{};
+        request.shadercPath = graphShaderCook_->toolchain.shadercPath;
+        request.varyingDefPath = graphShaderCook_->toolchain.varyingDefPath;
+        request.includeDirs = graphShaderCook_->toolchain.includeDirs;
+        request.cacheRoot = graphShaderCook_->cacheRoot;
+        request.pass = std::string{ pass };
+        request.shaderPlatform = graphShaderCook_->toolchain.shaderPlatform;
+        request.materialTypeVersion = materialTypeVersion;
+        RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+        diagnostics.insert(
+            diagnostics.end(),
+            std::make_move_iterator(cooked.diagnostics.begin()),
+            std::make_move_iterator(cooked.diagnostics.end()));
+    }
+}
+
 std::uint64_t RuntimeMaterialResolver::EmbeddedMaterialAssetId(std::uint64_t meshAssetId, std::uint32_t slotIndex, std::string_view materialName) noexcept {
     std::string key = "RenderMeshEmbeddedMaterial:";
     key += std::to_string(meshAssetId);
@@ -1989,6 +2018,10 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
                 bindingResult.diagnostics.begin(),
                 bindingResult.diagnostics.end());
             if (!bindingHasError) {
+                CookGraphShader(
+                    graphCompile.shader,
+                    materialAsset.materialTypeVersion == 0U ? 1U : materialAsset.materialTypeVersion,
+                    resolved.graphDiagnostics);
                 resolved.graphProgram = std::move(bindingResult.binding);
                 WriteRendererMaterialGraphDebugLog(
                     "runtime",
