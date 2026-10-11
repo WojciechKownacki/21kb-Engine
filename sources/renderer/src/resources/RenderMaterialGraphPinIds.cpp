@@ -47,6 +47,13 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "pixelDepthOffset") return PinId(nodeKind, direction, 26U);
         // Unreal's Refraction (index of refraction of a translucent surface).
         if (!outputPin && pin == "refraction") return PinId(nodeKind, direction, 27U);
+        // Unreal's Thin Translucent Material Output: the colour the surface passes.
+        if (!outputPin && pin == "transmittanceColor") return PinId(nodeKind, direction, 28U);
+        // Unreal's Single Layer Water Material Output.
+        if (!outputPin && pin == "waterScattering") return PinId(nodeKind, direction, 29U);
+        if (!outputPin && pin == "waterAbsorption") return PinId(nodeKind, direction, 30U);
+        if (!outputPin && pin == "waterPhaseG") return PinId(nodeKind, direction, 31U);
+        if (!outputPin && pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 32U);
         return 0U;
     case RenderMaterialGraphNodeKind::TextureSample:
         if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
@@ -332,6 +339,11 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 22U);
         if (pin == "pixelDepthOffset") return PinId(nodeKind, direction, 23U);
         if (pin == "refraction") return PinId(nodeKind, direction, 24U);
+        if (pin == "transmittanceColor") return PinId(nodeKind, direction, 25U);
+        if (pin == "waterScattering") return PinId(nodeKind, direction, 26U);
+        if (pin == "waterAbsorption") return PinId(nodeKind, direction, 27U);
+        if (pin == "waterPhaseG") return PinId(nodeKind, direction, 28U);
+        if (pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 29U);
         return 0U;
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
         if (outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -355,6 +367,11 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 22U);
         if (pin == "pixelDepthOffset") return PinId(nodeKind, direction, 23U);
         if (pin == "refraction") return PinId(nodeKind, direction, 24U);
+        if (pin == "transmittanceColor") return PinId(nodeKind, direction, 25U);
+        if (pin == "waterScattering") return PinId(nodeKind, direction, 26U);
+        if (pin == "waterAbsorption") return PinId(nodeKind, direction, 27U);
+        if (pin == "waterPhaseG") return PinId(nodeKind, direction, 28U);
+        if (pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 29U);
         return 0U;
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
         if (!outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -373,6 +390,11 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 22U);
         if (pin == "pixelDepthOffset") return PinId(nodeKind, direction, 23U);
         if (pin == "refraction") return PinId(nodeKind, direction, 24U);
+        if (pin == "transmittanceColor") return PinId(nodeKind, direction, 25U);
+        if (pin == "waterScattering") return PinId(nodeKind, direction, 26U);
+        if (pin == "waterAbsorption") return PinId(nodeKind, direction, 27U);
+        if (pin == "waterPhaseG") return PinId(nodeKind, direction, 28U);
+        if (pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 29U);
         return 0U;
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);

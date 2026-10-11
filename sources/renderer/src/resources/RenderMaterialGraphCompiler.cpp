@@ -1028,7 +1028,12 @@ void AppendCustomCodeFunctionDefinitions(
         "    " + v + ".clearCoat = 1.0;\n"
         "    " + v + ".clearCoatRoughness = 0.1;\n"
         "    " + v + ".pixelDepthOffset = 0.0;\n"
-        "    " + v + ".refraction = 1.0;\n";
+        "    " + v + ".refraction = 1.0;\n"
+        "    " + v + ".transmittanceColor = vec3(1.0, 1.0, 1.0);\n"
+        "    " + v + ".waterScattering = vec3(0.0, 0.0, 0.0);\n"
+        "    " + v + ".waterAbsorption = vec3(0.0, 0.0, 0.0);\n"
+        "    " + v + ".waterPhaseG = 0.0;\n"
+        "    " + v + ".waterColorScaleBehind = 1.0;\n";
 }
 
 // MAT-39: parse a compile-time boolean from a node's value hint.
@@ -1373,6 +1378,11 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".clearCoatRoughness = " + CompileInputExpression(cg, node, "clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.1") + ";\n";
         cg.statements += "    " + tmp + ".pixelDepthOffset = " + CompileInputExpression(cg, node, "pixelDepthOffset", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
         cg.statements += "    " + tmp + ".refraction = " + CompileInputExpression(cg, node, "refraction", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
+        cg.statements += "    " + tmp + ".transmittanceColor = " + CompileInputExpression(cg, node, "transmittanceColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)") + ";\n";
+        cg.statements += "    " + tmp + ".waterScattering = " + CompileInputExpression(cg, node, "waterScattering", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + ";\n";
+        cg.statements += "    " + tmp + ".waterAbsorption = " + CompileInputExpression(cg, node, "waterAbsorption", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + ";\n";
+        cg.statements += "    " + tmp + ".waterPhaseG = " + CompileInputExpression(cg, node, "waterPhaseG", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        cg.statements += "    " + tmp + ".waterColorScaleBehind = " + CompileInputExpression(cg, node, "waterColorScaleBehind", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1414,6 +1424,11 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".clearCoatRoughness = mix((" + a + ").clearCoatRoughness, (" + b + ").clearCoatRoughness, " + fv + ");\n";
         cg.statements += "    " + tmp + ".pixelDepthOffset = mix((" + a + ").pixelDepthOffset, (" + b + ").pixelDepthOffset, " + fv + ");\n";
         cg.statements += "    " + tmp + ".refraction = mix((" + a + ").refraction, (" + b + ").refraction, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".transmittanceColor = mix((" + a + ").transmittanceColor, (" + b + ").transmittanceColor, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".waterScattering = mix((" + a + ").waterScattering, (" + b + ").waterScattering, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".waterAbsorption = mix((" + a + ").waterAbsorption, (" + b + ").waterAbsorption, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".waterPhaseG = mix((" + a + ").waterPhaseG, (" + b + ").waterPhaseG, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".waterColorScaleBehind = mix((" + a + ").waterColorScaleBehind, (" + b + ").waterColorScaleBehind, " + fv + ");\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1484,6 +1499,21 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         }
         if (FindInputLink(cg.graph, node.id, "refraction") != nullptr) {
             cg.statements += "    " + tmp + ".refraction = " + CompileInputExpression(cg, node, "refraction", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "transmittanceColor") != nullptr) {
+            cg.statements += "    " + tmp + ".transmittanceColor = " + CompileInputExpression(cg, node, "transmittanceColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "waterScattering") != nullptr) {
+            cg.statements += "    " + tmp + ".waterScattering = " + CompileInputExpression(cg, node, "waterScattering", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "waterAbsorption") != nullptr) {
+            cg.statements += "    " + tmp + ".waterAbsorption = " + CompileInputExpression(cg, node, "waterAbsorption", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "waterPhaseG") != nullptr) {
+            cg.statements += "    " + tmp + ".waterPhaseG = " + CompileInputExpression(cg, node, "waterPhaseG", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "waterColorScaleBehind") != nullptr) {
+            cg.statements += "    " + tmp + ".waterColorScaleBehind = " + CompileInputExpression(cg, node, "waterColorScaleBehind", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
         }
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
@@ -1999,6 +2029,11 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
         if (outputPin == "clearCoatRoughness") return "(" + baseRef + ").clearCoatRoughness";
         if (outputPin == "pixelDepthOffset") return "(" + baseRef + ").pixelDepthOffset";
         if (outputPin == "refraction") return "(" + baseRef + ").refraction";
+        if (outputPin == "transmittanceColor") return "(" + baseRef + ").transmittanceColor";
+        if (outputPin == "waterScattering") return "(" + baseRef + ").waterScattering";
+        if (outputPin == "waterAbsorption") return "(" + baseRef + ").waterAbsorption";
+        if (outputPin == "waterPhaseG") return "(" + baseRef + ").waterPhaseG";
+        if (outputPin == "waterColorScaleBehind") return "(" + baseRef + ").waterColorScaleBehind";
         AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "Material attribute output pin is not supported.");
         return "0.0";
     case RenderMaterialGraphNodeKind::BreakVector:
@@ -3354,10 +3389,33 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     }
     // Unreal's Refraction bends the opaque scene seen through a Translucent surface, so that
     // material reads the scene-color snapshot like a Scene Color node; other blend modes ignore it.
+    const bool usesThinTranslucent = resolvedShadingModel == RenderMaterialShadingModel::ThinTranslucent;
+    // Unreal's Single Layer Water reads the scene behind it (colour and depth) after the opaque scene;
+    // here it draws in the translucent pass, so it needs the Translucent blend mode.
+    const bool usesSingleLayerWater = resolvedShadingModel == RenderMaterialShadingModel::SingleLayerWater;
+    if (usesSingleLayerWater && resolvedBlendMode != RenderMaterialGraphBlendMode::Translucent) {
+        result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
+            .severity = RenderMaterialGraphDiagnosticSeverity::Error,
+            .kind = RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel,
+            .message = "Shading model 'singleLayerWater' needs the Translucent blend mode (it draws over the scene behind it).",
+        });
+        AttachDiagnosticContext(graph, context, result.diagnostics);
+        return result;
+    }
+    if (usesThinTranslucent && resolvedBlendMode != RenderMaterialGraphBlendMode::Translucent) {
+        result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
+            .severity = RenderMaterialGraphDiagnosticSeverity::Error,
+            .kind = RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel,
+            .message = "Shading model 'thinTranslucent' needs the Translucent blend mode (it colours the scene behind it).",
+        });
+        AttachDiagnosticContext(graph, context, result.diagnostics);
+        return result;
+    }
     const bool usesRefraction = resolvedBlendMode == RenderMaterialGraphBlendMode::Translucent &&
         std::any_of(graph.links.begin(), graph.links.end(),
             [](const RenderMaterialGraphLink& link) { return link.toPin == "refraction"; });
-    usesSceneColor = usesSceneColor || usesRefraction;
+    usesSceneColor = usesSceneColor || usesRefraction || usesThinTranslucent || usesSingleLayerWater;
+    usesSceneDepth = usesSceneDepth || usesSingleLayerWater;
     if (usesSceneColor) {
         // MAT-31: transparent graph materials can sample an opaque scene-color snapshot bound at slot 4.
         source += "SAMPLER2D(s_kbSceneColor, 4);\n";
@@ -3418,6 +3476,11 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    float clearCoatRoughness;\n";
     source += "    float pixelDepthOffset;\n";
     source += "    float refraction;\n";
+    source += "    vec3 transmittanceColor;\n";
+    source += "    vec3 waterScattering;\n";
+    source += "    vec3 waterAbsorption;\n";
+    source += "    float waterPhaseG;\n";
+    source += "    float waterColorScaleBehind;\n";
     source += "};\n\n";
 
     if (usesHsv) {
@@ -3583,6 +3646,11 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     std::string clearCoatRoughnessExpr;
     std::string pixelDepthOffsetExpr;
     std::string refractionExpr;
+    std::string transmittanceColorExpr;
+    std::string waterScatteringExpr;
+    std::string waterAbsorptionExpr;
+    std::string waterPhaseGExpr;
+    std::string waterColorScaleBehindExpr;
 
     // MAT-36: when a single MaterialAttributes set is wired into MaterialOutput.attributes it drives the
     // whole surface (the "use material attributes" mode); the per-channel pins are bypassed entirely.
@@ -3603,6 +3671,11 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         clearCoatRoughnessExpr = compileOutput("clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.1");
         pixelDepthOffsetExpr = compileOutput("pixelDepthOffset", RenderMaterialGraphPinType::Float, "0.0");
         refractionExpr = compileOutput("refraction", RenderMaterialGraphPinType::Float, "1.0");
+        transmittanceColorExpr = compileOutput("transmittanceColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)");
+        waterScatteringExpr = compileOutput("waterScattering", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
+        waterAbsorptionExpr = compileOutput("waterAbsorption", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
+        waterPhaseGExpr = compileOutput("waterPhaseG", RenderMaterialGraphPinType::Float, "0.0");
+        waterColorScaleBehindExpr = compileOutput("waterColorScaleBehind", RenderMaterialGraphPinType::Float, "1.0");
     }
     {
         std::ostringstream row;
@@ -3637,6 +3710,11 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "    material.clearCoatRoughness = " + clearCoatRoughnessExpr + ";\n";
         source += "    material.pixelDepthOffset = " + pixelDepthOffsetExpr + ";\n";
         source += "    material.refraction = " + refractionExpr + ";\n";
+        source += "    material.transmittanceColor = " + transmittanceColorExpr + ";\n";
+        source += "    material.waterScattering = " + waterScatteringExpr + ";\n";
+        source += "    material.waterAbsorption = " + waterAbsorptionExpr + ";\n";
+        source += "    material.waterPhaseG = " + waterPhaseGExpr + ";\n";
+        source += "    material.waterColorScaleBehind = " + waterColorScaleBehindExpr + ";\n";
     }
     source += "    return material;\n";
     source += "}\n";

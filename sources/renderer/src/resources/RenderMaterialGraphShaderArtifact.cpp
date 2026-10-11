@@ -715,15 +715,87 @@ void AppendMaterialGraphPixelDepthOffset(std::string& wrapper) {
 // then covers it by its opacity. The fragment writes alpha 1, so the alpha blend keeps its colour.
 // The sign between NDC y and the screen position comes from the derivatives, so D3D, Vulkan and
 // OpenGL (bottom-left origin) bend the same way.
-void AppendMaterialGraphRefraction(std::string& wrapper, const std::string& normal, const std::string& litColor) {
+// The opaque scene behind the surface (kbBehind), at the refracted position when the graph drives
+// Refraction (see above), else straight behind.
+void AppendMaterialGraphSceneBehind(std::string& wrapper, const std::string& normal, const bool refracts) {
+    if (!refracts) {
+        wrapper += "    vec2 kbBehindUv = ctx.screenPosition;\n";
+        wrapper += "    vec3 kbBehind = texture2DLod(s_kbSceneColor, kbBehindUv, 0.0).rgb;\n";
+        return;
+    }
     wrapper += "    vec3 kbRefrViewNormal = mul(u_view, vec4(" + normal + ", 0.0)).xyz;\n";
     wrapper += "    vec4 kbRefrClip = mul(u_viewProj, vec4(v_worldPos, 1.0));\n";
     wrapper += "    float kbRefrNdcY = kbRefrClip.y / kbRefrClip.w;\n";
     wrapper += "    float kbRefrYSign = dFdy(kbRefrNdcY) < 0.0 ? -1.0 : 1.0;\n";
     wrapper += "    vec2 kbRefrNdc = -kbRefrViewNormal.xy * (surface.refraction - 1.0) * vec2(u_proj[0][0], u_proj[1][1]);\n";
-    wrapper += "    vec2 kbRefrUv = clamp(ctx.screenPosition + vec2(kbRefrNdc.x, kbRefrNdc.y * kbRefrYSign) * 0.5, vec2(0.0, 0.0), vec2(1.0, 1.0));\n";
-    wrapper += "    vec3 kbRefrScene = texture2DLod(s_kbSceneColor, kbRefrUv, 0.0).rgb;\n";
-    wrapper += "    gl_FragColor = vec4(mix(kbRefrScene, " + litColor + ", clamp(surface.alpha, 0.0, 1.0)), 1.0);\n";
+    wrapper += "    vec2 kbBehindUv = clamp(ctx.screenPosition + vec2(kbRefrNdc.x, kbRefrNdc.y * kbRefrYSign) * 0.5, vec2(0.0, 0.0), vec2(1.0, 1.0));\n";
+    wrapper += "    vec3 kbBehind = texture2DLod(s_kbSceneColor, kbBehindUv, 0.0).rgb;\n";
+}
+
+void AppendMaterialGraphRefraction(std::string& wrapper, const std::string& normal, const std::string& litColor) {
+    AppendMaterialGraphSceneBehind(wrapper, normal, true);
+    wrapper += "    gl_FragColor = vec4(mix(kbBehind, " + litColor + ", clamp(surface.alpha, 0.0, 1.0)), 1.0);\n";
+}
+
+// Unreal's Thin Translucent: the scene behind passes coloured by Transmittance Color where the
+// surface does not cover it, the diffuse light is scaled by the opacity and the specular reflection
+// stays whole, as on clear glass. The specular is the lighting of the same surface with no albedo.
+// The fragment writes alpha 1 over the scene copy, so the alpha blend keeps its colour.
+void AppendMaterialGraphThinTranslucent(std::string& wrapper, const RenderMaterialGraphShaderSource& shader,
+    const std::string& shadingModel) {
+    wrapper += "    vec3 kbThinSpecular = KbEvaluateForwardLighting(worldNormal, v_worldPos, vec3(0.0, 0.0, 0.0), 0.0, roughness, specular, occlusion, " +
+        shadingModel + ", 0.0, 0.0);\n";
+    wrapper += "    vec3 kbThinDiffuse = max(lighting - kbThinSpecular, vec3(0.0, 0.0, 0.0));\n";
+    AppendMaterialGraphSceneBehind(wrapper, "worldNormal", shader.reflection.hasRefraction);
+    wrapper += "    float kbThinCoverage = clamp(surface.alpha, 0.0, 1.0);\n";
+    wrapper += "    gl_FragColor = vec4(kbBehind * surface.transmittanceColor * (1.0 - kbThinCoverage) + kbThinDiffuse * kbThinCoverage + kbThinSpecular + surface.emissive, 1.0);\n";
+}
+
+// Unreal's Single Layer Water: the scene behind is dimmed by the water between the surface and it,
+// exp(-(absorption + scattering) * thickness) times Color Scale Behind Water; the water scatters the
+// sky and the sun (Henyey-Greenstein phase of Phase G) in proportion scattering / extinction; the
+// surface reflects on top. Thickness comes from the opaque scene depth behind, along the view ray.
+void AppendMaterialGraphSingleLayerWater(std::string& wrapper, const RenderMaterialGraphShaderSource& shader,
+    const std::string& shadingModel) {
+    wrapper += "    vec3 kbWaterSpecular = KbEvaluateForwardLighting(worldNormal, v_worldPos, vec3(0.0, 0.0, 0.0), 0.0, roughness, specular, occlusion, " +
+        shadingModel + ", 0.0, 0.0);\n";
+    AppendMaterialGraphSceneBehind(wrapper, "worldNormal", shader.reflection.hasRefraction);
+    wrapper += "    float kbWaterDeviceDepth = texture2DLod(s_kbSceneDepth, kbBehindUv, 0.0).x;\n";
+    wrapper += "#if BGFX_SHADER_LANGUAGE_GLSL\n";
+    // OpenGL clip depth is -1..1; the depth buffer stores 0..1.
+    wrapper += "    kbWaterDeviceDepth = kbWaterDeviceDepth * 2.0 - 1.0;\n";
+    wrapper += "#endif\n";
+    wrapper += "    vec4 kbWaterBehindView = mul(u_invProj, vec4(0.0, 0.0, kbWaterDeviceDepth, 1.0));\n";
+    wrapper += "    vec4 kbWaterSurfaceView = mul(u_view, vec4(v_worldPos, 1.0));\n";
+    if (shader.reflection.hasRefraction) {
+        // Like Unreal: a refracted sample that lands on something in front of the water falls back to
+        // the scene straight behind.
+        wrapper += "    if ((kbWaterBehindView.z / kbWaterBehindView.w) / kbWaterSurfaceView.z < 1.0) {\n";
+        wrapper += "        kbBehindUv = ctx.screenPosition;\n";
+        wrapper += "        kbBehind = texture2DLod(s_kbSceneColor, kbBehindUv, 0.0).rgb;\n";
+        wrapper += "        kbWaterDeviceDepth = texture2DLod(s_kbSceneDepth, kbBehindUv, 0.0).x;\n";
+        wrapper += "#if BGFX_SHADER_LANGUAGE_GLSL\n";
+        wrapper += "        kbWaterDeviceDepth = kbWaterDeviceDepth * 2.0 - 1.0;\n";
+        wrapper += "#endif\n";
+        wrapper += "        kbWaterBehindView = mul(u_invProj, vec4(0.0, 0.0, kbWaterDeviceDepth, 1.0));\n";
+        wrapper += "    }\n";
+    }
+    wrapper += "    float kbWaterThickness = max(length(kbWaterSurfaceView.xyz) * ((kbWaterBehindView.z / kbWaterBehindView.w) / kbWaterSurfaceView.z - 1.0), 0.0);\n";
+    wrapper += "    vec3 kbWaterScattering = max(surface.waterScattering, vec3(0.0, 0.0, 0.0));\n";
+    wrapper += "    vec3 kbWaterExtinction = max(kbWaterScattering + max(surface.waterAbsorption, vec3(0.0, 0.0, 0.0)), vec3(0.00001, 0.00001, 0.00001));\n";
+    wrapper += "    vec3 kbWaterTransmittance = exp(-kbWaterExtinction * kbWaterThickness);\n";
+    wrapper += "    vec3 kbWaterView = normalize(u_cameraPosition.xyz - v_worldPos);\n";
+    wrapper += "    float kbWaterG = clamp(surface.waterPhaseG, -0.99, 0.99);\n";
+    wrapper += "    vec3 kbWaterSunLight = vec3(0.0, 0.0, 0.0);\n";
+    wrapper += "    if (u_lightParams.x > 0.5 && u_lightDirKind[0].w < 0.5) {\n";
+    wrapper += "        float kbWaterCos = dot(normalize(u_lightDirKind[0].xyz), kbWaterView);\n";
+    // 4 pi times the Henyey-Greenstein phase: 1 for an isotropic medium.
+    wrapper += "        float kbWaterPhase = (1.0 - kbWaterG * kbWaterG) / pow(max(1.0 + kbWaterG * kbWaterG - 2.0 * kbWaterG * kbWaterCos, 0.0001), 1.5);\n";
+    wrapper += "        kbWaterSunLight = u_lightColorIntensity[0].rgb * (u_lightColorIntensity[0].a * 3.14159265 * kbWaterPhase);\n";
+    wrapper += "    }\n";
+    wrapper += "    vec3 kbWaterAmbient = KbEnvironmentColor(vec3(0.0, 1.0, 0.0)) * u_environmentParams.y;\n";
+    wrapper += "    vec3 kbWaterInScatter = kbWaterScattering / kbWaterExtinction * (vec3(1.0, 1.0, 1.0) - kbWaterTransmittance) * (kbWaterAmbient + kbWaterSunLight);\n";
+    wrapper += "    gl_FragColor = vec4(kbBehind * kbWaterTransmittance * max(surface.waterColorScaleBehind, 0.0) + kbWaterInScatter + kbWaterSpecular + surface.emissive, 1.0);\n";
 }
 
 void AppendMaterialGraphTangentBasis(std::string& wrapper, const RenderMaterialGraphShaderSource& shader) {
@@ -1110,7 +1182,11 @@ std::string BuildGraphFragmentWrapperSource(
             const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
             wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
                 std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0));\n";
-            if (shader.reflection.hasRefraction) {
+            if (shader.reflection.shadingModel == RenderMaterialShadingModel::ThinTranslucent) {
+                AppendMaterialGraphThinTranslucent(wrapper, shader, std::to_string(shadingModelId) + ".0");
+            } else if (shader.reflection.shadingModel == RenderMaterialShadingModel::SingleLayerWater) {
+                AppendMaterialGraphSingleLayerWater(wrapper, shader, std::to_string(shadingModelId) + ".0");
+            } else if (shader.reflection.hasRefraction) {
                 AppendMaterialGraphRefraction(wrapper, "worldNormal", "lighting + surface.emissive");
             } else {
                 wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);\n";

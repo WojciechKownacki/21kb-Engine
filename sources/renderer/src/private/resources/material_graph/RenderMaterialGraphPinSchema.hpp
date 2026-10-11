@@ -38,6 +38,11 @@ class RenderMaterialGraphPinSchema final {
             visitor("clearCoatRoughness", Direction::Input);
             visitor("pixelDepthOffset", Direction::Input);
             visitor("refraction", Direction::Input);
+            visitor("transmittanceColor", Direction::Input);
+            visitor("waterScattering", Direction::Input);
+            visitor("waterAbsorption", Direction::Input);
+            visitor("waterPhaseG", Direction::Input);
+            visitor("waterColorScaleBehind", Direction::Input);
             break;
         case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
             visitor("baseColor", Direction::Input);
@@ -54,6 +59,11 @@ class RenderMaterialGraphPinSchema final {
             visitor("clearCoatRoughness", Direction::Input);
             visitor("pixelDepthOffset", Direction::Input);
             visitor("refraction", Direction::Input);
+            visitor("transmittanceColor", Direction::Input);
+            visitor("waterScattering", Direction::Input);
+            visitor("waterAbsorption", Direction::Input);
+            visitor("waterPhaseG", Direction::Input);
+            visitor("waterColorScaleBehind", Direction::Input);
             visitor("attributes", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
@@ -72,6 +82,11 @@ class RenderMaterialGraphPinSchema final {
             visitor("clearCoatRoughness", Direction::Output);
             visitor("pixelDepthOffset", Direction::Output);
             visitor("refraction", Direction::Output);
+            visitor("transmittanceColor", Direction::Output);
+            visitor("waterScattering", Direction::Output);
+            visitor("waterAbsorption", Direction::Output);
+            visitor("waterPhaseG", Direction::Output);
+            visitor("waterColorScaleBehind", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
             visitor("a", Direction::Input);
@@ -95,6 +110,11 @@ class RenderMaterialGraphPinSchema final {
             visitor("clearCoatRoughness", Direction::Output);
             visitor("pixelDepthOffset", Direction::Output);
             visitor("refraction", Direction::Output);
+            visitor("transmittanceColor", Direction::Output);
+            visitor("waterScattering", Direction::Output);
+            visitor("waterAbsorption", Direction::Output);
+            visitor("waterPhaseG", Direction::Output);
+            visitor("waterColorScaleBehind", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::SetMaterialAttributes:
             visitor("attributes", Direction::Input);
@@ -112,6 +132,11 @@ class RenderMaterialGraphPinSchema final {
             visitor("clearCoatRoughness", Direction::Input);
             visitor("pixelDepthOffset", Direction::Input);
             visitor("refraction", Direction::Input);
+            visitor("transmittanceColor", Direction::Input);
+            visitor("waterScattering", Direction::Input);
+            visitor("waterAbsorption", Direction::Input);
+            visitor("waterPhaseG", Direction::Input);
+            visitor("waterColorScaleBehind", Direction::Input);
             visitor("attributesOut", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::StaticBoolParameter:

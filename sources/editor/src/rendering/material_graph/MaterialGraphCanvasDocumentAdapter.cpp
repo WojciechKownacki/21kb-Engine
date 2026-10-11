@@ -56,6 +56,11 @@ namespace {
             "clearCoatRoughness",
             "pixelDepthOffset",
             "refraction",
+            "transmittanceColor",
+            "waterScattering",
+            "waterAbsorption",
+            "waterPhaseG",
+            "waterColorScaleBehind",
         };
     }
     return kb::render::RenderMaterialGraphNodeInputPinNames(node);

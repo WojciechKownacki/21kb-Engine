@@ -4591,38 +4591,51 @@ void RunMaterialShadingModelGatingTest() {
     Require(ComputeRenderMaterialGraphReflectionHash(unlitResult.shader.reflection) != ComputeRenderMaterialGraphReflectionHash(litResult.shader.reflection),
         "KBMAT-MAT37: Unlit and DefaultLit must hash to different program identities");
 
-    // Subsurface/ClearCoat/SingleLayerWater/ThinTranslucent are still selectable Shading Model values
-    // (kept for forward compatibility / project settings that already reference them), but since the
-    // Material Output pins that used to feed their special-case terms (subsurfaceColor, clearCoatNormal,
-    // clearCoat, clearCoatRoughness, surfaceThickness, thinTranslucentOutput, singleLayerWaterOutput)
-    // were removed, these models now compile to the exact same DefaultLit forward-lighting wrapper --
-    // no per-model branch, no dead pin references. Verify that explicitly instead of asserting on
-    // branch markers that no longer exist.
+    // Subsurface/ClearCoat/Cloth/Hair keep the standard forward lighting call; the model reaches the
+    // lighting through its shading-model id.
     for (const RenderMaterialShadingModel model : { RenderMaterialShadingModel::Subsurface,
              RenderMaterialShadingModel::ClearCoat,
-             RenderMaterialShadingModel::SingleLayerWater,
-             RenderMaterialShadingModel::ThinTranslucent }) {
+             RenderMaterialShadingModel::Cloth,
+             RenderMaterialShadingModel::Hair }) {
         RenderMaterialGraphDocument modelGraph = litGraph;
         modelGraph.shadingModel = std::string{ RenderMaterialShadingModelName(model) };
         const RenderMaterialGraphCompileResult modelResult = CompileRenderMaterialGraphToShaderSource(modelGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0372U });
-        Require(modelResult.Succeeded(), "KBMAT-MAT37: a legacy shading model token must still compile");
+        Require(modelResult.Succeeded(), "KBMAT-MAT37: a production shading model must compile");
         Require(modelResult.shader.reflection.shadingModel == model,
-            "KBMAT-MAT37: legacy shading model reflection must still record the requested model");
-        Require(FindGraphDiagnostic(modelResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel) == nullptr,
-            "KBMAT-MAT37: legacy shading model tokens must not emit an unsupported diagnostic");
+            "KBMAT-MAT37: shading model reflection must record the requested model");
         const std::string wrapper = BuildGraphFragmentWrapperSource(modelResult.shader, "BaseOpaque");
         Require(wrapper.find("KbEvaluateForwardLighting(") != std::string::npos,
-            "KBMAT-MAT37: legacy shading models fall back to the standard forward lighting call");
-        Require(wrapper.find("subsurfaceColor") == std::string::npos && wrapper.find("clearCoatNormal") == std::string::npos &&
-                wrapper.find("singleLayerWaterOutput") == std::string::npos && wrapper.find("thinTranslucentOutput") == std::string::npos,
-            "KBMAT-MAT37: legacy shading models must not emit removed per-model surface fields");
+            "KBMAT-MAT37: the model must use the standard forward lighting call");
     }
 
-    RenderMaterialGraphDocument hairGraph = litGraph;
-    hairGraph.shadingModel = "hair";
-    const RenderMaterialGraphCompileResult hairResult = CompileRenderMaterialGraphToShaderSource(hairGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0376U });
-    Require(!hairResult.Succeeded(), "KBMAT-MAT37: a declared shading model without a production branch must fail instead of falling back");
-    const RenderMaterialGraphDiagnostic* shadingDiag = FindGraphDiagnostic(hairResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel);
+    // Thin Translucent and Single Layer Water read the scene behind them, so, like Unreal, they need the
+    // Translucent blend mode: Opaque is refused by name, Translucent gets the model's own composition.
+    for (const auto& [model, marker] : std::initializer_list<std::pair<RenderMaterialShadingModel, const char*>>{
+             { RenderMaterialShadingModel::ThinTranslucent, "kbThinSpecular" },
+             { RenderMaterialShadingModel::SingleLayerWater, "kbWaterTransmittance" } }) {
+        RenderMaterialGraphDocument opaqueModel = litGraph;
+        opaqueModel.shadingModel = std::string{ RenderMaterialShadingModelName(model) };
+        const RenderMaterialGraphCompileResult refused = CompileRenderMaterialGraphToShaderSource(opaqueModel, RenderMaterialGraphBuildContext{ .assetId = 0x0373U });
+        const RenderMaterialGraphDiagnostic* blendDiag = FindGraphDiagnostic(refused.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel);
+        Require(!refused.Succeeded() && blendDiag != nullptr && blendDiag->message.find("Translucent blend mode") != std::string::npos,
+            "KBMAT-MAT37: thin translucent / water with an opaque blend mode must be refused by name");
+        RenderMaterialGraphDocument translucentModel = opaqueModel;
+        translucentModel.blendMode = "translucent";
+        const RenderMaterialGraphCompileResult accepted = CompileRenderMaterialGraphToShaderSource(translucentModel, RenderMaterialGraphBuildContext{ .assetId = 0x0374U });
+        Require(accepted.Succeeded() && accepted.shader.reflection.shadingModel == model && accepted.shader.reflection.usesSceneColor,
+            "KBMAT-MAT37: translucent thin translucent / water must compile and read the scene color");
+        Require(model != RenderMaterialShadingModel::SingleLayerWater || accepted.shader.reflection.usesSceneDepth,
+            "KBMAT-MAT37: water must read the scene depth for its thickness");
+        const std::string wrapper = BuildGraphFragmentWrapperSource(accepted.shader, "BaseOpaque");
+        Require(wrapper.find(marker) != std::string::npos && wrapper.find("kbBehind") != std::string::npos,
+            "KBMAT-MAT37: thin translucent / water must compose the scene behind in its own branch");
+    }
+
+    RenderMaterialGraphDocument eyeGraph = litGraph;
+    eyeGraph.shadingModel = "eye";
+    const RenderMaterialGraphCompileResult eyeResult = CompileRenderMaterialGraphToShaderSource(eyeGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0376U });
+    Require(!eyeResult.Succeeded(), "KBMAT-MAT37: a declared shading model without a production branch must fail instead of falling back");
+    const RenderMaterialGraphDiagnostic* shadingDiag = FindGraphDiagnostic(eyeResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel);
     Require(shadingDiag != nullptr && shadingDiag->severity == RenderMaterialGraphDiagnosticSeverity::Error,
         "KBMAT-MAT37: an unimplemented shading model must emit an error diagnostic without a DefaultLit fallback");
 
@@ -4630,12 +4643,12 @@ void RunMaterialShadingModelGatingTest() {
             IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::DefaultLit) &&
             IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Subsurface) &&
             IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ClearCoat) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Cloth) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Hair) &&
             IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::SingleLayerWater) &&
             IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ThinTranslucent),
             "KBMAT-MAT37: Unlit, DefaultLit and implemented advanced models must be production shading models");
-    Require(!IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Cloth) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Hair) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Eye),
+    Require(!IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Eye),
             "KBMAT-MAT37: declared shading models without runtime branches must remain non-production");
 }
 
