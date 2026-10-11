@@ -1026,7 +1026,8 @@ void AppendCustomCodeFunctionDefinitions(
         "    " + v + ".tangentOutput = vec3(1.0, 0.0, 0.0);\n"
         // Unreal's defaults of the Clear Coat pins.
         "    " + v + ".clearCoat = 1.0;\n"
-        "    " + v + ".clearCoatRoughness = 0.1;\n";
+        "    " + v + ".clearCoatRoughness = 0.1;\n"
+        "    " + v + ".pixelDepthOffset = 0.0;\n";
 }
 
 // MAT-39: parse a compile-time boolean from a node's value hint.
@@ -1369,6 +1370,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".tangentOutput = " + CompileInputExpression(cg, node, "tangentOutput", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)") + ";\n";
         cg.statements += "    " + tmp + ".clearCoat = " + CompileInputExpression(cg, node, "clearCoat", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
         cg.statements += "    " + tmp + ".clearCoatRoughness = " + CompileInputExpression(cg, node, "clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.1") + ";\n";
+        cg.statements += "    " + tmp + ".pixelDepthOffset = " + CompileInputExpression(cg, node, "pixelDepthOffset", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1408,6 +1410,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".tangentOutput = normalize(mix((" + a + ").tangentOutput, (" + b + ").tangentOutput, " + fv + "));\n";
         cg.statements += "    " + tmp + ".clearCoat = mix((" + a + ").clearCoat, (" + b + ").clearCoat, " + fv + ");\n";
         cg.statements += "    " + tmp + ".clearCoatRoughness = mix((" + a + ").clearCoatRoughness, (" + b + ").clearCoatRoughness, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".pixelDepthOffset = mix((" + a + ").pixelDepthOffset, (" + b + ").pixelDepthOffset, " + fv + ");\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1472,6 +1475,9 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         }
         if (FindInputLink(cg.graph, node.id, "clearCoatRoughness") != nullptr) {
             cg.statements += "    " + tmp + ".clearCoatRoughness = " + CompileInputExpression(cg, node, "clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.1") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "pixelDepthOffset") != nullptr) {
+            cg.statements += "    " + tmp + ".pixelDepthOffset = " + CompileInputExpression(cg, node, "pixelDepthOffset", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
         }
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
@@ -1985,6 +1991,7 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
         if (outputPin == "tangentOutput") return "(" + baseRef + ").tangentOutput";
         if (outputPin == "clearCoat") return "(" + baseRef + ").clearCoat";
         if (outputPin == "clearCoatRoughness") return "(" + baseRef + ").clearCoatRoughness";
+        if (outputPin == "pixelDepthOffset") return "(" + baseRef + ").pixelDepthOffset";
         AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "Material attribute output pin is not supported.");
         return "0.0";
     case RenderMaterialGraphNodeKind::BreakVector:
@@ -3396,6 +3403,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    vec3 tangentOutput;\n";
     source += "    float clearCoat;\n";
     source += "    float clearCoatRoughness;\n";
+    source += "    float pixelDepthOffset;\n";
     source += "};\n\n";
 
     if (usesHsv) {
@@ -3559,6 +3567,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     std::string tangentOutputExpr;
     std::string clearCoatExpr;
     std::string clearCoatRoughnessExpr;
+    std::string pixelDepthOffsetExpr;
 
     // MAT-36: when a single MaterialAttributes set is wired into MaterialOutput.attributes it drives the
     // whole surface (the "use material attributes" mode); the per-channel pins are bypassed entirely.
@@ -3577,6 +3586,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         tangentOutputExpr = compileOutput("tangentOutput", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)");
         clearCoatExpr = compileOutput("clearCoat", RenderMaterialGraphPinType::Float, "1.0");
         clearCoatRoughnessExpr = compileOutput("clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.1");
+        pixelDepthOffsetExpr = compileOutput("pixelDepthOffset", RenderMaterialGraphPinType::Float, "0.0");
     }
     {
         std::ostringstream row;
@@ -3609,6 +3619,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "    material.tangentOutput = " + tangentOutputExpr + ";\n";
         source += "    material.clearCoat = " + clearCoatExpr + ";\n";
         source += "    material.clearCoatRoughness = " + clearCoatRoughnessExpr + ";\n";
+        source += "    material.pixelDepthOffset = " + pixelDepthOffsetExpr + ";\n";
     }
     source += "    return material;\n";
     source += "}\n";
@@ -3706,6 +3717,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     reflection.hasCustomizedUv0 = hasCustomizedUv0;
     reflection.hasDisplacement = hasDisplacement;
     reflection.hasTangentOutput = hasTangentOutput;
+    // Directly or through the material attribute nodes: any link into a Pixel Depth Offset pin.
+    reflection.hasPixelDepthOffset = std::any_of(graph.links.begin(), graph.links.end(),
+        [](const RenderMaterialGraphLink& link) { return link.toPin == "pixelDepthOffset"; });
     reflection.shadingModel = resolvedShadingModel;
     reflection.blendMode = resolvedBlendMode;
     reflection.usesSceneDepth = usesSceneDepth;

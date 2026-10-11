@@ -36,6 +36,7 @@ class RenderMaterialGraphPinSchema final {
             visitor("displacement", Direction::Input);
             visitor("clearCoat", Direction::Input);
             visitor("clearCoatRoughness", Direction::Input);
+            visitor("pixelDepthOffset", Direction::Input);
             break;
         case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
             visitor("baseColor", Direction::Input);
@@ -50,6 +51,7 @@ class RenderMaterialGraphPinSchema final {
             visitor("tangentOutput", Direction::Input);
             visitor("clearCoat", Direction::Input);
             visitor("clearCoatRoughness", Direction::Input);
+            visitor("pixelDepthOffset", Direction::Input);
             visitor("attributes", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
@@ -66,6 +68,7 @@ class RenderMaterialGraphPinSchema final {
             visitor("tangentOutput", Direction::Output);
             visitor("clearCoat", Direction::Output);
             visitor("clearCoatRoughness", Direction::Output);
+            visitor("pixelDepthOffset", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
             visitor("a", Direction::Input);
@@ -87,6 +90,7 @@ class RenderMaterialGraphPinSchema final {
             visitor("tangentOutput", Direction::Output);
             visitor("clearCoat", Direction::Output);
             visitor("clearCoatRoughness", Direction::Output);
+            visitor("pixelDepthOffset", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::SetMaterialAttributes:
             visitor("attributes", Direction::Input);
@@ -102,6 +106,7 @@ class RenderMaterialGraphPinSchema final {
             visitor("tangentOutput", Direction::Input);
             visitor("clearCoat", Direction::Input);
             visitor("clearCoatRoughness", Direction::Input);
+            visitor("pixelDepthOffset", Direction::Input);
             visitor("attributesOut", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::StaticBoolParameter:
