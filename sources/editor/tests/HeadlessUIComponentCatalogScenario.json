@@ -2,6 +2,11 @@
   "schema": "21kb.editor-automation/v1",
   "steps": [
     {
+      "op": "create_scene",
+      "name": "UICatalog",
+      "template": "Empty"
+    },
+    {
       "op": "copy_fixture",
       "source": "fixtures/ui/AuditPNG.png",
       "destination": "Source/AuditPNG.png"

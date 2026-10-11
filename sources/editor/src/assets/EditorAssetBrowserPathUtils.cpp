@@ -12,16 +12,22 @@ std::string Normalize(const std::filesystem::path& path) {
 std::filesystem::path ParentVirtualPath(const std::filesystem::path& virtualPath) {
     const std::string text = Normalize(virtualPath);
     const std::size_t separator = text.find_last_of('/');
-    if (separator == std::string::npos || separator == 0) {
+    if (separator == std::string::npos) {
         return std::filesystem::path{ "/Game" };
+    }
+    // A mount root (/Game, /Engine, /21kbParticle) has no parent: engine and plugin content is not
+    // inside the project's folder.
+    if (separator == 0) {
+        return std::filesystem::path{ text };
     }
     return std::filesystem::path{ text.substr(0, separator) };
 }
 
 std::string FileNameOrRoot(const std::filesystem::path& path) {
     const std::string text = Normalize(path);
+    // The project's folder shows the name it has on disk.
     if (text == "/Game") {
-        return "Game";
+        return "Assets";
     }
     return path.filename().string();
 }
@@ -87,10 +93,11 @@ bool IsHiddenByCollapsedAncestor(const std::string& folder, const std::unordered
         if (collapsedFolders.contains(normalizedParent)) {
             return true;
         }
-        if (normalizedParent == "/Game") {
+        const std::filesystem::path next = ParentVirtualPath(parent);
+        if (Normalize(next) == normalizedParent) {
             break;
         }
-        parent = ParentVirtualPath(parent);
+        parent = next;
     }
     return false;
 }

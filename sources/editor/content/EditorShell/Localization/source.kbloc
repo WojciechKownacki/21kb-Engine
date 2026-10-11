@@ -1696,7 +1696,6 @@ text "prefabDirty.beforeCloseEditor" "Save changes to the prefab before closing 
 text "prefabDirty.beforeClosePrefab" "Save changes to the prefab before closing it? ({prefab})"
 text "prefabDirty.supporting" "Choose whether to preserve the current prefab changes."
 text "prefabDirty.title" "Unsaved Prefab"
-text "projectFiles.contentRoot" "Content"
 text "projectFiles.copyHere" "Copy Here"
 text "projectFiles.currentFolder" "Current"
 text "projectFiles.deleteConfirm.body" "The listed object(s) go to the Recycle Bin, where you can restore them."
