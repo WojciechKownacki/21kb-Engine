@@ -633,6 +633,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorScriptAssetGateway.hpp
     src/private/scene/EditorScriptEditorState.hpp
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
+    src/private/localization/EditorLocalization.hpp
     src/private/scene/EditorSceneAudioAssetActions.hpp
     src/private/scene/EditorSceneCommandController.hpp
     src/private/scene/EditorAssetErrorMessage.hpp
@@ -855,6 +856,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorColliderTextBuilder.cpp
     src/inspection/InspectorComponentCatalog.cpp
     src/inspection/InspectorSceneColor.cpp
+    src/localization/EditorLocalization.cpp
     src/inspection/InspectorSceneColorEdit.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
     src/inspection/InspectorPhysicsModel.cpp
@@ -1391,6 +1393,7 @@ if(BUILD_TESTING)
         src/inspection/InspectorAudioScrubController.cpp
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorSceneColor.cpp
+        src/localization/EditorLocalization.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
         src/inspection/InspectorPhysicsModel.cpp
         src/inspection/ui/InspectorUIComponentModel.cpp
