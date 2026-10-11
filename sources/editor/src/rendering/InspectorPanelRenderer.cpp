@@ -6,6 +6,7 @@
 #include "rendering/InspectorAudioMixerAssetView.hpp"
 #include "rendering/InspectorSceneAudioView.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
+#include "rendering/EditorPanelStyle.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
 
 #if defined(_WIN32)
@@ -617,20 +618,22 @@ void DrawAddComponent(HDC dc, RECT content, const EditorTheme& theme, const Insp
         buttonActive ? HoverFill(theme) : Color(theme.chrome),
         buttonActive ? Color(theme.accent) : Color(theme.borderPanel));
     const int glyphWidth = 18;
-    const int textWidth = 108;
-    const int groupLeft = button.left + std::max(0, (RectWidth(button) - glyphWidth - textWidth) / 2);
+    ScopedFont font(12, FW_SEMIBOLD);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    // The label's own width in the editor's language, within the button.
+    const std::string_view label = EditorText("inspector.addComponent", "Add Component");
+    const int textWidth = std::min(panel_style::TextWidth(dc, label) + 2, std::max(0, RectWidth(button) - glyphWidth - 24));
+    const int groupLeft = button.left + std::max(0, (RectWidth(button) - glyphWidth - 8 - textWidth) / 2);
     HeroIconPainter::Draw(
         dc,
         Rect(groupLeft, CenteredY(button, glyphWidth), groupLeft + glyphWidth, CenteredY(button, glyphWidth) + glyphWidth),
         HeroIconKind::Plus,
         Color(buttonActive ? theme.textPrimary : theme.accent),
         2);
-    ScopedFont font(12, FW_SEMIBOLD);
-    const ScopedGdiObject selectedFont(dc, font.handle);
     Text(
         dc,
         Rect(groupLeft + glyphWidth + 8, button.top, groupLeft + glyphWidth + 8 + textWidth, button.bottom),
-        EditorText("inspector.addComponent", "Add Component"),
+        label,
         Color(buttonActive ? theme.textPrimary : theme.textSecondary),
         DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }

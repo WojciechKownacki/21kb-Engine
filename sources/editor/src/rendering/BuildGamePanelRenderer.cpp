@@ -11,6 +11,7 @@
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <array>
@@ -53,7 +54,7 @@ void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int poin
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 [[nodiscard]] HeroIconKind TargetIcon(const kb::packaging::PackagingTargetSpec& target) noexcept {

@@ -15,6 +15,7 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "scene/EditorHierarchyRowPicker.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -36,11 +37,11 @@ constexpr UINT_PTR kSkeletonTreeMenuRenameSocket = 1202;
 constexpr UINT_PTR kSkeletonTreeMenuDeleteSocket = 1203;
 
 void AppendDisabled(HMENU menu, const char* label) {
-    AppendMenuA(menu, MF_STRING | MF_GRAYED, 0, label);
+    kb::editor::AppendMenuUtf8(menu, MF_STRING | MF_GRAYED, 0, label);
 }
 
 void AppendSeparator(HMENU menu) {
-    AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
+    kb::editor::AppendMenuUtf8(menu, MF_SEPARATOR, 0, nullptr);
 }
 
 [[nodiscard]] UINT ShowHierarchySystemMenu(HWND window, int x, int y) {
@@ -103,14 +104,14 @@ void AppendSeparator(HMENU menu) {
 [[nodiscard]] HMENU CreateSkeletonTreeSystemMenu(bool canAddSocket) {
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) return nullptr;
-    AppendMenuA(
+    kb::editor::AppendMenuUtf8(
         menu,
         MF_STRING | (canAddSocket ? MF_ENABLED : MF_GRAYED),
         kSkeletonTreeMenuAddSocket,
         std::string{ EditorText("skeletalMeshEditor.menu.addSocket", "Add Socket") }.c_str());
-    AppendMenuA(menu, MF_STRING | MF_GRAYED, kSkeletonTreeMenuRenameSocket,
+    kb::editor::AppendMenuUtf8(menu, MF_STRING | MF_GRAYED, kSkeletonTreeMenuRenameSocket,
         std::string{ EditorText("skeletalMeshEditor.menu.renameSocket", "Rename Socket") }.c_str());
-    AppendMenuA(menu, MF_STRING | MF_GRAYED, kSkeletonTreeMenuDeleteSocket,
+    kb::editor::AppendMenuUtf8(menu, MF_STRING | MF_GRAYED, kSkeletonTreeMenuDeleteSocket,
         std::string{ EditorText("skeletalMeshEditor.menu.deleteSocket", "Delete Socket") }.c_str());
     return menu;
 }
@@ -165,12 +166,12 @@ HMENU EditorRightButtonDownRouter::CreateHierarchyMenu() {
                     for (const auto handle : {menu, create, widgets, layouts, effects, advanced}) DestroyMenu(handle);
                     return nullptr;
                 }
-                AppendMenuA(create, MF_POPUP, reinterpret_cast<UINT_PTR>(submenu), std::string{ CreateSubmenuLabel(item.submenu) }.c_str());
+                kb::editor::AppendMenuUtf8(create, MF_POPUP, reinterpret_cast<UINT_PTR>(submenu), std::string{ CreateSubmenuLabel(item.submenu) }.c_str());
                 found = submenus.insert(submenus.end(), { item.submenu, submenu });
             }
             destination = found->second;
         }
-        AppendMenuA(destination, MF_STRING, kHierarchyMenuCreateItem + index, label.c_str());
+        kb::editor::AppendMenuUtf8(destination, MF_STRING, kHierarchyMenuCreateItem + index, label.c_str());
     }
     for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
         using enum kb::scene::UIComponentType;
@@ -182,14 +183,14 @@ HMENU EditorRightButtonDownRouter::CreateHierarchyMenu() {
         case CanvasScaler: case CanvasGroup: case Selectable: destination = advanced; break;
         default: break;
         }
-        AppendMenuA(destination, MF_STRING, kHierarchyMenuCreateUI + static_cast<UINT>(descriptor.type),
+        kb::editor::AppendMenuUtf8(destination, MF_STRING, kHierarchyMenuCreateUI + static_cast<UINT>(descriptor.type),
             std::string{ InspectorUIComponentModel::DisplayName(descriptor.type) }.c_str());
     }
     AppendSeparator(widgets);
     const auto append = [](HMENU target, UINT flags, UINT_PTR id, std::string_view text, std::string_view shortcut = {}) {
         std::string row{ text };
         if (!shortcut.empty()) row += "\t" + std::string{ shortcut };
-        AppendMenuA(target, flags, id, row.c_str());
+        kb::editor::AppendMenuUtf8(target, flags, id, row.c_str());
     };
     append(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(layouts), EditorText("hierarchy.create.layout", "Layout"));
     append(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(effects), EditorText("hierarchy.create.uiEffects", "Effects"));

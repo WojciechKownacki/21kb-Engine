@@ -6,6 +6,7 @@
 #include "rendering/ProjectSettingsPanelLayout.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <filesystem>
 #include <algorithm>
@@ -56,7 +57,7 @@ void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int poin
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 void DrawTooltipText(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize = 11, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS) {
@@ -64,7 +65,7 @@ void DrawTooltipText(HDC dc, RECT rect, std::string_view text, COLORREF color, i
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 // "/Game/Input/Player.21kbinputcontext" -> "Player". Empty path -> "(None)".

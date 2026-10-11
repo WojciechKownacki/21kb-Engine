@@ -36,6 +36,7 @@
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -126,7 +127,7 @@ enum class AssetPickerTileKind : std::uint8_t {
 void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
 }
 
 [[nodiscard]] std::string DisplayName(const kb::assets::AssetMetadata& metadata, std::string_view fallback) {

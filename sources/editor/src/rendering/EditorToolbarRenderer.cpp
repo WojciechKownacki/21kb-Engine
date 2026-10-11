@@ -11,6 +11,7 @@
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #pragma warning(push, 0)
 #include <objidl.h>
@@ -68,7 +69,7 @@ constexpr int kToolbarStatusGap = 10;
 void DrawMenuText(HDC dc, RECT rect, std::string_view label, COLORREF text, UINT format) {
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, text);
-    DrawTextA(dc, label.data(), static_cast<int>(label.size()), &rect, format | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, label.data(), static_cast<int>(label.size()), &rect, format | DT_NOPREFIX);
 }
 
 void DrawStatusText(HDC dc, RECT rect, std::string_view label, COLORREF text, UINT format) {
@@ -78,7 +79,7 @@ void DrawStatusText(HDC dc, RECT rect, std::string_view label, COLORREF text, UI
 
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, text);
-    DrawTextA(dc, label.data(), static_cast<int>(label.size()), &rect, format | DT_NOPREFIX | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+    kb::editor::DrawTextUtf8(dc, label.data(), static_cast<int>(label.size()), &rect, format | DT_NOPREFIX | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
 }
 
 [[nodiscard]] std::string SceneDisplayName(const EditorSceneContext& sceneContext) {

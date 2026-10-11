@@ -6,6 +6,7 @@
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <unordered_map>
@@ -108,7 +109,7 @@ void DrawTabChrome(HDC dc, const RECT& tab, bool active, const EditorTheme& them
 void DrawTabLabel(HDC dc, RECT rect, const char* text, COLORREF color) {
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, text, -1, &rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
 void DrawTabClose(HDC dc, const DockRect& tab, bool active, const EditorTheme& theme) {
