@@ -96,16 +96,16 @@ struct ObjImportContext {
     return (stream >> x >> y >> z) && ParseFloat(x, output.x) && ParseFloat(y, output.y) && ParseFloat(z, output.z);
 }
 
-[[nodiscard]] bool ParseVec2Line(std::string_view rest, Vec2& output, bool flipV) {
+// OBJ counts V from the bottom of the image; 21kb samples V from its top (D3D, Vulkan, glTF,
+// Unreal), so V is flipped on import - without it a texture lay upside down on the model.
+[[nodiscard]] bool ParseTexCoordLine(std::string_view rest, Vec2& output) {
     std::istringstream stream{ std::string{ rest } };
     std::string x;
     std::string y;
     if (!(stream >> x >> y) || !ParseFloat(x, output.x) || !ParseFloat(y, output.y)) {
         return false;
     }
-    if (flipV) {
-        output.y = 1.0F - output.y;
-    }
+    output.y = 1.0F - output.y;
     return true;
 }
 
@@ -263,7 +263,7 @@ std::optional<RenderMeshAssetData> RenderMeshObjImporter::Load(std::istream& inp
             context.positions.push_back(position);
         } else if (keyword == "vt") {
             Vec2 texCoord{};
-            if (!ParseVec2Line(rest, texCoord, desc.flipV)) {
+            if (!ParseTexCoordLine(rest, texCoord)) {
                 return std::nullopt;
             }
             context.texCoords.push_back(texCoord);

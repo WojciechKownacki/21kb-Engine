@@ -55,7 +55,8 @@ float KbDiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
     return lightScatter * viewScatter * energyFactor;
 }
 
-vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
+// Material ambient occlusion darkens only the light from the surroundings (fs_deferred_lighting.sc).
+vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular)
 {
     vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
     if (u_sceneLightGridDimensions.w > 0.5) {
@@ -109,7 +110,7 @@ vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldP
     float distribution = KbDistributionGgx(nDotH, roughness);
     float geometry = KbGeometrySchlickGgx(nDotV, roughness) * KbGeometrySchlickGgx(nDotL, roughness);
     vec3 specularTerm = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
-    vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * KbDiffuseBurley(nDotV, nDotL, lDotH, roughness)) * occlusion;
+    vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * KbDiffuseBurley(nDotV, nDotL, lDotH, roughness));
     // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
     // surface returns its albedo, so the physical BRDF above is taken times pi.
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
@@ -148,7 +149,7 @@ vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, flo
     for (int entry = 0; entry < int(lightList.y); ++entry) {
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
-            lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, specular, occlusion) *
+            lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, specular) *
                 KbPointShadowFactor(lightIndex, worldPos);
         }
     }

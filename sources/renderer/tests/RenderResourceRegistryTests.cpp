@@ -832,11 +832,15 @@ void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {
     Require(asset.has_value(), "OBJ importer failed to build a mesh asset");
     Require(asset->desc.vertexFormat == RenderVertexFormat::P3N3T4UV2, "OBJ importer did not synthesize tangent vertex storage for the PBR shader");
     Require(asset->vertices.empty() && asset->tangentVertices.size() == asset->desc.vertexCount, "OBJ importer did not expose tangent vertices through RenderMeshDesc");
-    // +U runs along source +X, which the right- to left-handed import mirrors to engine -X; the
-    // mirror also turns the UV frame over, so the bitangent sign is negative.
+    // +U runs along source +X, which the right- to left-handed import mirrors to engine -X. OBJ
+    // counts V from the bottom of the image and 21kb from its top, so V = 1 - y on this quad, and
+    // the bitangent cross(normal, tangent) * w points up the image (+y), where a normal map's +Y is.
     for (const RenderStaticMeshVertexP3N3T4UV2& vertex : asset->tangentVertices) {
-        Require(NearlyEqual(vertex.tx, -1.0F) && NearlyEqual(vertex.ty, 0.0F) && NearlyEqual(vertex.tz, 0.0F) && vertex.tw < 0.0F,
+        Require(NearlyEqual(vertex.tx, -1.0F) && NearlyEqual(vertex.ty, 0.0F) && NearlyEqual(vertex.tz, 0.0F),
             "OBJ importer tangent fallback must use UV-derived +U tangents for normal maps");
+        Require(NearlyEqual(vertex.v, 1.0F - vertex.y), "OBJ importer must read V from the top of the image");
+        const float bitangentY = (vertex.nz * vertex.tx - vertex.nx * vertex.tz) * vertex.tw;
+        Require(bitangentY > 0.5F, "OBJ importer bitangent must point up the image, where a normal map's +Y points");
     }
     Require(asset->desc.indexFormat == RenderIndexFormat::Uint16, "OBJ importer did not compact small OBJ indices to uint16");
     Require(asset->desc.vertexCount == 4U, "OBJ importer did not deduplicate shared vertex tuples");
