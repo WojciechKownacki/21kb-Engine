@@ -6,6 +6,7 @@
 #include "engine/audio/AudioClipAssetLoader.hpp"
 #include "engine/audio/AudioClipFormats.hpp"
 #include "engine/assets/AssetImportCatalog.hpp"
+#include "engine/assets/AssetImportPreset.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetCompatibility.hpp"
@@ -48,6 +49,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <future>
 #include <iterator>
 #include <limits>
@@ -1122,6 +1124,111 @@ void RunAssetImportServiceBinaryContainerTest() {
     kb::tests::Require(rediscovered.DiscoverMountedAssets() == 1U, "Imported asset rediscovery did not find the .21kb file");
     const kb::assets::AssetMetadata* rediscoveredMetadata = rediscovered.Registry().FindByPath(item.virtualPath);
     kb::tests::Require(rediscoveredMetadata != nullptr && rediscoveredMetadata->importCategory == "Texture", "Imported asset rediscovery did not read the binary category flag");
+}
+
+// A model imported with a scale and rotation keeps them in its container, so every load (and a
+// repeated import with the same settings) reproduces them, as a Unity .meta keeps ModelImporter
+// settings; other settings import a separate asset, a texture never carries them, and a scale
+// that is not above zero is refused.
+void RunAssetImportServiceKeepsModelTransformTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path assetsRoot = TestRoot() / "Project" / "Assets";
+    const std::filesystem::path sourceRoot = TestRoot() / "External";
+    WriteTextFile(sourceRoot / "Crate.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    WriteTextFile(sourceRoot / "Albedo.png", "texture bytes");
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()), "Import transform test loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Game asset mount failed for import transform test");
+
+    kb::assets::AssetImportOptions options{};
+    options.mesh.transform = kb::assets::AssetMeshImportTransform{ .scale = 0.01F, .rotationDegrees = { -90.0F, 180.0F, 0.0F } };
+    const std::array<std::filesystem::path, 2> files{ sourceRoot / "Crate.obj", sourceRoot / "Albedo.png" };
+    const kb::assets::AssetImportResult first = kb::assets::AssetImportService::ImportFiles(manager, files, "/Game/Models", options);
+    kb::tests::Require(first.Succeeded() && first.CreatedCount() == 2U, "Import transform test did not import the model and the texture");
+
+    const auto readVersion = [](const std::filesystem::path& path) {
+        std::ifstream input{ path, std::ios::binary };
+        std::array<unsigned char, 12U> header{};
+        input.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
+        return static_cast<std::uint32_t>(header[8]) | (static_cast<std::uint32_t>(header[9]) << 8U);
+    };
+    kb::tests::Require(readVersion(first.items[0].assetPhysicalPath) == 3U, "A model imported with a transform must write a version 3 container");
+    kb::tests::Require(readVersion(first.items[1].assetPhysicalPath) == 1U, "A texture must not carry the model transform");
+
+    // A model is typed RenderMesh (the renderer's loader reads the container); read it here as
+    // the container it is, through the imported asset loader the renderer uses.
+    const kb::assets::AssetMetadata* modelMetadata = manager.Registry().Find(first.items[0].id);
+    kb::tests::Require(modelMetadata != nullptr, "Import transform test lost the model metadata");
+    kb::assets::ImportedAssetLoader containerLoader;
+    const kb::assets::AssetLoadResult modelLoad =
+        containerLoader.Load(kb::assets::AssetLoadRequest{ *modelMetadata, first.items[0].assetPhysicalPath });
+    const auto model = std::static_pointer_cast<kb::assets::ImportedAsset>(modelLoad.asset);
+    kb::tests::Require(modelLoad.Succeeded() && model != nullptr && model->meshTransform == options.mesh.transform,
+        "The imported model did not load its scale and rotation");
+    kb::tests::Require(model->payload.size() == std::filesystem::file_size(sourceRoot / "Crate.obj"), "The imported model payload must follow the transform unchanged");
+    const kb::assets::AssetHandle<kb::assets::ImportedAsset> texture = manager.Load<kb::assets::ImportedAsset>(first.items[1].id);
+    kb::tests::Require(texture.IsLoaded() && texture->meshTransform.IsIdentity(), "The texture must load without a transform");
+
+    const std::array<std::filesystem::path, 1> model1{ sourceRoot / "Crate.obj" };
+    const kb::assets::AssetImportResult again = kb::assets::AssetImportService::ImportFiles(manager, model1, "/Game/Models", options);
+    kb::tests::Require(again.Succeeded() && again.ReusedCount() == 1U && again.items[0].id == first.items[0].id,
+        "Importing the model again with the same settings must reuse its asset");
+    kb::assets::AssetImportOptions other = options;
+    other.mesh.transform.scale = 1.0F;
+    const kb::assets::AssetImportResult rescaled = kb::assets::AssetImportService::ImportFiles(manager, model1, "/Game/Models", other);
+    kb::tests::Require(rescaled.Succeeded() && rescaled.CreatedCount() == 1U && rescaled.items[0].id != first.items[0].id,
+        "Importing the model with another scale must make a separate asset");
+
+    kb::assets::AssetImportOptions invalid = options;
+    invalid.mesh.transform.scale = 0.0F;
+    const kb::assets::AssetImportResult refused = kb::assets::AssetImportService::ImportFiles(manager, model1, "/Game/Models", invalid);
+    kb::tests::Require(!refused.Succeeded() && refused.items[0].status == kb::assets::AssetImportItemStatus::Failed &&
+            refused.items[0].error.find("scale") != std::string::npos,
+        "A zero import scale must be refused with a reason");
+
+    kb::assets::AssetManager rediscovered;
+    kb::tests::Require(rediscovered.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()) &&
+            rediscovered.Mounts().Mount("Game", assetsRoot) && rediscovered.DiscoverMountedAssets() >= 3U,
+        "Import transform test could not rediscover its assets");
+    const kb::assets::AssetMetadata* found = rediscovered.Registry().FindByPath(first.items[0].virtualPath);
+    kb::tests::Require(found != nullptr && found->importCategory == kb::assets::ToString(kb::assets::AssetImportCategory::Model) && found->type == "RenderMesh", "A version 3 container must be discovered as a model");
+}
+
+// An import preset (.kbimportpreset) round-trips every option, ignores a key it does not know and
+// refuses a value a key does not take.
+void RunAssetImportPresetRoundTripTest() {
+    ResetTestRoot();
+    const std::filesystem::path path = TestRoot() / "Models.kbimportpreset";
+    kb::assets::AssetImportOptions options{};
+    options.mesh.transform = kb::assets::AssetMeshImportTransform{ .scale = 0.01F, .rotationDegrees = { -90.0F, 0.0F, 45.0F } };
+    options.mesh.importMaterials = true;
+    options.mesh.importTextures = true;
+    options.mesh.importMaterialSlots = false;
+    options.mesh.combineMeshes = true;
+    std::filesystem::create_directories(TestRoot());
+    kb::tests::Require(kb::assets::AssetImportPresetIO::Save(path, options), "Import preset could not be saved");
+    const std::optional<kb::assets::AssetImportOptions> loaded = kb::assets::AssetImportPresetIO::Load(path);
+    kb::tests::Require(loaded.has_value() && loaded->mesh.transform == options.mesh.transform && loaded->mesh.importMaterials &&
+            loaded->mesh.importTextures && !loaded->mesh.importMaterialSlots && loaded->mesh.combineMeshes && !loaded->mesh.importSkeletalMesh,
+        "Import preset round trip lost an option");
+
+    std::istringstream newer{ "scale 2\nfutureOption 7\nrotation 0,90,0\n" };
+    const std::optional<kb::assets::AssetImportOptions> forward = kb::assets::AssetImportPresetIO::Parse(newer);
+    kb::tests::Require(forward.has_value() && forward->mesh.transform.scale == 2.0F && forward->mesh.transform.rotationDegrees[1] == 90.0F,
+        "An import preset must ignore a key it does not know");
+    std::istringstream broken{ "scale -1\n" };
+    std::string error;
+    kb::tests::Require(!kb::assets::AssetImportPresetIO::Parse(broken, &error).has_value() && error.find("scale") != std::string::npos,
+        "An import preset must refuse a negative scale and name it");
+    kb::assets::AssetImportOptions edited{};
+    kb::tests::Require(kb::assets::AssetImportPresetIO::SetField(edited, "importMaterials", "yes") && edited.mesh.importMaterials &&
+            !kb::assets::AssetImportPresetIO::SetField(edited, "rotation", "1 2") && !kb::assets::AssetImportPresetIO::SetField(edited, "unknown", "1"),
+        "Import preset SetField must take known options and refuse the rest");
+    kb::assets::AssetImportOptions invalid = options;
+    invalid.mesh.transform.scale = -2.0F;
+    kb::tests::Require(!kb::assets::AssetImportPresetIO::Save(path, invalid), "An import preset with an invalid scale must not be written");
 }
 
 void RunAssetImportServiceReportsCreatedReusedMissingAndUnsupportedTest() {
@@ -2519,6 +2626,8 @@ void RunAssetRuntimeTests() {
     RunAssetDiscoveryPreservesEditorLiveOverrideTest();
     RunAssetManagerFolderAndRenameOperationsTest();
     RunAssetImportServiceBinaryContainerTest();
+    RunAssetImportServiceKeepsModelTransformTest();
+    RunAssetImportPresetRoundTripTest();
     RunAssetImportServiceReportsCreatedReusedMissingAndUnsupportedTest();
     RunScenePrefabRuntimeAssetTest();
     RunSceneAssetDependencyDiscoveryTest();

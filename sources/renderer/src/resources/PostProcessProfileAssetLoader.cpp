@@ -89,6 +89,27 @@ namespace {
 // member initializer in place (so a hand-trimmed profile file omitting most keys is valid).
 enum class FieldResult { Applied, Invalid, Unknown };
 
+[[nodiscard]] bool ParseUnitFloat(std::string_view text, float& output) {
+    float value = 0.0F;
+    if (!ParseFiniteMaterialFloatToken(text, value) || value < 0.0F || value > 1.0F) return false;
+    output = value;
+    return true;
+}
+
+[[nodiscard]] bool ParseNonNegativeFloat(std::string_view text, float& output) {
+    float value = 0.0F;
+    if (!ParseFiniteMaterialFloatToken(text, value) || value < 0.0F) return false;
+    output = value;
+    return true;
+}
+
+[[nodiscard]] bool ParsePositiveFloat(std::string_view text, float& output) {
+    float value = 0.0F;
+    if (!ParseFiniteMaterialFloatToken(text, value) || value <= 0.0F) return false;
+    output = value;
+    return true;
+}
+
 [[nodiscard]] FieldResult Applied(bool parsed) noexcept {
     return parsed ? FieldResult::Applied : FieldResult::Invalid;
 }
@@ -127,6 +148,11 @@ enum class FieldResult { Applied, Invalid, Unknown };
     if (keyword == "outputTransform.autoExposure.temporalAdaptationEnabled") return Applied(ParseBoolToken(rest, settings.outputTransform.autoExposure.temporalAdaptationEnabled));
     if (keyword == "outputTransform.autoExposure.brightAdaptationRate") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.brightAdaptationRate));
     if (keyword == "outputTransform.autoExposure.darkAdaptationRate") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.outputTransform.autoExposure.darkAdaptationRate));
+    if (keyword == "vignetteEnabled") return Applied(ParseBoolToken(rest, settings.vignetteEnabled));
+    if (keyword == "vignetteIntensity") return Applied(ParseUnitFloat(Trim(rest), settings.vignetteIntensity));
+    if (keyword == "ambientOcclusionEnabled") return Applied(ParseBoolToken(rest, settings.ambientOcclusionEnabled));
+    if (keyword == "ambientOcclusionIntensity") return Applied(ParseNonNegativeFloat(Trim(rest), settings.ambientOcclusionIntensity));
+    if (keyword == "ambientOcclusionRadius") return Applied(ParsePositiveFloat(Trim(rest), settings.ambientOcclusionRadius));
     return FieldResult::Unknown; // forward compatible: a profile file ignores it rather than failing.
 }
 
@@ -173,6 +199,11 @@ void WriteProfile(std::ostream& output, const ScenePostProcessSettings& settings
     output << "outputTransform.autoExposure.temporalAdaptationEnabled " << (settings.outputTransform.autoExposure.temporalAdaptationEnabled ? 1 : 0) << '\n';
     output << "outputTransform.autoExposure.brightAdaptationRate " << settings.outputTransform.autoExposure.brightAdaptationRate << '\n';
     output << "outputTransform.autoExposure.darkAdaptationRate " << settings.outputTransform.autoExposure.darkAdaptationRate << '\n';
+    output << "vignetteEnabled " << (settings.vignetteEnabled ? 1 : 0) << '\n';
+    output << "vignetteIntensity " << settings.vignetteIntensity << '\n';
+    output << "ambientOcclusionEnabled " << (settings.ambientOcclusionEnabled ? 1 : 0) << '\n';
+    output << "ambientOcclusionIntensity " << settings.ambientOcclusionIntensity << '\n';
+    output << "ambientOcclusionRadius " << settings.ambientOcclusionRadius << '\n';
 }
 
 } // namespace
@@ -242,7 +273,10 @@ std::string PostProcessProfileAssetLoader::Describe(const ScenePostProcessSettin
 }
 
 bool PostProcessProfileAssetLoader::SaveProfile(const std::filesystem::path& path, const ScenePostProcessSettings& settings) {
-    if (settings.outputTransform.colorGradingLutStrength != 0.0F) {
+    // A value the file format refuses on load is not written: the profile would not load again.
+    if (settings.outputTransform.colorGradingLutStrength != 0.0F ||
+        !(settings.vignetteIntensity >= 0.0F && settings.vignetteIntensity <= 1.0F) ||
+        !(settings.ambientOcclusionIntensity >= 0.0F) || !(settings.ambientOcclusionRadius > 0.0F)) {
         return false;
     }
     return detail::WriteMaterialFileAtomically(path, [&settings](std::ostream& output) {

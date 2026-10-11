@@ -2,6 +2,7 @@
 
 #include "renderer/RendererDebugLog.hpp"
 
+#include <algorithm>
 #include <sstream>
 
 namespace kb::render {
@@ -14,6 +15,11 @@ SceneDisplayOutputTransform RendererFinalCompositeSubmitter::DisplayTransform(co
         outputTransform.tonemap = SceneDisplayTonemapOperator::None;
     }
     return outputTransform;
+}
+
+float RendererFinalCompositeSubmitter::VignetteIntensity(const PostProcessOutput& postProcessOutput) noexcept {
+    const ScenePostProcessSettings& settings = postProcessOutput.postProcessSettings;
+    return settings.vignetteEnabled ? std::clamp(settings.vignetteIntensity, 0.0F, 1.0F) : 0.0F;
 }
 
 bool RendererFinalCompositeSubmitter::Submit(
@@ -51,6 +57,7 @@ bool RendererFinalCompositeSubmitter::Submit(
         .outputTransform = outputTransform,
         .clearRgba = desc.clearRgba,
         .clearTarget = desc.finalComposite.clearTarget,
+        .vignetteIntensity = VignetteIntensity(postProcessOutput),
     });
 }
 

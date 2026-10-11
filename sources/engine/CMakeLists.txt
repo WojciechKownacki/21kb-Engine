@@ -30,6 +30,7 @@ add_library(kb_engine STATIC
     include/engine/assets/TerrainAsset.hpp
     include/engine/assets/CollisionMeshAsset.hpp
     include/engine/assets/TerrainAssetIO.hpp
+    include/engine/assets/AssetImportPreset.hpp
     include/engine/assets/AssetImportService.hpp
     include/engine/assets/AssetImportTypes.hpp
     include/engine/assets/AssetManager.hpp
@@ -565,6 +566,7 @@ add_library(kb_engine STATIC
     src/assets/TerrainAsset.cpp
     src/assets/CollisionMeshAsset.cpp
     src/assets/TerrainAssetIO.cpp
+    src/assets/AssetImportPreset.cpp
     src/assets/AssetImportService.cpp
     src/assets/AssetLoadRequest.cpp
     src/assets/AssetImportTypes.cpp

@@ -62,6 +62,7 @@
 #include "app/scene_viewport/EditorSceneViewportSelectionTypes.hpp"
 #include "inspection/InspectorPanelState.hpp"
 #include "app/EditorPlayModeSceneSession.hpp"
+#include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
@@ -560,6 +561,9 @@ public:
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateAudioMixerAsset(const std::filesystem::path& virtualFolder);
+    // Create > Post-Process Profile and Create > Import Preset (EditorSceneContextPostProcess.cpp).
+    [[nodiscard]] bool CreatePostProcessProfileAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateImportPresetAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateParticleEffectAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialFunctionAsset(const std::filesystem::path& virtualFolder);
@@ -835,6 +839,15 @@ public:
     [[nodiscard]] bool SetSceneAudioMixer(kb::assets::AssetId id);
     [[nodiscard]] bool SetSceneAudioSnapshot(std::string_view snapshot);
     [[nodiscard]] bool SetSceneAudioOcclusion(const kb::scene::AudioOcclusionSettings& settings);
+    // A post-process profile asset's values (the Inspector edits them, undoably) and the scene's
+    // profile (saved with the scene, undoable through the scene history); 0 clears it.
+    [[nodiscard]] std::optional<kb::render::ScenePostProcessSettings> ReadPostProcessProfile(kb::assets::AssetId id) const;
+    [[nodiscard]] bool SetPostProcessProfile(kb::assets::AssetId id, const kb::render::ScenePostProcessSettings& settings);
+    [[nodiscard]] bool SetScenePostProcessProfile(kb::assets::AssetId id);
+    // The settings the scene's profile gives the edit-mode viewport (nullopt without one).
+    [[nodiscard]] std::optional<kb::render::ScenePostProcessSettings> ScenePostProcessProfileSettings() const;
+    // Import presets of the project for the import dialog: name, virtual path and options.
+    [[nodiscard]] std::vector<std::pair<std::string, kb::assets::AssetImportOptions>> ImportPresets();
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialInstanceAssetData> ReadMaterialInstanceAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadEffectiveMaterialAsset(kb::assets::AssetId id) const;

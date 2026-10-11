@@ -3,6 +3,8 @@
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
 #include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
+#include "platform/win32/EditorPostProcessProfileAssetPickerDialog.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
@@ -221,6 +223,25 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
         rows.push_back(AssetPickerRow{
             .assetId = metadata.id,
             .name = DisplayName(metadata, EditorText("assetPicker.unnamedAudioMixer", "Audio Mixer")),
+            .path = DisplayPath(metadata),
+        });
+    }
+    std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
+        return lhs.name != rhs.name ? lhs.name < rhs.name : lhs.assetId.value < rhs.assetId.value;
+    });
+    return rows;
+}
+
+[[nodiscard]] std::vector<AssetPickerRow> BuildPostProcessProfileRows(const EditorSceneContext& sceneContext) {
+    std::vector<AssetPickerRow> rows;
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (!EditorPostProcessProfileAssetPickerDialog::MatchesFilter(metadata)) {
+            continue;
+        }
+        rows.push_back(AssetPickerRow{
+            .assetId = metadata.id,
+            .name = DisplayName(metadata, EditorText("assetPicker.unnamedPostProcessProfile", "Post-Process Profile")),
             .path = DisplayPath(metadata),
         });
     }
@@ -1773,6 +1794,31 @@ EditorAudioMixerAssetPickerDialog::Result EditorAudioMixerAssetPickerDialog::Sho
     };
     const AssetPickerResult result = window.Show(owner);
     return EditorAudioMixerAssetPickerDialog::Result{
+        .accepted = result.accepted,
+        .assetId = result.assetId,
+    };
+}
+
+bool EditorPostProcessProfileAssetPickerDialog::MatchesFilter(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == kb::render::kPostProcessProfileAssetType;
+}
+
+EditorPostProcessProfileAssetPickerDialog::Result EditorPostProcessProfileAssetPickerDialog::Show(
+    HWND owner,
+    const EditorTheme& theme,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId currentProfile) {
+    AssetPickerWindow window{
+        theme,
+        BuildPostProcessProfileRows(sceneContext),
+        currentProfile,
+        std::string{ EditorText("assetPicker.selectPostProcessProfile", "Select Post-Process Profile") },
+        std::string{ EditorText("assetPicker.choosePostProcessProfile", "Choose the post-process profile this scene renders with.") },
+        std::string{ EditorText("assetPicker.clearPostProcessProfile", "Clear scene profile") },
+        HeroIconKind::AdjustmentsHorizontal,
+    };
+    const AssetPickerResult result = window.Show(owner);
+    return EditorPostProcessProfileAssetPickerDialog::Result{
         .accepted = result.accepted,
         .assetId = result.assetId,
     };

@@ -10,6 +10,8 @@ constexpr std::array<char, 8> AssetMagic{ '2', '1', 'K', 'B', 'A', 'S', 'T', '\0
 constexpr std::uint32_t SupportedVersion = 1U;
 // Version 2 only appends a resource table after the names; the fields read here are unchanged.
 constexpr std::uint32_t ResourcesVersion = 2U;
+// Version 3 appends the model's import scale and rotation after the names; likewise unchanged here.
+constexpr std::uint32_t TransformVersion = 3U;
 
 [[nodiscard]] bool ReadU16(std::istream& input, std::uint16_t& value) {
     value = 0;
@@ -50,7 +52,7 @@ std::optional<AssetImportCategory> ImportedAssetHeaderReader::ReadCategory(const
     std::uint16_t flags = 0;
     if (magic != AssetMagic
         || !ReadU32(input, version)
-        || (version != SupportedVersion && version != ResourcesVersion)
+        || (version != SupportedVersion && version != ResourcesVersion && version != TransformVersion)
         || !ReadU16(input, category)
         || !ReadU16(input, flags)) {
         return std::nullopt;

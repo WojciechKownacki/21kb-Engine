@@ -51,6 +51,7 @@ void RunRendererCommandReuseTests();
 void RunRendererTransparentGpuReadbackTests();
 void RunRendererDefaultSubmissionResultTest();
 void RunRendererPostProcessProfileDiagnosticTest();
+void RunRendererPostProcessProfileAuthoringTests();
 void RunRendererResourceGroupEnsureTests();
 void RunRendererSceneSubmitScaleBenchmark(bool spiralLayout);
 void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
@@ -96,6 +97,11 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "post-profile-diagnostic") {
         kb::render::tests::RunRendererPostProcessProfileDiagnosticTest();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "post-process-profile") {
+        kb::render::tests::RunRendererPostProcessProfileAuthoringTests();
+        kb::render::tests::RunSceneExposureMeterTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "exposure-readback") {

@@ -158,6 +158,19 @@ void TonemapOffKeepsExposureAndDisplayEncoding() {
         "Tonemapping on lost the profile's tone curve");
 }
 
+// The composite applies the profile's vignette only when it is on, at its clamped intensity.
+void VignetteFollowsTheProfile() {
+    PostProcessOutput output;
+    Require(RendererFinalCompositeSubmitter::VignetteIntensity(output) == 0.0F, "The default profile must not vignette");
+    output.postProcessSettings.vignetteEnabled = true;
+    output.postProcessSettings.vignetteIntensity = 0.4F;
+    Require(NearlyEqual(RendererFinalCompositeSubmitter::VignetteIntensity(output), 0.4F), "An enabled vignette lost its intensity");
+    output.postProcessSettings.vignetteIntensity = 3.0F;
+    Require(NearlyEqual(RendererFinalCompositeSubmitter::VignetteIntensity(output), 1.0F), "Vignette intensity must clamp to 1");
+    output.postProcessSettings.vignetteEnabled = false;
+    Require(RendererFinalCompositeSubmitter::VignetteIntensity(output) == 0.0F, "A disabled vignette must not darken");
+}
+
 } // namespace
 
 void RunSceneExposureMeterTests() {
@@ -169,6 +182,7 @@ void RunSceneExposureMeterTests() {
     TemporalExposureAdaptationUsesRatesAndHistory();
     ExposureSubmissionUsesElapsedFrameTime();
     TonemapOffKeepsExposureAndDisplayEncoding();
+    VignetteFollowsTheProfile();
 }
 
 } // namespace kb::render::tests

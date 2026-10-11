@@ -17,6 +17,9 @@
 #include "inspection/InspectorRigidbodyTextBuilder.hpp"
 #include "rendering/InspectorAudioMixerAssetView.hpp"
 #include "inspection/InspectorSceneAudioModel.hpp"
+#include "inspection/InspectorPostProcessProfileModel.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 
 #include <array>
 #include <cstdio>
@@ -141,6 +144,14 @@ void AppendMaterialInspectorText(std::ostringstream& text, const EditorSceneCont
         if (metadata->type == "RenderMaterial") {
             AppendMaterialInspectorText(text, sceneContext, metadata->id);
         }
+        if (metadata->type == kb::render::kPostProcessProfileAssetType) {
+            text << '\n';
+            if (const std::optional<kb::render::ScenePostProcessSettings> settings = sceneContext.ReadPostProcessProfile(metadata->id)) {
+                text << InspectorPostProcessProfileModel::Text(*settings);
+            } else {
+                text << "Post-Process Profile: could not be read" << '\n';
+            }
+        }
         if (InspectorAudioMixerAssetView::Supports(*metadata)) {
             kb::assets::AssetManager& mutableManager = const_cast<kb::assets::AssetManager&>(manager);
             const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
@@ -178,6 +189,14 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
     }
 
     std::string text = InspectorEntitySummaryTextBuilder{}.Build(sceneContext, selected);
+    if (sceneContext.Scene().Components().WorldBackdrops().Has(selected)) {
+        // The scene's post-process profile, shown on its environment object.
+        const kb::assets::AssetId profile{ kb::scene::ScenePostProcessAccess::ActiveProfile(sceneContext.Scene()) };
+        const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(profile);
+        text += "\nPost Processing\nScene Profile: ";
+        text += !profile.IsValid() ? std::string{ "None" } : metadata != nullptr ? metadata->name : "Missing (" + std::to_string(profile.value) + ")";
+        text += '\n';
+    }
 
     if (const kb::scene::CameraComponent* camera = sceneContext.Scene().Components().Cameras().TryGet(selected); camera != nullptr) {
         InspectorCameraTextBuilder{}.Append(text, *camera);

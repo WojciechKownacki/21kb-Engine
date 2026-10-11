@@ -46,6 +46,8 @@ struct FullscreenTexturePassDesc {
     std::uint32_t clearRgba = 0x000000FFU;
     bool clearTarget = false;
     const char* viewName = "KB Fullscreen Texture";
+    // 0 = none; 1 = corners fully dark (display composite vignette).
+    float vignetteIntensity = 0.0F;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
@@ -69,6 +71,7 @@ private:
     bgfx::UniformHandle colorGradeSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle tonemapParams_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle colorGradeParams_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle vignetteParams_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle neutralColorGradeLut_ = BGFX_INVALID_HANDLE;
 };
 

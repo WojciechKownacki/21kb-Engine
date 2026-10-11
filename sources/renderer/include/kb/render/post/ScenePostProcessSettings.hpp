@@ -29,6 +29,16 @@ struct ScenePostProcessSettings {
             .enabled = true,
         },
     };
+    // Darkens the image toward its corners in the final composite, as Unity's and Unreal's
+    // Vignette do. Intensity 0..1: how dark the corners get.
+    bool vignetteEnabled = false;
+    float vignetteIntensity = 0.3F;
+    // Screen-space ambient occlusion of the indirect light (the renderer's SSAO pass in the
+    // screen-space resolve). Intensity scales the occlusion, radius (m) is the sampled hemisphere.
+    // Off by default, as a scene without a profile renders today.
+    bool ambientOcclusionEnabled = false;
+    float ambientOcclusionIntensity = 1.0F;
+    float ambientOcclusionRadius = 0.6F;
 };
 
 } // namespace kb::render

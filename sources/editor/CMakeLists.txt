@@ -849,6 +849,8 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorAudioTextBuilder.cpp
     src/inspection/InspectorAudioMixerAssetInteraction.cpp
     src/inspection/InspectorAudioMixerAssetModel.cpp
+    src/inspection/InspectorPostProcessProfileModel.cpp
+    src/private/inspection/InspectorPostProcessProfileModel.hpp
     src/inspection/InspectorSceneAudioInteraction.cpp
     src/inspection/InspectorSceneAudioModel.cpp
     src/inspection/InspectorAudioComponentModel.cpp
@@ -889,14 +891,13 @@ add_executable(kb_editor WIN32
     src/scene/EditorPluginCatalog.cpp
     src/scene/EditorScriptAssetGateway.cpp
     src/scene/EditorSceneAssetBrowserCommands.cpp
-    src/private/scene/EditorMeshImportArtifacts.hpp
-    src/scene/EditorMeshImportArtifacts.cpp
     src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
     src/scene/ui/EditorUIComponentAuthoring.cpp
     src/private/platform/win32/EditorBundledFontPath.hpp
     src/scene/EditorSceneContextSkeletalMesh.cpp
+    src/scene/EditorSceneContextPostProcess.cpp
     src/scene/EditorSceneBuildGame.cpp
     src/scene/EditorParticleEditorHost.cpp
     src/private/scene/ParticleEditorBakeHostCommand.hpp
@@ -950,6 +951,9 @@ add_executable(kb_editor WIN32
     src/scene/input/EditorInputActionAuthoring.cpp
     src/scene/input/EditorInputMappingContextAuthoring.cpp
     src/scene/audio/EditorAudioMixerAssetGateway.cpp
+    src/scene/postprocess/EditorPostProcessProfileAssets.cpp
+    src/private/scene/postprocess/EditorPostProcessProfileAssets.hpp
+    src/private/platform/win32/EditorPostProcessProfileAssetPickerDialog.hpp
     src/scene/audio/EditorAudioMixerAuthoring.cpp
     src/scene/audio/EditorSceneAudioSettingsService.cpp
     src/windowing/EditorFloatingWindowFrame.cpp
@@ -1362,8 +1366,6 @@ if(BUILD_TESTING)
         src/scene/audio/EditorAudioMixerAssetGateway.cpp
         src/scene/audio/EditorAudioMixerAuthoring.cpp
         src/scene/audio/EditorSceneAudioSettingsService.cpp
-        src/private/scene/EditorMeshImportArtifacts.hpp
-        src/scene/EditorMeshImportArtifacts.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneHierarchyActions.cpp
         src/scene/EditorHierarchyObjectFactory.cpp
@@ -1498,6 +1500,13 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-World-Partition")
     set_tests_properties(kb_editor_world_partition_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;world" TIMEOUT 180)
+    add_test(NAME kb_editor_post_process_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessPostProcessScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Post-Process")
+    set_tests_properties(kb_editor_post_process_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;rendering" TIMEOUT 180)
     add_test(NAME kb_editor_navigation_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessNavigationScenario.json"

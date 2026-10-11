@@ -123,9 +123,10 @@ struct ImportProject {
         Require(manager.Mounts().Mount("Game", assets), "glTF import project mount failed");
     }
 
-    [[nodiscard]] kb::assets::AssetImportItemResult Import(const std::filesystem::path& source) {
+    [[nodiscard]] kb::assets::AssetImportItemResult Import(
+        const std::filesystem::path& source, const kb::assets::AssetImportOptions& options = {}) {
         const std::array files{ source };
-        const kb::assets::AssetImportResult result = kb::assets::AssetImportService::ImportFiles(manager, files, "/Game/Meshes");
+        const kb::assets::AssetImportResult result = kb::assets::AssetImportService::ImportFiles(manager, files, "/Game/Meshes", options);
         Require(result.items.size() == 1U, "glTF import returned no item");
         return result.items.front();
     }
@@ -301,9 +302,67 @@ void ExternalImagesResolveInsideTheDocumentFolderOnly() {
     }
 }
 
+struct MeshBounds {
+    std::array<float, 3> low{};
+    std::array<float, 3> high{};
+};
+
+[[nodiscard]] MeshBounds BoundsOf(const RenderMeshAssetData& mesh) {
+    MeshBounds bounds{ { 1e9F, 1e9F, 1e9F }, { -1e9F, -1e9F, -1e9F } };
+    const auto add = [&](float x, float y, float z) {
+        const std::array<float, 3> position{ x, y, z };
+        for (std::size_t axis = 0U; axis < 3U; ++axis) {
+            bounds.low[axis] = std::min(bounds.low[axis], position[axis]);
+            bounds.high[axis] = std::max(bounds.high[axis], position[axis]);
+        }
+    };
+    for (const RenderStaticMeshVertexP3N3UV2& vertex : mesh.vertices) add(vertex.x, vertex.y, vertex.z);
+    for (const RenderStaticMeshVertexP3N3T4UV2& vertex : mesh.tangentVertices) add(vertex.x, vertex.y, vertex.z);
+    return bounds;
+}
+
+[[nodiscard]] bool Near(float value, float expected) {
+    return std::fabs(value - expected) < 0.001F;
+}
+
+// The import scale and rotation (ModelImporter Scale Factor, Interchange Import Rotation) reach
+// the loaded mesh of an OBJ and a glTF source after the right- to left-handed conversion: the
+// triangle (0,0,0) (1,0,0) (0,1,0) mirrors X to (-1,0,0), turns 90 degrees about Y to (0,0,1) and
+// doubles. Without the settings the same source keeps its unit size along -X.
+void ImportScaleAndRotationReachTheMesh() {
+    const TempRoot root;
+    const std::filesystem::path sourceFolder = root.Path() / "Source";
+    WriteText(sourceFolder / "Triangle.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    WriteText(sourceFolder / "Triangle.gltf", TriangleDocument("triangle.bin"));
+    WriteBytes(sourceFolder / "triangle.bin", TriangleBuffer());
+
+    kb::assets::AssetImportOptions turned{};
+    turned.mesh.transform = kb::assets::AssetMeshImportTransform{ .scale = 2.0F, .rotationDegrees = { 0.0F, 90.0F, 0.0F } };
+    ImportProject project{ root.Path() };
+    for (const char* name : { "Triangle.obj", "Triangle.gltf" }) {
+        const kb::assets::AssetImportItemResult plain = project.Import(sourceFolder / name);
+        const kb::assets::AssetImportItemResult transformed = project.Import(sourceFolder / name, turned);
+        RequireThat(plain.Succeeded() && transformed.Succeeded() && plain.id != transformed.id,
+            std::string{ "Import transform test could not import " } + name + ": " + plain.error + transformed.error);
+        const kb::assets::AssetHandle<RenderMeshAssetData> plainMesh = project.manager.Load<RenderMeshAssetData>(plain.id);
+        const kb::assets::AssetHandle<RenderMeshAssetData> transformedMesh = project.manager.Load<RenderMeshAssetData>(transformed.id);
+        RequireThat(plainMesh.IsLoaded() && transformedMesh.IsLoaded(), std::string{ "Import transform test could not load " } + name);
+        const MeshBounds before = BoundsOf(*plainMesh);
+        const MeshBounds after = BoundsOf(*transformedMesh);
+        RequireThat(Near(before.low[0], -1.0F) && Near(before.high[1], 1.0F) && Near(before.high[2], 0.0F),
+            std::string{ "Without import settings the mirrored triangle must keep its unit size: " } + name);
+        RequireThat(Near(after.low[0], 0.0F) && Near(after.high[0], 0.0F) && Near(after.high[1], 2.0F) &&
+                Near(after.low[2], 0.0F) && Near(after.high[2], 2.0F),
+            std::string{ "The import scale and rotation did not reach the mesh: " } + name);
+        RequireThat(Near(transformedMesh->bounds.radius, plainMesh->bounds.radius * 2.0F),
+            std::string{ "The imported mesh bounds must follow the import scale: " } + name);
+    }
+}
+
 } // namespace
 
 void RunGltfExternalResourceTests() {
+    ImportScaleAndRotationReachTheMesh();
     RelativeResourcePathsAreTheOnlyAcceptedFileUris();
     ExternalBufferImportsAndLoadsWithoutTheSourceFolder();
     BufferUrisOutsideTheSourceFolderAreRefused();

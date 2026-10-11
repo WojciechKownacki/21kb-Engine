@@ -716,6 +716,22 @@ void AppendNavigationMesh(
         renderProfile.autoExposureEnabled && continuousRuntimeFrames;
     postProcessSettings.outputTransform.autoExposure.temporalAdaptationEnabled =
         renderProfile.autoExposureEnabled && continuousRuntimeFrames;
+    // The scene's post-process profile shows in the edit-mode viewport too, as Unity's Scene view
+    // shows the global Volume. Edit mode renders on events, so its temporal parts follow the rule
+    // above: temporal anti-aliasing becomes FXAA, and auto exposure meters the scene's light each
+    // frame (no GPU readback that lags a frame behind, no adaptation over time).
+    if (!continuousRuntimeFrames) {
+        if (std::optional<kb::render::ScenePostProcessSettings> sceneProfile = sceneContext.ScenePostProcessProfileSettings()) {
+            sceneProfile->fxaaEnabled = sceneProfile->fxaaEnabled || sceneProfile->temporalAntiAliasingEnabled;
+            sceneProfile->temporalAntiAliasingEnabled = false;
+            sceneProfile->temporalJitterEnabled = false;
+            sceneProfile->outputTransform.autoExposure.temporalAdaptationEnabled = false;
+            if (sceneProfile->autoExposureMetering == kb::render::ScenePostProcessSettings::AutoExposureMeteringMode::HdrColor) {
+                sceneProfile->autoExposureMetering = kb::render::ScenePostProcessSettings::AutoExposureMeteringMode::SceneLighting;
+            }
+            postProcessSettings = *sceneProfile;
+        }
+    }
     kb::render::SceneRenderLightingConfig lightingConfig = BuildViewportLightingConfig(renderProfile, sceneContext.ProjectConfiguration().lightingPath);
     // SceneGBuffer has no MSAA-attachment support, so a multisampled Deferred G-buffer isn't an
     // option today; falling back to Forward is the only way to honor the MSAA request. This is a

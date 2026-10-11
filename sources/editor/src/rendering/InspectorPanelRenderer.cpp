@@ -4,6 +4,9 @@
 #include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
 #include "rendering/InspectorAudioMixerAssetView.hpp"
+#include "inspection/InspectorPostProcessProfileModel.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "rendering/InspectorSceneAudioView.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
 #include "rendering/EditorPanelStyle.hpp"
@@ -1442,6 +1445,64 @@ void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const Ed
 }
 
 
+[[nodiscard]] bool IsPostProcessProfile(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == kb::render::kPostProcessProfileAssetType;
+}
+
+// A post-process profile is edited in place, one section per effect as Unity's Volume overrides;
+// every row writes the profile file through the same field names as kb_cli post-process-set.
+void PaintPostProcessProfileAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+    const InspectorPanelState& inspector = sceneContext.Inspector();
+    DrawHeader(dc, content, theme, HeroIconKind::AdjustmentsHorizontal,
+        metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name,
+        EditorText("inspector.postProcess.profile", "Post-Process Profile"));
+    const std::optional<kb::render::ScenePostProcessSettings> settings = sceneContext.ReadPostProcessProfile(metadata.id);
+    int y = InspectorBodyTop(content);
+    if (!settings.has_value()) {
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset,
+            HeroIconKind::AdjustmentsHorizontal, EditorText("inspector.postProcess.profile", "Post-Process Profile"));
+        section.Field(EditorText("inspector.postProcess.unreadable", "Profile"), EditorText("inspector.postProcess.unreadableValue", "Could not be read"));
+        return;
+    }
+    const std::span<const InspectorPostProcessProfileRow> rows = InspectorPostProcessProfileModel::Rows();
+    for (const InspectorPostProcessProfileSection& entry : InspectorPostProcessProfileModel::Sections()) {
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, entry.section,
+            HeroIconKind::AdjustmentsHorizontal, InspectorPostProcessProfileModel::SectionTitle(entry.section));
+        for (std::size_t index = 0U; index < rows.size(); ++index) {
+            if (rows[index].section != entry.section) continue;
+            const int row = static_cast<int>(index);
+            if (rows[index].kind == InspectorPostProcessProfileRowKind::Bool) {
+                section.Bool(InspectorPostProcessProfileModel::RowLabel(row), InspectorPostProcessProfileModel::BoolValue(*settings, row),
+                    InspectorPropertyId::PostProcessProfileField, row);
+            } else {
+                section.Field(InspectorPostProcessProfileModel::RowLabel(row), InspectorPostProcessProfileModel::ValueText(*settings, row),
+                    InspectorPropertyId::PostProcessProfileField, row);
+            }
+        }
+        y = section.Bottom() + kSectionGap;
+    }
+}
+
+
+// The scene's profile on its environment object (the World Backdrop), as Unity shows the global
+// Volume's profile: the profile field (picker) and, with one set, Clear.
+[[nodiscard]] int ScenePostProcessRows(const EditorSceneContext& sceneContext) {
+    return kb::scene::ScenePostProcessAccess::ActiveProfile(sceneContext.Scene()) != 0U ? 2 : 1;
+}
+
+void PaintScenePostProcessSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const InspectorPanelState& inspector = sceneContext.Inspector();
+    const std::uint64_t profile = kb::scene::ScenePostProcessAccess::ActiveProfile(sceneContext.Scene());
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::ScenePostProcess,
+        HeroIconKind::AdjustmentsHorizontal, EditorText("inspector.scenePostProcess.title", "Post Processing"));
+    section.AssetField(EditorText("inspector.scenePostProcess.profile", "Scene Profile"), AssetDisplayName(sceneContext, profile),
+        InspectorPropertyId::ScenePostProcessProfile, InspectorPropertyId::ScenePostProcessProfile);
+    if (profile != 0U) {
+        section.Action(EditorText("inspector.scenePostProcess.clear", "Clear Scene Profile"), InspectorPropertyId::ScenePostProcessProfileClear);
+    }
+    y = section.Bottom() + kSectionGap;
+}
+
 void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneContext& sceneContext) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const EditorAssetBrowserState& state = sceneContext.AssetBrowser();
@@ -1466,6 +1527,10 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneConte
         }
         if (IsMaterialDocument(*metadata)) {
             PaintMaterialAsset(dc, content, theme, sceneContext, *metadata);
+            return;
+        }
+        if (IsPostProcessProfile(*metadata)) {
+            PaintPostProcessProfileAsset(dc, content, theme, sceneContext, *metadata);
             return;
         }
         if (InspectorAudioMixerAssetView::Supports(*metadata)) {
@@ -3461,6 +3526,8 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::WorldBackdropComponent* backdrop = scene.Components().WorldBackdrops().TryGet(selected); backdrop != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::WorldBackdrop, static_cast<int>(WorldBackdropRows(backdrop->mode).size()));
         if (y < content.bottom && y + h > content.top) PaintWorldBackdropSection(dc, content, y, theme, inspector, *backdrop); else y += h + kSectionGap;
+        const int postProcessHeight = SectionHeight(inspector, InspectorSectionId::ScenePostProcess, ScenePostProcessRows(sceneContext));
+        if (y < content.bottom && y + postProcessHeight > content.top) PaintScenePostProcessSection(dc, content, y, theme, sceneContext); else y += postProcessHeight + kSectionGap;
     }
     if (const kb::scene::AmbientRadianceComponent* ambient = scene.Components().AmbientRadiances().TryGet(selected); ambient != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::AmbientRadiance, kAmbientRadianceRows);
@@ -3718,6 +3785,14 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     return rows;
 }
 
+[[nodiscard]] int PostProcessProfileContentHeight(const InspectorPanelState& inspector) {
+    int height = 0;
+    for (const InspectorPostProcessProfileSection& entry : InspectorPostProcessProfileModel::Sections()) {
+        height += SectionHeight(inspector, entry.section, InspectorPostProcessProfileModel::RowCount(entry.section)) + kSectionGap;
+    }
+    return height;
+}
+
 [[nodiscard]] int AssetContentHeight(const RECT& content, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
     int height = InspectorHeaderRegionHeight();
@@ -3735,6 +3810,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         // it has content to scroll to.
         height += MaterialPreviewSectionHeight(inspector, MaterialPreviewTelemetryFor(sceneContext, metadata), MaterialDebugChannelRowsFor(sceneContext, metadata).size());
         return height;
+    }
+    if (IsPostProcessProfile(metadata)) {
+        return height + PostProcessProfileContentHeight(inspector);
     }
     if (InspectorAudioMixerAssetView::Supports(metadata)) {
         kb::assets::AssetManager& manager = const_cast<kb::assets::AssetManager&>(
@@ -3808,6 +3886,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().StreamFocuses().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::StreamFocus, 5) + kSectionGap;
     if (const kb::scene::WorldBackdropComponent* backdrop = scene.Components().WorldBackdrops().TryGet(selected); backdrop != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::WorldBackdrop, static_cast<int>(WorldBackdropRows(backdrop->mode).size())) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::ScenePostProcess, ScenePostProcessRows(sceneContext)) + kSectionGap;
     }
     if (scene.Components().AmbientRadiances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::AmbientRadiance, kAmbientRadianceRows) + kSectionGap;
     if (scene.Components().DetailSwitches().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::DetailSwitch, 6) + kSectionGap;
@@ -5047,6 +5126,58 @@ void InspectorPanelRenderer::Paint(
     RestoreDC(dc, savedDc);
 }
 
+// Mirrors PaintPostProcessProfileAsset: one section per effect, a Bool row is a checkbox, every
+// other row a value field; the hit's index is the row of InspectorPostProcessProfileModel.
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestPostProcessProfile(const RECT& content, const InspectorPanelState& state, int x, int yPoint, int& y) {
+    const std::span<const InspectorPostProcessProfileRow> rows = InspectorPostProcessProfileModel::Rows();
+    for (const InspectorPostProcessProfileSection& entry : InspectorPostProcessProfileModel::Sections()) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, entry.section, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(entry.section)) {
+            for (std::size_t index = 0U; index < rows.size(); ++index) {
+                if (rows[index].section != entry.section) continue;
+                const RECT row = RowRect(content, y);
+                InspectorPanelRenderer::Hit hit = rows[index].kind == InspectorPostProcessProfileRowKind::Bool
+                    ? HitBool(row, entry.section, InspectorPropertyId::PostProcessProfileField, x, yPoint)
+                    : HitTextRow(row, entry.section, InspectorPropertyId::PostProcessProfileField, x, yPoint);
+                if (hit.kind != InspectorHitKind::None) {
+                    hit.index = static_cast<int>(index);
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    return {};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestScenePostProcessSection(
+    const RECT& content, const InspectorPanelState& state, const EditorSceneContext& sceneContext, int x, int yPoint, int& y) {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::ScenePostProcess, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (!state.IsCollapsed(InspectorSectionId::ScenePostProcess)) {
+        if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(content, y), InspectorSectionId::ScenePostProcess,
+                InspectorPropertyId::ScenePostProcessProfile, InspectorPropertyId::ScenePostProcessProfile, x, yPoint);
+            hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+        if (ScenePostProcessRows(sceneContext) > 1) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::ScenePostProcess,
+                    InspectorPropertyId::ScenePostProcessProfileClear, x, yPoint);
+                hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+        }
+    }
+    y += kSectionGap;
+    return {};
+}
+
 InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int yPoint) {
     if (!Contains(content, x, yPoint)) {
         return {};
@@ -5078,6 +5209,9 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         if (metadata != nullptr && metadata->type == "InputMappingContext") {
             return HitTestInputMappingSection(viewport, state, sceneContext, metadata->id, x, scrolledY, y);
+        }
+        if (metadata != nullptr && IsPostProcessProfile(*metadata)) {
+            return HitTestPostProcessProfile(viewport, state, x, scrolledY, y);
         }
         if (metadata != nullptr && IsMaterialDocument(*metadata)) {
             if (InspectorPanelRenderer::Hit hit = HitTestMaterialPreviewSection(viewport, state, sceneContext, *metadata, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
@@ -5312,6 +5446,9 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             }
         }
         y += kSectionGap;
+        if (InspectorPanelRenderer::Hit hit = HitTestScenePostProcessSection(viewport, state, sceneContext, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
     }
     if (sceneContext.Scene().Components().AmbientRadiances().Has(selected)) {
         if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AmbientRadiance, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
