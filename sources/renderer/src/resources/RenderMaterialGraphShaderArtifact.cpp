@@ -688,6 +688,27 @@ void AddArtifactDiagnostic(
     });
 }
 
+// Unreal's Pixel Depth Offset: the depth the pass writes moves away from the viewer by
+// surface.pixelDepthOffset metres (never toward it) - along the view ray of a perspective view, along
+// the view axis of an orthographic one (a directional light's shadow cascade). The shadow pass pushes
+// the caster by the same amount, so the pushed surface the lighting reconstructs does not shadow
+// itself. Writing gl_FragDepth turns off early depth testing for the material.
+void AppendMaterialGraphPixelDepthOffset(std::string& wrapper) {
+    wrapper += "    vec4 kbPdoView = mul(u_view, vec4(v_worldPos, 1.0));\n";
+    wrapper += "    float kbPdoOffset = max(surface.pixelDepthOffset, 0.0);\n";
+    wrapper += "    float kbPdoDistance = max(length(kbPdoView.xyz), 0.0001);\n";
+    wrapper += "    bool kbPdoOrthographic = abs(mul(u_proj, vec4(0.0, 0.0, 1.0, 0.0)).w) < 0.5;\n";
+    wrapper += "    vec3 kbPdoPushed = kbPdoOrthographic ? kbPdoView.xyz + vec3(0.0, 0.0, kbPdoOffset)\n";
+    wrapper += "        : kbPdoView.xyz * ((kbPdoDistance + kbPdoOffset) / kbPdoDistance);\n";
+    wrapper += "    vec4 kbPdoClip = mul(u_proj, vec4(kbPdoPushed, 1.0));\n";
+    wrapper += "    float kbPdoDepth = kbPdoClip.z / kbPdoClip.w;\n";
+    wrapper += "#if BGFX_SHADER_LANGUAGE_GLSL\n";
+    // OpenGL clip depth is -1..1; the depth buffer stores 0..1.
+    wrapper += "    kbPdoDepth = kbPdoDepth * 0.5 + 0.5;\n";
+    wrapper += "#endif\n";
+    wrapper += "    gl_FragDepth = kbPdoDepth;\n";
+}
+
 void AppendMaterialGraphTangentBasis(std::string& wrapper, const RenderMaterialGraphShaderSource& shader) {
     if (shader.reflection.hasWorldPositionOffset || shader.reflection.hasDisplacement) {
         wrapper += "    vec3 basisNormal = normalize(cross(dFdx(v_worldPos), dFdy(v_worldPos)));\n";
@@ -1009,6 +1030,11 @@ std::string BuildGraphFragmentWrapperSource(
         wrapper += "    ctx.lightVector = (u_lightParams.x > 0.5) ? normalize(-u_lightDirKind[0].xyz) : vec3(0.0, 1.0, 0.0);\n";
     }
     wrapper += "    MaterialSurface surface = EvaluateMaterialGraph(ctx);\n";
+    const bool writesDepth = shader.reflection.blendMode == RenderMaterialGraphBlendMode::Opaque ||
+        shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked;
+    if (shader.reflection.hasPixelDepthOffset && writesDepth) {
+        AppendMaterialGraphPixelDepthOffset(wrapper);
+    }
     if (shadowPass) {
         wrapper += "    if (surface.alpha < surface.alphaClipThreshold)\n    {\n        discard;\n    }\n";
         wrapper += "    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);\n";
@@ -1191,6 +1217,7 @@ std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraph
     HashU64(hash, reflection.hasCustomizedUv0 ? 1U : 0U);
     HashU64(hash, reflection.hasDisplacement ? 1U : 0U);
     HashU64(hash, reflection.hasTangentOutput ? 1U : 0U);
+    HashU64(hash, reflection.hasPixelDepthOffset ? 1U : 0U);
     // MAT-37: the shading model selects the fragment wrapper lighting branch, so it is part of program identity.
     HashU64(hash, static_cast<std::uint64_t>(reflection.shadingModel));
     // MAT-38: the blend mode changes the wrapper (masked clip) and the cooked pass, so it is part of identity.

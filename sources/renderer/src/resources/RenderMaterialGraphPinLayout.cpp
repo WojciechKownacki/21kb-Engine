@@ -98,7 +98,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (pin == "customizedUv0") return RenderMaterialGraphPinType::Float2;
         if (pin == "worldPositionOffset" || pin == "tangentOutput" || pin == "displacement") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
-            pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness") return RenderMaterialGraphPinType::Float;
+            pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "pixelDepthOffset") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
         if (outputPin) return pin == "attributes" ? RenderMaterialGraphPinType::MaterialAttributes : RenderMaterialGraphPinType::Unknown;
@@ -106,7 +106,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (pin == "normal") return RenderMaterialGraphPinType::Normal;
         if (pin == "tangentOutput") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
-            pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness") return RenderMaterialGraphPinType::Float;
+            pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "pixelDepthOffset") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
         if (!outputPin) return pin == "attributes" ? RenderMaterialGraphPinType::MaterialAttributes : RenderMaterialGraphPinType::Unknown;
@@ -114,7 +114,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (pin == "normal") return RenderMaterialGraphPinType::Normal;
         if (pin == "tangentOutput") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
-            pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness") return RenderMaterialGraphPinType::Float;
+            pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "pixelDepthOffset") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
         if (outputPin) return pin == "attributes" ? RenderMaterialGraphPinType::MaterialAttributes : RenderMaterialGraphPinType::Unknown;
@@ -127,7 +127,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (pin == "normal") return RenderMaterialGraphPinType::Normal;
         if (pin == "tangentOutput") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
-            pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness") return RenderMaterialGraphPinType::Float;
+            pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "pixelDepthOffset") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
         if (outputPin) return pin == "attributesOut" ? RenderMaterialGraphPinType::MaterialAttributes : RenderMaterialGraphPinType::Unknown;
@@ -136,7 +136,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (pin == "normal") return RenderMaterialGraphPinType::Normal;
         if (pin == "tangentOutput") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
-            pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness") return RenderMaterialGraphPinType::Float;
+            pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "pixelDepthOffset") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;

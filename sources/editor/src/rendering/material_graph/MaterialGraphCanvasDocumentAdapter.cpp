@@ -54,6 +54,7 @@ namespace {
             "displacement",
             "clearCoat",
             "clearCoatRoughness",
+            "pixelDepthOffset",
         };
     }
     return kb::render::RenderMaterialGraphNodeInputPinNames(node);
