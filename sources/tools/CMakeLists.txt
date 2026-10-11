@@ -8,6 +8,7 @@ add_library(kb_cli_core STATIC
     src/CliPackSetCommands.cpp
     src/CliRunCommand.cpp
     src/CliSceneCommands.cpp
+    src/CliScriptCommands.cpp
     src/CliSecurityCommands.cpp
     src/CliValidateCommand.cpp
     src/CliWorldCommands.cpp

@@ -2829,7 +2829,7 @@ bool EditorSceneContext::CreateNativeScriptAsset(const std::filesystem::path& vi
     std::string error;
     const std::optional<std::filesystem::path> path = gateway.CreateNativeScript(virtualFolder, error);
     if (!path.has_value()) {
-        console_.Error("Scripts", error.empty() ? "C++ script could not be created." : error);
+        console_.Error("Scripts", "C++ script could not be created: " + error);
         return false;
     }
     console_.Info("Scripts", "C++ script created: " + path->generic_string());

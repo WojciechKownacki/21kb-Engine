@@ -2161,6 +2161,94 @@ void RunSceneNewCommandTests() {
     std::filesystem::remove_all(parent, error);
 }
 
+// Scripts without the editor: script-new writes what the Create menu writes, never over a file,
+// and script-build runs each C++ script's build as Play and the cooker do.
+void RunScriptCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "script_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Skrypty", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path root = parent / "Skrypty";
+    const std::string project = root.string();
+
+    const CommandRun lua = Run(&kb::cli::RunScriptNewCommand, { "--project", project, "--name", "Player", "--language", "lua" });
+    Require(lua.exitCode == 0 && Contains(lua.output, "Lua script created: /Game/Scripts/Player.lua"),
+        "script-new did not create the Lua script: " + lua.output);
+    std::ifstream luaFile{ root / "Assets" / "Scripts" / "Player.lua" };
+    const std::string luaSource{ std::istreambuf_iterator<char>{ luaFile }, {} };
+    Require(Contains(luaSource, "function Ready(self, dt)") && Contains(luaSource, "function Tick(self, dt)"),
+        "script-new must write the Lua template with Ready and Tick");
+    luaFile.close();
+    WriteTextFile(root / "Assets" / "Scripts" / "Player.lua", "-- the user's own code\n");
+
+    const auto refusedWith = [&](std::vector<std::string> arguments, std::string_view reason) {
+        arguments.insert(arguments.begin(), { "--project", project });
+        const CommandRun run = Run(&kb::cli::RunScriptNewCommand, arguments);
+        Require(run.exitCode != 0 && Contains(run.output, reason), "script-new must refuse with '" + std::string{ reason } +
+            "', got: " + run.output);
+    };
+    refusedWith({ "--name", "Player", "--language", "lua" }, "already exists");
+    std::ifstream kept{ root / "Assets" / "Scripts" / "Player.lua" };
+    Require(std::string{ std::istreambuf_iterator<char>{ kept }, {} } == "-- the user's own code\n",
+        "a refused script-new must leave the user's script untouched");
+    refusedWith({ "--name", "Pla:yer", "--language", "lua" }, "can't contain the character ':'");
+    refusedWith({ "--name", "Enemy", "--language", "python" }, "unknown language 'python'");
+    refusedWith({ "--name", "Enemy", "--language", "lua", "--folder", "Saved" }, "must be inside Assets");
+    refusedWith({ "--name", "Enemy" }, "requires --project <dir> --name <Name> --language lua|cpp");
+    refusedWith({ "--name", "2Fast", "--language", "cpp" }, "its class name");
+    refusedWith({ "--name", "Gracz\xC5\x82", "--language", "cpp" }, "its class name");
+    refusedWith({ "--name", "class", "--language", "cpp" }, "C++ keyword");
+    const std::string polish = "Gracz\xC5\x82";
+    Require(Run(&kb::cli::RunScriptNewCommand, { "--project", project, "--name", polish, "--language", "lua", "--folder", "/Game/Logic" })
+                .exitCode == 0,
+        "script-new with a Polish Lua name into a virtual folder failed");
+
+#if defined(_WIN32)
+    // The C++ script builds against the engine kb_cli_tests itself was built from.
+    const CommandRun cpp = Run(&kb::cli::RunScriptNewCommand, { "--project", project, "--name", "Enemy", "--language", "cpp" });
+    Require(cpp.exitCode == 0 && Contains(cpp.output, "C++ script created: /Game/Scripts/Enemy.native") &&
+            Contains(cpp.output, "Source/NativeScripts/Enemy/Enemy.cpp"),
+        "script-new did not create the C++ script: " + cpp.output);
+    for (const std::filesystem::path& file : { root / "Assets" / "Scripts" / "Enemy.native",
+             root / "Source" / "NativeScripts" / "Enemy" / "Enemy.cpp", root / "Source" / "NativeScripts" / "Enemy" / "CMakeLists.txt" }) {
+        Require(std::filesystem::is_regular_file(file), "script-new did not write " + file.generic_string());
+    }
+    // A name the C++ script's source folder already has is taken, even from another Assets folder.
+    refusedWith({ "--name", "Enemy", "--language", "cpp", "--folder", "Assets/Other" }, "Source/NativeScripts/Enemy");
+#endif
+
+    // script-build: one built, one failing, one without a build command; the exit code says it.
+    const std::filesystem::path builds = TestRoot() / "script_build_project";
+    std::filesystem::remove_all(builds, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", builds.string(), "--name", "Budowa", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path buildRoot = builds / "Budowa";
+    const std::string buildProject = buildRoot.string();
+    Require(Run(&kb::cli::RunScriptBuildCommand, { "--project", buildProject }).output.find("no C++ scripts") != std::string::npos,
+        "script-build must say when a project has no C++ scripts");
+    WriteTextFile(buildRoot / "Binaries" / "NativeScripts" / "Good.dll", "module");
+    WriteTextFile(buildRoot / "Assets" / "Scripts" / "Good.native",
+        "name = Good\nsymbol = project.Good\nmodule = ../../Binaries/NativeScripts/Good.dll\nbuild = exit 0\n");
+    const CommandRun good = Run(&kb::cli::RunScriptBuildCommand, { "--project", buildProject, "--script", "/Game/Scripts/Good.native" });
+    Require(good.exitCode == 0 && Contains(good.output, "Built /Game/Scripts/Good.native: Binaries/NativeScripts/Good.dll"),
+        "script-build of a script that builds failed: " + good.output);
+
+    WriteTextFile(buildRoot / "Assets" / "Scripts" / "Broken.native",
+        "name = Broken\nsymbol = project.Broken\nmodule = ../../Binaries/NativeScripts/Broken.dll\nbuild = exit 3\n");
+    WriteTextFile(buildRoot / "Assets" / "Scripts" / "Silent.native",
+        "name = Silent\nsymbol = project.Silent\nmodule = ../../Binaries/NativeScripts/Silent.dll\nbuild = exit 0\n");
+    const CommandRun all = Run(&kb::cli::RunScriptBuildCommand, { "--project", buildProject });
+    Require(all.exitCode == 1 && Contains(all.output, "/Game/Scripts/Broken.native: native script build command failed with exit code") &&
+            Contains(all.output, "/Game/Scripts/Silent.native: the build command succeeded but did not write") &&
+            Contains(all.output, "C++ scripts: 1 ready, 2 failed."),
+        "script-build must name each script that does not build: " + all.output);
+    const CommandRun notScript = Run(&kb::cli::RunScriptBuildCommand, { "--project", buildProject, "--script", "Assets/Scripts" });
+    Require(notScript.exitCode == 1, "script-build of something that is not a C++ script must fail: " + notScript.output);
+    std::filesystem::remove_all(builds, error);
+    std::filesystem::remove_all(parent, error);
+}
+
 // An agent builds a scene without the editor: entities, transform in degrees, components and
 // their properties land in the project's startup scene.
 void RunEntityComponentCommandTests() {
@@ -3223,6 +3311,7 @@ int main() {
     RunPlayerControllerTemplateTests();
     RunNewCommandTests();
     RunSceneNewCommandTests();
+    RunScriptCommandTests();
     RunEntityComponentCommandTests();
     RunApiCommandTests();
     RunApiCheckCommandTests();

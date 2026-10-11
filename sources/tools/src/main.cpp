@@ -32,6 +32,14 @@ Commands:
                  --project <dir> --name <Name> [--folder Assets/Scenes]
                  [--template Basic|Empty] [--default yes|no]
                (--default yes makes it the scene the game starts in)
+  script-new   Create a script, as the editor's Create menu does: Lua (one .lua
+               file) or C++ (a .native asset, with its source and CMake project in
+               Source/NativeScripts/<Name>). Existing files are never overwritten.
+                 --project <dir> --name <Name> --language lua|cpp
+                 [--folder Assets/Scripts]
+  script-build Build the project's C++ scripts (or one), as Play and the cooker
+               do. Exits 1 when a build fails.
+                 --project <dir> [--script <path>]
   entity       Add or remove a scene entity (the project's startup scene unless --scene).
                  add --project <dir> [--scene <path>] --name <Name> [--parent <Name>]
                      [--create <Item>] [--position x,y,z] [--rotation x,y,z (degrees)] [--scale x,y,z]
@@ -236,6 +244,12 @@ int Dispatch(int argc, char** argv) {
     }
     if (command == "scene-new") {
         return kb::cli::RunSceneNewCommand(arguments, io);
+    }
+    if (command == "script-new") {
+        return kb::cli::RunScriptNewCommand(arguments, io);
+    }
+    if (command == "script-build") {
+        return kb::cli::RunScriptBuildCommand(arguments, io);
     }
     if (command == "run") {
         return kb::cli::RunRunCommand(arguments, io);

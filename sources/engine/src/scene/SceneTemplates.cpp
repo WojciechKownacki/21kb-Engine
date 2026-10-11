@@ -10,9 +10,7 @@
 
 #include "engine/assets/AssetFileName.hpp"
 
-#include <algorithm>
 #include <array>
-#include <vector>
 #include <system_error>
 
 namespace kb::scene {
@@ -36,10 +34,6 @@ constexpr std::array<SceneTemplateInfo, 2> kTemplates{ {
         }
     }
     return true;
-}
-
-[[nodiscard]] std::filesystem::path Utf8Path(std::string_view text) {
-    return std::filesystem::path{ std::u8string{ reinterpret_cast<const char8_t*>(text.data()), text.size() } };
 }
 
 // The UTF-8 file stem, for the scene document's name.
@@ -111,38 +105,13 @@ NewScenePath SceneTemplates::ResolveNewScene(const std::filesystem::path& projec
     if (std::string problem = kb::assets::AssetFileNameError(name); !problem.empty()) {
         return { {}, {}, std::move(problem) };
     }
-    // "/Game/Scenes" and "Assets/Scenes" name the same folder.
-    std::string relative{ folder };
-    std::replace(relative.begin(), relative.end(), '\\', '/');
-    if (relative == "/Game" || relative.starts_with("/Game/")) {
-        relative = "Assets" + relative.substr(5);
-    }
-    while (!relative.empty() && relative.back() == '/') {
-        relative.pop_back();
-    }
-    std::vector<std::string> parts;
-    for (std::size_t start = 0; start <= relative.size();) {
-        const std::size_t slash = std::min(relative.find('/', start), relative.size());
-        parts.emplace_back(relative.substr(start, slash - start));
-        start = slash + 1;
-    }
-    if (parts.empty() || parts.front() != "Assets") {
-        return { {}, {}, "The folder must be inside Assets, for example Assets/Scenes." };
-    }
-    std::filesystem::path file = projectRoot;
-    std::string virtualPath = "/Game";
-    for (std::size_t index = 0; index < parts.size(); ++index) {
-        if (std::string problem = kb::assets::AssetFileNameError(parts[index]); !problem.empty()) {
-            return { {}, {}, "Folder: " + problem };
-        }
-        file /= Utf8Path(parts[index]);
-        if (index > 0) {
-            virtualPath += "/" + parts[index];
-        }
+    kb::assets::ProjectAssetFolder target = kb::assets::ResolveProjectAssetFolder(projectRoot, folder);
+    if (!target.error.empty()) {
+        return { {}, {}, std::move(target.error) };
     }
     const std::string fileName = std::string{ name } + std::string{ ".21kbscene" };
-    file /= Utf8Path(fileName);
-    virtualPath += "/" + fileName;
+    std::filesystem::path file = target.folder / kb::assets::Utf8Path(fileName);
+    std::string virtualPath = target.virtualPath + "/" + fileName;
     std::error_code error;
     if (std::filesystem::exists(file, error)) {
         return { {}, {}, "A scene named " + std::string{ name } + " already exists there. Choose another name." };

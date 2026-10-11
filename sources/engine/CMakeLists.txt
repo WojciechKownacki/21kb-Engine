@@ -414,6 +414,7 @@ add_library(kb_engine STATIC
     include/engine/script/NativeScriptPlugin.hpp
     include/engine/script/NativeScriptPluginManager.hpp
     include/engine/script/NativeScriptPluginRegistrar.hpp
+    include/engine/script/ScriptProjectFiles.hpp
     include/engine/script/PucLuaSafeCall.hpp
     include/engine/script/PucLuaScriptRuntime.hpp
     include/engine/script/ScriptAgentProjectFiles.hpp
@@ -1117,6 +1118,7 @@ add_library(kb_engine STATIC
     src/script/NativeScriptBackend.cpp
     src/script/NativeScriptPluginManager.cpp
     src/script/NativeScriptPluginRegistrar.cpp
+    src/script/ScriptProjectFiles.cpp
     src/script/lua/api/PucLuaEventApi.cpp
     src/script/lua/api/PucLuaEventsApi.cpp
     src/script/lua/api/PucLuaFunctionApi.cpp

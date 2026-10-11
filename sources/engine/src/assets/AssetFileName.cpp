@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <vector>
 
 namespace kb::assets {
 namespace {
@@ -50,6 +51,42 @@ std::string AssetFileNameError(std::string_view name) {
         return "A name can't end with a space or a dot.";
     }
     return {};
+}
+
+ProjectAssetFolder ResolveProjectAssetFolder(const std::filesystem::path& projectRoot, std::string_view text) {
+    // "/Game/Scenes" and "Assets/Scenes" name the same folder.
+    std::string relative{ text };
+    std::replace(relative.begin(), relative.end(), '\\', '/');
+    if (relative == "/Game" || relative.starts_with("/Game/")) {
+        relative = "Assets" + relative.substr(5);
+    }
+    while (!relative.empty() && relative.back() == '/') {
+        relative.pop_back();
+    }
+    std::vector<std::string> parts;
+    for (std::size_t start = 0; start <= relative.size();) {
+        const std::size_t slash = std::min(relative.find('/', start), relative.size());
+        parts.emplace_back(relative.substr(start, slash - start));
+        start = slash + 1;
+    }
+    if (parts.empty() || parts.front() != "Assets") {
+        return { {}, {}, "The folder must be inside Assets (Assets/... or /Game/...)." };
+    }
+    ProjectAssetFolder resolved{ projectRoot, "/Game", {} };
+    for (std::size_t index = 0; index < parts.size(); ++index) {
+        if (std::string problem = AssetFileNameError(parts[index]); !problem.empty()) {
+            return { {}, {}, "Folder: " + problem };
+        }
+        resolved.folder /= Utf8Path(parts[index]);
+        if (index > 0) {
+            resolved.virtualPath += "/" + parts[index];
+        }
+    }
+    return resolved;
+}
+
+std::filesystem::path Utf8Path(std::string_view text) {
+    return std::filesystem::path{ std::u8string{ reinterpret_cast<const char8_t*>(text.data()), text.size() } };
 }
 
 } // namespace kb::assets
