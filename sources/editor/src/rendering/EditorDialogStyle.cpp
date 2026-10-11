@@ -5,6 +5,7 @@
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <string>
@@ -342,7 +343,7 @@ void EditorDialogStyle::PaintText(
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextW(dc, wide.data(), wideLength, &bounds, format | DT_NOPREFIX);
+    kb::editor::DrawTextWide(dc, wide.data(), wideLength, &bounds, format | DT_NOPREFIX);
 }
 
 } // namespace kb::editor

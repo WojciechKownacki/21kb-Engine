@@ -1,6 +1,7 @@
 #include "app/EditorAutomationScenarioRunner.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "editor/ParticleEditorText.hpp"
+#include "rendering/gdi/CutTextAudit.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
@@ -4543,9 +4544,23 @@ ReadScriptValue(
         const double height = NumberMember(step, "height", error, false).value_or(700.0);
         if (!error.empty() || width < 240.0 || width > 3840.0 || height < 200.0 || height > 2160.0)
             return {false, "capture dimensions outside supported bounds"};
-        return {
-            state.automation.CapturePanel(*panel, *checkpoint, static_cast<int>(width), static_cast<int>(height)),
-            *panel + ':' + *checkpoint };
+        // "text_fits": no single-line text of the panel may be cut (a translation must fit too).
+        const bool textFits = BoolMember(step, "text_fits", error, false).value_or(false);
+        std::vector<CutText> cut;
+        if (textFits) CutTextSink() = &cut;
+        const bool captured =
+            state.automation.CapturePanel(*panel, *checkpoint, static_cast<int>(width), static_cast<int>(height));
+        CutTextSink() = nullptr;
+        if (!captured) return { false, *panel + ':' + *checkpoint };
+        if (!cut.empty()) {
+            std::string message = *panel + ": " + std::to_string(cut.size()) + " cut text(s):";
+            for (std::size_t index = 0; index < cut.size() && index < 8U; ++index) {
+                message += " \"" + cut[index].text + "\" needs " + std::to_string(cut[index].needed) + " px, has " +
+                    std::to_string(cut[index].available) + " px;";
+            }
+            return { false, message };
+        }
+        return { true, *panel + ':' + *checkpoint };
     }
 
     if (*operation == "capture_screenshot_matrix") {

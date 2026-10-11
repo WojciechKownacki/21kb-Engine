@@ -4,6 +4,7 @@
 #include "rendering/EditorPanelStyle.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <array>
@@ -101,7 +102,7 @@ void Text(
     }
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextW(dc, wide.data(), length, &rect, format | DT_NOPREFIX);
+    kb::editor::DrawTextWide(dc, wide.data(), length, &rect, format | DT_NOPREFIX);
 }
 
 [[nodiscard]] RECT ValueRect(RECT row) noexcept {

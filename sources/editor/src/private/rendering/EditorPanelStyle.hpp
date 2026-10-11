@@ -14,6 +14,7 @@
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #pragma warning(push, 0)
 #include <objidl.h>
@@ -103,7 +104,7 @@ inline void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT 
     if (wideLength <= 0) return;
     std::wstring wideText(static_cast<std::size_t>(wideLength), L'\0');
     if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), wideText.data(), wideLength) != wideLength) return;
-    DrawTextW(dc, wideText.data(), wideLength, &rect, format | DT_NOPREFIX);
+    kb::editor::DrawTextWide(dc, wideText.data(), wideLength, &rect, format | DT_NOPREFIX);
 }
 
 // Width of UTF-8 text in the font currently selected into `dc`. Callers must already be
@@ -142,7 +143,7 @@ inline void TextW(HDC dc, RECT rect, std::wstring_view text, COLORREF color, UIN
     rect.bottom += kTextBaselineOffsetY;
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextW(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
+    kb::editor::DrawTextWide(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
 }
 
 [[nodiscard]] inline Gdiplus::Color GdiplusColor(COLORREF color) noexcept {

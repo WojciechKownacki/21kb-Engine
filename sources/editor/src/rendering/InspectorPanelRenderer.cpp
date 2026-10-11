@@ -73,6 +73,7 @@
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "scene/material_preview/EditorMaterialPreviewTelemetry.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <array>
@@ -389,7 +390,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
     if (wideLength <= 0) return;
     std::wstring wideText(static_cast<std::size_t>(wideLength), L'\0');
     if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), wideText.data(), wideLength) != wideLength) return;
-    DrawTextW(dc, wideText.data(), wideLength, &rect, format | DT_NOPREFIX);
+    kb::editor::DrawTextWide(dc, wideText.data(), wideLength, &rect, format | DT_NOPREFIX);
 }
 
 void DrawFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {

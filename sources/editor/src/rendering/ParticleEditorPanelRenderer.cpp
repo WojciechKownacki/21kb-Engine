@@ -107,7 +107,7 @@ void DrawTextUtf8(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT
     }
     std::wstring wide(static_cast<std::size_t>(wideLength), L'\0');
     if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), length, wide.data(), wideLength) <= 0) return;
-    DrawTextW(dc, wide.c_str(), wideLength, &rect, format | DT_NOPREFIX);
+    kb::editor::DrawTextWide(dc, wide.c_str(), wideLength, &rect, format | DT_NOPREFIX);
 }
 
 void DrawButton(HDC dc, const RECT& rect, std::string_view label, ParticleEditorButtonTone tone = ParticleEditorButtonTone::Neutral,
