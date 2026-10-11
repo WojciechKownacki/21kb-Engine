@@ -1,4 +1,5 @@
 #include "rendering/PluginsPanelRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
@@ -102,12 +103,28 @@ constexpr int kCategoryColumnRight = 430;
     return RECT{ track.left + 2, thumbTop, track.right - 2, thumbTop + thumbHeight };
 }
 
-void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
     ScopedFont font{ pointSize, weight };
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
+}
+
+// A plugin's name and category in the editor language; product names stay as they are.
+[[nodiscard]] std::string_view PluginDisplayName(const EditorPluginDescriptor& plugin) {
+    if (plugin.id == "Rendering.21kbParticle") return EditorText("panel.particleEditor", "21kb Particle System");
+    if (plugin.id == "Rendering.BasicLighting") return EditorText("plugins.basicLighting", "Basic Lighting");
+    if (plugin.id == "Editor.Terrain") return EditorText("plugins.terrainEditor", "Terrain Editor");
+    return plugin.displayName;
+}
+
+[[nodiscard]] std::string_view PluginCategory(std::string_view category) {
+    if (category == "Physics") return EditorText("plugins.category.physics", "Physics");
+    if (category == "Audio") return EditorText("plugins.category.audio", "Audio");
+    if (category == "Rendering") return EditorText("plugins.category.rendering", "Rendering");
+    if (category == "Editor") return EditorText("plugins.category.editor", "Editor");
+    return category;
 }
 
 void DrawCheckbox(HDC dc, RECT rect, const EditorTheme& theme, bool enabled) {
@@ -124,7 +141,7 @@ void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme) {
     GdiDrawing::FillRectColor(dc, header, Color(theme.strip));
     GdiDrawing::FillRectColor(dc, RECT{ header.left, header.top, header.left + 3, header.bottom }, Color(theme.accent));
     GdiDrawing::FillRectColor(dc, RECT{ header.left, header.bottom - 1, header.right, header.bottom }, Color(theme.borderChrome));
-    DrawText(dc, RECT{ header.left + kPadding, header.top, header.right - kPadding, header.bottom }, "Plugins", Color(theme.textPrimary), 14, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left + kPadding, header.top, header.right - kPadding, header.bottom }, EditorText("panel.plugins", "Plugins"), Color(theme.textPrimary), 14, FW_SEMIBOLD);
 }
 
 void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
@@ -132,24 +149,24 @@ void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const Edi
     if (sceneContext.HasPendingParticleProviderMigration()) {
         const RECT header = HeaderRect(content);
         DrawText(dc, RECT{ header.left + 92, header.top, header.right - 166, header.bottom },
-            "Particle effects detected", RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            EditorText("plugins.particleEffectsDetected", "Particle effects detected"), RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         GdiDrawing::DrawSharpFrame(dc, ProviderAddRect(content), Color(theme.accent), Color(theme.accent));
         GdiDrawing::DrawSharpFrame(dc, ProviderCancelRect(content), Color(theme.chrome), Color(theme.borderPanel));
-        DrawText(dc, ProviderAddRect(content), "Add", Color(theme.textPrimary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        DrawText(dc, ProviderCancelRect(content), "Cancel", Color(theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, ProviderAddRect(content), EditorText("common.add", "Add"), Color(theme.textPrimary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, ProviderCancelRect(content), EditorText("common.cancel", "Cancel"), Color(theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     } else if (sceneContext.Plugins().HasPendingReload()) {
         const RECT header = HeaderRect(content);
-        DrawText(dc, RECT{ header.left + 110, header.top, header.right - kPadding, header.bottom }, "Pending scene reload", RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, RECT{ header.left + 110, header.top, header.right - kPadding, header.bottom }, EditorText("plugins.pendingReload", "Pending scene reload"), RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
 void DrawColumnHeader(HDC dc, const RECT& content, const EditorTheme& theme) {
     const RECT header = ColumnHeaderRect(content);
     GdiDrawing::FillRectColor(dc, header, Color(theme.chrome));
-    DrawText(dc, RECT{ header.left + kPadding + kPluginColumnLeft, header.top, header.left + kPluginColumnRight, header.bottom }, "PLUGIN", Color(theme.textSecondary), 11, FW_SEMIBOLD);
-    DrawText(dc, RECT{ header.left + kPluginColumnRight, header.top, header.left + kStatusColumnRight, header.bottom }, "STATUS", Color(theme.textSecondary), 11, FW_SEMIBOLD);
-    DrawText(dc, RECT{ header.left + kStatusColumnRight, header.top, header.left + kCategoryColumnRight, header.bottom }, "CATEGORY", Color(theme.textSecondary), 11, FW_SEMIBOLD);
-    DrawText(dc, RECT{ header.left + kCategoryColumnRight, header.top, header.right - kPadding, header.bottom }, "BINARY", Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left + kPadding + kPluginColumnLeft, header.top, header.left + kPluginColumnRight, header.bottom }, EditorText("plugins.column.plugin", "PLUGIN"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left + kPluginColumnRight, header.top, header.left + kStatusColumnRight, header.bottom }, EditorText("plugins.column.status", "STATUS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left + kStatusColumnRight, header.top, header.left + kCategoryColumnRight, header.bottom }, EditorText("plugins.column.category", "CATEGORY"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left + kCategoryColumnRight, header.top, header.right - kPadding, header.bottom }, EditorText("plugins.column.binary", "BINARY"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
     GdiDrawing::FillRectColor(dc, RECT{ header.left, header.bottom - 1, header.right, header.bottom }, Color(theme.borderChrome));
 }
 
@@ -170,11 +187,12 @@ void DrawRow(HDC dc, const RECT& row, const EditorTheme& theme, std::size_t inde
 
     const RECT checkbox{ row.left + 8, row.top + 8, row.left + 24, row.top + 24 };
     DrawCheckbox(dc, checkbox, theme, enabled);
-    DrawText(dc, RECT{ row.left + 34, row.top + 1, row.left + kPluginColumnRight - 10, row.top + 18 }, plugin->displayName.data(), Color(theme.textPrimary), 12, FW_SEMIBOLD);
-    DrawText(dc, RECT{ row.left + 34, row.top + 17, row.left + kPluginColumnRight - 10, row.bottom }, plugin->id.data(), Color(theme.textDisabled), 11);
-    const char* status = enabled ? (pendingReload ? "Enabled*" : "Enabled") : (pendingReload ? "Disabled*" : "Disabled");
+    DrawText(dc, RECT{ row.left + 34, row.top + 1, row.left + kPluginColumnRight - 10, row.top + 18 }, PluginDisplayName(*plugin), Color(theme.textPrimary), 12, FW_SEMIBOLD);
+    DrawText(dc, RECT{ row.left + 34, row.top + 17, row.left + kPluginColumnRight - 10, row.bottom }, plugin->id, Color(theme.textDisabled), 11);
+    const std::string status = std::string{ enabled ? EditorText("plugins.enabled", "Enabled") : EditorText("plugins.disabled", "Disabled") } +
+        (pendingReload ? "*" : "");
     DrawText(dc, RECT{ row.left + kPluginColumnRight, row.top, row.left + kStatusColumnRight, row.bottom }, status, pendingReload ? RGB(223, 178, 91) : (enabled ? RGB(126, 201, 143) : RGB(136, 145, 156)), 12);
-    DrawText(dc, RECT{ row.left + kStatusColumnRight, row.top, row.left + kCategoryColumnRight, row.bottom }, plugin->category.data(), Color(theme.textSecondary), 12);
+    DrawText(dc, RECT{ row.left + kStatusColumnRight, row.top, row.left + kCategoryColumnRight, row.bottom }, PluginCategory(plugin->category), Color(theme.textSecondary), 12);
 
     const std::string binary = sceneContext.ProjectPluginBinaryPath(plugin->id).empty()
         ? std::string{ plugin->binaryPath }
@@ -225,7 +243,7 @@ void PluginsPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme&
     }
 
     if (EditorPluginCatalog::Count() == 0U) {
-        DrawText(dc, rows, "No plugins discovered.", Color(theme.textDisabled), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, rows, EditorText("plugins.none", "No plugins discovered."), Color(theme.textDisabled), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     DrawScrollbar(dc, content, theme, sceneContext);
 }

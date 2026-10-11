@@ -1,4 +1,5 @@
 #include "scene/EditorSceneContext.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneCreateMenu.hpp"
 #include "scene/EditorPlayCameraResolver.hpp"
@@ -3595,7 +3596,7 @@ std::string EditorSceneContext::EntityScriptName(kb::scene::SceneEntity entity) 
     }
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour->behaviourAssetId });
     if (metadata == nullptr) {
-        return "(missing script)";
+        return std::string{ EditorText("inspector.script.missingScript", "(missing script)") };
     }
     return metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
 }
@@ -4595,7 +4596,8 @@ kb::scene::SceneEntity EditorSceneContext::AnimatorEditorDebugTarget() const noe
 }
 
 std::string EditorSceneContext::AnimatorEditorDebugTargetLabel() const {
-    return AnimatorEditorDebuggingPreview() ? "Preview Instance" : scene_->Entities().Name(animatorEditorDebugTarget_);
+    return AnimatorEditorDebuggingPreview() ? std::string{ EditorText("animatorEditor.previewInstance", "Preview Instance") }
+                                            : scene_->Entities().Name(animatorEditorDebugTarget_);
 }
 
 kb::scene::SceneEntity EditorSceneContext::AnimatorEditorResolvedDebugTarget() const noexcept {

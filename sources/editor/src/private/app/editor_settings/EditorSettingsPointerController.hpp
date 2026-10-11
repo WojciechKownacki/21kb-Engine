@@ -11,12 +11,18 @@
 namespace kb::editor {
 
 class EditorSceneContext;
+class EditorDockModel;
+class EditorFloatingWindowManager;
 
 class EditorSettingsPointerController final {
 public:
-    explicit EditorSettingsPointerController(EditorSceneContext& sceneContext) noexcept : sceneContext_(sceneContext) {}
+    EditorSettingsPointerController(EditorSceneContext& sceneContext, EditorDockModel& dockModel,
+        EditorFloatingWindowManager& floatingWindows) noexcept
+        : sceneContext_(sceneContext), dockModel_(dockModel), floatingWindows_(floatingWindows) {}
 #if defined(_WIN32)
+    // `owner` is the window the Language list opens over.
     [[nodiscard]] bool HandlePointerDown(
+        HWND owner,
         const RECT& content,
         int x,
         int y);
@@ -24,6 +30,8 @@ public:
 
 private:
     EditorSceneContext& sceneContext_;
+    EditorDockModel& dockModel_;
+    EditorFloatingWindowManager& floatingWindows_;
 };
 
 } // namespace kb::editor

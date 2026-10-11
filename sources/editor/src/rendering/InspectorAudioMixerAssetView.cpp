@@ -1,4 +1,5 @@
 #include "rendering/InspectorAudioMixerAssetView.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include "rendering/EditorPanelStyle.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -149,7 +150,7 @@ void PaintHeader(
         const ScopedGdiObject selected(dc, font.handle);
         Text(dc, Rect(icon.right + 10, header.top + 7, header.right - 12, header.top + 33), title, Color(theme.textPrimary));
     }
-    Text(dc, Rect(icon.right + 10, header.top + 31, header.right - 12, header.bottom - 7), "Audio Mixer", Color(theme.textDisabled));
+    Text(dc, Rect(icon.right + 10, header.top + 31, header.right - 12, header.bottom - 7), EditorText("inspector.audioMixer.subtitle", "Audio Mixer"), Color(theme.textDisabled));
 }
 
 void PaintRow(
@@ -300,11 +301,11 @@ void InspectorAudioMixerAssetView::Paint(
     Fill(dc, content, Color(theme.background));
     PaintHeader(dc, content, theme, metadata);
     const int busesTop = content.top + kHeaderHeight + kPanelPadTop;
-    PaintSection(dc, content, busesTop, theme, state, metadata.id, InspectorSectionId::AudioMixerBuses, "Buses", model.Rows(InspectorSectionId::AudioMixerBuses));
+    PaintSection(dc, content, busesTop, theme, state, metadata.id, InspectorSectionId::AudioMixerBuses, EditorText("inspector.audioMixer.buses", "Buses"), model.Rows(InspectorSectionId::AudioMixerBuses));
     const int snapshotsTop = busesTop
         + SectionHeight(state, InspectorSectionId::AudioMixerBuses, model.Rows(InspectorSectionId::AudioMixerBuses))
         + kSectionGap;
-    PaintSection(dc, content, snapshotsTop, theme, state, metadata.id, InspectorSectionId::AudioMixerSnapshots, "Snapshots", model.Rows(InspectorSectionId::AudioMixerSnapshots));
+    PaintSection(dc, content, snapshotsTop, theme, state, metadata.id, InspectorSectionId::AudioMixerSnapshots, EditorText("inspector.audioMixer.snapshots", "Snapshots"), model.Rows(InspectorSectionId::AudioMixerSnapshots));
 }
 
 InspectorAudioMixerAssetHit InspectorAudioMixerAssetView::HitTest(

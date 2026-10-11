@@ -49,24 +49,24 @@ bool ProjectFilesPanelDrawing::SameVirtualPath(const std::filesystem::path& left
     return kb::assets::NormalizeAssetPath(left) == kb::assets::NormalizeAssetPath(right);
 }
 
-void ProjectFilesPanelDrawing::DrawLabel(HDC dc, RECT rect, const char* text, COLORREF color) {
+void ProjectFilesPanelDrawing::DrawLabel(HDC dc, RECT rect, std::string_view text, COLORREF color) {
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
-void ProjectFilesPanelDrawing::DrawCenteredLabel(HDC dc, RECT rect, const char* text, COLORREF color) {
+void ProjectFilesPanelDrawing::DrawCenteredLabel(HDC dc, RECT rect, std::string_view text, COLORREF color) {
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
-void ProjectFilesPanelDrawing::DrawTextWithFont(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize, int weight, UINT flags) {
+void ProjectFilesPanelDrawing::DrawTextWithFont(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize, int weight, UINT flags) {
     ScopedFont font{ pointSize, weight };
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 void ProjectFilesPanelDrawing::DrawHairline(HDC dc, RECT rect, COLORREF color) {
@@ -92,7 +92,7 @@ void ProjectFilesPanelDrawing::DrawIconButton(HDC dc, RECT rect, const EditorThe
     HeroIconPainter::Draw(dc, iconRect, icon, active ? Color(theme.textPrimary) : Color(theme.textSecondary), 2);
 }
 
-void ProjectFilesPanelDrawing::DrawTextButton(HDC dc, RECT rect, const EditorTheme& theme, const char* text, bool active) {
+void ProjectFilesPanelDrawing::DrawTextButton(HDC dc, RECT rect, const EditorTheme& theme, std::string_view text, bool active) {
     const COLORREF fill = active ? Blend(Color(theme.tabActive), Color(theme.accent), 10) : Blend(Color(theme.panel), Color(theme.strip), 20);
     const COLORREF border = active ? Blend(Color(theme.accent), Color(theme.borderPanel), 28) : Color(theme.borderPanel);
     GdiDrawing::DrawSharpFrame(dc, rect, fill, border);

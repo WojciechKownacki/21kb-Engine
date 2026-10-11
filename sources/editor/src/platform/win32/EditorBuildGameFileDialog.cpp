@@ -1,6 +1,10 @@
 #include "platform/win32/EditorBuildGameFileDialog.hpp"
 
 #if defined(_WIN32)
+#include "localization/EditorLocalization.hpp"
+#include "platform/win32/EditorFileDialogFilter.hpp"
+#include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
+
 #include <CommDlg.h>
 #include <ShlObj.h>
 
@@ -11,15 +15,20 @@ namespace kb::editor {
 namespace {
 
 [[nodiscard]] std::optional<std::filesystem::path> SelectFile(
-    HWND owner, const wchar_t* filter, const wchar_t* title) {
+    HWND owner, std::string_view description, std::string_view pattern, std::string_view titleText) {
+    const std::wstring filter = EditorFileDialogFilter({
+        { description, pattern },
+        { EditorText("fileDialog.allFiles", "All files (*.*)"), "*.*" },
+    });
+    const std::wstring title = ScriptEditorTextEncoding::Widen(titleText);
     std::array<wchar_t, 32768> buffer{};
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
     dialog.hwndOwner = owner;
-    dialog.lpstrFilter = filter;
+    dialog.lpstrFilter = filter.c_str();
     dialog.lpstrFile = buffer.data();
     dialog.nMaxFile = static_cast<DWORD>(buffer.size());
-    dialog.lpstrTitle = title;
+    dialog.lpstrTitle = title.c_str();
     dialog.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (!GetOpenFileNameW(&dialog)) return std::nullopt;
     return std::filesystem::path{ buffer.data() };
@@ -28,14 +37,14 @@ namespace {
 } // namespace
 
 std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectFolder(
-    HWND owner, const std::filesystem::path& initialDirectory, std::wstring_view title) {
+    HWND owner, const std::filesystem::path& initialDirectory, std::string_view title) {
     IFileDialog* dialog = nullptr;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
             IID_PPV_ARGS(&dialog))) || dialog == nullptr) return std::nullopt;
     DWORD options = 0U;
     static_cast<void>(dialog->GetOptions(&options));
     static_cast<void>(dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST));
-    const std::wstring titleText{ title };
+    const std::wstring titleText = ScriptEditorTextEncoding::Widen(title);
     static_cast<void>(dialog->SetTitle(titleText.c_str()));
     IShellItem* initial = nullptr;
     if (!initialDirectory.empty() && SUCCEEDED(SHCreateItemFromParsingName(initialDirectory.c_str(), nullptr,
@@ -63,23 +72,23 @@ std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectFolder(
 }
 
 std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectPng(HWND owner) {
-    constexpr wchar_t filter[] = L"PNG image (*.png)\0*.png\0All files (*.*)\0*.*\0";
-    return SelectFile(owner, filter, L"Select application icon");
+    return SelectFile(owner, EditorText("fileDialog.pngFilter", "PNG image (*.png)"), "*.png",
+        EditorText("fileDialog.selectAppIconTitle", "Select application icon"));
 }
 
 std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectKeystore(HWND owner) {
-    constexpr wchar_t filter[] = L"Java keystore (*.jks;*.keystore)\0*.jks;*.keystore\0All files (*.*)\0*.*\0";
-    return SelectFile(owner, filter, L"Select Android keystore");
+    return SelectFile(owner, EditorText("fileDialog.keystoreFilter", "Java keystore (*.jks;*.keystore)"), "*.jks;*.keystore",
+        EditorText("fileDialog.selectKeystoreTitle", "Select Android keystore"));
 }
 
 std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectCertificate(HWND owner) {
-    constexpr wchar_t filter[] = L"Code signing certificate (*.pfx;*.p12)\0*.pfx;*.p12\0All files (*.*)\0*.*\0";
-    return SelectFile(owner, filter, L"Select code signing certificate");
+    return SelectFile(owner, EditorText("fileDialog.certificateFilter", "Code signing certificate (*.pfx;*.p12)"), "*.pfx;*.p12",
+        EditorText("fileDialog.selectCertificateTitle", "Select code signing certificate"));
 }
 
 std::optional<std::filesystem::path> EditorBuildGameFileDialog::SelectIdentity(HWND owner) {
-    constexpr wchar_t filter[] = L"SSH private key (id_*)\0id_*\0All files (*.*)\0*.*\0";
-    return SelectFile(owner, filter, L"Select SSH identity file");
+    return SelectFile(owner, EditorText("fileDialog.sshKeyFilter", "SSH private key (id_*)"), "id_*",
+        EditorText("fileDialog.selectSshIdentityTitle", "Select SSH identity file"));
 }
 
 } // namespace kb::editor

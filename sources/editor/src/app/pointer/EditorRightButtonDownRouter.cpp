@@ -1,4 +1,5 @@
 #include "app/pointer/EditorRightButtonDownRouter.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
@@ -9,6 +10,7 @@
 #include "app/project_files/EditorProjectFilesTransientUiController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "engine/scene/SceneCreateMenu.hpp"
+#include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
@@ -62,6 +64,42 @@ void AppendSeparator(HMENU menu) {
     return command;
 }
 
+// The Create menu in the editor language. The engine's SceneCreateMenu keeps the English rows kb_cli shows;
+// a row the engine adds later keeps its English label until it gets an entry here.
+[[nodiscard]] std::string_view CreateItemLabel(const kb::scene::SceneCreateItem& item) {
+    if (item.id == "Empty") return EditorText("hierarchy.create.empty", "Create Empty");
+    if (item.id == "Cube") return EditorText("hierarchy.create.cube", "Cube");
+    if (item.id == "Sphere") return EditorText("hierarchy.create.sphere", "Sphere");
+    if (item.id == "Capsule") return EditorText("hierarchy.create.capsule", "Capsule");
+    if (item.id == "Cylinder") return EditorText("hierarchy.create.cylinder", "Cylinder");
+    if (item.id == "Cone") return EditorText("hierarchy.create.cone", "Cone");
+    if (item.id == "Plane") return EditorText("hierarchy.create.plane", "Plane");
+    if (item.id == "Quad") return EditorText("hierarchy.create.quad", "Quad");
+    if (item.id == "Directional Light") return EditorText("hierarchy.create.directionalLight", "Directional");
+    if (item.id == "Point Light") return EditorText("hierarchy.create.pointLight", "Point");
+    if (item.id == "Spot Light") return EditorText("hierarchy.create.spotLight", "Spot");
+    if (item.id == "Area Light") return EditorText("hierarchy.create.areaLight", "Area");
+    if (item.id == "Camera") return EditorText("hierarchy.create.camera", "Camera");
+    if (item.id == "Environment") return EditorText("hierarchy.create.environment", "Environment");
+    if (item.id == "Particle System") return EditorText("hierarchy.create.particleSystem", "Particle System");
+    if (item.id == "Audio Source") return EditorText("hierarchy.create.audioSource", "Audio Source");
+    if (item.id == "Audio Listener") return EditorText("hierarchy.create.audioListener", "Audio Listener");
+    return item.label;
+}
+
+[[nodiscard]] std::string_view CreateSubmenuLabel(std::string_view submenu) {
+    if (submenu == "3D Object") return EditorText("hierarchy.create.submenu.objects3D", "3D Object");
+    if (submenu == "Light") return EditorText("hierarchy.create.submenu.light", "Light");
+    if (submenu == "Effects") return EditorText("hierarchy.create.submenu.effects", "Effects");
+    if (submenu == "Audio") return EditorText("hierarchy.create.submenu.audio", "Audio");
+    return submenu;
+}
+
+[[nodiscard]] std::string_view CreateItemHint(const kb::scene::SceneCreateItem& item) {
+    if (item.id == "Environment") return EditorText("hierarchy.create.environmentHint", "Sky + ambient");
+    return item.hint;
+}
+
 [[nodiscard]] HMENU CreateSkeletonTreeSystemMenu(bool canAddSocket) {
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) return nullptr;
@@ -69,9 +107,11 @@ void AppendSeparator(HMENU menu) {
         menu,
         MF_STRING | (canAddSocket ? MF_ENABLED : MF_GRAYED),
         kSkeletonTreeMenuAddSocket,
-        "Add Socket");
-    AppendMenuA(menu, MF_STRING | MF_GRAYED, kSkeletonTreeMenuRenameSocket, "Rename Socket");
-    AppendMenuA(menu, MF_STRING | MF_GRAYED, kSkeletonTreeMenuDeleteSocket, "Delete Socket");
+        std::string{ EditorText("skeletalMeshEditor.menu.addSocket", "Add Socket") }.c_str());
+    AppendMenuA(menu, MF_STRING | MF_GRAYED, kSkeletonTreeMenuRenameSocket,
+        std::string{ EditorText("skeletalMeshEditor.menu.renameSocket", "Rename Socket") }.c_str());
+    AppendMenuA(menu, MF_STRING | MF_GRAYED, kSkeletonTreeMenuDeleteSocket,
+        std::string{ EditorText("skeletalMeshEditor.menu.deleteSocket", "Delete Socket") }.c_str());
     return menu;
 }
 
@@ -113,8 +153,8 @@ HMENU EditorRightButtonDownRouter::CreateHierarchyMenu() {
     const auto items = kb::scene::SceneCreateMenu::Items();
     for (std::size_t index = 0U; index < items.size(); ++index) {
         const kb::scene::SceneCreateItem& item = items[index];
-        std::string label{ item.label };
-        if (!item.hint.empty()) label += "\t" + std::string{ item.hint };
+        std::string label{ CreateItemLabel(item) };
+        if (!item.hint.empty()) label += "\t" + std::string{ CreateItemHint(item) };
         HMENU destination = create;
         if (!item.submenu.empty()) {
             auto found = std::ranges::find_if(submenus, [&item](const auto& entry) { return entry.first == item.submenu; });
@@ -125,7 +165,7 @@ HMENU EditorRightButtonDownRouter::CreateHierarchyMenu() {
                     for (const auto handle : {menu, create, widgets, layouts, effects, advanced}) DestroyMenu(handle);
                     return nullptr;
                 }
-                AppendMenuA(create, MF_POPUP, reinterpret_cast<UINT_PTR>(submenu), std::string{ item.submenu }.c_str());
+                AppendMenuA(create, MF_POPUP, reinterpret_cast<UINT_PTR>(submenu), std::string{ CreateSubmenuLabel(item.submenu) }.c_str());
                 found = submenus.insert(submenus.end(), { item.submenu, submenu });
             }
             destination = found->second;
@@ -143,22 +183,27 @@ HMENU EditorRightButtonDownRouter::CreateHierarchyMenu() {
         default: break;
         }
         AppendMenuA(destination, MF_STRING, kHierarchyMenuCreateUI + static_cast<UINT>(descriptor.type),
-            std::string{descriptor.displayName}.c_str());
+            std::string{ InspectorUIComponentModel::DisplayName(descriptor.type) }.c_str());
     }
     AppendSeparator(widgets);
-    AppendMenuA(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(layouts), "Layout");
-    AppendMenuA(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(effects), "Effects");
-    AppendMenuA(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(advanced), "Advanced");
-    AppendMenuA(create, MF_POPUP, reinterpret_cast<UINT_PTR>(widgets), "User Interface");
-    AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(create), "Create");
+    const auto append = [](HMENU target, UINT flags, UINT_PTR id, std::string_view text, std::string_view shortcut = {}) {
+        std::string row{ text };
+        if (!shortcut.empty()) row += "\t" + std::string{ shortcut };
+        AppendMenuA(target, flags, id, row.c_str());
+    };
+    append(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(layouts), EditorText("hierarchy.create.layout", "Layout"));
+    append(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(effects), EditorText("hierarchy.create.uiEffects", "Effects"));
+    append(widgets, MF_POPUP, reinterpret_cast<UINT_PTR>(advanced), EditorText("hierarchy.create.advanced", "Advanced"));
+    append(create, MF_POPUP, reinterpret_cast<UINT_PTR>(widgets), EditorText("hierarchy.create.userInterface", "User Interface"));
+    append(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(create), EditorText("hierarchy.create", "Create"));
     AppendSeparator(menu);
-    AppendMenuA(menu, MF_STRING, kHierarchyMenuDelete, "Delete\tDel");
-    AppendMenuA(menu, MF_STRING, kHierarchyMenuDuplicate, "Duplicate\tCtrl+D");
-    AppendMenuA(menu, MF_STRING, kHierarchyMenuRename, "Rename\tF2");
-    AppendDisabled(menu, "Paste Special");
-    AppendDisabled(menu, "Paste\tCtrl+V");
-    AppendDisabled(menu, "Copy\tCtrl+C");
-    AppendDisabled(menu, "Cut\tCtrl+X");
+    append(menu, MF_STRING, kHierarchyMenuDelete, EditorText("common.delete", "Delete"), "Del");
+    append(menu, MF_STRING, kHierarchyMenuDuplicate, EditorText("hierarchy.menu.duplicate", "Duplicate"), "Ctrl+D");
+    append(menu, MF_STRING, kHierarchyMenuRename, EditorText("common.rename", "Rename"), "F2");
+    AppendDisabled(menu, std::string{ EditorText("hierarchy.menu.pasteSpecial", "Paste Special") }.c_str());
+    AppendDisabled(menu, (std::string{ EditorText("hierarchy.menu.paste", "Paste") } + "\tCtrl+V").c_str());
+    AppendDisabled(menu, (std::string{ EditorText("hierarchy.menu.copy", "Copy") } + "\tCtrl+C").c_str());
+    AppendDisabled(menu, (std::string{ EditorText("hierarchy.menu.cut", "Cut") } + "\tCtrl+X").c_str());
     return menu;
 }
 

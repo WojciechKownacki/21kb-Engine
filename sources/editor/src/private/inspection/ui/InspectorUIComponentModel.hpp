@@ -42,6 +42,10 @@ public:
         const kb::scene::Scene& scene, kb::scene::SceneEntity entity,
         kb::scene::UIComponentType component);
 
+    // The component's name in the editor language; the engine's catalog name stays English for files
+    // and tools.
+    [[nodiscard]] static std::string_view DisplayName(kb::scene::UIComponentType component);
+    [[nodiscard]] static std::string_view PresetDisplayName(kb::scene::UIComponentPreset preset);
     [[nodiscard]] static InspectorSectionId Section(kb::scene::UIComponentType component) noexcept;
     [[nodiscard]] static InspectorPropertyId Property(kb::scene::UIComponentType component) noexcept;
     [[nodiscard]] static std::optional<kb::scene::UIComponentType> Component(

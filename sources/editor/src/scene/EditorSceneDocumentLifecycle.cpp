@@ -495,8 +495,21 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
         return false;
     }
     worldPartition_.Close();
+    // Loading replaces the open scene's objects before it can fail; the scene that was open comes
+    // back then, so a later save can never write an empty scene over its file.
+    const kb::scene::SceneDocument previous = kb::scene::SceneDocumentService::Capture(*scene_, SceneDocumentName(currentScenePath_));
     if (!kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
-        console_.Error("Project", "Scene could not be instantiated: " + scenePath.generic_string());
+        const bool restored = kb::scene::SceneDocumentService::LoadIntoScene(*scene_, previous);
+        console_.Error("Project", "Scene could not be instantiated: " + scenePath.generic_string() +
+            (restored ? std::string{ ". The scene that was open is still open." } : std::string{}));
+        if (!restored) {
+            for (const kb::scene::SceneEntity root : scene_->Hierarchy().RootEntities()) {
+                scene_->Entities().Destroy(root);
+            }
+            StartUntitledBasicScene();
+        }
+        ReleaseRenderedSceneResources();
+        AdvanceSceneDocumentGeneration();
         return false;
     }
     EditorSceneAudioSettingsService::PrepareDocument(*scene_);

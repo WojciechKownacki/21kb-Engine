@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/AnimationAssets.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -41,25 +42,34 @@ public:
             clip.skeletalTracks.size() + clip.tracks.size() + clip.morphTracks.size() +
             clip.curves.size() + 2U);
         for (const kb::scene::AnimationBoneTrack& source : clip.skeletalTracks) {
-            tracks_.push_back({ AnimationClipTimelineTrackKind::Bone, source.boneId, "Bone " + std::to_string(source.boneId), BoneKeys(source) });
+            tracks_.push_back({ AnimationClipTimelineTrackKind::Bone, source.boneId,
+                EditorLocalization::Format("animationClipEditor.track.bone", "Bone {id}", { { "id", std::to_string(source.boneId) } }),
+                BoneKeys(source) });
         }
         for (const kb::scene::AnimationTransformTrack& source : clip.tracks) {
             tracks_.push_back({ AnimationClipTimelineTrackKind::Transform, 0U,
-                source.targetPath.empty() || source.targetPath == "." ? "Transform (Owner)" : "Transform " + source.targetPath,
+                source.targetPath.empty() || source.targetPath == "."
+                    ? std::string{ EditorText("animationClipEditor.track.transformOwner", "Transform (Owner)") }
+                    : EditorLocalization::Format("animationClipEditor.track.transform", "Transform {path}", { { "path", source.targetPath } }),
                 TransformKeys(source) });
         }
         for (const kb::scene::AnimationMorphTrack& source : clip.morphTracks) {
-            tracks_.push_back({ AnimationClipTimelineTrackKind::Morph, 0U, "Morph " + source.morphTarget, MorphKeys(source) });
+            tracks_.push_back({ AnimationClipTimelineTrackKind::Morph, 0U,
+                EditorLocalization::Format("animationClipEditor.track.morph", "Morph {target}", { { "target", source.morphTarget } }),
+                MorphKeys(source) });
         }
         for (const kb::scene::AnimationCurveTrack& source : clip.curves) {
-            tracks_.push_back({ AnimationClipTimelineTrackKind::Curve, 0U, "Curve " + source.name, CurveKeys(source) });
+            tracks_.push_back({ AnimationClipTimelineTrackKind::Curve, 0U,
+                EditorLocalization::Format("animationClipEditor.track.curve", "Curve {name}", { { "name", source.name } }),
+                CurveKeys(source) });
         }
         if (!clip.events.empty()) {
             std::vector<AnimationClipTimelineKey> keys;
             keys.reserve(clip.events.size());
             for (const kb::scene::AnimationEventKeyframe& event : clip.events) keys.push_back({ event.timeSeconds, event.id });
             SortKeys(keys);
-            tracks_.push_back({ AnimationClipTimelineTrackKind::Event, 0U, "Events", std::move(keys) });
+            tracks_.push_back({ AnimationClipTimelineTrackKind::Event, 0U,
+                std::string{ EditorText("animationClipEditor.track.events", "Events") }, std::move(keys) });
         }
         if (clip.rootMotionMode == kb::scene::AnimationRootMotionMode::ExtractFromBone) {
             std::vector<AnimationClipTimelineKey> keys;
@@ -68,9 +78,12 @@ public:
             });
             if (source != clip.skeletalTracks.end()) keys = BoneKeys(*source);
             tracks_.push_back({ AnimationClipTimelineTrackKind::RootMotion, clip.rootMotionBoneId,
-                "Root Motion (Bone " + std::to_string(clip.rootMotionBoneId) + ")", std::move(keys) });
+                EditorLocalization::Format("animationClipEditor.track.rootMotionBone", "Root Motion (Bone {id})",
+                    { { "id", std::to_string(clip.rootMotionBoneId) } }),
+                std::move(keys) });
         } else {
-            tracks_.push_back({ AnimationClipTimelineTrackKind::RootMotion, 0U, "Root Motion (Disabled)", {} });
+            tracks_.push_back({ AnimationClipTimelineTrackKind::RootMotion, 0U,
+                std::string{ EditorText("animationClipEditor.track.rootMotionDisabled", "Root Motion (Disabled)") }, {} });
         }
         std::stable_sort(tracks_.begin(), tracks_.end(), [](const AnimationClipTimelineTrack& lhs, const AnimationClipTimelineTrack& rhs) {
             if (lhs.kind != rhs.kind) return lhs.kind < rhs.kind;

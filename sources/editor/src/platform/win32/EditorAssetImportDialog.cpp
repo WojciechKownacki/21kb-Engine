@@ -1,7 +1,9 @@
 #include "platform/win32/EditorAssetImportDialog.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "engine/assets/AssetImportCatalog.hpp"
+#include "platform/win32/EditorFileDialogFilter.hpp"
 #include "platform/win32/EditorModalMessageLoop.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/components/EditorDialogStyle.hpp"
@@ -30,13 +32,6 @@ constexpr int kRowHeight = EditorDialogStyle::ListRowHeight;
 [[nodiscard]] RECT Rect(int left, int top, int right, int bottom) noexcept { return RECT{ left, top, right, bottom }; }
 [[nodiscard]] bool Contains(const RECT& rect, int x, int y) noexcept { return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom; }
 [[nodiscard]] int Height(const RECT& rect) noexcept { return std::max(0, static_cast<int>(rect.bottom - rect.top)); }
-[[nodiscard]] std::wstring WidenAsciiFilter(const std::string& filter) {
-    std::wstring output;
-    output.reserve(filter.size());
-    for (const char character : filter) output.push_back(static_cast<wchar_t>(static_cast<unsigned char>(character)));
-    return output;
-}
-
 [[nodiscard]] std::vector<std::filesystem::path> ParseOpenFileNameBuffer(const std::array<wchar_t, 65536>& buffer) {
     std::vector<std::filesystem::path> paths;
     const wchar_t* cursor = buffer.data();
@@ -116,15 +111,18 @@ private:
         const RECT client = Client();
         const EditorTheme theme = MakeEditorDarkTheme();
         EditorDialogStyle::PaintSurface(dc, client, theme);
-        const std::string description = (importSkeletalMesh_ ? "Skeletal mesh  /  " : "Static mesh  /  ")
-            + std::to_string(fileCount_) + " file(s)";
+        const std::string description = importSkeletalMesh_
+            ? EditorLocalization::Plural("importMesh.skeletalFileCount", static_cast<std::int64_t>(fileCount_),
+                  "Skeletal mesh  /  {count} file", "Skeletal mesh  /  {count} files")
+            : EditorLocalization::Plural("importMesh.staticFileCount", static_cast<std::int64_t>(fileCount_),
+                  "Static mesh  /  {count} file", "Static mesh  /  {count} files");
         EditorDialogStyle::PaintHeader(
             dc,
             theme,
             EditorDialogHeaderDescriptor{
                 .bounds = Rect(1, 3, client.right - 1, kHeaderHeight),
                 .closeButton = CloseRect(),
-                .title = "Import Mesh",
+                .title = EditorText("importMesh.title", "Import Mesh"),
                 .description = description,
                 .icon = HeroIconKind::DocumentText,
                 .showIcon = true,
@@ -133,41 +131,47 @@ private:
         const int saved = SaveDC(dc);
         IntersectClipRect(dc, viewport.left, viewport.top, viewport.right, viewport.bottom);
         const int y = viewport.top - scrollOffset_;
-        EditorDialogStyle::PaintText(dc, Rect(viewport.left, y, viewport.right, y + 24), "Mesh", EditorDialogStyle::Color(theme.accent), 12, FW_SEMIBOLD);
+        EditorDialogStyle::PaintText(dc, Rect(viewport.left, y, viewport.right, y + 24), EditorText("importMesh.meshSection", "Mesh"), EditorDialogStyle::Color(theme.accent), 12, FW_SEMIBOLD);
         EditorDialogStyle::PaintText(
             dc,
             Rect(viewport.left, y + 25, viewport.right, y + 48),
-            importSkeletalMesh_ ? "Skeletal source import" : "Static mesh import",
+            importSkeletalMesh_ ? EditorText("importMesh.skeletalSourceImport", "Skeletal source import")
+                                : EditorText("importMesh.staticMeshImport", "Static mesh import"),
             EditorDialogStyle::Color(theme.textSecondary));
         DrawCheckRow(
             dc,
             theme,
             MaterialSlotsRow(),
             importMaterialSlots_,
-            "Import material slots",
-            materialSlotsAvailable_ ? "Preserve FBX material names and per-section assignments" : "Available only when every selected mesh is an FBX source",
+            EditorText("importMesh.importMaterialSlots", "Import material slots"),
+            materialSlotsAvailable_
+                ? EditorText("importMesh.importMaterialSlotsHint", "Preserve FBX material names and per-section assignments")
+                : EditorText("importMesh.importMaterialSlotsUnavailable", "Available only when every selected mesh is an FBX source"),
             materialSlotsAvailable_ && !importSkeletalMesh_);
-        EditorDialogStyle::PaintText(dc, Rect(viewport.left, y + 132, viewport.right, y + 156), "Import pipeline", EditorDialogStyle::Color(theme.accent), 12, FW_SEMIBOLD);
-        DrawCheckRow(dc, theme, TexturesRow(), importTextures_, "Import textures",
-            "Copies external images and extracts embedded FBX, glTF, or GLB image data", skeletalImportAvailable_);
-        DrawCheckRow(dc, theme, MaterialsRow(), importMaterials_, "Import materials",
-            "Creates PBR Material assets and assigns them to imported mesh sections", skeletalImportAvailable_);
-        DrawCheckRow(dc, theme, CombineMeshesRow(), combineMeshes_, "Combine meshes",
-            "Merges all compatible mesh nodes bound to the imported skin into one asset", skeletalImportAvailable_);
+        EditorDialogStyle::PaintText(dc, Rect(viewport.left, y + 132, viewport.right, y + 156), EditorText("importMesh.pipelineSection", "Import pipeline"), EditorDialogStyle::Color(theme.accent), 12, FW_SEMIBOLD);
+        DrawCheckRow(dc, theme, TexturesRow(), importTextures_, EditorText("importMesh.importTextures", "Import textures"),
+            EditorText("importMesh.importTexturesHint", "Copies external images and extracts embedded FBX, glTF, or GLB image data"),
+            skeletalImportAvailable_);
+        DrawCheckRow(dc, theme, MaterialsRow(), importMaterials_, EditorText("importMesh.importMaterials", "Import materials"),
+            EditorText("importMesh.importMaterialsHint", "Creates PBR Material assets and assigns them to imported mesh sections"),
+            skeletalImportAvailable_);
+        DrawCheckRow(dc, theme, CombineMeshesRow(), combineMeshes_, EditorText("importMesh.combineMeshes", "Combine meshes"),
+            EditorText("importMesh.combineMeshesHint", "Merges all compatible mesh nodes bound to the imported skin into one asset"),
+            skeletalImportAvailable_);
         DrawCheckRow(
             dc,
             theme,
             SkeletonRow(),
             importSkeletalMesh_,
-            "Import skeleton",
+            EditorText("importMesh.importSkeleton", "Import skeleton"),
             skeletalImportAvailable_
-                ? "Creates Skeleton, Skeletal Mesh and Animation Clips from FBX, glTF, or GLB"
-                : "Requires every selected source to use one supported skeletal format: FBX, glTF, or GLB",
+                ? EditorText("importMesh.importSkeletonHint", "Creates Skeleton, Skeletal Mesh and Animation Clips from FBX, glTF, or GLB")
+                : EditorText("importMesh.importSkeletonUnavailable", "Requires every selected source to use one supported skeletal format: FBX, glTF, or GLB"),
             skeletalImportAvailable_);
         EditorDialogStyle::PaintText(dc, Rect(viewport.left, y + 374, viewport.right - 12, y + 416),
             importSkeletalMesh_
-                ? "The importer publishes textures, materials, rig, skinned mesh and clips as one deterministic import operation."
-                : "Static mesh import uses the same texture and material asset pipeline.",
+                ? EditorText("importMesh.skeletalPipelineNote", "The importer publishes textures, materials, rig, skinned mesh and clips as one deterministic import operation.")
+                : EditorText("importMesh.staticPipelineNote", "Static mesh import uses the same texture and material asset pipeline."),
             EditorDialogStyle::Color(theme.textDisabled), 11, FW_NORMAL, DT_LEFT | DT_WORDBREAK);
         RestoreDC(dc, saved);
 
@@ -179,11 +183,11 @@ private:
         }
         const RECT footer = Rect(1, client.bottom - kFooterHeight, client.right - 1, client.bottom - 1);
         EditorDialogStyle::PaintFooter(dc, footer, theme);
-        EditorDialogStyle::PaintButton(dc, Rect(client.right - 198, client.bottom - 27, client.right - 106, client.bottom - 3), theme, "Cancel");
-        EditorDialogStyle::PaintButton(dc, Rect(client.right - 96, client.bottom - 27, client.right - 16, client.bottom - 3), theme, "Import", EditorDialogButtonTone::Primary);
+        EditorDialogStyle::PaintButton(dc, Rect(client.right - 198, client.bottom - 27, client.right - 106, client.bottom - 3), theme, EditorText("common.cancel", "Cancel"));
+        EditorDialogStyle::PaintButton(dc, Rect(client.right - 96, client.bottom - 27, client.right - 16, client.bottom - 3), theme, EditorText("importMesh.import", "Import"), EditorDialogButtonTone::Primary);
     }
 
-    static void DrawCheckRow(HDC dc, const EditorTheme& theme, const RECT& rect, bool checked, const char* title, const char* subtitle, bool enabled) {
+    static void DrawCheckRow(HDC dc, const EditorTheme& theme, const RECT& rect, bool checked, std::string_view title, std::string_view subtitle, bool enabled) {
         GdiDrawing::FillRectColor(dc, rect, EditorDialogStyle::Color(theme.panel));
         EditorDialogStyle::PaintDivider(dc, Rect(rect.left, rect.bottom - 1, rect.right, rect.bottom), theme);
         const RECT check = Rect(rect.left + 12, rect.top + 15, rect.left + 29, rect.top + 32);
@@ -260,9 +264,18 @@ private:
 
 std::optional<EditorAssetImportSelection> EditorAssetImportDialog::Open(HWND owner) {
     std::array<wchar_t, 65536> fileBuffer{};
-    const std::wstring filter = WidenAsciiFilter(kb::assets::AssetImportCatalog::WindowsFileDialogFilter());
+    std::string extensions;
+    for (const std::string& extension : kb::assets::AssetImportCatalog::SupportedSourceExtensions()) {
+        extensions += (extensions.empty() ? "*" : ";*") + extension;
+    }
+    const std::wstring filter = EditorFileDialogFilter({
+        { EditorLocalization::Format("fileDialog.assetSourcesFilter", "Game asset sources ({extensions})",
+              { { "extensions", extensions } }), extensions },
+        { EditorText("fileDialog.allFiles", "All files (*.*)"), "*.*" },
+    });
+    const std::wstring title = ScriptEditorTextEncoding::Widen(EditorText("fileDialog.importAssetsTitle", "Import assets"));
     OPENFILENAMEW openFileName{};
-    openFileName.lStructSize = sizeof(openFileName); openFileName.hwndOwner = owner; openFileName.lpstrFilter = filter.c_str(); openFileName.lpstrFile = fileBuffer.data(); openFileName.nMaxFile = static_cast<DWORD>(fileBuffer.size()); openFileName.lpstrTitle = L"Import assets";
+    openFileName.lStructSize = sizeof(openFileName); openFileName.hwndOwner = owner; openFileName.lpstrFilter = filter.c_str(); openFileName.lpstrFile = fileBuffer.data(); openFileName.nMaxFile = static_cast<DWORD>(fileBuffer.size()); openFileName.lpstrTitle = title.c_str();
     openFileName.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (GetOpenFileNameW(&openFileName) == FALSE) return std::nullopt;
     std::vector<std::filesystem::path> files = ParseOpenFileNameBuffer(fileBuffer);

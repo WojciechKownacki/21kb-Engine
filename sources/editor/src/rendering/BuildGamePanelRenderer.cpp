@@ -1,4 +1,5 @@
 #include "rendering/BuildGamePanelRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "packaging/EditorProjectPackageService.hpp"
@@ -31,10 +32,10 @@ using panel_style::HoverFill;
 constexpr COLORREF kBuildGreen = RGB(34, 108, 62);
 constexpr COLORREF kBuildGreenEdge = RGB(48, 138, 82);
 
-struct BuildProfile { std::string_view name; HeroIconKind icon; };
+struct BuildProfile { std::string_view (*name)(); HeroIconKind icon; };
 constexpr std::array<BuildProfile, 2> kBuildProfiles{{
-    { "Development", HeroIconKind::CodeBracket },
-    { "Release", HeroIconKind::RocketLaunch },
+    { [] { return EditorText("buildGame.profile.development", "Development"); }, HeroIconKind::CodeBracket },
+    { [] { return EditorText("buildGame.profile.release", "Release"); }, HeroIconKind::RocketLaunch },
 }};
 
 [[nodiscard]] COLORREF Color(EditorColor color) noexcept { return GdiDrawing::ToColorRef(color); }
@@ -93,7 +94,7 @@ void DrawTargetRow(HDC dc, const RECT& row, const kb::packaging::PackagingTarget
     }
     const RECT icon = BuildGamePanelLayout::IconBox(row, 18);
     HeroIconPainter::Draw(dc, icon, TargetIcon(target), Color(selected ? theme.textPrimary : theme.textSecondary));
-    DrawText(dc, RECT{ icon.right + 10, row.top, row.right - 8, row.bottom }, target.displayName,
+    DrawText(dc, RECT{ icon.right + 10, row.top, row.right - 8, row.bottom }, BuildGamePanelModel::TargetDisplayName(target.target),
         Color(selected ? theme.textPrimary : theme.textSecondary), 12, selected ? FW_SEMIBOLD : FW_NORMAL);
 }
 
@@ -106,7 +107,7 @@ void DrawProfileRow(HDC dc, const RECT& row, const BuildProfile& profile, bool s
     }
     const RECT icon = BuildGamePanelLayout::IconBox(row, 16);
     HeroIconPainter::Draw(dc, icon, profile.icon, Color(selected ? theme.textPrimary : theme.textSecondary));
-    DrawText(dc, RECT{ icon.right + 10, row.top, row.right - 8, row.bottom }, profile.name,
+    DrawText(dc, RECT{ icon.right + 10, row.top, row.right - 8, row.bottom }, profile.name(),
         Color(selected ? theme.textPrimary : theme.textSecondary), 12, selected ? FW_SEMIBOLD : FW_NORMAL);
 }
 
@@ -116,9 +117,9 @@ void DrawHeader(HDC dc, const RECT& header, const kb::packaging::PackagingTarget
     const RECT icon = BuildGamePanelLayout::IconBox(header, 26);
     HeroIconPainter::Draw(dc, icon, TargetIcon(target), Color(theme.accent));
     DrawText(dc, RECT{ icon.right + 12, header.top + 8, header.right - 140, header.top + 28 },
-        target.displayName, Color(theme.textPrimary), 14, FW_SEMIBOLD);
+        BuildGamePanelModel::TargetDisplayName(target.target), Color(theme.textPrimary), 14, FW_SEMIBOLD);
     DrawText(dc, RECT{ icon.right + 12, header.top + 28, header.right - 140, header.bottom - 8 },
-        target.summary, Color(theme.textSecondary), 11);
+        BuildGamePanelModel::TargetSummary(target.target), Color(theme.textSecondary), 11);
     DrawText(dc, RECT{ header.right - 132, header.top, header.right - 12, header.bottom }, profile,
         Color(theme.textSecondary), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
@@ -158,7 +159,7 @@ void DrawCheckbox(HDC dc, const RECT& box, bool checked, const EditorTheme& them
         const RECT row = BuildGamePanelLayout::OptionRow(body, y);
         if (sceneContext.BuildGameHoveredSection() == sectionIndex && sceneContext.BuildGameHoveredRow() == rowIndex)
             GdiDrawing::FillRectColor(dc, RECT{ row.left + 1, row.top, row.right - 1, row.bottom }, HoverFill(theme));
-        DrawText(dc, BuildGamePanelLayout::OptionLabel(row), spec.label, Color(theme.textPrimary), 12);
+        DrawText(dc, BuildGamePanelLayout::OptionLabel(row), spec.label(), Color(theme.textPrimary), 12);
         const RECT valueBox = BuildGamePanelLayout::OptionValueBox(row);
         if (spec.kind == BuildGameRowKind::Checkbox) {
             DrawCheckbox(dc, valueBox, sceneContext.BuildGameSettings().For(sceneContext.BuildGameTarget()).launchAfterBuild, theme);
@@ -169,8 +170,10 @@ void DrawCheckbox(HDC dc, const RECT& box, bool checked, const EditorTheme& them
             if (spec.kind == BuildGameRowKind::Password) {
                 const bool present = sceneContext.HasBuildGameSecret(spec.field);
                 const std::size_t length = editing ? sceneContext.BuildGameEditBuffer().size() : (present ? 8U : 0U);
-                value = length == 0U ? (spec.required ? "Required for this Release build" : "Needed only with a certificate file")
-                                     : std::string(length, '*');
+                value = length == 0U
+                    ? std::string{ spec.required ? EditorText("buildGame.value.requiredForRelease", "Required for this Release build")
+                                                 : EditorText("buildGame.value.neededWithCertificate", "Needed only with a certificate file") }
+                    : std::string(length, '*');
             } else {
                 value = editing ? std::string{ sceneContext.BuildGameEditBuffer() } :
                     BuildGamePanelModel::Value(spec.field, sceneContext.BuildGameTarget(),
@@ -196,7 +199,9 @@ void DrawFooter(HDC dc, const BuildGamePanelLayoutRects& rects, const EditorThem
         sceneContext.HasBuildGameStorePassword(), sceneContext.HasBuildGameKeyPassword(),
         sceneContext.HasBuildGameSecret(BuildGameField::WindowsCertificatePassword));
     const EditorBuildGameTargetSettings& targetSettings = sceneContext.BuildGameSettings().For(sceneContext.BuildGameTarget());
-    std::string first = targetSettings.outputDirectory.empty() ? "Output directory is not selected" : targetSettings.outputDirectory.generic_string();
+    std::string first = targetSettings.outputDirectory.empty()
+        ? std::string{ EditorText("buildGame.outputNotSelected", "Output directory is not selected") }
+        : targetSettings.outputDirectory.generic_string();
     std::string second = validation.reason;
     if (snapshot.state != EditorPackageJobState::Idle) {
         second = snapshot.status;
@@ -215,7 +220,7 @@ void DrawFooter(HDC dc, const BuildGamePanelLayoutRects& rects, const EditorThem
     GdiDrawing::DrawSharpFrame(dc, rects.buildButton,
         enabled ? kBuildGreen : Blend(Color(theme.chrome), Color(theme.panel), 50),
         enabled ? kBuildGreenEdge : Color(theme.borderPanel));
-    DrawText(dc, rects.buildButton, running ? "CANCEL" : "BUILD",
+    DrawText(dc, rects.buildButton, running ? EditorText("buildGame.cancel", "CANCEL") : EditorText("buildGame.build", "BUILD"),
         enabled ? RGB(236, 245, 239) : Color(theme.textDisabled), 12, FW_SEMIBOLD,
         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
@@ -296,17 +301,17 @@ void BuildGamePanelRenderer::Paint(HDC dc, const RECT& content, const EditorThem
     const auto targets = kb::packaging::PackagingTargets();
     const int selectedTarget = std::clamp(sceneContext.BuildGameSelectedTarget(), 0, static_cast<int>(targets.size()) - 1);
     const int selectedProfile = std::clamp(sceneContext.BuildGameSelectedProfile(), 0, 1);
-    DrawSidebarCaption(dc, rects.platformsCaption, "PLATFORMS", theme);
-    DrawSidebarCaption(dc, BuildGamePanelLayout::TargetGroupCaption(rects.platformsList, 0), "Player", theme);
+    DrawSidebarCaption(dc, rects.platformsCaption, EditorText("buildGame.platforms", "PLATFORMS"), theme);
+    DrawSidebarCaption(dc, BuildGamePanelLayout::TargetGroupCaption(rects.platformsList, 0), EditorText("buildGame.player", "Player"), theme);
     for (int index = 0; index < static_cast<int>(targets.size()); ++index)
         DrawTargetRow(dc, BuildGamePanelLayout::TargetRow(rects.platformsList, index), targets[static_cast<std::size_t>(index)],
             index == selectedTarget, sceneContext.BuildGameHoveredTarget() == index, theme);
-    DrawSidebarCaption(dc, rects.profilesCaption, "BUILD PROFILES", theme);
+    DrawSidebarCaption(dc, rects.profilesCaption, EditorText("buildGame.buildProfiles", "BUILD PROFILES"), theme);
     for (int index = 0; index < 2; ++index)
         DrawProfileRow(dc, BuildGamePanelLayout::ProfileRow(rects.profilesList, index), kBuildProfiles[static_cast<std::size_t>(index)],
             index == selectedProfile, sceneContext.BuildGameHoveredProfile() == index, theme);
     DrawHeader(dc, rects.header, targets[static_cast<std::size_t>(selectedTarget)],
-        kBuildProfiles[static_cast<std::size_t>(selectedProfile)].name, theme);
+        kBuildProfiles[static_cast<std::size_t>(selectedProfile)].name(), theme);
     const std::vector<BuildGameSectionSpec> sections = Sections(sceneContext);
     const int contentHeight = SettingsContentHeight(sceneContext);
     const int scroll = std::clamp(sceneContext.BuildGameScrollOffset(), 0,

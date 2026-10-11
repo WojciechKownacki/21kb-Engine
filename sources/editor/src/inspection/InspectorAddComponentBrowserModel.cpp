@@ -21,7 +21,8 @@ namespace {
     if (!query.empty()) {
         for (const InspectorComponentTile* tile : InspectorComponentCatalog::Search(query)) {
             if (tile != nullptr && IsAvailable(*tile, pluginEnabled)) {
-                rows.push_back(AddComponentRow{ .kind = AddComponentRowKind::Component, .label = tile->label, .icon = tile->icon, .id = tile->id });
+                rows.push_back(AddComponentRow{ .kind = AddComponentRowKind::Component,
+                    .label = InspectorComponentCatalog::DisplayLabel(*tile), .icon = tile->icon, .id = tile->id });
             }
         }
         return rows;
@@ -29,9 +30,12 @@ namespace {
     if (!category.empty()) {
         for (const InspectorComponentTile* tile : InspectorComponentCatalog::InCategory(category)) {
             if (tile != nullptr && IsAvailable(*tile, pluginEnabled)) {
-                rows.push_back(AddComponentRow{ .kind = AddComponentRowKind::Component, .label = tile->label, .icon = tile->icon, .id = tile->id });
+                rows.push_back(AddComponentRow{ .kind = AddComponentRowKind::Component,
+                    .label = InspectorComponentCatalog::DisplayLabel(*tile), .icon = tile->icon, .id = tile->id });
             }
         }
+        // Alphabetical in the language shown; the catalog orders by the English labels.
+        std::ranges::stable_sort(rows, {}, &AddComponentRow::label);
         return rows;
     }
     for (const InspectorComponentCategory& entry : InspectorComponentCatalog::Categories()) {
@@ -39,7 +43,8 @@ namespace {
         if (std::ranges::any_of(tiles, [pluginEnabled](const InspectorComponentTile* tile) {
                 return tile != nullptr && IsAvailable(*tile, pluginEnabled);
             })) {
-            rows.push_back(AddComponentRow{ .kind = AddComponentRowKind::Category, .label = entry.name, .icon = entry.icon, .id = entry.name });
+            rows.push_back(AddComponentRow{ .kind = AddComponentRowKind::Category,
+                .label = std::string{ InspectorComponentCatalog::CategoryLabel(entry.name) }, .icon = entry.icon, .id = entry.name });
         }
     }
     return rows;

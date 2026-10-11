@@ -1,4 +1,5 @@
 #include "scene/EditorSceneContext.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "engine/audio/AudioPlayback.hpp"
@@ -775,15 +776,16 @@ SkeletalMeshEditorDetailsModel EditorSceneContext::SkeletalMeshEditorDetails() c
                     const std::string filename = material->virtualPath.filename().string();
                     field.value = filename.empty() ? material->name : filename;
                 } else {
-                    field.value = "Missing (" + std::to_string(field.assetId) + ")";
+                    field.value = EditorLocalization::Format("skeletalMeshEditor.details.missingAsset", "Missing ({id})",
+                        { { "id", std::to_string(field.assetId) } });
                 }
             } else if (field.action == SkeletalMeshEditorDetailsAction::PreviewLod &&
                        working != nullptr && animationPreviewScene_ != nullptr) {
                 const std::uint32_t resolved = animationPreviewScene_->ResolvePreviewLod(*working);
                 const std::optional<std::uint32_t> forced = animationPreviewScene_->ForcedLod();
                 field.value = forced.has_value()
-                    ? "LOD " + std::to_string(resolved)
-                    : "Auto (LOD " + std::to_string(resolved) + ")";
+                    ? EditorLocalization::Format("skeletalMeshEditor.lod", "LOD {index}", { { "index", std::to_string(resolved) } })
+                    : EditorLocalization::Format("skeletalMeshEditor.lodAutoResolved", "Auto (LOD {index})", { { "index", std::to_string(resolved) } });
             }
         }
     }

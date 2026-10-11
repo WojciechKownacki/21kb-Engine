@@ -8,6 +8,7 @@
 #include "app/EditorWorkspaceSession.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
 #include "docking/EditorFloatingWindowSync.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "platform/win32/EditorChoiceDialog.hpp"
 #include "platform/win32/EditorSceneFileDialog.hpp"
 #include "platform/win32/EditorTextEntryDialog.hpp"
@@ -119,11 +120,11 @@ void SaveCurrentLayout(
     EditorDockModel& dockModel,
     EditorSceneContext& sceneContext) {
     const std::optional<std::string> name = EditorTextEntryDialog::Show(mainWindow, {
-        .title = "Save Layout",
-        .label = "Layout name",
+        .title = std::string{ EditorText("layout.saveTitle", "Save Layout") },
+        .label = std::string{ EditorText("layout.nameLabel", "Layout name") },
         .value = sceneContext.EditorConfig().layoutName,
-        .hint = "Letters, digits, spaces, dashes and underscores.",
-        .acceptLabel = "Save",
+        .hint = std::string{ EditorText("layout.nameHint", "Letters, digits, spaces, dashes and underscores.") },
+        .acceptLabel = std::string{ EditorText("common.save", "Save") },
         .icon = HeroIconKind::RectangleGroup,
     });
     if (!name.has_value()) {
@@ -137,11 +138,11 @@ void SaveCurrentLayout(
     const bool overwriting =
         EditorLayoutLibrary::Load(EditorProjectPaths::ProjectRoot(), *name).has_value();
     if (overwriting && EditorChoiceDialog::Show(mainWindow, {
-            .title = "Save Layout",
-            .message = "Replace the layout " + *name + "?",
-            .supportingText = "Its saved arrangement is overwritten with the one on screen.",
-            .primaryLabel = "Replace",
-            .cancelLabel = "Cancel",
+            .title = std::string{ EditorText("layout.saveTitle", "Save Layout") },
+            .message = EditorLocalization::Format("layout.replaceQuestion", "Replace the layout {layout}?", { { "layout", *name } }),
+            .supportingText = std::string{ EditorText("layout.replaceSupporting", "Its saved arrangement is overwritten with the one on screen.") },
+            .primaryLabel = std::string{ EditorText("common.replace", "Replace") },
+            .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
             .icon = HeroIconKind::RectangleGroup,
         }) != EditorChoiceDialogResult::Primary) {
         return;
@@ -165,11 +166,11 @@ void DeleteSavedLayout(
     EditorSceneContext& sceneContext,
     const std::string& name) {
     if (EditorChoiceDialog::Show(mainWindow, {
-            .title = "Delete Layout",
-            .message = "Delete the layout " + name + "?",
-            .supportingText = "The arrangement on screen stays as it is; only the saved layout goes.",
-            .primaryLabel = "Delete",
-            .cancelLabel = "Cancel",
+            .title = std::string{ EditorText("layout.deleteTitle", "Delete Layout") },
+            .message = EditorLocalization::Format("layout.deleteQuestion", "Delete the layout {layout}?", { { "layout", name } }),
+            .supportingText = std::string{ EditorText("layout.deleteSupporting", "The arrangement on screen stays as it is; only the saved layout goes.") },
+            .primaryLabel = std::string{ EditorText("common.delete", "Delete") },
+            .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
             .icon = HeroIconKind::RectangleGroup,
             .primaryTone = EditorDialogButtonTone::Destructive,
         }) != EditorChoiceDialogResult::Primary) {
@@ -379,17 +380,17 @@ void ActivatePanel(
                 break;
             case 5: {
                 const std::optional<EditorDirtySceneResolution> resolution =
-                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, L"converting the scene to a world");
+                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, EditorSceneTransition::ConvertSceneToWorld);
                 changed = resolution.has_value() && sceneContext.ConvertCurrentSceneToWorld(128.0, *resolution);
                 break;
             }
             case 6: {
                 const std::optional<std::string> name = EditorTextEntryDialog::Show(mainWindow, {
-                    .title = "Add Data Layer",
-                    .label = "Layer name",
+                    .title = std::string{ EditorText("world.addDataLayerTitle", "Add Data Layer") },
+                    .label = std::string{ EditorText("world.dataLayerNameLabel", "Layer name") },
                     .value = {},
-                    .hint = "Letters, digits, '_', '-' or '.'. New layers start active.",
-                    .acceptLabel = "Add",
+                    .hint = std::string{ EditorText("world.dataLayerNameHint", "Letters, digits, '_', '-' or '.'. New layers start active.") },
+                    .acceptLabel = std::string{ EditorText("common.add", "Add") },
                 });
                 changed = name.has_value() && sceneContext.DeclareWorldDataLayer(*name);
                 break;

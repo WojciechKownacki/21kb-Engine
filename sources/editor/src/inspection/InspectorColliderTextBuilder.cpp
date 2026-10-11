@@ -12,7 +12,7 @@ void InspectorColliderTextBuilder::Append(std::string& text, const kb::scene::Co
         component,
         sizeof(component),
         "\n\nCollider\nShape: %s\nCenter: %.2f, %.2f, %.2f\nBox size: %.2f, %.2f, %.2f\nRadius: %.2f\nHeight: %.2f\nTrigger: %s",
-        InspectorComponentLabelFormatter::ColliderShapeName(collider.shape),
+        std::string{ InspectorComponentLabelFormatter::ColliderShapeName(collider.shape) }.c_str(),
         static_cast<double>(collider.center.x),
         static_cast<double>(collider.center.y),
         static_cast<double>(collider.center.z),

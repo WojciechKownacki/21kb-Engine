@@ -1,3 +1,4 @@
+#include "localization/EditorLocalization.hpp"
 #include "app/EditorApplicationLifecycle.hpp"
 
 #if defined(_WIN32)
@@ -41,7 +42,7 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
     if (session.area == DockArea::Floating) {
         state.dockModel.Commands().UndockPanel(panelId, session.floatingRect);
         static_cast<void>(state.floatingWindows.Commands().Create(
-            panelId, "21kb Particle System", session.floatingRect));
+            panelId, std::string{ EditorText("panel.particleEditor", "21kb Particle System") }, session.floatingRect));
     } else {
         RECT client{};
         GetClientRect(state.window, &client);
@@ -95,6 +96,15 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
 
 bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     state.instance = GetModuleHandleW(nullptr);
+    // The user's editor language (Editor Settings > General), or the system's. A missing or damaged
+    // catalog leaves the editor in English and says so.
+    {
+        std::string error;
+        const std::string language = EditorLocalization::PreferredLanguage();
+        if (!EditorLocalization::SetLanguage(language, EditorLocalization::DefaultCatalogFolder(), error)) {
+            state.sceneContext.Console().Warning("Editor", error + " The editor stays in English.");
+        }
+    }
 
     if (!state.windowClasses.Register(state.instance, &EditorApplicationWindowProc::Handle)) {
         return false;

@@ -1,4 +1,5 @@
 #include "rendering/ProjectFilesAssetListRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorAudioAssetPreview.hpp"
@@ -19,11 +20,11 @@ using Draw = ProjectFilesPanelDrawing;
 void DrawListHeader(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme) {
     const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
     RECT header{ viewport.left, viewport.top, viewport.right, viewport.top + EditorAssetBrowserLayout::AssetHeaderHeight };
-    Draw::DrawLabel(dc, header, "Name", Draw::Color(theme.textSecondary));
+    Draw::DrawLabel(dc, header, EditorText("projectFiles.list.name", "Name"), Draw::Color(theme.textSecondary));
     RECT type{ header.left + 270, header.top, header.left + 410, header.bottom };
-    Draw::DrawLabel(dc, type, "Type", Draw::Color(theme.textSecondary));
+    Draw::DrawLabel(dc, type, EditorText("projectFiles.list.type", "Type"), Draw::Color(theme.textSecondary));
     RECT path{ header.left + 420, header.top, header.right, header.bottom };
-    Draw::DrawLabel(dc, path, "Path", Draw::Color(theme.textSecondary));
+    Draw::DrawLabel(dc, path, EditorText("projectFiles.list.path", "Path"), Draw::Color(theme.textSecondary));
     RECT line{ viewport.left, header.bottom, viewport.right, header.bottom + 1 };
     Draw::DrawHairline(dc, line, Draw::Color(theme.borderPanel));
 }
@@ -44,7 +45,7 @@ void DrawFolderRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAsset
         Draw::DrawLabel(dc, name, folder.name.c_str(), Draw::Color(theme.textPrimary));
     }
     RECT type{ row.left + 270, row.top, row.left + 410, row.bottom };
-    Draw::DrawLabel(dc, type, "Folder", Draw::Color(theme.textSecondary));
+    Draw::DrawLabel(dc, type, EditorText("projectFiles.list.folder", "Folder"), Draw::Color(theme.textSecondary));
     RECT path{ row.left + 420, row.top, row.right, row.bottom };
     Draw::DrawLabel(dc, path, kb::assets::NormalizeAssetPath(folder.virtualPath).c_str(), Draw::Color(theme.textDisabled));
 }
@@ -67,7 +68,7 @@ void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetI
     }
     RECT type{ row.left + 270, row.top, row.left + 410, row.bottom };
     if (EditorAudioAssetPreview::IsPlaying(asset.metadata.id)) {
-        Draw::DrawLabel(dc, type, "Playing", RGB(116, 232, 205));
+        Draw::DrawLabel(dc, type, EditorText("projectFiles.list.playing", "Playing"), RGB(116, 232, 205));
     } else {
         Draw::DrawLabel(dc, type, asset.metadata.type.c_str(), Draw::Color(theme.textSecondary));
     }

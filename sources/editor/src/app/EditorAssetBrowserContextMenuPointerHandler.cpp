@@ -6,6 +6,7 @@
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 namespace kb::editor {
@@ -14,18 +15,22 @@ namespace {
 [[nodiscard]] HMENU CreateLightingSubmenu() {
     HMENU lighting = CreatePopupMenu();
     AppendMenuA(lighting, MF_STRING,
-        EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand::AddDirectionalLight), "Directional Light");
+        EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand::AddDirectionalLight),
+        std::string{ EditorText("projectFiles.menu.directionalLight", "Directional Light") }.c_str());
     AppendMenuA(lighting, MF_STRING,
-        EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand::AddPointLight), "Point Light");
+        EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand::AddPointLight),
+        std::string{ EditorText("projectFiles.menu.pointLight", "Point Light") }.c_str());
     AppendMenuA(lighting, MF_STRING,
-        EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand::AddSpotLight), "Spot Light");
+        EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand::AddSpotLight),
+        std::string{ EditorText("projectFiles.menu.spotLight", "Spot Light") }.c_str());
     return lighting;
 }
 
 void AppendAddSubmenu(HMENU menu) {
     HMENU add = CreatePopupMenu();
-    AppendMenuA(add, MF_POPUP, reinterpret_cast<UINT_PTR>(CreateLightingSubmenu()), "Lighting");
-    AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(add), "Add");
+    AppendMenuA(add, MF_POPUP, reinterpret_cast<UINT_PTR>(CreateLightingSubmenu()),
+        std::string{ EditorText("projectFiles.menu.lighting", "Lighting") }.c_str());
+    AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(add), std::string{ EditorText("projectFiles.menu.add", "Add") }.c_str());
 }
 
 [[nodiscard]] UINT ShowProjectFilesSystemMenu(HWND window, int x, int y, const std::vector<EditorAssetContextMenuItem>& items) {
@@ -38,7 +43,7 @@ void AppendAddSubmenu(HMENU menu) {
         if (item.command == EditorAssetContextCommand::AddLighting) {
             continue;
         } else if (const UINT_PTR id = EditorAssetBrowserNativeCommandMap::Id(item.command); id != 0) {
-            AppendMenuA(menu, MF_STRING, id, item.label);
+            AppendMenuA(menu, MF_STRING, id, item.label.c_str());
         }
         if (item.separatorAfter) {
             AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);

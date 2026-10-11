@@ -1,4 +1,5 @@
 #include "assets/EditorAssetBrowserState.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include "assets/EditorAssetBrowserPathUtils.hpp"
 
@@ -29,20 +30,20 @@ namespace {
 [[nodiscard]] std::vector<EditorAssetContextMenuItem> MaterialContextMenuItems(const kb::assets::AssetMetadata& metadata) {
     std::vector<EditorAssetContextMenuItem> items;
     if (metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance" || metadata.type == "RenderMaterialGraph") {
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = "Open" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = std::string{ EditorText("common.open", "Open") } });
     }
     if (metadata.type == "RenderMaterial") {
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Duplicate, .label = "Duplicate" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::CreateMaterialInstance, .label = "Create Material Instance", .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Duplicate, .label = std::string{ EditorText("projectFiles.menu.duplicate", "Duplicate") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::CreateMaterialInstance, .label = std::string{ EditorText("projectFiles.menu.createMaterialInstance", "Create Material Instance") }, .separatorAfter = true });
     } else if (metadata.type == "RenderMaterialGraph") {
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::CreateMaterialFromGraph, .label = "Create Material From Graph", .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::CreateMaterialFromGraph, .label = std::string{ EditorText("projectFiles.menu.createMaterialFromGraph", "Create Material From Graph") }, .separatorAfter = true });
     } else if (metadata.type == "RenderMaterialType") {
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::CreateMaterialFromMaterialType, .label = "Create Material From Material Type", .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::CreateMaterialFromMaterialType, .label = std::string{ EditorText("projectFiles.menu.createMaterialFromType", "Create Material From Material Type") }, .separatorAfter = true });
     }
-    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Rename, .label = "Rename" });
-    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Delete, .label = "Delete" });
-    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::FindReferences, .label = "Find References", .separatorAfter = true });
-    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
+    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Rename, .label = std::string{ EditorText("common.rename", "Rename") } });
+    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Delete, .label = std::string{ EditorText("common.delete", "Delete") } });
+    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::FindReferences, .label = std::string{ EditorText("projectFiles.menu.findReferences", "Find References") }, .separatorAfter = true });
+    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = std::string{ EditorText("projectFiles.menu.refresh", "Refresh") } });
     return items;
 }
 
@@ -56,20 +57,20 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserState::ContextMenuItem
         if (metadata != nullptr && IsMaterialAsset(*metadata)) {
             items = MaterialContextMenuItems(*metadata);
         } else if (metadata != nullptr) {
-            items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Duplicate, .label = "Duplicate", .separatorAfter = true });
+            items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Duplicate, .label = std::string{ EditorText("projectFiles.menu.duplicate", "Duplicate") }, .separatorAfter = true });
             if (EditorAssetOpenPolicy::CanOpen(*metadata)) {
-                items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = "Open" });
+                items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = std::string{ EditorText("common.open", "Open") } });
             }
         }
         if (metadata != nullptr && (metadata->type == "RenderMesh" || metadata->importCategory == "Mesh")) {
-            items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::ExtractMaterials, .label = "Extract Material Instances", .separatorAfter = true });
+            items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::ExtractMaterials, .label = std::string{ EditorText("projectFiles.menu.extractMaterials", "Extract Material Instances") }, .separatorAfter = true });
         }
         // Particle effects are the second asset kind whose scene usage can be
         // queried, so they carry the same entry the material menu already has,
         // in the same place: after Delete and before Refresh.
         if (metadata != nullptr && metadata->type == kb::scene::kParticleEffectAssetType) {
             const auto refresh = std::ranges::find(items, EditorAssetContextCommand::Refresh, &EditorAssetContextMenuItem::command);
-            items.insert(refresh, EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::FindReferences, .label = "Find References", .separatorAfter = true });
+            items.insert(refresh, EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::FindReferences, .label = std::string{ EditorText("projectFiles.menu.findReferences", "Find References") }, .separatorAfter = true });
         }
     }
     if (!ContextMenuTargetIsProjectContent(manager)) {

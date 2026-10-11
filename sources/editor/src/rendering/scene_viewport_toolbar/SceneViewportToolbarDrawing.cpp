@@ -69,7 +69,7 @@ void SceneViewportToolbarDrawing::DrawIconButton(HDC dc, RECT rect, HeroIconKind
     HeroIconPainter::Draw(dc, CenteredRect(rect, SceneViewportToolbarMetrics::IconSize), icon, iconColor, 1);
 }
 
-void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKind icon, const char* value, const EditorTheme& theme, bool active) {
+void SceneViewportToolbarDrawing::DrawValueButton(HDC dc, RECT rect, HeroIconKind icon, std::string_view value, const EditorTheme& theme, bool active) {
     DrawBase(dc, rect, theme, active);
     const RECT iconRect{
         rect.left + 7,

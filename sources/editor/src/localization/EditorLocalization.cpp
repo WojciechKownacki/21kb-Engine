@@ -6,9 +6,11 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -69,9 +71,21 @@ struct State {
     std::unordered_map<std::string, std::string> texts;
 };
 
-[[nodiscard]] State& CurrentState() {
-    static State state;
-    return state;
+// Every catalog loaded in this run stays in memory, so the text views EditorText hands out never
+// dangle after a language switch (a menu or a panel may still hold one).
+[[nodiscard]] std::vector<std::unique_ptr<const State>>& LoadedStates() {
+    static std::vector<std::unique_ptr<const State>> states;
+    return states;
+}
+
+[[nodiscard]] const State*& CurrentPointer() {
+    static const State english;
+    static const State* current = &english;
+    return current;
+}
+
+[[nodiscard]] const State& CurrentState() {
+    return *CurrentPointer();
 }
 
 [[nodiscard]] std::string Fill(std::string text, std::initializer_list<std::pair<std::string_view, std::string>> values) {
@@ -152,7 +166,14 @@ std::filesystem::path EditorLocalization::PreferencesFile() {
 }
 
 std::string EditorLocalization::PreferredLanguage() {
-    const std::filesystem::path file = PreferencesFile();
+    return PreferredLanguage(PreferencesFile());
+}
+
+bool EditorLocalization::StorePreferredLanguage(std::string_view code, std::string& error) {
+    return StorePreferredLanguage(code, PreferencesFile(), error);
+}
+
+std::string EditorLocalization::PreferredLanguage(const std::filesystem::path& file) {
     std::error_code missing;
     if (!file.empty() && std::filesystem::exists(file, missing)) {
         kb::config::IniDocument document;
@@ -167,8 +188,13 @@ std::string EditorLocalization::PreferredLanguage() {
     return std::string{ SystemLanguage() };
 }
 
-bool EditorLocalization::StorePreferredLanguage(std::string_view code, std::string& error) {
-    const std::filesystem::path file = PreferencesFile();
+bool EditorLocalization::StorePreferredLanguage(std::string_view code, const std::filesystem::path& file,
+    std::string& error) {
+    const EditorLanguage* language = Find(code);
+    if (language == nullptr) {
+        error = "Unknown language '" + std::string{ code } + "'.";
+        return false;
+    }
     if (file.empty()) {
         error = "There is no user folder to keep the editor language in.";
         return false;
@@ -180,7 +206,7 @@ bool EditorLocalization::StorePreferredLanguage(std::string_view code, std::stri
         static_cast<void>(document.Load(file, ignored));
     }
     std::filesystem::create_directories(file.parent_path(), missing);
-    document.SetString("Editor", "Language", std::string{ code });
+    document.SetString("Editor", "Language", std::string{ language->code });
     return document.Save(file, error);
 }
 
@@ -229,7 +255,8 @@ bool EditorLocalization::SetLanguage(std::string_view code, const std::filesyste
             }
         }
     }
-    CurrentState() = std::move(next);
+    LoadedStates().push_back(std::make_unique<const State>(std::move(next)));
+    CurrentPointer() = LoadedStates().back().get();
     return true;
 }
 

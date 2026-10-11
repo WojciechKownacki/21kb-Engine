@@ -23,14 +23,14 @@ bool EditorSceneFileCommands::NewScene(HWND owner, EditorSceneContext& sceneCont
         return false;
     }
     const std::optional<EditorDirtySceneResolution> resolution =
-        EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(owner, sceneContext, L"creating a new scene");
+        EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(owner, sceneContext, EditorSceneTransition::NewScene);
     return resolution.has_value() &&
         sceneContext.CreateScene(choice->folder, choice->name, choice->sceneTemplate, choice->setAsStartupScene, *resolution);
 }
 
 bool EditorSceneFileCommands::OpenScene(HWND owner, EditorSceneContext& sceneContext) {
     const std::optional<EditorDirtySceneResolution> resolution =
-        EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(owner, sceneContext, L"opening another scene");
+        EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(owner, sceneContext, EditorSceneTransition::OpenScene);
     if (!resolution.has_value()) {
         return false;
     }

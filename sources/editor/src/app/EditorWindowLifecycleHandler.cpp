@@ -7,8 +7,8 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/editor/docking/DockTypes.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "platform/win32/EditorChoiceDialog.hpp"
-#include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <optional>
@@ -17,24 +17,24 @@
 namespace kb::editor {
 namespace {
 
-[[nodiscard]] std::wstring DirtyMaterialPromptText(const EditorSceneContext& sceneContext, std::wstring_view action) {
-    std::wstring materialName = L"the open material";
+// The question asked before the Material Editor window (or the whole editor) closes over unsaved work.
+[[nodiscard]] std::string DirtyMaterialPromptText(const EditorSceneContext& sceneContext, bool closingEditor) {
     const kb::assets::AssetId materialId = sceneContext.MaterialEditor().OpenAssetId();
     if (const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(materialId);
         metadata != nullptr) {
         const std::string name = metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
-        materialName.assign(name.begin(), name.end());
+        return closingEditor
+            ? EditorLocalization::Format("materialDirty.namedBeforeCloseEditor", "Save changes to {material} before closing the editor?",
+                  { { "material", name } })
+            : EditorLocalization::Format("materialDirty.namedBeforeCloseMaterialEditor",
+                  "Save changes to {material} before closing the Material Editor?", { { "material", name } });
     }
-
-    std::wstring text = L"Save changes to ";
-    text += materialName;
-    text += L" before ";
-    text += action;
-    text += L"?";
-    return text;
+    return std::string{ closingEditor
+        ? EditorText("materialDirty.beforeCloseEditor", "Save changes to the open material before closing the editor?")
+        : EditorText("materialDirty.beforeCloseMaterialEditor", "Save changes to the open material before closing the Material Editor?") };
 }
 
-[[nodiscard]] bool ResolveDirtyMaterialEditorClose(HWND owner, EditorSceneContext& sceneContext, std::wstring_view action) {
+[[nodiscard]] bool ResolveDirtyMaterialEditorClose(HWND owner, EditorSceneContext& sceneContext, bool closingEditor) {
     // Alt+F4 reaches here without any mouse-up, so a graph gesture can still own the working copy (the docked
     // tab's close button carries the same guard, in EditorLeftButtonDownRouter). Settle it before anything
     // reads the document: a drag is finished the way a mouse-up would finish it - so the move is recorded,
@@ -48,12 +48,12 @@ namespace {
     }
 
     const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
-        .title = "Unsaved Material",
-        .message = ScriptEditorTextEncoding::Narrow(DirtyMaterialPromptText(sceneContext, action)),
-        .supportingText = "Choose whether to preserve the current material changes.",
-        .primaryLabel = "Save",
-        .secondaryLabel = "Discard",
-        .cancelLabel = "Cancel",
+        .title = std::string{ EditorText("materialDirty.title", "Unsaved Material") },
+        .message = DirtyMaterialPromptText(sceneContext, closingEditor),
+        .supportingText = std::string{ EditorText("materialDirty.supporting", "Choose whether to preserve the current material changes.") },
+        .primaryLabel = std::string{ EditorText("common.save", "Save") },
+        .secondaryLabel = std::string{ EditorText("common.discard", "Discard") },
+        .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
         .icon = HeroIconKind::RectangleGroup,
     });
 
@@ -69,18 +69,17 @@ namespace {
     }
 }
 
-[[nodiscard]] bool ResolveDirtySkeletalMeshEditorClose(HWND owner, EditorSceneContext& sceneContext, std::wstring_view action) {
+[[nodiscard]] bool ResolveDirtySkeletalMeshEditorClose(HWND owner, EditorSceneContext& sceneContext, bool closingEditor) {
     if (!sceneContext.HasDirtySkeletalMeshEditorAssetEdit()) return true;
-    std::wstring text = L"Save changes to the open skeletal assets before ";
-    text += action;
-    text += L"?";
     switch (EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
-        .title = "Unsaved Skeletal Asset",
-        .message = ScriptEditorTextEncoding::Narrow(text),
-        .supportingText = "Choose whether to preserve the current asset changes.",
-        .primaryLabel = "Save",
-        .secondaryLabel = "Discard",
-        .cancelLabel = "Cancel",
+        .title = std::string{ EditorText("skeletalDirty.title", "Unsaved Skeletal Asset") },
+        .message = std::string{ closingEditor
+            ? EditorText("skeletalDirty.beforeCloseTab", "Save changes to the open skeletal assets before closing the editor?")
+            : EditorText("skeletalDirty.beforeCloseWindow", "Save changes to the open skeletal assets before closing the Skeletal Mesh Editor?") },
+        .supportingText = std::string{ EditorText("skeletalDirty.supporting", "Choose whether to preserve the current asset changes.") },
+        .primaryLabel = std::string{ EditorText("common.save", "Save") },
+        .secondaryLabel = std::string{ EditorText("common.discard", "Discard") },
+        .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
         .icon = HeroIconKind::Skeleton,
     })) {
     case EditorChoiceDialogResult::Primary:
@@ -93,18 +92,17 @@ namespace {
     }
 }
 
-[[nodiscard]] bool ResolveDirtyAnimatorEditorClose(HWND owner, EditorSceneContext& sceneContext, std::wstring_view action) {
+[[nodiscard]] bool ResolveDirtyAnimatorEditorClose(HWND owner, EditorSceneContext& sceneContext, bool closingEditor) {
     if (!sceneContext.HasDirtyAnimatorEditorAssetEdit()) return true;
-    std::wstring text = L"Save changes to the open Animator Controller before ";
-    text += action;
-    text += L"?";
     switch (EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
-        .title = "Unsaved Animator Controller",
-        .message = ScriptEditorTextEncoding::Narrow(text),
-        .supportingText = "Choose whether to preserve the current controller changes.",
-        .primaryLabel = "Save",
-        .secondaryLabel = "Discard",
-        .cancelLabel = "Cancel",
+        .title = std::string{ EditorText("animatorDirty.title", "Unsaved Animator Controller") },
+        .message = std::string{ closingEditor
+            ? EditorText("animatorDirty.beforeCloseTab", "Save changes to the open Animator Controller before closing the editor?")
+            : EditorText("animatorDirty.beforeCloseWindow", "Save changes to the open Animator Controller before closing the Animator Editor?") },
+        .supportingText = std::string{ EditorText("animatorDirty.supporting", "Choose whether to preserve the current controller changes.") },
+        .primaryLabel = std::string{ EditorText("common.save", "Save") },
+        .secondaryLabel = std::string{ EditorText("common.discard", "Discard") },
+        .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
         .icon = HeroIconKind::Gamepad2,
     })) {
     case EditorChoiceDialogResult::Primary:
@@ -130,22 +128,21 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
     if (const std::uint32_t panelId = floatingWindows_.Queries().PanelId(messageWindow); panelId != 0) {
         const DockPanel* panel = dockModel_.Queries().FindPanel(panelId);
         if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor &&
-            !ResolveDirtyMaterialEditorClose(messageWindow, sceneContext_, L"closing the Material Editor")) {
+            !ResolveDirtyMaterialEditorClose(messageWindow, sceneContext_, false)) {
             return 0;
         }
         if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor &&
-            !ResolveDirtySkeletalMeshEditorClose(messageWindow, sceneContext_, L"closing the Skeletal Mesh Editor")) {
+            !ResolveDirtySkeletalMeshEditorClose(messageWindow, sceneContext_, false)) {
             return 0;
         }
         if (panel != nullptr && panel->kind == DockPanelKind::AnimatorEditor &&
-            !ResolveDirtyAnimatorEditorClose(messageWindow, sceneContext_, L"closing the Animator Editor")) {
+            !ResolveDirtyAnimatorEditorClose(messageWindow, sceneContext_, false)) {
             return 0;
         }
         if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor &&
             !EditorParticleDocumentLifecycle::Resolve(
                 messageWindow, sceneContext_,
-                kb::particle_editor::ParticleDocumentTransition::CloseWindow,
-                L"closing the particle editor window")) {
+                kb::particle_editor::ParticleDocumentTransition::CloseWindow)) {
             return 0;
         }
         floatingWindows_.Commands().Destroy(panelId);
@@ -162,26 +159,25 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
     }
 
     static_cast<void>(sceneContext_.RestorePlayModeSceneSession());
-    if (!ResolveDirtyMaterialEditorClose(messageWindow, sceneContext_, L"closing the editor")) {
+    if (!ResolveDirtyMaterialEditorClose(messageWindow, sceneContext_, true)) {
         return 0;
     }
-    if (!ResolveDirtySkeletalMeshEditorClose(messageWindow, sceneContext_, L"closing the editor")) {
+    if (!ResolveDirtySkeletalMeshEditorClose(messageWindow, sceneContext_, true)) {
         return 0;
     }
-    if (!ResolveDirtyAnimatorEditorClose(messageWindow, sceneContext_, L"closing the editor")) {
+    if (!ResolveDirtyAnimatorEditorClose(messageWindow, sceneContext_, true)) {
         return 0;
     }
     if (!EditorParticleDocumentLifecycle::Resolve(
             messageWindow, sceneContext_,
-            kb::particle_editor::ParticleDocumentTransition::ExitApplication,
-            L"closing the editor")) {
+            kb::particle_editor::ParticleDocumentTransition::ExitApplication)) {
         return 0;
     }
-    if (!EditorSceneLifecycleGuard::LeavePrefabEditMode(mainWindow_, sceneContext_, L"closing the editor")) {
+    if (!EditorSceneLifecycleGuard::LeavePrefabEditMode(mainWindow_, sceneContext_, EditorPrefabLeaveReason::CloseEditor)) {
         return 0;
     }
     const std::optional<EditorDirtySceneResolution> resolution =
-        EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow_, sceneContext_, L"closing the editor");
+        EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow_, sceneContext_, EditorSceneTransition::CloseEditor);
     if (!resolution.has_value()) {
         return 0;
     }

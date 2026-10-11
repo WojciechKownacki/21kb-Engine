@@ -1,4 +1,5 @@
 #include "rendering/ProjectFilesFilterMenuOverlayWindow.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserLayout.hpp"
@@ -34,7 +35,7 @@ void DrawCheckbox(HDC dc, RECT rect, const EditorTheme& theme, bool checked) {
     EditorDialogStyle::PaintCheckbox(dc, rect, theme, checked);
 }
 
-void DrawItem(HDC dc, RECT rect, const EditorTheme& theme, const char* label, HeroIconKind icon, bool checked, bool hovered) {
+void DrawItem(HDC dc, RECT rect, const EditorTheme& theme, std::string_view label, HeroIconKind icon, bool checked, bool hovered) {
     GdiDrawing::FillRectColor(
         dc,
         rect,
@@ -95,10 +96,10 @@ void ProjectFilesFilterMenuOverlayWindow::PaintOverlay(HDC dc, const RECT& clien
 
     RECT first = EditorAssetBrowserLayout::ContextMenuItemRect(client, 0);
     RECT second = EditorAssetBrowserLayout::ContextMenuItemRect(client, 1);
-    DrawItem(dc, first, theme_, "Folder", HeroIconKind::Folder, sceneContext_->AssetBrowser().ShowFolders(), hoveredIndex_ == 0);
+    DrawItem(dc, first, theme_, EditorText("projectFiles.filter.folder", "Folder"), HeroIconKind::Folder, sceneContext_->AssetBrowser().ShowFolders(), hoveredIndex_ == 0);
     RECT separator{ client.left + 8, first.bottom + 3, client.right - 8, first.bottom + 4 };
     EditorDialogStyle::PaintDivider(dc, separator, theme_);
-    DrawItem(dc, second, theme_, "Template", HeroIconKind::Cube, sceneContext_->AssetBrowser().ShowTemplates(), hoveredIndex_ == 1);
+    DrawItem(dc, second, theme_, EditorText("projectFiles.filter.template", "Template"), HeroIconKind::Cube, sceneContext_->AssetBrowser().ShowTemplates(), hoveredIndex_ == 1);
 }
 
 void ProjectFilesFilterMenuOverlayWindow::HandleMouseMove(int x, int y) {

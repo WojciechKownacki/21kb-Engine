@@ -36,6 +36,10 @@ public:
     // The tiles in one category, in display order.
     [[nodiscard]] static std::vector<const InspectorComponentTile*> InCategory(std::string_view category);
     [[nodiscard]] static const InspectorComponentTile* Find(std::string_view id);
+    // What the menu shows: the tile's label and a category's name in the editor language. The tile keeps
+    // its English label and category, which identify it.
+    [[nodiscard]] static std::string DisplayLabel(const InspectorComponentTile& tile);
+    [[nodiscard]] static std::string_view CategoryLabel(std::string_view category);
     [[nodiscard]] static std::string_view RequiredPluginId(std::string_view componentId) noexcept;
 };
 

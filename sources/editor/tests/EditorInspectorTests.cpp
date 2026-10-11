@@ -442,7 +442,7 @@ void RunAudioInspectorComponentModelTest() {
     const std::span<const kb::editor::InspectorAudioRow> sourceRows = InspectorAudioComponentModel::SourceRows();
     kb::editor::tests::Require(sourceRows.size() == expectedSourceRows.size(), "Audio Source Inspector should expose every authored field exactly once");
     for (std::size_t index = 0U; index < expectedSourceRows.size(); ++index) {
-        kb::editor::tests::Require(sourceRows[index].property == expectedSourceRows[index].first && sourceRows[index].kind == expectedSourceRows[index].second && !sourceRows[index].label.empty(), "Audio Source Inspector row order, kind, or label is inconsistent");
+        kb::editor::tests::Require(sourceRows[index].property == expectedSourceRows[index].first && sourceRows[index].kind == expectedSourceRows[index].second && !InspectorAudioComponentModel::Label(sourceRows[index].property).empty(), "Audio Source Inspector row order, kind, or label is inconsistent");
     }
     kb::editor::tests::Require(sourceRows.front().pickerProperty == InspectorPropertyId::AudioSourceClipPicker, "Audio clip row should use the shared asset picker affordance");
     kb::editor::tests::Require(InspectorAudioComponentModel::HitKindForControl(InspectorAudioControlKind::Asset) == InspectorHitKind::TextField
@@ -467,7 +467,7 @@ void RunAudioInspectorComponentModelTest() {
     const std::span<const kb::editor::InspectorAudioRow> listenerRows = InspectorAudioComponentModel::ListenerRows();
     kb::editor::tests::Require(listenerRows.size() == expectedListenerRows.size(), "Audio Listener Inspector should expose every authored field exactly once");
     for (std::size_t index = 0U; index < expectedListenerRows.size(); ++index) {
-        kb::editor::tests::Require(listenerRows[index].property == expectedListenerRows[index].first && listenerRows[index].kind == expectedListenerRows[index].second && !listenerRows[index].label.empty(), "Audio Listener Inspector row order, kind, or label is inconsistent");
+        kb::editor::tests::Require(listenerRows[index].property == expectedListenerRows[index].first && listenerRows[index].kind == expectedListenerRows[index].second && !InspectorAudioComponentModel::Label(listenerRows[index].property).empty(), "Audio Listener Inspector row order, kind, or label is inconsistent");
     }
 
     kb::scene::Scene scene;

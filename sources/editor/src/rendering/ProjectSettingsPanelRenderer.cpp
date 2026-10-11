@@ -1,4 +1,5 @@
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
@@ -32,17 +33,17 @@ constexpr int kTooltipPaddingY = 10;
         (GetBValue(a) * percentA + GetBValue(b) * percentB) / 100);
 }
 
-[[nodiscard]] const char* CategoryLabel(int index) noexcept {
+[[nodiscard]] std::string_view CategoryLabel(int index) {
     switch (static_cast<ProjectSettingsCategory>(index)) {
     case ProjectSettingsCategory::Inputs:
-        return "Inputs";
+        return EditorText("projectSettings.category.inputs", "Inputs");
     case ProjectSettingsCategory::Graphics:
-        return "Graphics";
+        return EditorText("projectSettings.category.graphics", "Graphics");
     case ProjectSettingsCategory::Physics:
-        return "Physics";
+        return EditorText("projectSettings.category.physics", "Physics");
     case ProjectSettingsCategory::Count:
     default:
-        return "";
+        return {};
     }
 }
 
@@ -50,26 +51,26 @@ constexpr int kTooltipPaddingY = 10;
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
 }
 
-void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
     ScopedFont font{ pointSize, weight };
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
-void DrawTooltipText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 11, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS) {
+void DrawTooltipText(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize = 11, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS) {
     ScopedFont font{ pointSize, weight };
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 // "/Game/Input/Player.21kbinputcontext" -> "Player". Empty path -> "(None)".
 [[nodiscard]] std::string MappingContextDisplayName(const std::string& virtualPath) {
     if (virtualPath.empty()) {
-        return "(None)";
+        return std::string{ EditorText("projectSettings.noAsset", "(None)") };
     }
     return std::filesystem::path{ virtualPath }.stem().string();
 }
@@ -94,7 +95,7 @@ void DrawSelectorBox(HDC dc, const RECT& box, const EditorTheme& theme, const st
     DrawText(dc, RECT{ box.right - 20, box.top, box.right - 4, box.bottom }, open ? "^" : "v", Color(theme.textSecondary), 11, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-void DrawOptionButton(HDC dc, const RECT& rect, const EditorTheme& theme, const char* label, bool selected, bool enabled = true) {
+void DrawOptionButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view label, bool selected, bool enabled = true) {
     const COLORREF fill = selected ? Color(theme.accent) : Color(enabled ? theme.chrome : theme.background);
     const COLORREF border = selected ? Color(theme.accent) : Color(enabled ? theme.borderPanel : theme.borderChrome);
     const COLORREF text = Color(selected ? theme.textPrimary : (enabled ? theme.textSecondary : theme.textDisabled));
@@ -130,73 +131,85 @@ void DrawDropdownList(HDC dc, const RECT& fieldBox, const EditorTheme& theme, co
 }
 
 struct TooltipContent {
-    const char* title = "";
-    const char* body = "";
+    std::string_view title;
+    std::string_view body;
 };
 
-[[nodiscard]] TooltipContent TooltipForKind(ProjectSettingsTooltipKind kind) noexcept {
+[[nodiscard]] TooltipContent TooltipForKind(ProjectSettingsTooltipKind kind) {
     switch (kind) {
     case ProjectSettingsTooltipKind::MappingContext:
         return TooltipContent{
-            "Mapping Context",
-            "Selects the project-wide input mapping asset used by the runtime input system.",
+            EditorText("projectSettings.mappingContext", "Mapping Context"),
+            EditorText("projectSettings.mappingContextTooltip",
+            "Selects the project-wide input mapping asset used by the runtime input system."),
         };
     case ProjectSettingsTooltipKind::PhysicsLayers:
         return TooltipContent{
-            "Collision Layers Asset",
-            "Selects the project-wide Physics Layers asset used to configure collision and query interactions at runtime.",
+            EditorText("projectSettings.physicsLayers", "Collision Layers Asset"),
+            EditorText("projectSettings.physicsLayersTooltip",
+            "Selects the project-wide Physics Layers asset used to configure collision and query interactions at runtime."),
         };
     case ProjectSettingsTooltipKind::InputEnabled:
         return TooltipContent{
-            "Input Enabled",
-            "Enables or disables project input processing. Disable it for scenes that should ignore gameplay input.",
+            EditorText("projectSettings.inputEnabled", "Input Enabled"),
+            EditorText("projectSettings.inputEnabledTooltip",
+            "Enables or disables project input processing. Disable it for scenes that should ignore gameplay input."),
         };
     case ProjectSettingsTooltipKind::RenderBackend:
         return TooltipContent{
-            "bgfx Backend",
-            "Chooses the rendering backend for the editor viewport. Changing it recreates renderer resources.",
+            EditorText("projectSettings.renderBackend", "bgfx Backend"),
+            EditorText("projectSettings.renderBackendTooltip",
+            "Chooses the rendering backend for the editor viewport. Changing it recreates renderer resources."),
         };
     case ProjectSettingsTooltipKind::LightingPath:
         return TooltipContent{
-            "Lighting Path",
-            "Chooses Forward or Deferred scene lighting for opaque geometry. Transparent objects still render in the forward transparent pass.",
+            EditorText("projectSettings.lightingPath", "Lighting Path"),
+            EditorText("projectSettings.lightingPathTooltip",
+            "Chooses Forward or Deferred scene lighting for opaque geometry. Transparent objects still render in the forward transparent pass."),
         };
     case ProjectSettingsTooltipKind::PostProcess:
         return TooltipContent{
-            "Post FX",
-            "Master switch for scene post-processing such as anti-aliasing, bloom, selection outline and final composition.",
+            EditorText("projectSettings.postProcess", "Post FX"),
+            EditorText("projectSettings.postProcessTooltip",
+            "Master switch for scene post-processing such as anti-aliasing, bloom, selection outline and final composition."),
         };
     case ProjectSettingsTooltipKind::AntiAliasing:
         return TooltipContent{
-            "Anti-Aliasing",
+            EditorText("projectSettings.antiAliasing", "Anti-Aliasing"),
+            EditorText("projectSettings.antiAliasingTooltip",
             "Chooses exactly one AA path for the scene. TAA and FXAA run in post-process alongside your configured lighting path. "
             "MSAA multisamples the render target instead; on a Deferred-lit project it also forces per-sample Forward shading for "
-            "this preview, since the G-buffer cannot be multisampled, so expect lower FPS than TAA/FXAA at the same resolution.",
+            "this preview, since the G-buffer cannot be multisampled, so expect lower FPS than TAA/FXAA at the same resolution."),
         };
     case ProjectSettingsTooltipKind::MsaaSamples:
         return TooltipContent{
-            "MSAA Samples",
-            "Controls the hardware multisample count when Anti-Aliasing is set to MSAA. It is inactive for None, FXAA and TAA.",
+            EditorText("projectSettings.msaaSamples", "MSAA Samples"),
+            EditorText("projectSettings.msaaSamplesTooltip",
+            "Controls the hardware multisample count when Anti-Aliasing is set to MSAA. It is inactive for None, FXAA and TAA."),
         };
     case ProjectSettingsTooltipKind::Bloom:
         return TooltipContent{
-            "Bloom",
-            "Adds a soft glow around bright pixels in the post-process chain. It depends on Post FX being enabled.",
+            EditorText("projectSettings.bloom", "Bloom"),
+            EditorText("projectSettings.bloomTooltip",
+            "Adds a soft glow around bright pixels in the post-process chain. It depends on Post FX being enabled."),
         };
     case ProjectSettingsTooltipKind::Shadows:
         return TooltipContent{
-            "Shadows",
-            "Enables shadow submission for scene lighting. Turning it off reduces rendering cost while previewing layout or materials.",
+            EditorText("projectSettings.shadows", "Shadows"),
+            EditorText("projectSettings.shadowsTooltip",
+            "Enables shadow submission for scene lighting. Turning it off reduces rendering cost while previewing layout or materials."),
         };
     case ProjectSettingsTooltipKind::SelectionOutline:
         return TooltipContent{
-            "Selection Outline",
-            "Draws the editor outline around selected objects through the post-process chain. It depends on Post FX being enabled.",
+            EditorText("projectSettings.selectionOutline", "Selection Outline"),
+            EditorText("projectSettings.selectionOutlineTooltip",
+            "Draws the editor outline around selected objects through the post-process chain. It depends on Post FX being enabled."),
         };
     case ProjectSettingsTooltipKind::GpuDriven:
         return TooltipContent{
-            "GPU Driven",
-            "Enables runtime GPU-driven scene submission where supported. The renderer falls back when the selected backend lacks required features.",
+            EditorText("projectSettings.gpuDriven", "GPU Driven"),
+            EditorText("projectSettings.gpuDrivenTooltip",
+            "Enables runtime GPU-driven scene submission where supported. The renderer falls back when the selected backend lacks required features."),
         };
     case ProjectSettingsTooltipKind::None:
     default:
@@ -206,7 +219,7 @@ struct TooltipContent {
 
 void DrawTooltip(HDC dc, const RECT& content, const EditorTheme& theme, const EditorProjectSettingsState& state) {
     const TooltipContent tooltip = TooltipForKind(state.TooltipKind());
-    if (tooltip.title[0] == '\0') {
+    if (tooltip.title.empty()) {
         return;
     }
 
@@ -249,13 +262,13 @@ void DrawInputsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const 
     const bool dropdownOpen = sceneContext.ProjectSettings().IsMappingContextDropdownOpen();
 
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
-    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, "INPUTS", Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.inputsSection", "INPUTS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
 
     // Enabled first so an open dropdown can overlap it.
-    DrawText(dc, RECT{ rects.enabledLabel.left, rects.enabledLabel.top, rects.enabledLabel.right - 8, rects.enabledLabel.bottom }, "Enabled", Color(theme.textSecondary), 12);
+    DrawText(dc, RECT{ rects.enabledLabel.left, rects.enabledLabel.top, rects.enabledLabel.right - 8, rects.enabledLabel.bottom }, EditorText("projectSettings.inputEnabledLabel", "Enabled"), Color(theme.textSecondary), 12);
     DrawCheckbox(dc, rects.enabledCheckbox, theme, settings.inputEnabled);
 
-    DrawText(dc, RECT{ rects.mappingLabel.left, rects.mappingLabel.top, rects.mappingLabel.right - 8, rects.mappingLabel.bottom }, "Mapping Context", Color(theme.textSecondary), 12);
+    DrawText(dc, RECT{ rects.mappingLabel.left, rects.mappingLabel.top, rects.mappingLabel.right - 8, rects.mappingLabel.bottom }, EditorText("projectSettings.mappingContext", "Mapping Context"), Color(theme.textSecondary), 12);
     const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
     DrawSelectorBox(dc, fieldBox, theme, MappingContextDisplayName(settings.inputMappingContext), settings.inputMappingContext.empty(), dropdownOpen);
     if (dropdownOpen) {
@@ -270,42 +283,42 @@ void DrawGraphicsPage(
     const EditorSceneContext& sceneContext,
     const EditorRenderBackendSettings& renderBackendSettings) {
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
-    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, "GRAPHICS", Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.graphicsSection", "GRAPHICS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
 
-    DrawText(dc, RECT{ rects.backendLabel.left, rects.backendLabel.top, rects.backendLabel.right - 8, rects.backendLabel.bottom }, "bgfx Backend", Color(theme.textSecondary), 12);
+    DrawText(dc, RECT{ rects.backendLabel.left, rects.backendLabel.top, rects.backendLabel.right - 8, rects.backendLabel.bottom }, EditorText("projectSettings.renderBackend", "bgfx Backend"), Color(theme.textSecondary), 12);
     const EditorRenderBackend backend = renderBackendSettings.Backend();
-    DrawOptionButton(dc, rects.backendAutoButton, theme, "Auto", backend == EditorRenderBackend::Auto);
+    DrawOptionButton(dc, rects.backendAutoButton, theme, EditorText("projectSettings.backendAuto", "Auto"), backend == EditorRenderBackend::Auto);
     DrawOptionButton(dc, rects.backendDx12Button, theme, "DX12", backend == EditorRenderBackend::DirectX12);
     DrawOptionButton(dc, rects.backendVulkanButton, theme, "Vulkan", backend == EditorRenderBackend::Vulkan);
 
-    DrawText(dc, RECT{ rects.lightingPathLabel.left, rects.lightingPathLabel.top, rects.lightingPathLabel.right - 8, rects.lightingPathLabel.bottom }, "Lighting Path", Color(theme.textSecondary), 12);
+    DrawText(dc, RECT{ rects.lightingPathLabel.left, rects.lightingPathLabel.top, rects.lightingPathLabel.right - 8, rects.lightingPathLabel.bottom }, EditorText("projectSettings.lightingPath", "Lighting Path"), Color(theme.textSecondary), 12);
     const kb::project::ProjectSceneLightingPath lightingPath = sceneContext.ProjectConfiguration().lightingPath;
-    DrawOptionButton(dc, rects.lightingPathForwardButton, theme, "Forward", lightingPath == kb::project::ProjectSceneLightingPath::Forward);
-    DrawOptionButton(dc, rects.lightingPathForwardPlusButton, theme, "Forward+", lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus);
-    DrawOptionButton(dc, rects.lightingPathDeferredButton, theme, "Deferred", lightingPath == kb::project::ProjectSceneLightingPath::Deferred);
+    DrawOptionButton(dc, rects.lightingPathForwardButton, theme, EditorText("projectSettings.lightingForward", "Forward"), lightingPath == kb::project::ProjectSceneLightingPath::Forward);
+    DrawOptionButton(dc, rects.lightingPathForwardPlusButton, theme, EditorText("projectSettings.lightingForwardPlus", "Forward+"), lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus);
+    DrawOptionButton(dc, rects.lightingPathDeferredButton, theme, EditorText("projectSettings.lightingDeferred", "Deferred"), lightingPath == kb::project::ProjectSceneLightingPath::Deferred);
 
-    DrawText(dc, rects.postProcessLabel, "Post FX", Color(theme.textSecondary), 12);
+    DrawText(dc, rects.postProcessLabel, EditorText("projectSettings.postProcess", "Post FX"), Color(theme.textSecondary), 12);
     DrawCheckbox(dc, rects.postProcessCheckbox, theme, renderBackendSettings.PostProcessEnabled());
-    DrawText(dc, rects.antiAliasingLabel, "Anti-Aliasing", Color(theme.textSecondary), 12);
+    DrawText(dc, rects.antiAliasingLabel, EditorText("projectSettings.antiAliasing", "Anti-Aliasing"), Color(theme.textSecondary), 12);
     const EditorAntiAliasingMode aaMode = renderBackendSettings.AntiAliasingMode();
-    DrawOptionButton(dc, rects.antiAliasingNoneButton, theme, "None", aaMode == EditorAntiAliasingMode::None);
+    DrawOptionButton(dc, rects.antiAliasingNoneButton, theme, EditorText("projectSettings.antiAliasingNone", "None"), aaMode == EditorAntiAliasingMode::None);
     DrawOptionButton(dc, rects.antiAliasingFxaaButton, theme, "FXAA", aaMode == EditorAntiAliasingMode::Fxaa);
     DrawOptionButton(dc, rects.antiAliasingTaaButton, theme, "TAA", aaMode == EditorAntiAliasingMode::Taa);
     DrawOptionButton(dc, rects.antiAliasingMsaaButton, theme, "MSAA", aaMode == EditorAntiAliasingMode::Msaa);
     const bool msaaActive = aaMode == EditorAntiAliasingMode::Msaa;
-    DrawText(dc, rects.msaaLabel, "MSAA Samples", Color(msaaActive ? theme.textSecondary : theme.textDisabled), 12);
-    DrawOptionButton(dc, rects.msaaOffButton, theme, "Off", msaaActive && renderBackendSettings.MsaaSamples() == 0U, msaaActive);
+    DrawText(dc, rects.msaaLabel, EditorText("projectSettings.msaaSamples", "MSAA Samples"), Color(msaaActive ? theme.textSecondary : theme.textDisabled), 12);
+    DrawOptionButton(dc, rects.msaaOffButton, theme, EditorText("projectSettings.msaaOff", "Off"), msaaActive && renderBackendSettings.MsaaSamples() == 0U, msaaActive);
     DrawOptionButton(dc, rects.msaa2xButton, theme, "2x", msaaActive && renderBackendSettings.MsaaSamples() == 2U, msaaActive);
     DrawOptionButton(dc, rects.msaa4xButton, theme, "4x", msaaActive && renderBackendSettings.MsaaSamples() == 4U, msaaActive);
     DrawOptionButton(dc, rects.msaa8xButton, theme, "8x", msaaActive && renderBackendSettings.MsaaSamples() == 8U, msaaActive);
     DrawOptionButton(dc, rects.msaa16xButton, theme, "16x", msaaActive && renderBackendSettings.MsaaSamples() == 16U, msaaActive);
-    DrawText(dc, rects.bloomLabel, "Bloom", Color(theme.textSecondary), 12);
+    DrawText(dc, rects.bloomLabel, EditorText("projectSettings.bloom", "Bloom"), Color(theme.textSecondary), 12);
     DrawCheckbox(dc, rects.bloomCheckbox, theme, renderBackendSettings.BloomEnabled());
-    DrawText(dc, rects.shadowsLabel, "Shadows", Color(theme.textSecondary), 12);
+    DrawText(dc, rects.shadowsLabel, EditorText("projectSettings.shadows", "Shadows"), Color(theme.textSecondary), 12);
     DrawCheckbox(dc, rects.shadowsCheckbox, theme, renderBackendSettings.ShadowsEnabled());
-    DrawText(dc, rects.selectionOutlineLabel, "Selection Outline", Color(theme.textSecondary), 12);
+    DrawText(dc, rects.selectionOutlineLabel, EditorText("projectSettings.selectionOutline", "Selection Outline"), Color(theme.textSecondary), 12);
     DrawCheckbox(dc, rects.selectionOutlineCheckbox, theme, renderBackendSettings.SelectionOutlineEnabled());
-    DrawText(dc, rects.gpuDrivenLabel, "GPU Visibility Diagnostics", Color(theme.textSecondary), 12);
+    DrawText(dc, rects.gpuDrivenLabel, EditorText("projectSettings.gpuVisibilityDiagnostics", "GPU Visibility Diagnostics"), Color(theme.textSecondary), 12);
     DrawCheckbox(dc, rects.gpuDrivenCheckbox, theme, renderBackendSettings.GpuDrivenEnabled());
 }
 
@@ -314,8 +327,8 @@ void DrawPhysicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const
     const bool dropdownOpen = sceneContext.ProjectSettings().IsPhysicsLayersDropdownOpen();
 
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
-    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, "PHYSICS", Color(theme.textSecondary), 11, FW_SEMIBOLD);
-    DrawText(dc, RECT{ rects.mappingLabel.left, rects.mappingLabel.top, rects.mappingLabel.right - 8, rects.mappingLabel.bottom }, "Collision Layers Asset", Color(theme.textSecondary), 12);
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.physicsSection", "PHYSICS"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ rects.mappingLabel.left, rects.mappingLabel.top, rects.mappingLabel.right - 8, rects.mappingLabel.bottom }, EditorText("projectSettings.physicsLayers", "Collision Layers Asset"), Color(theme.textSecondary), 12);
     const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
     DrawSelectorBox(dc, fieldBox, theme, MappingContextDisplayName(settings.physicsLayersAsset), settings.physicsLayersAsset.empty(), dropdownOpen);
     if (dropdownOpen) {
@@ -340,7 +353,7 @@ void ProjectSettingsPanelRenderer::Paint(
     GdiDrawing::FillRectColor(dc, rects.header, Color(theme.strip));
     GdiDrawing::FillRectColor(dc, RECT{ rects.header.left, rects.header.top, rects.header.left + 3, rects.header.bottom }, Color(theme.accent));
     GdiDrawing::FillRectColor(dc, RECT{ rects.header.left, rects.header.bottom - 1, rects.header.right, rects.header.bottom }, Color(theme.borderChrome));
-    DrawText(dc, RECT{ rects.header.left + kPadding, rects.header.top, rects.header.right - kPadding, rects.header.bottom }, "Project Settings", Color(theme.textPrimary), 14, FW_SEMIBOLD);
+    DrawText(dc, RECT{ rects.header.left + kPadding, rects.header.top, rects.header.right - kPadding, rects.header.bottom }, EditorText("panel.projectSettings", "Project Settings"), Color(theme.textPrimary), 14, FW_SEMIBOLD);
 
     DrawCategorySidebar(dc, rects, theme, selectedCategory);
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "localization/EditorLocalization.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -65,8 +67,8 @@ public:
 
     void Complete(bool succeeded, std::string documentName) {
         notificationText_ = succeeded
-            ? "Autosaved " + std::move(documentName)
-            : "Autosave failed";
+            ? EditorLocalization::Format("autosave.saved", "Autosaved {document}", { { "document", std::move(documentName) } })
+            : std::string{ EditorText("autosave.failed", "Autosave failed") };
         notificationSucceeded_ = succeeded;
         notificationSecondsRemaining_ = NotificationSeconds;
     }

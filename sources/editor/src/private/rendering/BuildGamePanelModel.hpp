@@ -27,7 +27,8 @@ enum class BuildGameRowKind : std::uint8_t { ReadOnly, Text, Password, FolderPic
 
 struct BuildGameRowSpec {
     BuildGameField field = BuildGameField::None;
-    std::string_view label;
+    // The row's label in the editor language.
+    std::string_view (*label)() = nullptr;
     BuildGameRowKind kind = BuildGameRowKind::ReadOnly;
     bool required = false;
 };
@@ -46,6 +47,9 @@ struct BuildGameValidation {
 class BuildGamePanelModel final {
 public:
     BuildGamePanelModel() = delete;
+    // A package target's name and summary in the editor language; the engine catalog keeps English for tools.
+    [[nodiscard]] static std::string_view TargetDisplayName(kb::packaging::PackagingTarget target);
+    [[nodiscard]] static std::string_view TargetSummary(kb::packaging::PackagingTarget target);
     [[nodiscard]] static std::vector<BuildGameSectionSpec> Sections(kb::packaging::PackagingTarget target, bool release);
     [[nodiscard]] static std::string Value(BuildGameField field, kb::packaging::PackagingTarget target,
         const kb::project::ProjectSettings& project, const EditorBuildGameSettings& local);

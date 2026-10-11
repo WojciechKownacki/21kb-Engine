@@ -7,9 +7,17 @@
 #endif
 
 #include <filesystem>
-#include <string_view>
 
 namespace kb::editor {
+
+// What the user is about to do when the editor asks about unsaved scene changes.
+enum class EditorSceneTransition {
+    NewScene,
+    OpenScene,
+    CloseEditor,
+    ConvertSceneToWorld,
+    BuildGame,
+};
 
 #if defined(_WIN32)
 
@@ -26,7 +34,7 @@ public:
     [[nodiscard]] static EditorSceneDirtyPromptResult Confirm(
         HWND owner,
         const std::filesystem::path& scenePath,
-        std::wstring_view action);
+        EditorSceneTransition transition);
 };
 
 #endif

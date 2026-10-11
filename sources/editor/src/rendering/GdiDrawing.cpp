@@ -31,15 +31,15 @@ void GdiDrawing::FillRectAlpha(HDC target, const RECT& rect, COLORREF color, BYT
     GdiAlphaBlender::Fill(target, rect, color, alpha);
 }
 
-void GdiDrawing::DrawTextBlock(HDC dc, RECT rect, const char* text, COLORREF color) {
+void GdiDrawing::DrawTextBlock(HDC dc, RECT rect, std::string_view text, COLORREF color) {
     GdiTextPainter::DrawBlock(dc, rect, text, color);
 }
 
-void GdiDrawing::DrawTabText(HDC dc, RECT rect, const char* text, COLORREF color) {
+void GdiDrawing::DrawTabText(HDC dc, RECT rect, std::string_view text, COLORREF color) {
     GdiTextPainter::DrawTab(dc, rect, text, color);
 }
 
-void GdiDrawing::DrawCenteredText(HDC dc, RECT rect, const char* text, COLORREF color) {
+void GdiDrawing::DrawCenteredText(HDC dc, RECT rect, std::string_view text, COLORREF color) {
     GdiTextPainter::DrawCentered(dc, rect, text, color);
 }
 

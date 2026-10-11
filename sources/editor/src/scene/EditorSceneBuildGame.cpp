@@ -112,13 +112,14 @@ bool EditorSceneContext::BeginBuildGameTextEdit(BuildGameField field) {
     else if (field == BuildGameField::AndroidKeyPassword) buildGameEditBuffer_ = buildGameKeyPassword_;
     else if (field == BuildGameField::WindowsCertificatePassword) buildGameEditBuffer_ = buildGameCertificatePassword_;
     else buildGameEditBuffer_ = BuildGamePanelModel::Value(field, BuildGameTarget(), projectConfig_, buildGameSettings_);
-    if (field == BuildGameField::AndroidKeyAlias && buildGameEditBuffer_ == "Development only") {
+    const EditorBuildGameTargetSettings& targetSettings = buildGameSettings_.For(BuildGameTarget());
+    // An empty value shows a hint in its place; editing starts from the empty value, not the hint.
+    if (field == BuildGameField::AndroidKeyAlias && targetSettings.androidKeyAlias.empty()) {
         buildGameEditBuffer_.clear();
     }
     if (field == BuildGameField::CrashReportUrl && projectConfig_.crashReportUploadUrl.empty()) {
         buildGameEditBuffer_.clear();
     }
-    const EditorBuildGameTargetSettings& targetSettings = buildGameSettings_.For(BuildGameTarget());
     if ((field == BuildGameField::WindowsCertificateThumbprint && targetSettings.windowsCertificateThumbprint.empty()) ||
         (field == BuildGameField::WindowsTimestampUrl && targetSettings.windowsTimestampUrl.empty())) {
         buildGameEditBuffer_.clear();

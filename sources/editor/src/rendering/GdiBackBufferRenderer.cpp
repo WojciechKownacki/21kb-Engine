@@ -1,6 +1,7 @@
 #include "rendering/GdiBackBufferRenderer.hpp"
 
 #if defined(_WIN32)
+#include "rendering/gdi/EditorFontCache.hpp"
 #include "rendering/gdi/ScopedPaint.hpp"
 
 #include <algorithm>
@@ -147,6 +148,9 @@ void GdiBackBufferRenderer::Paint(HWND window, GdiBackBufferPaintFn paint, void*
     // repaint instead of a full-window workspace redraw.
     const int savedClip = SaveDC(memoryDc);
     IntersectClipRect(memoryDc, dirtyRect.left, dirtyRect.top, dirtyRect.right, dirtyRect.bottom);
+    // Text drawn without a font of its own uses the editor's, not the DC's raster "System"
+    // font, which has no glyphs for most of the editor languages.
+    SelectObject(memoryDc, EditorFontCache::Acquire(EditorFontCache::UiPointSize, FW_NORMAL));
     paint(
         GdiBackBufferPaintContext{
             .dc = memoryDc,

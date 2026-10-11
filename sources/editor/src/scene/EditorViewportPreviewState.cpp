@@ -1,4 +1,5 @@
 #include "scene/EditorViewportPreviewState.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include <algorithm>
 #include <array>
@@ -108,13 +109,13 @@ constexpr EditorViewportProfile kProfiles[] = {
     return std::round(value / safeStep) * safeStep;
 }
 
-[[nodiscard]] const char* StepLabel(std::span<const float> values, std::span<const char* const> labels, float value) noexcept {
+[[nodiscard]] std::string_view StepLabel(std::span<const float> values, std::span<const std::string_view> labels, float value) {
     for (std::size_t index = 0; index < values.size() && index < labels.size(); ++index) {
         if (NearlyEqual(values[index], value)) {
             return labels[index];
         }
     }
-    return "Custom";
+    return EditorText("viewport.customStep", "Custom");
 }
 
 } // namespace
@@ -417,30 +418,30 @@ const char* EditorViewportCameraModeLabel(EditorViewportCameraMode mode) noexcep
     return "Game Cam";
 }
 
-const char* EditorViewportRenderProfileLabel(EditorViewportRenderProfile profile) noexcept {
+std::string_view EditorViewportRenderProfileLabel(EditorViewportRenderProfile profile) {
     switch (profile) {
     case EditorViewportRenderProfile::Interactive:
-        return "Interactive";
+        return EditorText("viewport.renderProfile.interactive", "Interactive");
     case EditorViewportRenderProfile::Lit:
-        return "Lit";
+        return EditorText("viewport.renderProfile.lit", "Lit");
     case EditorViewportRenderProfile::GamePreview:
-        return "Game";
+        return EditorText("viewport.renderProfile.game", "Game");
     }
-    return "Interactive";
+    return EditorText("viewport.renderProfile.interactive", "Interactive");
 }
 
-const char* EditorViewportGridSpacingLabel(float spacing) noexcept {
-    constexpr std::array<const char*, 6U> labels{ "0.25m", "0.5m", "1m", "2m", "5m", "10m" };
+std::string_view EditorViewportGridSpacingLabel(float spacing) {
+    constexpr std::array<std::string_view, 6U> labels{ "0.25m", "0.5m", "1m", "2m", "5m", "10m" };
     return StepLabel(kGridSpacings, labels, spacing);
 }
 
-const char* EditorViewportSnapStepLabel(float step) noexcept {
-    constexpr std::array<const char*, 6U> labels{ "0.25m", "0.5m", "1m", "2m", "5m", "10m" };
+std::string_view EditorViewportSnapStepLabel(float step) {
+    constexpr std::array<std::string_view, 6U> labels{ "0.25m", "0.5m", "1m", "2m", "5m", "10m" };
     return StepLabel(kSnapSteps, labels, step);
 }
 
-const char* EditorViewportRotationSnapLabel(float degrees) noexcept {
-    constexpr std::array<const char*, 5U> labels{ "Off", "5deg", "10deg", "15deg", "20deg" };
+std::string_view EditorViewportRotationSnapLabel(float degrees) {
+    const std::array<std::string_view, 5U> labels{ EditorText("viewport.rotationSnapOff", "Off"), "5deg", "10deg", "15deg", "20deg" };
     return StepLabel(kRotationSnapDegrees, labels, degrees);
 }
 

@@ -6,6 +6,8 @@
 #include <Windows.h>
 #endif
 
+#include <string_view>
+
 namespace kb::editor {
 
 #if defined(_WIN32)
@@ -14,9 +16,9 @@ class GdiTextPainter {
 public:
     GdiTextPainter() = delete;
 
-    static void DrawBlock(HDC dc, RECT rect, const char* text, COLORREF color);
-    static void DrawTab(HDC dc, RECT rect, const char* text, COLORREF color);
-    static void DrawCentered(HDC dc, RECT rect, const char* text, COLORREF color);
+    static void DrawBlock(HDC dc, RECT rect, std::string_view text, COLORREF color);
+    static void DrawTab(HDC dc, RECT rect, std::string_view text, COLORREF color);
+    static void DrawCentered(HDC dc, RECT rect, std::string_view text, COLORREF color);
 };
 
 #endif

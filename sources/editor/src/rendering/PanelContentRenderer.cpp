@@ -1,4 +1,5 @@
 #include "rendering/PanelContentRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "console/EditorConsoleLayout.hpp"
@@ -63,16 +64,16 @@ namespace {
     return "i";
 }
 
-[[nodiscard]] const char* LongLevelLabel(EditorConsoleLevel level) noexcept {
+[[nodiscard]] std::string_view LongLevelLabel(EditorConsoleLevel level) {
     switch (level) {
     case EditorConsoleLevel::Info:
-        return "Info";
+        return EditorText("console.levelInfo", "Info");
     case EditorConsoleLevel::Warning:
-        return "Warning";
+        return EditorText("console.levelWarning", "Warning");
     case EditorConsoleLevel::Error:
-        return "Error";
+        return EditorText("console.levelError", "Error");
     }
-    return "Info";
+    return EditorText("console.levelInfo", "Info");
 }
 
 [[nodiscard]] COLORREF LevelColor(EditorConsoleLevel level) noexcept {
@@ -158,12 +159,12 @@ namespace {
     return std::string{ buffer };
 }
 
-void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
     ScopedFont font{ pointSize, weight };
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 void DrawPill(HDC dc, RECT rect, const EditorTheme& theme, EditorConsoleLevel level, std::uint32_t count, bool active) {
@@ -176,7 +177,7 @@ void DrawPill(HDC dc, RECT rect, const EditorTheme& theme, EditorConsoleLevel le
     DrawText(dc, countRect, FormatCount(count).c_str(), active ? Color(theme.textPrimary) : Color(theme.textDisabled), 12, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
-void DrawButton(HDC dc, RECT rect, const EditorTheme& theme, const char* label, bool hovered = false, bool pressed = false) {
+void DrawButton(HDC dc, RECT rect, const EditorTheme& theme, std::string_view label, bool hovered = false, bool pressed = false) {
     const COLORREF background = pressed ? Color(theme.tabActive) : (hovered ? Blend(Color(theme.panel), Color(theme.accent), 9) : Color(theme.chrome));
     const COLORREF border = pressed || hovered ? Color(theme.accent) : Color(theme.borderPanel);
     const COLORREF text = pressed ? Color(theme.textPrimary) : Color(theme.textSecondary);
@@ -198,9 +199,9 @@ void DrawConsoleToolbar(HDC dc, const EditorConsoleLayoutRects& layout, const Ed
     DrawPill(dc, layout.infoButton, theme, EditorConsoleLevel::Info, console.Count(EditorConsoleLevel::Info), console.ShowInfo());
     DrawPill(dc, layout.warningButton, theme, EditorConsoleLevel::Warning, console.Count(EditorConsoleLevel::Warning), console.ShowWarnings());
     DrawPill(dc, layout.errorButton, theme, EditorConsoleLevel::Error, console.Count(EditorConsoleLevel::Error), console.ShowErrors());
-    DrawButton(dc, layout.copyLineButton, theme, "Copy Line", console.HoveredButton() == EditorConsoleButton::CopyLine, console.PressedButton() == EditorConsoleButton::CopyLine);
-    DrawButton(dc, layout.saveLogButton, theme, "Save Log", console.HoveredButton() == EditorConsoleButton::SaveLog, console.PressedButton() == EditorConsoleButton::SaveLog);
-    DrawButton(dc, layout.clearButton, theme, "Clear", console.HoveredButton() == EditorConsoleButton::Clear, console.PressedButton() == EditorConsoleButton::Clear);
+    DrawButton(dc, layout.copyLineButton, theme, EditorText("console.copyLine", "Copy Line"), console.HoveredButton() == EditorConsoleButton::CopyLine, console.PressedButton() == EditorConsoleButton::CopyLine);
+    DrawButton(dc, layout.saveLogButton, theme, EditorText("console.saveLog", "Save Log"), console.HoveredButton() == EditorConsoleButton::SaveLog, console.PressedButton() == EditorConsoleButton::SaveLog);
+    DrawButton(dc, layout.clearButton, theme, EditorText("console.clear", "Clear"), console.HoveredButton() == EditorConsoleButton::Clear, console.PressedButton() == EditorConsoleButton::Clear);
 }
 
 void DrawConsoleRow(HDC dc, RECT row, const EditorTheme& theme, const EditorConsoleEntry& entry, int visibleIndex, bool selected) {
@@ -298,7 +299,8 @@ void DrawConsolePanel(HDC dc, const RECT& content, const EditorTheme& theme, con
     }
 
     if (accepted == 0) {
-        DrawText(dc, layout.listRows, console.Entries().empty() ? "Console is ready. No log entries yet." : "No log entries match the active filters.", Color(theme.textDisabled), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DrawText(dc, layout.listRows, console.Entries().empty() ? EditorText("console.emptyReady", "Console is ready. No log entries yet.")
+                                                           : EditorText("console.emptyFiltered", "No log entries match the active filters."), Color(theme.textDisabled), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
     DrawConsoleListScrollbar(dc, layout, theme, console);
     DrawConsoleDetail(dc, layout, theme, console);

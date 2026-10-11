@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/SceneTransforms.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "inspection/EditorValueFormatter.hpp"
 #include "inspection/InspectorPanelState.hpp"
 #include "inspection/InspectorSceneColor.hpp"
@@ -466,7 +467,7 @@ inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const In
     {
         ScopedFont valueFont(12, classified ? FW_SEMIBOLD : FW_NORMAL);
         const ScopedGdiObject selectedFont(dc, valueFont.handle);
-        Text(dc, Shrink(valueRect, 8, 0, 28, 0), classified ? value : std::string_view{ "None" },
+        Text(dc, Shrink(valueRect, 8, 0, 28, 0), classified ? value : EditorText("inspector.none", "None"),
             classified ? Color(theme.textPrimary) : Color(theme.textDisabled));
         Text(dc, Rect(valueRect.right - 25, valueRect.top, valueRect.right - 5, valueRect.bottom), open ? "^" : "v",
             Color(theme.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);

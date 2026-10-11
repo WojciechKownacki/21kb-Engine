@@ -1,5 +1,6 @@
 #include "settings/EditorLayoutMenuModel.hpp"
 
+#include "localization/EditorLocalization.hpp"
 #include "settings/EditorLayoutLibrary.hpp"
 
 namespace kb::editor {
@@ -8,7 +9,7 @@ void EditorLayoutMenuModel::Rebuild(
     const std::vector<std::string>& savedLayouts, std::string_view activeLayout) {
     rows_.clear();
     rows_.push_back({
-        .label = "Default",
+        .label = std::string{ EditorText("layout.default", "Default") },
         .action = EditorLayoutMenuAction::Default,
         .active = activeLayout.empty(),
     });
@@ -23,14 +24,16 @@ void EditorLayoutMenuModel::Rebuild(
             .active = name == activeLayout,
         });
     }
-    rows_.push_back({ .label = "Save Layout...", .action = EditorLayoutMenuAction::Save });
-    rows_.push_back({ .label = "Delete Layout...", .action = EditorLayoutMenuAction::Delete });
+    rows_.push_back({ .label = std::string{ EditorText("layout.saveRow", "Save Layout...") }, .action = EditorLayoutMenuAction::Save });
+    rows_.push_back({ .label = std::string{ EditorText("layout.deleteRow", "Delete Layout...") }, .action = EditorLayoutMenuAction::Delete });
 }
 
 void EditorLayoutMenuModel::RebuildForDelete(const std::vector<std::string>& savedLayouts) {
     rows_.clear();
     rows_.push_back({
-        .label = savedLayouts.empty() ? "No saved layouts" : "Delete which layout?",
+        .label = std::string{ savedLayouts.empty()
+            ? EditorText("layout.noSavedLayouts", "No saved layouts")
+            : EditorText("layout.deleteWhich", "Delete which layout?") },
         .action = EditorLayoutMenuAction::Delete,
         .enabled = false,
     });

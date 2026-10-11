@@ -12,7 +12,7 @@ void InspectorCameraTextBuilder::Append(std::string& text, const kb::scene::Came
         component,
         sizeof(component),
         "\n\nCamera\nProjection: %s\nFOV: %.1f\nClip: %.2f - %.1f\nPrimary: %s\nViewport: %u\nPriority: %d\nCulling Mask: 0x%08X\nClear: %s\nClear Color: %.2f, %.2f, %.2f",
-        InspectorComponentLabelFormatter::ProjectionName(camera.projection),
+        std::string{ InspectorComponentLabelFormatter::ProjectionName(camera.projection) }.c_str(),
         camera.verticalFovDegrees,
         camera.nearClip,
         camera.farClip,
@@ -20,7 +20,7 @@ void InspectorCameraTextBuilder::Append(std::string& text, const kb::scene::Came
         camera.viewportId,
         camera.priority,
         camera.cullingMask,
-        InspectorComponentLabelFormatter::CameraClearModeName(camera.clearMode),
+        std::string{ InspectorComponentLabelFormatter::CameraClearModeName(camera.clearMode) }.c_str(),
         camera.clearColor.x,
         camera.clearColor.y,
         camera.clearColor.z);

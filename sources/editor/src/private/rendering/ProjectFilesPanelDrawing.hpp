@@ -28,14 +28,14 @@ public:
     [[nodiscard]] static COLORREF FolderColor(bool selected) noexcept;
     [[nodiscard]] static bool SameVirtualPath(const std::filesystem::path& left, const std::filesystem::path& right);
 
-    static void DrawLabel(HDC dc, RECT rect, const char* text, COLORREF color);
-    static void DrawCenteredLabel(HDC dc, RECT rect, const char* text, COLORREF color);
-    static void DrawTextWithFont(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize, int weight, UINT flags);
+    static void DrawLabel(HDC dc, RECT rect, std::string_view text, COLORREF color);
+    static void DrawCenteredLabel(HDC dc, RECT rect, std::string_view text, COLORREF color);
+    static void DrawTextWithFont(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize, int weight, UINT flags);
     static void DrawHairline(HDC dc, RECT rect, COLORREF color);
     static void DrawEditField(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value);
     static void DrawCenteredEditField(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value);
     static void DrawIconButton(HDC dc, RECT rect, const EditorTheme& theme, HeroIconKind icon, bool active);
-    static void DrawTextButton(HDC dc, RECT rect, const EditorTheme& theme, const char* text, bool active);
+    static void DrawTextButton(HDC dc, RECT rect, const EditorTheme& theme, std::string_view text, bool active);
     static void DrawDisclosureTriangle(HDC dc, RECT rect, COLORREF color, bool expanded);
     static void DrawIconWithShadow(HDC dc, RECT icon, HeroIconKind kind, COLORREF color, int strokeWidth = 2);
 };

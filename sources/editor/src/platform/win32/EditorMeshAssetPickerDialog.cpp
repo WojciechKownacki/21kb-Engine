@@ -1,4 +1,5 @@
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
 #include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
@@ -145,22 +146,32 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
     return metadata.physicalPath.string();
 }
 
-[[nodiscard]] std::string TextureFilterLabel(EditorTextureAssetPickerFilter filter) {
+[[nodiscard]] std::string TextureFilterTitle(EditorTextureAssetPickerFilter filter) {
     switch (filter) {
     case EditorTextureAssetPickerFilter::TextureCube:
-        return "Texture Cube";
+        return std::string{ EditorText("assetPicker.selectTextureCube", "Select Texture Cube") };
     case EditorTextureAssetPickerFilter::TextureVolume:
-        return "Texture Volume";
+        return std::string{ EditorText("assetPicker.selectTextureVolume", "Select Texture Volume") };
     case EditorTextureAssetPickerFilter::Texture2DArray:
-        return "Texture 2D Array";
+        return std::string{ EditorText("assetPicker.selectTexture2DArray", "Select Texture 2D Array") };
     case EditorTextureAssetPickerFilter::Texture2D:
     default:
-        return "Texture 2D";
+        return std::string{ EditorText("assetPicker.selectTexture2D", "Select Texture 2D") };
     }
 }
 
 [[nodiscard]] std::string TextureFilterDescription(EditorTextureAssetPickerFilter filter) {
-    return "Choose a " + TextureFilterLabel(filter) + " asset.";
+    switch (filter) {
+    case EditorTextureAssetPickerFilter::TextureCube:
+        return std::string{ EditorText("assetPicker.chooseTextureCube", "Choose a Texture Cube asset.") };
+    case EditorTextureAssetPickerFilter::TextureVolume:
+        return std::string{ EditorText("assetPicker.chooseTextureVolume", "Choose a Texture Volume asset.") };
+    case EditorTextureAssetPickerFilter::Texture2DArray:
+        return std::string{ EditorText("assetPicker.chooseTexture2DArray", "Choose a Texture 2D Array asset.") };
+    case EditorTextureAssetPickerFilter::Texture2D:
+    default:
+        return std::string{ EditorText("assetPicker.chooseTexture2D", "Choose a Texture 2D asset.") };
+    }
 }
 
 [[nodiscard]] std::vector<AssetPickerRow> BuildMeshRows(const EditorSceneContext& sceneContext) {
@@ -170,7 +181,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
         if (!EditorSceneMeshAssetActions::IsMeshAsset(metadata)) {
             continue;
         }
-        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, "Mesh"), .path = DisplayPath(metadata) });
+        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, EditorText("assetPicker.unnamedMesh", "Mesh")), .path = DisplayPath(metadata) });
     }
     std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
         if (lhs.name != rhs.name) {
@@ -188,7 +199,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
         if (!EditorSceneMaterialAssetActions::IsMaterialAsset(metadata)) {
             continue;
         }
-        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, "Material"), .path = DisplayPath(metadata) });
+        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, EditorText("assetPicker.unnamedMaterial", "Material")), .path = DisplayPath(metadata) });
     }
     std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
         if (lhs.name != rhs.name) {
@@ -208,7 +219,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
         }
         rows.push_back(AssetPickerRow{
             .assetId = metadata.id,
-            .name = DisplayName(metadata, "Audio Mixer"),
+            .name = DisplayName(metadata, EditorText("assetPicker.unnamedAudioMixer", "Audio Mixer")),
             .path = DisplayPath(metadata),
         });
     }
@@ -225,7 +236,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
         if (metadata.type != kb::scene::kParticleEffectAssetType) continue;
         rows.push_back(AssetPickerRow{
             .assetId = metadata.id,
-            .name = DisplayName(metadata, "Particle Effect"),
+            .name = DisplayName(metadata, EditorText("assetPicker.unnamedParticleEffect", "Particle Effect")),
             .path = DisplayPath(metadata),
         });
     }
@@ -244,7 +255,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
         }
         rows.push_back(AssetPickerRow{
             .assetId = metadata.id,
-            .name = DisplayName(metadata, "Animator Controller"),
+            .name = DisplayName(metadata, EditorText("assetPicker.unnamedAnimatorController", "Animator Controller")),
             .path = DisplayPath(metadata),
         });
     }
@@ -262,7 +273,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
         if (metadata.type != kb::scene::kSkeletonAssetType) continue;
-        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, "Skeleton"), .path = DisplayPath(metadata) });
+        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, EditorText("assetPicker.unnamedSkeleton", "Skeleton")), .path = DisplayPath(metadata) });
     }
     std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
         return lhs.name != rhs.name ? lhs.name < rhs.name : lhs.assetId.value < rhs.assetId.value;
@@ -275,7 +286,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
         if (metadata.type != kb::scene::kSkeletalMeshAssetType) continue;
-        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, "Skeletal Mesh"), .path = DisplayPath(metadata) });
+        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, EditorText("assetPicker.unnamedSkeletalMesh", "Skeletal Mesh")), .path = DisplayPath(metadata) });
     }
     std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
         return lhs.name != rhs.name ? lhs.name < rhs.name : lhs.assetId.value < rhs.assetId.value;
@@ -290,7 +301,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
         if (!EditorTextureAssetMatchesFilter(metadata, filter)) {
             continue;
         }
-        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, "Texture"), .path = DisplayPath(metadata) });
+        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, EditorText("assetPicker.unnamedTexture", "Texture")), .path = DisplayPath(metadata) });
     }
     std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
         if (lhs.name != rhs.name) {
@@ -758,13 +769,13 @@ private:
         return true;
     }
 
-    void PaintTextureButton(HDC dc, RECT rect, std::string_view label, bool enabled, bool hovered) const {
+    void PaintTextureButton(HDC dc, RECT rect, std::string_view label, bool primary, bool enabled, bool hovered) const {
         EditorDialogStyle::PaintButton(
             dc,
             rect,
             theme_,
             label,
-            label == "Accept" ? EditorDialogButtonTone::Primary : EditorDialogButtonTone::Neutral,
+            primary ? EditorDialogButtonTone::Primary : EditorDialogButtonTone::Neutral,
             hovered,
             enabled);
     }
@@ -837,7 +848,7 @@ private:
 
         const RECT search = TextureSearchRect();
         const std::string searchText = textureQuery_.empty()
-            ? (textureSearchFocused_ ? std::string{ "|" } : std::string{ "Search textures" })
+            ? (textureSearchFocused_ ? std::string{ "|" } : std::string{ EditorText("assetPicker.searchTextures", "Search textures") })
             : (textureSearchFocused_ ? textureQuery_ + "|" : textureQuery_);
         EditorDialogStyle::PaintField(
             dc,
@@ -847,9 +858,10 @@ private:
             textureSearchFocused_,
             textureQuery_.empty() && !textureSearchFocused_);
 
-        PaintTextureButton(dc, TextureClearRect(), "Clear", allowClear_, hoveredRow_ == -5);
-        PaintTextureButton(dc, TextureAcceptRect(), "Accept", ValidAsset(selectedTextureAsset_), hoveredRow_ == -3);
-        PaintTextureButton(dc, TextureCancelRect(), "Cancel", true, hoveredRow_ == -4);
+        PaintTextureButton(dc, TextureClearRect(), EditorText("assetPicker.clear", "Clear"), false, allowClear_, hoveredRow_ == -5);
+        PaintTextureButton(dc, TextureAcceptRect(), EditorText("assetPicker.accept", "Accept"), true,
+            ValidAsset(selectedTextureAsset_), hoveredRow_ == -3);
+        PaintTextureButton(dc, TextureCancelRect(), EditorText("common.cancel", "Cancel"), false, true, hoveredRow_ == -4);
 
         const RECT viewport = TextureViewportRect();
         EditorDialogStyle::PaintListFrame(dc, viewport, theme_);
@@ -879,7 +891,7 @@ private:
                 hoveredRow_ == static_cast<int>(tile));
         }
         if (indices.empty()) {
-            Text(dc, Rect(viewport.left, viewport.top + 8, viewport.right, viewport.top + 36), "No textures found", Rgb(128, 133, 145));
+            Text(dc, Rect(viewport.left, viewport.top + 8, viewport.right, viewport.top + 36), EditorText("assetPicker.noTextures", "No textures found"), Rgb(128, 133, 145));
         }
         RestoreDC(dc, saved);
         PaintTextureScrollbar(dc, viewport, contentHeight);
@@ -888,7 +900,7 @@ private:
         EditorDialogStyle::PaintText(
             dc,
             Rect(kPad, footer.top, client.right - kPad, footer.bottom),
-            "Select an item, then confirm the assignment.",
+            EditorText("assetPicker.textureFooter", "Select an item, then confirm the assignment."),
             Color(theme_.textSecondary),
             10);
     }
@@ -1083,7 +1095,7 @@ private:
             HeroIconPainter::Draw(dc, GdiDrawing::Inset(image, 42), icon_, iconColor, 2);
         }
 
-        const std::string name = asset != nullptr ? asset->name : std::string{ "None" };
+        const std::string name = asset != nullptr ? asset->name : std::string{ EditorText("assetPicker.none", "None") };
         RECT label = Rect(rect.left + 8, rect.top + kAssetTilePreviewHeight + 12, rect.right - 8, rect.bottom - 6);
         EditorDialogStyle::PaintText(
             dc, label, name, Color(theme_.textPrimary), 12, FW_SEMIBOLD,
@@ -1135,11 +1147,11 @@ private:
             PaintTileGridItem(dc, tile, index, index == selectedTile, hoveredRow_ == index);
         }
         if (RowCount() == 0) {
-            const char* message = tileKind_ == AssetPickerTileKind::Material
-                ? "No material assets found"
+            const std::string_view message = tileKind_ == AssetPickerTileKind::Material
+                ? EditorText("assetPicker.noMaterials", "No material assets found")
                 : tileKind_ == AssetPickerTileKind::Particle
-                    ? "No particle effects found"
-                    : "No mesh assets found";
+                    ? EditorText("assetPicker.noParticleEffects", "No particle effects found")
+                    : EditorText("assetPicker.noMeshes", "No mesh assets found");
             Text(dc, Rect(viewport.left, viewport.top + 12, viewport.right, viewport.top + 40),
                 message, Color(theme_.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
@@ -1152,8 +1164,8 @@ private:
             dc,
             Rect(kPad, footer.top, client.right - kPad, footer.bottom),
             tileKind_ == AssetPickerTileKind::Particle
-                ? "Click to select. Double-click to assign. Esc closes without changes."
-                : "Click to select. Double-click or Enter to assign. Esc closes.",
+                ? EditorText("assetPicker.particleFooter", "Click to select. Double-click to assign. Esc closes without changes.")
+                : EditorText("assetPicker.tileFooter", "Click to select. Double-click or Enter to assign. Esc closes."),
             Color(theme_.textSecondary),
             11);
     }
@@ -1194,7 +1206,7 @@ private:
             const kb::assets::AssetId rowAsset = row == 0 ? kb::assets::AssetId{} : rows_[static_cast<std::size_t>(row - 1)].assetId;
             const bool selected = rowAsset.value == currentAsset_.value;
             const bool hovered = hoveredRow_ == row;
-            const std::string name = row == 0 ? std::string{ "None" } : rows_[static_cast<std::size_t>(row - 1)].name;
+            const std::string name = row == 0 ? std::string{ EditorText("assetPicker.none", "None") } : rows_[static_cast<std::size_t>(row - 1)].name;
             const std::string path = row == 0 ? clearDescription_ : rows_[static_cast<std::size_t>(row - 1)].path;
             EditorDialogStyle::PaintListRow(dc, theme_, EditorDialogListRowDescriptor{
                 .bounds = rect,
@@ -1212,7 +1224,7 @@ private:
         EditorDialogStyle::PaintText(
             dc,
             Rect(kPad, footer.top, client.right - kPad, footer.bottom),
-            "Esc closes. Click a row to assign it.",
+            EditorText("assetPicker.listFooter", "Esc closes. Click a row to assign it."),
             Color(theme_.textSecondary),
             11);
     }
@@ -1705,9 +1717,9 @@ EditorMeshAssetPickerDialog::Result EditorMeshAssetPickerDialog::Show(
         theme,
         BuildMeshRows(sceneContext),
         currentMesh,
-        "Select Mesh",
-        "Choose a mesh asset.",
-        "Clear mesh selection",
+        std::string{ EditorText("assetPicker.selectMesh", "Select Mesh") },
+        std::string{ EditorText("assetPicker.chooseMesh", "Choose a mesh asset.") },
+        std::string{ EditorText("assetPicker.clearMesh", "Clear mesh selection") },
         HeroIconKind::Cube,
         &manager,
         false, // textureThumbnails
@@ -1729,9 +1741,9 @@ EditorMaterialAssetPickerDialog::Result EditorMaterialAssetPickerDialog::Show(
         theme,
         BuildMaterialRows(sceneContext),
         currentMaterial,
-        "Select Material",
-        "Choose a material asset from this project.",
-        "Clear material assignment",
+        std::string{ EditorText("assetPicker.selectMaterial", "Select Material") },
+        std::string{ EditorText("assetPicker.chooseMaterial", "Choose a material asset from this project.") },
+        std::string{ EditorText("assetPicker.clearMaterial", "Clear material assignment") },
         HeroIconKind::AdjustmentsHorizontal,
         &manager,
         false,
@@ -1753,9 +1765,9 @@ EditorAudioMixerAssetPickerDialog::Result EditorAudioMixerAssetPickerDialog::Sho
         theme,
         BuildAudioMixerRows(sceneContext),
         currentMixer,
-        "Select Audio Mixer",
-        "Choose an audio mixer for this scene.",
-        "Clear scene audio mixer",
+        std::string{ EditorText("assetPicker.selectAudioMixer", "Select Audio Mixer") },
+        std::string{ EditorText("assetPicker.chooseAudioMixer", "Choose an audio mixer for this scene.") },
+        std::string{ EditorText("assetPicker.clearAudioMixer", "Clear scene audio mixer") },
         HeroIconKind::AdjustmentsHorizontal,
     };
     const AssetPickerResult result = window.Show(owner);
@@ -1778,9 +1790,9 @@ bool EditorParticleEffectAssetPickerDialog::Open(
         theme,
         BuildParticleEffectRows(sceneContext),
         currentEffect,
-        "Select Particle Effect",
-        "Choose a Particle Effect asset to play on this object.",
-        "Clear Particle Effect",
+        std::string{ EditorText("assetPicker.selectParticleEffect", "Select Particle Effect") },
+        std::string{ EditorText("assetPicker.chooseParticleEffect", "Choose a Particle Effect asset to play on this object.") },
+        std::string{ EditorText("assetPicker.clearParticleEffect", "Clear Particle Effect") },
         HeroIconKind::Bolt,
         &manager,
         false,
@@ -1806,9 +1818,9 @@ EditorAnimatorControllerAssetPickerDialog::Result EditorAnimatorControllerAssetP
         theme,
         BuildAnimatorControllerRows(sceneContext),
         currentController,
-        "Select Animator Controller",
-        "Choose an Animator Controller asset from this project.",
-        "Clear Animator Controller",
+        std::string{ EditorText("assetPicker.selectAnimatorController", "Select Animator Controller") },
+        std::string{ EditorText("assetPicker.chooseAnimatorController", "Choose an Animator Controller asset from this project.") },
+        std::string{ EditorText("assetPicker.clearAnimatorController", "Clear Animator Controller") },
         HeroIconKind::Play,
     };
     const AssetPickerResult result = window.Show(owner);
@@ -1827,9 +1839,9 @@ EditorSkeletonAssetPickerDialog::Result EditorSkeletonAssetPickerDialog::Show(
         theme,
         BuildSkeletonRows(sceneContext),
         currentSkeleton,
-        "Select Skeleton",
-        "Choose a Skeleton asset for the selected Skeleton Binding.",
-        "Clear Skeleton Binding",
+        std::string{ EditorText("assetPicker.selectSkeleton", "Select Skeleton") },
+        std::string{ EditorText("assetPicker.chooseSkeleton", "Choose a Skeleton asset for the selected Skeleton Binding.") },
+        std::string{ EditorText("assetPicker.clearSkeleton", "Clear Skeleton Binding") },
         HeroIconKind::AdjustmentsHorizontal,
     };
     const AssetPickerResult result = window.Show(owner);
@@ -1845,9 +1857,9 @@ EditorSkeletalMeshAssetPickerDialog::Result EditorSkeletalMeshAssetPickerDialog:
         theme,
         BuildSkeletalMeshRows(sceneContext),
         currentSkeletalMesh,
-        "Select Skeletal Mesh",
-        "Choose a Skeletal Mesh asset for the selected Deformed Geometry.",
-        "Clear Deformed Geometry mesh",
+        std::string{ EditorText("assetPicker.selectSkeletalMesh", "Select Skeletal Mesh") },
+        std::string{ EditorText("assetPicker.chooseSkeletalMesh", "Choose a Skeletal Mesh asset for the selected Deformed Geometry.") },
+        std::string{ EditorText("assetPicker.clearSkeletalMesh", "Clear Deformed Geometry mesh") },
         HeroIconKind::Cube,
     };
     const AssetPickerResult result = window.Show(owner);
@@ -1865,9 +1877,9 @@ EditorTextureAssetPickerDialog::Result EditorTextureAssetPickerDialog::Show(
         theme,
         BuildTextureRows(sceneContext, filter),
         currentTexture,
-        "Select " + TextureFilterLabel(filter),
+        TextureFilterTitle(filter),
         TextureFilterDescription(filter),
-        "Clear texture selection",
+        std::string{ EditorText("assetPicker.clearTexture", "Clear texture selection") },
         HeroIconKind::RectangleGroup,
         &manager,
         true,
@@ -1885,14 +1897,15 @@ EditorTextureAssetPickerDialog::Result EditorUIAssetPickerDialog::Show(
     std::vector<AssetPickerRow> rows;
     for (const auto& metadata : sceneContext.Scene().Assets().Manager().Registry().All()) {
         if (kb::assets::AssetMatchesKind(metadata, kind)) {
-            rows.push_back({metadata.id, DisplayName(metadata, "Font"), DisplayPath(metadata)});
+            rows.push_back({metadata.id, DisplayName(metadata, EditorText("assetPicker.unnamedFont", "Font")), DisplayPath(metadata)});
         }
     }
     std::ranges::sort(rows, [](const auto& lhs, const auto& rhs) {
         return lhs.name != rhs.name ? lhs.name < rhs.name : lhs.assetId.value < rhs.assetId.value;
     });
-    AssetPickerWindow window{theme, std::move(rows), currentAsset, "Select UI Font",
-        "Choose a font asset from this project.", "Clear font selection", HeroIconKind::RectangleGroup};
+    AssetPickerWindow window{theme, std::move(rows), currentAsset, std::string{ EditorText("assetPicker.selectFont", "Select UI Font") },
+        std::string{ EditorText("assetPicker.chooseFont", "Choose a font asset from this project.") },
+        std::string{ EditorText("assetPicker.clearFont", "Clear font selection") }, HeroIconKind::RectangleGroup};
     const auto result = window.Show(owner, options);
     return {.accepted = result.accepted, .assetId = result.assetId};
 }
@@ -1912,7 +1925,7 @@ EditorUIEntityPickerDialog::Result EditorUIEntityPickerDialog::Show(
             InspectorUIComponentModel::HierarchyPath(scene, target)});
     }
     AssetPickerWindow window{theme, std::move(rows), kb::assets::AssetId{current.Id()}, choice.title,
-        choice.description, "Clear reference", HeroIconKind::RectangleGroup};
+        choice.description, std::string{ EditorText("assetPicker.clearReference", "Clear reference") }, HeroIconKind::RectangleGroup};
     const AssetPickerResult result = window.Show(owner, options);
     return {.accepted = result.accepted, .entity = kb::scene::SceneEntity{result.assetId.value}};
 }
