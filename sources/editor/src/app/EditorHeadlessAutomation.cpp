@@ -702,6 +702,9 @@ struct EditorHeadlessAutomation::Impl {
         const DockPanel panel{ .id = static_cast<std::uint32_t>(viewportKey), .kind = DockPanelKind::Scene };
         auto settings = ScenePanelContentRenderer::BuildSettings(RECT{ 0, -34, 640, 360 }, panel, context, backendSettings);
         settings.presentToHost = false;
+        // The editor loop points the viewport at the project's cooked graph shaders before every
+        // present; without it graph materials draw the built-in fallback, not what the panel shows.
+        viewport.SetGraphShaderCacheRoot(context.GraphShaderCacheRoot());
         viewport.BeginPaintLayout(window);
         viewport.Present(window, RECT{ 0, 0, 640, 360 }, context.Scene(), settings);
         viewport.EndPaintLayout();

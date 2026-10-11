@@ -202,15 +202,17 @@ kb::world::WorldHlodResult WorldHlodMeshBaker::Bake(const kb::world::WorldHlodRe
         }
         const std::size_t used = meshopt_optimizeVertexFetch(welded.data(), simplified.data(), simplified.size(), welded.data(), welded.size(), sizeof(ProxyVertex));
         welded.resize(used);
+        // OBJ is right-handed and the importer mirrors X into the engine's left-handed space, so
+        // write the proxy mirrored back (X negated, winding reversed) to load where it was baked.
         for (const ProxyVertex& vertex : welded) {
-            obj += "v "; AppendFloat(obj, vertex.x); obj += ' '; AppendFloat(obj, vertex.y); obj += ' '; AppendFloat(obj, vertex.z); obj += '\n';
+            obj += "v "; AppendFloat(obj, -vertex.x); obj += ' '; AppendFloat(obj, vertex.y); obj += ' '; AppendFloat(obj, vertex.z); obj += '\n';
             obj += "vt "; AppendFloat(obj, vertex.u); obj += ' '; AppendFloat(obj, vertex.v); obj += '\n';
-            obj += "vn "; AppendFloat(obj, vertex.nx); obj += ' '; AppendFloat(obj, vertex.ny); obj += ' '; AppendFloat(obj, vertex.nz); obj += '\n';
+            obj += "vn "; AppendFloat(obj, -vertex.nx); obj += ' '; AppendFloat(obj, vertex.ny); obj += ' '; AppendFloat(obj, vertex.nz); obj += '\n';
         }
         obj += "usemtl slot" + std::to_string(slot) + "\n";
         for (std::size_t index = 0U; index + 2U < simplified.size(); index += 3U) {
             obj += 'f';
-            for (std::size_t corner = 0U; corner < 3U; ++corner) {
+            for (const std::size_t corner : { 0U, 2U, 1U }) {
                 const std::string reference = std::to_string(vertexBase + simplified[index + corner]);
                 obj += ' ' + reference + '/' + reference + '/' + reference;
             }

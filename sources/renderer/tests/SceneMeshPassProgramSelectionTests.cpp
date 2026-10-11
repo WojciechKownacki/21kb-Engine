@@ -321,7 +321,9 @@ void RunSceneMeshPassProgramSelectionTest() {
         const SceneMeshPassProgramResolution skinnedGraphA =
             passResources.ResolveMeshPassProgram(&graphMaterialA, MeshPassType::BaseOpaque, true);
         Require(skinnedGraphA.graphProgram && bgfx::isValid(skinnedGraphA.program) &&
-                skinnedGraphA.key.pipelineStateKey != graphA.key.pipelineStateKey,
+                skinnedGraphA.key.skinned && !graphA.key.skinned &&
+                skinnedGraphA.key.pipelineStateKey == graphA.key.pipelineStateKey &&
+                skinnedGraphA.program.idx != graphA.program.idx,
             "SMA-36: A graph fragment program must pair with the skinned vertex permutation for bind-pose varyings");
 
         const SceneMeshPassProgramResolution graphGBuffer = passResources.ResolveMeshPassProgram(&graphMaterialA, MeshPassType::GBuffer);

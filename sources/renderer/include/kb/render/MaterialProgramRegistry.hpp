@@ -19,6 +19,9 @@ struct MaterialProgramKey {
     std::uint32_t backend = 0U;
     std::uint64_t binaryRevision = 0U;
     std::uint64_t pipelineStateKey = 0U;
+    // Skinned meshes need the skinning vertex shader. Kept apart from pipelineStateKey, which for
+    // graph programs is a full 64-bit hash and so has no bit free to carry it.
+    bool skinned = false;
     bool requiresGeneratedVertexShader = false;
     bool graphProgram = false;
 

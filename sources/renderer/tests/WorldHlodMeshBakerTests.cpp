@@ -97,8 +97,9 @@ void RunBakerTests() {
     };
     for (const RenderStaticMeshVertexP3N3UV2& vertex : proxy->vertices) visit(vertex.x, vertex.y, vertex.ny);
     for (const RenderStaticMeshVertexP3N3T4UV2& vertex : proxy->tangentVertices) visit(vertex.x, vertex.y, vertex.ny);
-    // The simplifier keeps the sheets' corners, so the proxy spans both instances exactly.
-    Check(NearlyEqual(minX, 10.0F) && NearlyEqual(maxX, 80.0F),
+    // The simplifier keeps the sheets' corners, so the proxy spans both instances exactly. The
+    // 0..20 OBJ sheet imports mirrored into the left-handed engine as -20..0.
+    Check(NearlyEqual(minX, -10.0F) && NearlyEqual(maxX, 60.0F),
         "HLOD vertices are placed in cell-local space: " + std::to_string(minX) + " " + std::to_string(maxX));
 
     kb::world::WorldHlodRequest empty;
