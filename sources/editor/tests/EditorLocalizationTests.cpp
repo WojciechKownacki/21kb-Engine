@@ -123,8 +123,8 @@ void RunShippedCatalogsLoadTest() {
             continue;
         }
         std::string error;
-        Require(EditorLocalization::SetLanguage(language.code, folder, error),
-            ("A shipped catalog does not load: " + error).c_str());
+        const bool loaded_language = EditorLocalization::SetLanguage(language.code, folder, error);
+        Require(loaded_language, ("A shipped catalog does not load: " + error).c_str());
         ++loaded;
     }
     Require(loaded > 0, "The editor should ship at least one translation");
