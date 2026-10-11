@@ -20,4 +20,18 @@ struct CutText {
     return sink;
 }
 
+// Text that is data, not interface: a log message or a path the user made. Its row ends it with an
+// ellipsis and shows it whole elsewhere (Unity's console: the row, then the detail pane), so a
+// translation check must not count it as cut. Pauses the record for its scope.
+class CutTextDataScope {
+public:
+    CutTextDataScope() noexcept : saved_(CutTextSink()) { CutTextSink() = nullptr; }
+    ~CutTextDataScope() { CutTextSink() = saved_; }
+    CutTextDataScope(const CutTextDataScope&) = delete;
+    CutTextDataScope& operator=(const CutTextDataScope&) = delete;
+
+private:
+    std::vector<CutText>* saved_;
+};
+
 } // namespace kb::editor
