@@ -26,7 +26,6 @@ struct RenderMeshAssetMaterialBinding {
 struct RenderMeshObjImportDesc {
     const RenderMeshAssetMaterialBinding* materialBindings = nullptr;
     std::uint32_t materialBindingCount = 0;
-    bool flipV = false;
     // Import scale and rotation (ModelImporter Scale Factor), applied after the handedness conversion.
     kb::assets::AssetMeshImportTransform transform{};
 };

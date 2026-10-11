@@ -134,7 +134,8 @@ private:
             vertex.tx = tangent.x;
             vertex.ty = tangent.y;
             vertex.tz = tangent.z;
-            vertex.tw = Dot(Cross(normal, tangent), accum[index][1]) < 0.0F ? -1.0F : 1.0F;
+            // Bitangent up the image (smaller V), as a normal map's +Y (RenderMeshAssetFinalizer).
+            vertex.tw = Dot(Cross(normal, tangent), accum[index][1]) > 0.0F ? -1.0F : 1.0F;
         }
     }
 
