@@ -20,9 +20,11 @@ target_include_directories(kb_cli_core PUBLIC src/private)
 
 target_link_libraries(kb_cli_core PUBLIC kb_engine)
 # world build resolves meshes for HLOD proxies with the same loaders kb_cooker uses.
+# Materials (.kbmat) are renderer assets: material-new/set/show and MeshRenderer material=.
 if(KB_BUILD_RENDERER)
     target_link_libraries(kb_cli_core PUBLIC kb_renderer)
-    target_compile_definitions(kb_cli_core PUBLIC KB_CLI_WORLD_HLOD=1)
+    target_compile_definitions(kb_cli_core PUBLIC KB_CLI_WORLD_HLOD=1 KB_CLI_RENDERER=1)
+    target_sources(kb_cli_core PRIVATE src/CliMaterialCommands.cpp)
 endif()
 
 kb_apply_quality_gates(kb_cli_core)

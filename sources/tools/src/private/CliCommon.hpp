@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <filesystem>
 #include <optional>
 #include <ostream>
@@ -67,6 +68,10 @@ private:
     const std::filesystem::path& input,
     const std::filesystem::path& projectRoot,
     std::string& error);
+
+// A colour as a person writes it: "#RRGGBB" (or "#RRGGBBAA" when `channels` is 4) is sRGB, as
+// every colour picker shows it, and comes back linear; "r,g,b[,a]" are linear values in 0..1.
+[[nodiscard]] std::optional<std::array<float, 4>> ParseColorText(std::string_view text, std::size_t channels);
 
 // Finds an asset by virtual path ("/Game/...") or by physical file path.
 [[nodiscard]] const kb::assets::AssetMetadata* FindAssetByFlexiblePath(

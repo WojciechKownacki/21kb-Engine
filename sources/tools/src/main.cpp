@@ -37,6 +37,17 @@ Commands:
                Source/NativeScripts/<Name>). Existing files are never overwritten.
                  --project <dir> --name <Name> --language lua|cpp
                  [--folder Assets/Scripts]
+  material-new Create a material, as the editor's Create > Material does, with
+               its values set at once. Existing files are never overwritten.
+                 --project <dir> --name <Name> [--folder Assets/Materials]
+                 [--set Field=value ...]
+  material-set Change values of a material.
+                 --project <dir> --material /Game/<path>.kbmat --set Field=value [...]
+  material-show Print the values of a material.
+                 --project <dir> --material /Game/<path>.kbmat
+               (fields: Base Color, Roughness, Metallic, Emissive Color, Emissive
+               Strength, Normal Scale, Occlusion Strength, Alpha Cutoff; a colour is
+               #RRGGBB as in a colour picker, or linear r,g,b 0..1)
   script-build Build the project's C++ scripts (or one), as Play and the cooker
                do. Exits 1 when a build fails.
                  --project <dir> [--script <path>]
@@ -247,6 +258,16 @@ int Dispatch(int argc, char** argv) {
     }
     if (command == "script-new") {
         return kb::cli::RunScriptNewCommand(arguments, io);
+    }
+    if (command == "material-new" || command == "material-set" || command == "material-show") {
+#if KB_CLI_RENDERER
+        if (command == "material-new") return kb::cli::RunMaterialNewCommand(arguments, io);
+        if (command == "material-set") return kb::cli::RunMaterialSetCommand(arguments, io);
+        return kb::cli::RunMaterialShowCommand(arguments, io);
+#else
+        std::cerr << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
+        return 1;
+#endif
     }
     if (command == "script-build") {
         return kb::cli::RunScriptBuildCommand(arguments, io);

@@ -138,7 +138,9 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     float geometry = GeometrySchlickGgx(nDotV, roughness) * GeometrySchlickGgx(nDotL, roughness);
     vec3 specular = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
     vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * DiffuseBurley(nDotV, nDotL, lDotH, roughness)) * occlusion;
-    vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation);
+    // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
+    // surface returns its albedo, so the physical BRDF above is taken times pi.
+    vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
     return (diffuse + specular) * radiance * nDotL;
 }
 

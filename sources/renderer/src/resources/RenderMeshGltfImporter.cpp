@@ -305,6 +305,7 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
         return std::nullopt;
     }
 
+    RenderMeshAssetFinalizer::ConvertRightHandedSource(asset);
     if (!RenderMeshAssetFinalizer::Finalize(asset)) {
         return std::nullopt;
     }

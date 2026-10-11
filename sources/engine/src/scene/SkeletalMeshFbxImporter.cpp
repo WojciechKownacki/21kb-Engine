@@ -458,7 +458,8 @@ std::optional<SkeletalMeshFbxImportResult> SkeletalMeshFbxImporter::Import(
     // on geometry. Without it ufbx represents the reflection as a negative
     // uniform root scale plus a 180-degree rotation, which turns Y-up rigs
     // upside down when MODIFY_GEOMETRY bakes that root scale into vertices.
-    loadOptions.handedness_conversion_axis = UFBX_MIRROR_AXIS_Z;
+    // Mirroring X, as Unity and the static mesh importers do, keeps the model's front at +Z.
+    loadOptions.handedness_conversion_axis = UFBX_MIRROR_AXIS_X;
     loadOptions.space_conversion = UFBX_SPACE_CONVERSION_MODIFY_GEOMETRY;
     loadOptions.generate_missing_normals = true;
     std::error_code sizeError;

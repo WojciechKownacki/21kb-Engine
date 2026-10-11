@@ -22,6 +22,9 @@ namespace kb::cli {
 [[nodiscard]] int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScriptNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMaterialNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMaterialSetCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMaterialShowCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunScriptBuildCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunRunCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
