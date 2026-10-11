@@ -4,6 +4,7 @@
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "rendering/gdi/EditorTextMeasure.hpp"
 
 #include <algorithm>
 
@@ -161,15 +162,17 @@ std::vector<std::string> EditorAssetBrowserGeometry::BreadcrumbSegments(const st
 }
 
 std::string EditorAssetBrowserGeometry::BreadcrumbDisplayLabel(const std::string& segment, std::size_t index) {
+    // The project's folder has the name it has on disk and in the folder tree.
     if (index == 0U && segment == "Game") {
-        return std::string{ EditorText("projectFiles.contentRoot", "Content") };
+        return "Assets";
     }
     return segment;
 }
 
 int EditorAssetBrowserGeometry::BreadcrumbSegmentWidth(std::string_view label, bool root) noexcept {
+    // Measured in the Project Files body font (13 pt), so a name in any letters gets its width.
     const int iconSpace = root ? 32 : 20;
-    return std::clamp(static_cast<int>(label.size()) * 7 + iconSpace, root ? 86 : 42, root ? 132 : 160);
+    return std::clamp(MeasureTextWidth(label, 13) + iconSpace + 8, root ? 86 : 42, 240);
 }
 
 } // namespace kb::editor
