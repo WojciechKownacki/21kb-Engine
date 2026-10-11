@@ -1920,6 +1920,22 @@ ReadScriptValue(
         return { configured, configured ? virtualPath.generic_string() : "physics layers project setting failed" };
     }
 
+    if (*operation == "set_startup_scene") {
+        // Build Game > Startup map: the scene the game starts in, chosen from the project's scenes.
+        const auto path = StringMember(step, "path", error);
+        const auto refusedWith = StringMember(step, "refused_with", error, false);
+        if (!path || !error.empty()) return { false, error };
+        const bool set = state.context.SetStartupScene(*path);
+        if (refusedWith.has_value()) {
+            const auto& entries = state.context.Console().Entries();
+            const std::string reason = entries.empty() ? std::string{} : entries.back().message;
+            return { !set && state.context.ProjectConfiguration().defaultMap != *path &&
+                         reason.find(*refusedWith) != std::string::npos, reason };
+        }
+        return { set && state.context.ProjectConfiguration().defaultMap == *path &&
+                     state.context.StartupSceneProblem().empty(), state.context.ProjectConfiguration().defaultMap };
+    }
+
     if (*operation == "set_language") {
         // The editor's language for the steps after it (Editor Settings > General > Language).
         const auto language = StringMember(step, "language", error);

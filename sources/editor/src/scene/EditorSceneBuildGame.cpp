@@ -1,5 +1,8 @@
 #include "scene/EditorSceneContext.hpp"
 
+#include "engine/assets/AssetManager.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "packaging/EditorPackageInputValidation.hpp"
 #include "packaging/EditorProjectIconTransaction.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
@@ -14,7 +17,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <string>
 #include <system_error>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -342,6 +347,46 @@ bool EditorSceneContext::ToggleBuildGameLaunchAfterBuild() {
     return true;
 }
 
+std::vector<std::string> EditorSceneContext::ProjectScenePaths() const {
+    std::vector<std::string> scenes;
+    for (const kb::assets::AssetMetadata& asset : scene_->Assets().Manager().Registry().All()) {
+        const std::string path = asset.virtualPath.generic_string();
+        if (asset.virtualPath.extension() == ".21kbscene" && path.rfind("/Game/", 0) == 0) {
+            scenes.push_back(path);
+        }
+    }
+    std::sort(scenes.begin(), scenes.end());
+    scenes.erase(std::unique(scenes.begin(), scenes.end()), scenes.end());
+    return scenes;
+}
+
+bool EditorSceneContext::SetStartupScene(const std::string& virtualPath) {
+    const std::vector<std::string> scenes = ProjectScenePaths();
+    if (std::find(scenes.begin(), scenes.end(), virtualPath) == scenes.end()) {
+        console_.Error("Project", "The game starts in a scene of this project; " + virtualPath + " is not one.");
+        return false;
+    }
+    projectConfig_.defaultMap = virtualPath;
+    if (!SaveProjectConfiguration()) {
+        return false;
+    }
+    console_.Info("Project", "The game now starts in " + virtualPath + ".");
+    return true;
+}
+
+std::string EditorSceneContext::StartupSceneProblem() const {
+    if (projectConfig_.defaultMap.empty()) {
+        return {};
+    }
+    const std::vector<std::string> scenes = ProjectScenePaths();
+    if (std::find(scenes.begin(), scenes.end(), projectConfig_.defaultMap) != scenes.end()) {
+        return {};
+    }
+    return EditorLocalization::Format("buildGame.invalid.startupMapMissing",
+        "Startup map {map} is not a scene of this project. Choose one from the list.",
+        { { "map", projectConfig_.defaultMap } });
+}
+
 bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyResolution) {
     if (buildGamePackageService_ == nullptr) return false;
     if (IsBuildGameTextEditing() && !CommitBuildGameTextEdit()) return false;
@@ -351,6 +396,10 @@ bool EditorSceneContext::StartBuildGamePackage(EditorDirtySceneResolution dirtyR
         HasBuildGameStorePassword(), HasBuildGameKeyPassword(), HasBuildGameSecret(BuildGameField::WindowsCertificatePassword));
     if (!validation.canBuild) {
         console_.Error("Packaging", validation.reason);
+        return false;
+    }
+    if (const std::string problem = StartupSceneProblem(); !problem.empty()) {
+        console_.Error("Packaging", problem);
         return false;
     }
     // Like Unity's Build: Save writes the edited scene first, Don't Save packages the saved one.

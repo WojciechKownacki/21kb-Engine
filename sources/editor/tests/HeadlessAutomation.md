@@ -49,6 +49,7 @@ scenario-local aliases.
 | `write_file` | `path`, `content` |
 | `write_pcm_wave` | project-relative `path`; optional `duration_ms` (1..10000), `sample_rate` (8000..48000), `frequency_hz`, `amplitude` (0..1); authors a valid mono 16-bit PCM fixture |
 | `configure_physics_layers` | project-relative `path`, two distinct indices/names (`first_layer`, `first_name`, `second_layer`, `second_name`) and `interact`; writes the binary asset and sets the project-wide physics-layers reference; use `reload_scene` before Play Mode |
+| `set_startup_scene` | `path`: a scene's virtual path (`/Game/Scenes/Level1.21kbscene`); makes it the scene the game starts in, as the Startup map list in Build Game does. With `refused_with`, the path must be refused (not a scene of the project) |
 | `set_language` | `language`: an editor language code (`pl`, `ja`, `zh-Hans`, ...); the steps after it see the editor in that language, as after a choice in Editor Settings. `capture` with `"text_fits": true` then fails on any single-line text the panel cuts or ends with an ellipsis |
 | `select_project_settings_category` | `category`: `inputs`, `graphics`, or `physics`; selects the visible Project Settings page before a panel capture |
 | `set_joint_connection` | `entity` (a Joint owner) and `connected_entity`; assigns the Joint's referenced entity and marks it modified for scene persistence |

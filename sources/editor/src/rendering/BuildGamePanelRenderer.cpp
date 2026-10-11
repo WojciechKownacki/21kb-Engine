@@ -199,11 +199,18 @@ void DrawFooter(HDC dc, const BuildGamePanelLayoutRects& rects, const EditorThem
         sceneContext.BuildGameSelectedProfile() == 1, running,
         sceneContext.HasBuildGameStorePassword(), sceneContext.HasBuildGameKeyPassword(),
         sceneContext.HasBuildGameSecret(BuildGameField::WindowsCertificatePassword));
+    // The startup scene has to be one of the project's scenes (the list under Startup map).
+    BuildGameValidation checked = validation;
+    if (checked.canBuild) {
+        if (std::string problem = sceneContext.StartupSceneProblem(); !problem.empty()) {
+            checked = BuildGameValidation{ false, std::move(problem) };
+        }
+    }
     const EditorBuildGameTargetSettings& targetSettings = sceneContext.BuildGameSettings().For(sceneContext.BuildGameTarget());
     std::string first = targetSettings.outputDirectory.empty()
         ? std::string{ EditorText("buildGame.outputNotSelected", "Output directory is not selected") }
         : targetSettings.outputDirectory.generic_string();
-    std::string second = validation.reason;
+    std::string second = checked.reason;
     if (snapshot.state != EditorPackageJobState::Idle) {
         second = snapshot.status;
         if (running) second += " (" + std::to_string(snapshot.progress) + "%)";
@@ -216,8 +223,8 @@ void DrawFooter(HDC dc, const BuildGamePanelLayoutRects& rects, const EditorThem
     DrawText(dc, RECT{ rects.status.left, rects.status.top + 6, rects.status.right, rects.status.top + 24 },
         first, Color(theme.textSecondary), 11);
     DrawText(dc, RECT{ rects.status.left, rects.status.top + 24, rects.status.right, rects.status.bottom - 6 },
-        second, validation.canBuild || running ? Color(theme.textSecondary) : Color(theme.textDisabled), 11);
-    const bool enabled = validation.canBuild || running;
+        second, checked.canBuild || running ? Color(theme.textSecondary) : Color(theme.textDisabled), 11);
+    const bool enabled = checked.canBuild || running;
     GdiDrawing::DrawSharpFrame(dc, rects.buildButton,
         enabled ? kBuildGreen : Blend(Color(theme.chrome), Color(theme.panel), 50),
         enabled ? kBuildGreenEdge : Color(theme.borderPanel));

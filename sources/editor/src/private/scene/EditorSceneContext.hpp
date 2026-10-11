@@ -256,6 +256,13 @@ public:
     // surface the editor reads and edits; the descriptor carries a mirror of the same
     // values for consumers that still read the project file, written only here.
     [[nodiscard]] const kb::project::ProjectSettings& ProjectConfiguration() const noexcept;
+    // The project's scenes (virtual paths, sorted): the choices for the scene the game starts in.
+    [[nodiscard]] std::vector<std::string> ProjectScenePaths() const;
+    // Makes `virtualPath` the scene the game starts in; refused, with a named reason, for a path
+    // that is not a scene of this project.
+    [[nodiscard]] bool SetStartupScene(const std::string& virtualPath);
+    // Empty when the startup scene is a scene of this project, else why the game cannot start.
+    [[nodiscard]] std::string StartupSceneProblem() const;
     [[nodiscard]] const std::filesystem::path& ProjectFile() const noexcept;
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
     [[nodiscard]] std::uint64_t SceneDocumentGeneration() const noexcept;
