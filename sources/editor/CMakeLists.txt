@@ -76,6 +76,7 @@ add_executable(kb_editor WIN32
     src/app/EditorPendingTextEditCommitter.cpp
     src/app/EditorPlayModeState.cpp
     src/app/EditorPlayModeSceneSession.cpp
+    src/app/EditorSceneFileCommands.cpp
     src/app/EditorSceneLifecycleGuard.cpp
     src/app/EditorShellInteractionState.cpp
     src/app/EditorPointerDragInteraction.cpp
@@ -357,6 +358,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorPlayModeState.hpp
     src/private/app/EditorPlayModeSceneSession.hpp
     src/private/app/EditorAutomationScenarioRunner.hpp
+    src/private/app/EditorSceneFileCommands.hpp
     src/private/app/EditorSceneLifecycleGuard.hpp
     src/private/app/EditorSelfTest.hpp
     src/private/app/EditorHeadlessAutomation.hpp
@@ -445,6 +447,7 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorChoiceDialog.hpp
     src/private/platform/win32/EditorDebugLogGate.hpp
     src/private/platform/win32/EditorModalMessageLoop.hpp
+    src/private/platform/win32/EditorNewSceneDialog.hpp
     src/private/platform/win32/EditorTextEntryDialog.hpp
     src/private/platform/win32/EditorModalWindowScope.hpp
     src/private/rendering/EditorMaterialThumbnailService.hpp
@@ -595,7 +598,6 @@ add_executable(kb_editor WIN32
     src/private/rendering/SvgPathFigureBuilder.hpp
     src/private/rendering/SvgPathGdiplusPoint.hpp
     src/private/rendering/SvgPathPoint.hpp
-    src/private/scene/EditorDefaultSceneFactory.hpp
     src/private/scene/EditorHierarchyContentResolver.hpp
     src/private/scene/EditorHierarchyFloatingContentResolver.hpp
     src/private/scene/EditorHierarchyMainContentResolver.hpp
@@ -697,6 +699,7 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorChoiceDialog.cpp
     src/platform/win32/EditorMaterialParameterValueDialog.cpp
     src/platform/win32/EditorTagNameDialog.cpp
+    src/platform/win32/EditorNewSceneDialog.cpp
     src/platform/win32/EditorTextEntryDialog.cpp
     src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp
@@ -866,7 +869,6 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorMultiSelectionTextBuilder.cpp
     src/inspection/InspectorPanelTextBuilder.cpp
     src/inspection/InspectorRigidbodyTextBuilder.cpp
-    src/scene/EditorDefaultSceneFactory.cpp
     src/scene/EditorAnimationPreviewScene.cpp
     src/scene/EditorHierarchyContentResolver.cpp
     src/scene/EditorHierarchyFloatingContentResolver.cpp
@@ -1314,8 +1316,7 @@ if(BUILD_TESTING)
         src/assets/EditorAssetBrowserViewState.cpp
         src/commands/EditorCommandStack.cpp
         src/commands/EditorSceneHistoryCommand.cpp
-        src/scene/EditorDefaultSceneFactory.cpp
-        src/scene/EditorHierarchyExpansionState.cpp
+            src/scene/EditorHierarchyExpansionState.cpp
         src/scene/EditorHierarchyRowBuilder.cpp
         src/scene/EditorHierarchyRowFactory.cpp
         src/scene/EditorHierarchySearchMatcher.cpp
@@ -1468,6 +1469,14 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Navigation")
     set_tests_properties(kb_editor_navigation_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;navigation" TIMEOUT 180)
+    # File > New Scene: templates, refused names, startup scene, reopening the last scene, Play without saving.
+    add_test(NAME kb_editor_new_scene_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessNewSceneScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-New-Scene")
+    set_tests_properties(kb_editor_new_scene_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;scene" TIMEOUT 180)
 
     add_test(
         NAME kb_editor_headless_automation_scenario

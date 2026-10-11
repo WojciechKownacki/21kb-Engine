@@ -147,7 +147,7 @@ NewProjectResult ProjectCreator::Create(const std::filesystem::path& parentDirec
 
     // The settings name Main.21kbscene as the startup map: it has to exist, or the game and every
     // headless tool start from a scene that is not there.
-    if (std::string written = kb::scene::SceneTemplates::CreateFile(
+    if (std::string written = kb::scene::SceneTemplates::WriteSceneFile(
             projectRoot / "Assets" / "Scenes" / "Main.21kbscene", startupTemplate, descriptor);
         !written.empty()) {
         undo();

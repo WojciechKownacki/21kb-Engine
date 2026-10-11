@@ -31,7 +31,7 @@ constexpr std::array<EditorMenuDescriptor, 6> kMenus{{
 // The Layout menu is missing here on purpose: its rows are the layouts a project
 // holds, so they are built when the menu opens rather than fixed by the build.
 constexpr std::array<std::array<std::string_view, 11>, 6> kDropdownRows{{
-    { "New Scene", "Open Scene...", "Save", "Save As...", "Build Game", "", "", "", "", "", "" },
+    { "New Scene...", "Open Scene...", "Save", "Save As...", "Build Game", "", "", "", "", "", "" },
     { "Undo", "Redo", "Duplicate", "Plugins", "", "", "", "", "", "", "" },
     { "", "", "", "", "", "", "", "", "", "", "" },
     { "Renderer", "Project Settings", "Editor Settings", "", "", "", "", "", "", "", "" },

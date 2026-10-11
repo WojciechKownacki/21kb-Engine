@@ -1,6 +1,7 @@
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
+#include "engine/assets/BuiltInShapes.hpp"
 #include "engine/audio/AudioClipAsset.hpp"
 #include "engine/audio/AudioClipAssetLoader.hpp"
 #include "engine/audio/AudioClipFormats.hpp"
@@ -190,7 +191,9 @@ void RunAssetManagerDiscoveryCacheAndManifestTest() {
     kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()), "Text asset loader registration failed");
     kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Game asset mount failed");
     kb::tests::Require(manager.DiscoverMountedAssets() == 1, "Mounted asset discovery did not find the text asset");
-    kb::tests::Require(manager.Registry().Count() == 1, "Asset registry did not store the discovered asset");
+    // The engine's /Engine/Shapes are registered in every manager, besides the project's own assets.
+    kb::tests::Require(manager.Registry().Count() == 1U + kb::assets::BuiltInShapes().size(),
+        "Asset registry did not store the discovered asset");
 
     const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Text/Greeting.txt");
     kb::tests::Require(metadata != nullptr, "Discovered asset could not be resolved by virtual path");

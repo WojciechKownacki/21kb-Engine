@@ -3,6 +3,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorEditCommandInputHandler.hpp"
+#include "app/EditorSceneFileCommands.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorHierarchySearchInputHandler.hpp"
 #include "app/EditorSkeletalMeshTreeSearchInputHandler.hpp"
@@ -685,6 +686,13 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             context_.sceneViewport.RequestPresent();
             InvalidateRect(messageWindow, nullptr, FALSE);
             if (messageWindow != context_.mainWindow) {
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
+        if (bool changed = false; EditorSceneFileCommands::HandleShortcut(context_.mainWindow, context_.sceneContext, wparam, changed)) {
+            if (changed) {
+                context_.sceneViewport.RequestPresent();
                 InvalidateRect(context_.mainWindow, nullptr, FALSE);
             }
             return 0;

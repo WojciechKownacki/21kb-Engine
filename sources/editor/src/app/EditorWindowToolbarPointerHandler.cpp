@@ -1,6 +1,7 @@
 #include "app/EditorWindowToolbarPointerHandler.hpp"
 
 #include "app/EditorEditCommandPolicy.hpp"
+#include "app/EditorSceneFileCommands.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorSceneLifecycleGuard.hpp"
@@ -264,18 +265,11 @@ void ActivatePanel(
     if (const std::optional<int> row = EditorToolbarRenderer::HitTestMenuRow(menu, x, y); row.has_value()) {
         if (shellInteraction.OpenMenu() == EditorMenuCommand::File) {
             if (*row == 0) {
-                const std::optional<EditorDirtySceneResolution> resolution =
-                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, L"creating a new scene");
-                if (resolution.has_value() && sceneContext.NewScene(*resolution)) {
+                if (EditorSceneFileCommands::NewScene(mainWindow, sceneContext)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 1) {
-                const std::optional<EditorDirtySceneResolution> resolution =
-                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, L"opening another scene");
-                const std::optional<std::filesystem::path> path = resolution.has_value()
-                    ? EditorSceneFileDialog::Open(mainWindow, EditorProjectPaths::ScenesRoot())
-                    : std::nullopt;
-                if (path.has_value() && sceneContext.OpenScene(*path, *resolution)) {
+                if (EditorSceneFileCommands::OpenScene(mainWindow, sceneContext)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 2) {
@@ -285,8 +279,7 @@ void ActivatePanel(
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 3) {
-                const std::optional<std::filesystem::path> path = EditorSceneFileDialog::SaveAs(mainWindow, sceneContext.CurrentScenePath(), EditorProjectPaths::ScenesRoot());
-                if (path.has_value() && sceneContext.SaveCurrentSceneAs(*path)) {
+                if (EditorSceneFileCommands::SaveSceneAs(mainWindow, sceneContext)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 4) {

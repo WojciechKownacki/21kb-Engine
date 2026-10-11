@@ -4840,7 +4840,7 @@ void RunRenderSceneReleaseLifecycleSuite(Report& report) {
 
     const std::uint64_t originalSceneId = context.Scene().Id();
     report.Check(
-        context.NewScene(EditorDirtySceneResolution::Discard),
+        context.NewScene(EditorDirtySceneResolution::Discard, kb::scene::SceneTemplate::Empty),
         "LIB-146 creating a new document succeeds");
     report.Check(
         releasedSceneIds.size() == 1U &&
@@ -5721,7 +5721,12 @@ void RunLegacyPrefabSceneSuite(Report& report) {
     report.Check(fixture.succeeded && fixture.document.fileVersion == 40U && fixture.document.LinksPrefabInstancesByName(),
         "The fixture is a version 40 scene that links its prefab instances by name");
 
-    // Main.21kbscene has no .meta yet, so it cannot be read: the editor must start without writing over it.
+    // Main.21kbscene's .meta is damaged, so it cannot be read: the editor must start without writing over it.
+    // (A .meta that is missing is written anew from the scene; one that does not match refuses it.)
+    {
+        std::ofstream damaged{ startupPath.parent_path() / "Main.meta", std::ios::binary | std::ios::trunc };
+        damaged << "not a scene meta";
+    }
     const auto readBytes = [](const std::filesystem::path& path) {
         std::ifstream input{ path, std::ios::binary };
         return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
@@ -5740,6 +5745,16 @@ void RunLegacyPrefabSceneSuite(Report& report) {
     report.Check(!startupBytes.empty() && readBytes(startupPath) == startupBytes, "The scene that could not be read is left byte for byte as it was");
     copied = std::filesystem::copy_file(fixtures / "LegacyPrefabs.meta", startupPath.parent_path() / "Main.meta", std::filesystem::copy_options::overwrite_existing, error);
     report.Check(copied, "Give the startup scene its .meta");
+    // The session above saved a scene of its own, which the editor would reopen as the last one; the user
+    // goes back to Main.
+    {
+        const std::filesystem::path settingsFile = kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot());
+        kb::project::ProjectSettingsLoadResult stored = kb::project::ProjectSettingsStore::Load(settingsFile);
+        stored.settings.lastOpenMap = "/Game/Scenes/Main.21kbscene";
+        std::string settingsError;
+        report.Check(kb::project::ProjectSettingsStore::Save(settingsFile, stored.settings, settingsError),
+            "Main is the scene that was open last");
+    }
     EditorSceneContext context;
 
     const auto childNamed = [&context](kb::scene::SceneEntity parent, std::string_view name) {

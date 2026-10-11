@@ -181,7 +181,10 @@ bool SceneAssetWriter::Write(const std::filesystem::path& path, const SceneDocum
     if (!WriteBytesAtomically(path, bytes)) {
         return false;
     }
+    return WriteMeta(path, scene);
+}
 
+bool SceneAssetWriter::WriteMeta(const std::filesystem::path& path, const SceneDocument& scene) {
     const SceneAssetIntegrity integrity = SceneAssetIntegrityService::ComputeFile(path);
     SceneAssetMeta meta{
         .fileVersion = SceneAssetMeta::CurrentFileVersion,

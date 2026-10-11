@@ -8,7 +8,6 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
-#include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 
 #include <algorithm>
@@ -160,13 +159,6 @@ void RunProjectPathsPreferRepositoryProjectWhenLaunchedFromBuildTreeTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
-void RunDefaultSceneFactorySeedsEmptySceneTest() {
-    kb::scene::Scene scene;
-    const kb::scene::SceneEntity selected = kb::editor::EditorDefaultSceneFactory::Seed(scene);
-    kb::editor::tests::Require(!selected.IsValid(), "Editor default scene should not select an entity in an empty scene");
-    kb::editor::tests::Require(scene.Hierarchy().RootEntities().empty(), "Editor default scene should start without root entities");
-}
-
 void RunParticleProviderMigrationPolicyTest() {
     std::error_code error;
     const std::filesystem::path root = TempRoot() / "ParticleMigration";
@@ -233,7 +225,6 @@ void RunEditorProjectTests() {
     RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest();
     RunProjectPathsPreferRepositoryProjectWhenLaunchedFromBuildTreeTest();
     RunParticleProviderMigrationPolicyTest();
-    RunDefaultSceneFactorySeedsEmptySceneTest();
     RunTerrainEditorPluginCatalogTest();
 }
 

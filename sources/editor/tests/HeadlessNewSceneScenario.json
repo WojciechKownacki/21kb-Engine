@@ -1,0 +1,22 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    { "op": "create_scene", "name": "Level1" },
+    { "op": "assert_current_scene", "path": "Assets/Scenes/Level1.21kbscene", "roots": "Main Camera,Sun,Environment,Plane", "dirty": false },
+    { "op": "assert_file", "path": "Assets/Scenes/Level1.21kbscene" },
+    { "op": "create_scene", "name": "Level1", "refused_with": "already exists" },
+    { "op": "create_scene", "name": "Le:vel", "refused_with": "can't contain the character ':'" },
+    { "op": "create_scene", "name": "CON", "refused_with": "reserves for devices" },
+    { "op": "create_scene", "name": "Outside", "folder": "Saved", "refused_with": "must be inside Assets" },
+    { "op": "create_scene", "name": "Arena", "folder": "/Game/Levels", "template": "Empty", "startup": true },
+    { "op": "assert_current_scene", "path": "Assets/Levels/Arena.21kbscene", "roots": "", "startup": "/Game/Levels/Arena.21kbscene" },
+    { "op": "assert_reopened_scene", "path": "Assets/Levels/Arena.21kbscene", "roots": "" },
+    { "op": "open_scene", "path": "Assets/Scenes/Level1.21kbscene" },
+    { "op": "create_entity", "id": "crate", "name": "Crate" },
+    { "op": "assert_current_scene", "path": "Assets/Scenes/Level1.21kbscene", "dirty": true },
+    { "op": "play" },
+    { "op": "stop" },
+    { "op": "assert_current_scene", "path": "Assets/Scenes/Level1.21kbscene", "roots": "Main Camera,Sun,Environment,Plane,Crate", "dirty": true },
+    { "op": "assert_reopened_scene", "path": "Assets/Scenes/Level1.21kbscene", "roots": "Main Camera,Sun,Environment,Plane" }
+  ]
+}

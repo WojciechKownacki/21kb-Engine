@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/SceneTemplates.hpp"
 #include "engine/assets/AssetImportTypes.hpp"
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/assets/TerrainAsset.hpp"
@@ -296,7 +297,14 @@ public:
     [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
     [[nodiscard]] kb::scene::SceneEntity PlayCameraEntity() const noexcept;
     [[nodiscard]] bool ReloadSceneFromProject();
-    [[nodiscard]] bool NewScene(EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
+    // A new, unsaved Untitled scene filled from `sceneTemplate`.
+    [[nodiscard]] bool NewScene(EditorDirtySceneResolution dirtyResolution, kb::scene::SceneTemplate sceneTemplate);
+    // File > New Scene: writes `folder`/`name`.21kbscene from the template, opens it and, when asked,
+    // makes it the scene the game starts in. Nothing is written when the name or folder is refused.
+    [[nodiscard]] bool CreateScene(std::string_view folder, std::string_view name, kb::scene::SceneTemplate sceneTemplate,
+        bool setAsStartupScene, EditorDirtySceneResolution dirtyResolution);
+    // Why `folder`/`name` cannot be a new scene of the project, or an empty string when it can.
+    [[nodiscard]] std::string NewScenePathError(std::string_view folder, std::string_view name) const;
     [[nodiscard]] bool OpenDefaultScene();
     [[nodiscard]] bool OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool SaveCurrentScene();
@@ -452,7 +460,8 @@ public:
     [[nodiscard]] bool SetBuildGameLocalFile(BuildGameField field, const std::filesystem::path& path);
     [[nodiscard]] bool ImportBuildGameApplicationIcon(const std::filesystem::path& path);
     [[nodiscard]] bool ToggleBuildGameLaunchAfterBuild();
-    [[nodiscard]] bool StartBuildGamePackage();
+    // Save writes the open scene first; Discard ("Don't Save") packages the scene as saved on disk.
+    [[nodiscard]] bool StartBuildGamePackage(EditorDirtySceneResolution dirtyResolution);
     void CancelBuildGamePackage() noexcept;
     [[nodiscard]] bool IsHierarchyScrollbarDragging() const noexcept;
     [[nodiscard]] bool SetHierarchyScrollOffset(int offset, int maxOffset) noexcept;
@@ -1405,6 +1414,9 @@ private:
     [[nodiscard]] bool SaveProjectConfiguration();
     // Records the document the author has open, so reopening the project returns to it.
     void RememberLastOpenMap();
+    // The editor's start when no saved scene can be opened: a new, unsaved Untitled scene from Basic.
+    void StartUntitledBasicScene();
+    [[nodiscard]] static std::string SceneDocumentName(const std::filesystem::path& scenePath);
     void ClearSceneDocumentDirty() noexcept;
     void ReleaseRenderedSceneResources();
     void InvalidateHierarchyRows() noexcept;
@@ -1563,6 +1575,8 @@ private:
     std::vector<std::uint64_t> sceneRenderDirtyEntityIds_;
     bool sceneRenderFullDirty_ = true;
     bool sceneRenderStructuralDirty_ = false;
+    // Whether the scene had unsaved edits when Play began, so Stop brings them back as unsaved.
+    bool playModeDocumentWasDirty_ = false;
     bool sceneDocumentDirty_ = false;
     EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;
