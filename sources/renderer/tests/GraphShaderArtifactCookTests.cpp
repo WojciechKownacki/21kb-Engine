@@ -6,6 +6,7 @@
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -742,6 +743,119 @@ void RunGraphShaderDeepCacheRootCookTest() {
 
 #endif
 
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+// The negator's sweep: every node kind alone, each of its outputs routed into the Material
+// Output, compiled to shader source and cooked by shaderc (BaseOpaque, SPIR-V). Unconnected
+// inputs take the node's defaults, as in the editor.
+void RunGraphShaderEveryNodeOutputCooksTest() {
+    std::ostringstream failures;
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
+    for (const RenderMaterialGraphNodeKind kind : AllRenderMaterialGraphNodeKinds()) {
+        switch (kind) {
+        case RenderMaterialGraphNodeKind::MaterialOutput:
+        case RenderMaterialGraphNodeKind::FunctionInput:
+        case RenderMaterialGraphNodeKind::FunctionOutput:
+        case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+        case RenderMaterialGraphNodeKind::LayerStack:
+        case RenderMaterialGraphNodeKind::Reroute:
+        case RenderMaterialGraphNodeKind::CompositeInput:
+        case RenderMaterialGraphNodeKind::CompositeOutput:
+        case RenderMaterialGraphNodeKind::CollectionParameter:
+        case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+        case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+            continue;  // need a declaration, a function or a source of their own (the MAT-50 test)
+        default:
+            break;
+        }
+        const std::string kindName{ RenderMaterialGraphNodeKindName(kind) };
+        for (const std::string& outPin : RenderMaterialGraphNodeOutputPinNames(kind)) {
+            const RenderMaterialGraphPinType outType = RenderMaterialGraphPinDataType(kind, outPin, true);
+            RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+            RenderMaterialGraphNode subject{ .id = 2U, .kind = kind };
+            const bool textureOut = outType == RenderMaterialGraphPinType::Texture2D ||
+                outType == RenderMaterialGraphPinType::TextureCube ||
+                outType == RenderMaterialGraphPinType::Texture3D ||
+                outType == RenderMaterialGraphPinType::Texture2DArray;
+            if (textureOut) {
+                subject.parameter.textureRole = "baseColor";
+            }
+            graph.nodes.push_back(subject);
+            const std::string sampleOut = RenderMaterialGraphNodeOutputPinNames(RenderMaterialGraphNodeKind::TextureSample).front();
+            const auto sampleInto = [&](RenderMaterialGraphNodeKind sampler, const std::string& samplerIn, const std::string& samplerOut) {
+                graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = sampler });
+                graph.links.push_back(MakeGraphLink(kind, 2U, outPin, sampler, 3U, samplerIn));
+                graph.links.push_back(MakeGraphLink(sampler, 3U, samplerOut, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+            };
+            switch (outType) {
+            case RenderMaterialGraphPinType::Texture2D:
+                sampleInto(RenderMaterialGraphNodeKind::TextureSample, "texture", sampleOut);
+                break;
+            case RenderMaterialGraphPinType::TextureCube:
+                sampleInto(RenderMaterialGraphNodeKind::TextureSampleCube, "texture", "color");
+                break;
+            case RenderMaterialGraphPinType::Texture3D:
+                sampleInto(RenderMaterialGraphNodeKind::TextureSampleVolume, "texture", "color");
+                break;
+            case RenderMaterialGraphPinType::Texture2DArray:
+                sampleInto(RenderMaterialGraphNodeKind::TextureSample2DArray, "texture", "color");
+                break;
+            case RenderMaterialGraphPinType::Float2:
+                sampleInto(RenderMaterialGraphNodeKind::TextureSample, "uv", sampleOut);
+                break;
+            case RenderMaterialGraphPinType::MaterialAttributes:
+                graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "attributes"));
+                break;
+            case RenderMaterialGraphPinType::Float:
+                graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+                break;
+            case RenderMaterialGraphPinType::Normal:
+                graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
+                break;
+            case RenderMaterialGraphPinType::Float3:
+                graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+                break;
+            default:
+                graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+                break;
+            }
+            const std::string where = kindName + "." + outPin;
+            bool refused = false;
+            for (const RenderMaterialGraphDiagnostic& diagnostic :
+                 ValidateRenderMaterialGraphDocument(graph, RenderMaterialGraphRenderPath::GpuForward)) {
+                if (!refused && diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error) {
+                    failures << where << ": graph refused: " << diagnostic.message << "@@";
+                    refused = true;
+                }
+            }
+            if (refused) {
+                continue;
+            }
+            const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(
+                graph, RenderMaterialGraphBuildContext{ .assetId = 0xC000U + static_cast<std::uint32_t>(kind) });
+            if (!compiled.Succeeded()) {
+                failures << where << ": source: " << (compiled.diagnostics.empty() ? std::string{} : compiled.diagnostics.front().message) << "@@";
+                continue;
+            }
+            const RenderMaterialGraphShaderArtifactResult cooked =
+                CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, MakeCookRequest("BaseOpaque"));
+            if (!cooked.Succeeded()) {
+                failures << where << ": shaderc: "
+                         << (cooked.diagnostics.empty() ? std::string{} : cooked.diagnostics.front().message.substr(cooked.diagnostics.front().message.size() > 700U ? cooked.diagnostics.front().message.size() - 700U : 0U)) << "@@";
+            }
+        }
+    }
+    std::string report = failures.str();
+    for (std::size_t at = report.find("@@"); at != std::string::npos; at = report.find("@@", at)) {
+        report.replace(at, 2U, "\n");
+    }
+    if (!report.empty()) {
+        std::fprintf(stderr, "%s", report.c_str());
+    }
+    Require(report.empty(), "KBMAT-MAT50: every node output must cook through shaderc (see the list above)");
+}
+
+#endif
+
 void RunGraphShaderArtifactCookTests() {
     RunGraphShaderWrapperSourceTest();
     RunGraphShaderBackendMetadataTest();
@@ -758,6 +872,7 @@ void RunGraphShaderArtifactCookTests() {
     RunGraphShaderAutomaticIncludeInvalidationTest();
     RunGraphShaderToolchainIdentityInvalidationTest();
     RunGraphShaderDeepCacheRootCookTest();
+    RunGraphShaderEveryNodeOutputCooksTest();
 #endif
 }
 

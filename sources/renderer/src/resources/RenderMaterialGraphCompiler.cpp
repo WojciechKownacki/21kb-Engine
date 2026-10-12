@@ -1403,8 +1403,18 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         if (const auto it = cg.emittedTemp.find(node.id); it != cg.emittedTemp.end()) {
             return it->second;
         }
-        const std::string a = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::MaterialAttributes, "");
-        const std::string b = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::MaterialAttributes, "");
+        // An unconnected side is Unreal's default attribute set.
+        const auto attributesOrDefault = [&](const char* pin) {
+            if (FindInputLink(cg.graph, node.id, pin) != nullptr) {
+                return CompileInputExpression(cg, node, pin, RenderMaterialGraphPinType::MaterialAttributes, "");
+            }
+            const std::string fallback = "attrsBlendDefault" + std::to_string(node.id) + pin;
+            cg.statements += "    MaterialSurface " + fallback + ";\n";
+            cg.statements += MaterialSurfaceDefaultInitStatements(fallback);
+            return fallback;
+        };
+        const std::string a = attributesOrDefault("a");
+        const std::string b = attributesOrDefault("b");
         const std::string f = CompileInputExpression(cg, node, "factor", RenderMaterialGraphPinType::Float, "0.5");
         const std::string tmp = "attrsBlend" + std::to_string(node.id);
         const std::string fv = "blendF" + std::to_string(node.id);
@@ -1847,8 +1857,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         const float defaultFraction = values.size() > 0U ? values[0] : 1.0F;
         const std::string color = CompileInputExpression(cg, node, "color", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)");
         const std::string fraction = CompileInputExpression(cg, node, "fraction", RenderMaterialGraphPinType::Float, FloatLiteral(defaultFraction));
-        // Rec.709 luminance, the working colour space's factors Unreal and Unity use.
-        const std::string luma = "dot((" + color + ").rgb, vec3(0.2126, 0.7152, 0.0722))";
+        // Unreal's Desaturation luminance factors.
+        const std::string luma = "dot((" + color + ").rgb, vec3(0.3, 0.59, 0.11))";
         return "mix(" + color + ", vec4(vec3(" + luma + "), (" + color + ").a), clamp(" + fraction + ", 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::Fresnel: {
@@ -1883,7 +1893,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::ArcTangent:
         return "atan(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") + ")";
     case RenderMaterialGraphNodeKind::ArcTangent2:
-        return "atan(" +
+        // bgfx's atan2 (HLSL spelling; GLSL backends map it to atan(y, x)).
+        return "atan2(" +
             CompileInputExpression(cg, node, "y", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ", " +
             CompileInputExpression(cg, node, "x", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +

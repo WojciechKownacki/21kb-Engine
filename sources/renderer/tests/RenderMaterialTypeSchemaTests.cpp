@@ -3079,7 +3079,7 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
             .sourcePath = "/Game/Materials/CompiledSurfaceUtility.kbmat",
         });
     Require(surfaceResult.Succeeded(), "KBMAT-GRAPH-0202: Surface utility graph should compile to shader source");
-    Require(surfaceResult.shader.source.find("vec3(0.2126, 0.7152, 0.0722)") != std::string::npos,
+    Require(surfaceResult.shader.source.find("vec3(0.3, 0.59, 0.11)") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit Desaturate luminance expression");
     Require(surfaceResult.shader.source.find("pow(1.0 -") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit Fresnel falloff expression");
