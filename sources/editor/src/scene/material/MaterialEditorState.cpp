@@ -1599,12 +1599,36 @@ std::vector<MaterialEditorGraphNodeProperty> MaterialEditorState::MaterialSettin
     properties.push_back(makeRow("material.shadingModel", EditorText("materialEditor.setting.shadingModel", "Shading Model"),
         workingCopy_->graph.shadingModel));
     properties.push_back(makeRow("material.blendMode", EditorText("materialEditor.setting.blendMode", "Blend Mode"), workingCopy_->graph.blendMode));
+    // Typed in (TextField): Unreal's Max World Position Offset Displacement.
+    char margin[32];
+    std::snprintf(margin, sizeof(margin), "%g", workingCopy_->graph.maxWorldPositionOffsetDisplacement);
+    properties.push_back(MaterialEditorGraphNodeProperty{
+        .nodeId = 0U,
+        .stableId = "material.maxWorldPositionOffsetDisplacement",
+        .displayName = std::string{ EditorText("materialEditor.setting.maxWorldPositionOffsetDisplacement", "Max World Position Offset Displacement") },
+        .kind = MaterialEditorGraphNodePropertyKind::Text,
+        .type = kb::render::RenderMaterialParameterType::Enum,
+        .value = EnumValue(margin),
+    });
     return properties;
 }
 
 bool MaterialEditorState::SetGraphMaterialSetting(std::string_view propertyId, std::string_view value) {
     if (!workingCopy_.has_value() || propertyId.empty()) {
         return false;
+    }
+    if (propertyId == "material.maxWorldPositionOffsetDisplacement") {
+        const std::string text{ value };
+        char* end = nullptr;
+        const float margin = std::strtof(text.c_str(), &end);
+        if (text.empty() || end == text.c_str() || *end != '\0' || !std::isfinite(margin) || margin < 0.0F ||
+            margin == workingCopy_->graph.maxWorldPositionOffsetDisplacement) {
+            return false;
+        }
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        document.graph.maxWorldPositionOffsetDisplacement = margin;
+        SetWorkingCopy(std::move(document));
+        return true;
     }
     const std::vector<MaterialEditorGraphNodePropertyOption>& options = MaterialSettingOptions(propertyId);
     if (std::ranges::none_of(options, [value](const MaterialEditorGraphNodePropertyOption& option) {

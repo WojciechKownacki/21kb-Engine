@@ -2023,6 +2023,7 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
                     materialAsset.materialTypeVersion == 0U ? 1U : materialAsset.materialTypeVersion,
                     resolved.graphDiagnostics);
                 resolved.graphProgram = std::move(bindingResult.binding);
+                resolved.graphProgram.boundsMargin = std::max(materialAsset.graph.maxWorldPositionOffsetDisplacement, 0.0F);
                 WriteRendererMaterialGraphDebugLog(
                     "runtime",
                     "resolve-graph-binding-ok asset=" + std::to_string(materialMetadata.id.value) +

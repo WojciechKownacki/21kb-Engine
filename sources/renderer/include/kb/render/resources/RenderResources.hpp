@@ -435,6 +435,8 @@ struct RenderMaterialGraphProgramBinding {
     bool usesSceneColor = false;
     // The G-buffer program writes the model colour (fifth target, SceneGBuffer::CustomDataTexture).
     bool writesShadingModelColor = false;
+    // The material's Max World Position Offset Displacement: the bounds margin of its objects.
+    float boundsMargin = 0.0F;
 };
 
 struct RenderMaterialResource {

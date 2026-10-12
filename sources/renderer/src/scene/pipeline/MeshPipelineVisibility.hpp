@@ -10,6 +10,9 @@
 
 namespace kb::render {
 
+class RenderResourceRegistry;
+class SceneRenderResourceMap;
+
 struct MeshPipelineFrustumPlane {
     float x = 0.0F;
     float y = 0.0F;
@@ -39,6 +42,15 @@ public:
         const RenderBoundsSphere& bounds,
         std::span<const SceneRenderVisibilityBlocker> blockers) noexcept;
     [[nodiscard]] static std::uint16_t DepthBucket(float depth) noexcept;
+    // Unreal's Max World Position Offset Displacement: the world units a graph material may move its
+    // vertices, which every culling path adds to the bounds of the objects drawn with it.
+    [[nodiscard]] static float MaterialBoundsMargin(const RenderMaterialResource* material) noexcept;
+    [[nodiscard]] static float MaterialBoundsMargin(
+        const RenderResourceRegistry& resources,
+        const SceneRenderResourceMap& resourceMap,
+        std::uint64_t materialAssetId,
+        std::span<const std::uint64_t> slotMaterialAssetIds) noexcept;
+    [[nodiscard]] static RenderBoundsSphere GrowBounds(RenderBoundsSphere bounds, float margin) noexcept;
     // The camera's culling view-projection, position and layers as the portal visibility pass takes them.
     [[nodiscard]] static kb::scene::ScenePortalCamera PortalCamera(const SceneRenderCamera& camera) noexcept;
     [[nodiscard]] static std::uint8_t SelectLodLevel(

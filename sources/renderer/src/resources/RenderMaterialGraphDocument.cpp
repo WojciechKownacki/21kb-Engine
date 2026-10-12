@@ -337,6 +337,9 @@ void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterial
     output << "graphMaterialDomain " << CanonicalGraphMaterialDomainName(graph.materialDomain) << '\n';
     output << "graphShadingModel " << CanonicalGraphShadingModelName(graph.shadingModel) << '\n';
     output << "graphBlendMode " << CanonicalGraphBlendModeName(graph.blendMode) << '\n';
+    if (graph.maxWorldPositionOffsetDisplacement > 0.0F) {
+        output << "graphMaxWorldPositionOffsetDisplacement " << graph.maxWorldPositionOffsetDisplacement << '\n';
+    }
     output << "graphStorageModel " << (graph.storageModel.empty() ? "inline-kbmat" : graph.storageModel) << '\n';
     output << "graphDiagnosticSchemaVersion " << (graph.diagnosticSchemaVersion == 0U ? 1U : graph.diagnosticSchemaVersion) << '\n';
     output << "graphPersistCompileDiagnostics " << (graph.persistCompileDiagnostics ? "true" : "false") << '\n';

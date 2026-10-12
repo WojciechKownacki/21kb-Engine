@@ -13,6 +13,7 @@
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialSemanticHash.hpp"
 #include "../src/scene/pipeline/MeshPipelinePassPolicy.hpp"
+#include "../src/scene/pipeline/MeshPipelineVisibility.hpp"
 #include "../src/scene/submit/SceneMeshMaterialBindingResolver.hpp"
 
 #include <cstdio>
@@ -4721,6 +4722,31 @@ void RunMaterialGraphBlendModeTest() {
     };
     const std::optional<RenderMaterialAssetData> parsed = RenderMaterialAssetParser::Parse(input);
     Require(parsed.has_value() && parsed->graph.blendMode == "additive", "KBMAT-MAT38: graphBlendMode must parse into the graph document");
+
+    // Unreal's Max World Position Offset Displacement: saved with the graph, and it grows the culling
+    // bounds of the objects drawn with the material.
+    std::istringstream marginInput{
+        "version 1\n"
+        "materialType builtin.pbr\n"
+        "graphVersion 1\n"
+        "graphMaxWorldPositionOffsetDisplacement 2.5\n"
+        "graphNode 1 MaterialOutput 0 0\n"
+    };
+    const std::optional<RenderMaterialAssetData> marginParsed = RenderMaterialAssetParser::Parse(marginInput);
+    Require(marginParsed.has_value() && marginParsed->graph.maxWorldPositionOffsetDisplacement == 2.5F,
+        "KBMAT-MAT38: graphMaxWorldPositionOffsetDisplacement must parse into the graph document");
+    std::ostringstream written;
+    WriteRenderMaterialGraphDocument(written, marginParsed->graph);
+    Require(written.str().find("graphMaxWorldPositionOffsetDisplacement 2.5") != std::string::npos,
+        "KBMAT-MAT38: the margin must be written back");
+    std::istringstream negativeInput{ "version 1\nmaterialType builtin.pbr\ngraphVersion 1\ngraphMaxWorldPositionOffsetDisplacement -1\n" };
+    Require(!RenderMaterialAssetParser::Parse(negativeInput).has_value(), "KBMAT-MAT38: a negative margin must be refused");
+    RenderMaterialResource moving{};
+    moving.graphProgram.active = true;
+    moving.graphProgram.boundsMargin = 2.5F;
+    const RenderBoundsSphere grown = MeshPipelineVisibility::GrowBounds(
+        RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 1.0F }, MeshPipelineVisibility::MaterialBoundsMargin(&moving));
+    Require(grown.radius == 3.5F, "KBMAT-MAT38: the material's margin must grow the culling bounds");
 }
 
 void RunMaterialGraphBlendSceneStateTest() {

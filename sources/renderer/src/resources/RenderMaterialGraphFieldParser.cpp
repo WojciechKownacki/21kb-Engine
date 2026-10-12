@@ -3,6 +3,8 @@
 
 #include <charconv>
 #include <sstream>
+#include <cmath>
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
@@ -282,6 +284,24 @@ void AddGraphMigrationDiagnostic(
         return RenderMaterialGraphFieldParseResult::Failed;
     }
     graph.blendMode = std::string{ rest };
+    return RenderMaterialGraphFieldParseResult::Parsed;
+}
+
+[[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphMaxWorldPositionOffsetDisplacement(
+    std::string_view rest,
+    std::size_t line,
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
+    float value = 0.0F;
+    const std::string text{ rest };
+    char* end = nullptr;
+    value = std::strtof(text.c_str(), &end);
+    if (text.empty() || end == text.c_str() || *end != '\0' || !std::isfinite(value) || value < 0.0F) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line,
+            "graphMaxWorldPositionOffsetDisplacement", "Max World Position Offset Displacement must be a finite value of 0 or more.", text);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    graph.maxWorldPositionOffsetDisplacement = value;
     return RenderMaterialGraphFieldParseResult::Parsed;
 }
 
@@ -1000,6 +1020,9 @@ RenderMaterialGraphFieldParseResult RenderMaterialGraphFieldParser::Apply(
     }
     if (keyword == "graphBlendMode") {
         return ParseGraphBlendMode(rest, line, asset.graph, diagnostics);
+    }
+    if (keyword == "graphMaxWorldPositionOffsetDisplacement") {
+        return ParseGraphMaxWorldPositionOffsetDisplacement(rest, line, asset.graph, diagnostics);
     }
     if (keyword == "graphStorageModel") {
         return ParseGraphStorageModel(rest, line, asset.graph, diagnostics);
