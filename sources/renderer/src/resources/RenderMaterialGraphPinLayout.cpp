@@ -370,7 +370,6 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::PartialDerivativeX:
     case RenderMaterialGraphNodeKind::PartialDerivativeY:
     case RenderMaterialGraphNodeKind::BlackBody:
-    case RenderMaterialGraphNodeKind::Noise:
     case RenderMaterialGraphNodeKind::VectorNoise:
     case RenderMaterialGraphNodeKind::ColorRamp:
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
@@ -378,6 +377,12 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::TransformPosition:
     case RenderMaterialGraphNodeKind::Cosine:
         if (!outputPin && pin == "value") return RenderMaterialGraphPinType::Float4;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Noise:
+        // Unreal's Noise: a float3 Position and a scalar Filter Width; the scalar result is broadcast to
+        // float4 so saved graphs keep feeding colour pins.
+        if (!outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "filterWidth") return RenderMaterialGraphPinType::Float;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::Distance:
@@ -480,6 +485,138 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
         return outputPin && (pin == "value" || pin == "xyz") ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+        if (!outputPin && pin == "texture") return RenderMaterialGraphPinType::Texture2D;
+        if (!outputPin && pin == "textureSize") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "worldPosition") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "projectionTransitionContrast") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "worldSpaceNormal") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "xyzTexture") return RenderMaterialGraphPinType::Color;
+        if (outputPin && pin == "xyTexture") return RenderMaterialGraphPinType::Color;
+        if (outputPin && pin == "zTexture") return RenderMaterialGraphPinType::Color;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::FlipBook:
+        if (!outputPin && pin == "animationPhase") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "numberOfRows") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "numberOfColumns") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float2;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Checkerboard:
+        if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
+        if (!outputPin && pin == "colorA") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "colorB") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "frequency") return RenderMaterialGraphPinType::Float2;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::PolarCoordinates:
+        if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
+        if (!outputPin && pin == "center") return RenderMaterialGraphPinType::Float2;
+        if (!outputPin && pin == "radialScale") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "lengthScale") return RenderMaterialGraphPinType::Float;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float2;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Twirl:
+        if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
+        if (!outputPin && pin == "center") return RenderMaterialGraphPinType::Float2;
+        if (!outputPin && pin == "strength") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "offset") return RenderMaterialGraphPinType::Float2;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float2;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Ellipse:
+        if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
+        if (!outputPin && pin == "width") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "height") return RenderMaterialGraphPinType::Float;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float4;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Rectangle:
+        if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
+        if (!outputPin && pin == "width") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "height") return RenderMaterialGraphPinType::Float;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float4;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::RoundedRectangle:
+        if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
+        if (!outputPin && pin == "width") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "height") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "radius") return RenderMaterialGraphPinType::Float;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float4;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::BlendOverlay:
+        if (!outputPin && pin == "base") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "blend") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::BlendScreen:
+        if (!outputPin && pin == "base") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "blend") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::BlendSoftLight:
+        if (!outputPin && pin == "base") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "blend") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::BlendHardLight:
+        if (!outputPin && pin == "base") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "blend") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::BlendLinearLight:
+        if (!outputPin && pin == "base") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "blend") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::BlendColorBurn:
+        if (!outputPin && pin == "base") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "blend") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::BlendColorDodge:
+        if (!outputPin && pin == "base") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "blend") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::BlendDarken:
+        if (!outputPin && pin == "base") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "blend") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::BlendLighten:
+        if (!outputPin && pin == "base") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "blend") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::BlendDifference:
+        if (!outputPin && pin == "base") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "blend") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Contrast:
+        if (!outputPin && pin == "input") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "contrast") return RenderMaterialGraphPinType::Float;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::HueShift:
+        if (!outputPin && pin == "hueShiftPercentage") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "color") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::ChannelMixer:
+        if (!outputPin && pin == "input") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "red") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "green") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "blue") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::RemapValueRange:
+        if (!outputPin && pin == "input") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "inputLow") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "inputHigh") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "targetLow") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && pin == "targetHigh") return RenderMaterialGraphPinType::Float;
+        if (outputPin && pin == "value") return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
     }
     return RenderMaterialGraphPinType::Unknown;
 }

@@ -652,6 +652,50 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return std::string{ EditorText("materialEditor.node.uv", "Texture Coordinate") };
     case kb::render::RenderMaterialGraphNodeKind::TwoSidedSign:
         return std::string{ EditorText("materialEditor.node.twoSidedSign", "Two Sided Sign") };
+    case kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture:
+        return std::string{ EditorText("materialEditor.node.worldAlignedTexture", "World Aligned Texture") };
+    case kb::render::RenderMaterialGraphNodeKind::FlipBook:
+        return std::string{ EditorText("materialEditor.node.flipBook", "FlipBook") };
+    case kb::render::RenderMaterialGraphNodeKind::Checkerboard:
+        return std::string{ EditorText("materialEditor.node.checkerboard", "Checkerboard") };
+    case kb::render::RenderMaterialGraphNodeKind::PolarCoordinates:
+        return std::string{ EditorText("materialEditor.node.polarCoordinates", "Polar Coordinates") };
+    case kb::render::RenderMaterialGraphNodeKind::Twirl:
+        return std::string{ EditorText("materialEditor.node.twirl", "Twirl") };
+    case kb::render::RenderMaterialGraphNodeKind::Ellipse:
+        return std::string{ EditorText("materialEditor.node.ellipse", "Ellipse") };
+    case kb::render::RenderMaterialGraphNodeKind::Rectangle:
+        return std::string{ EditorText("materialEditor.node.rectangle", "Rectangle") };
+    case kb::render::RenderMaterialGraphNodeKind::RoundedRectangle:
+        return std::string{ EditorText("materialEditor.node.roundedRectangle", "Rounded Rectangle") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendOverlay:
+        return std::string{ EditorText("materialEditor.node.blendOverlay", "Blend Overlay") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendScreen:
+        return std::string{ EditorText("materialEditor.node.blendScreen", "Blend Screen") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendSoftLight:
+        return std::string{ EditorText("materialEditor.node.blendSoftLight", "Blend Soft Light") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendHardLight:
+        return std::string{ EditorText("materialEditor.node.blendHardLight", "Blend Hard Light") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendLinearLight:
+        return std::string{ EditorText("materialEditor.node.blendLinearLight", "Blend Linear Light") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendColorBurn:
+        return std::string{ EditorText("materialEditor.node.blendColorBurn", "Blend Color Burn") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendColorDodge:
+        return std::string{ EditorText("materialEditor.node.blendColorDodge", "Blend Color Dodge") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendDarken:
+        return std::string{ EditorText("materialEditor.node.blendDarken", "Blend Darken") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendLighten:
+        return std::string{ EditorText("materialEditor.node.blendLighten", "Blend Lighten") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendDifference:
+        return std::string{ EditorText("materialEditor.node.blendDifference", "Blend Difference") };
+    case kb::render::RenderMaterialGraphNodeKind::Contrast:
+        return std::string{ EditorText("materialEditor.node.contrast", "Contrast") };
+    case kb::render::RenderMaterialGraphNodeKind::HueShift:
+        return std::string{ EditorText("materialEditor.node.hueShift", "Hue Shift") };
+    case kb::render::RenderMaterialGraphNodeKind::ChannelMixer:
+        return std::string{ EditorText("materialEditor.node.channelMixer", "Channel Mixer") };
+    case kb::render::RenderMaterialGraphNodeKind::RemapValueRange:
+        return std::string{ EditorText("materialEditor.node.remapValueRange", "Remap Value Range") };
     default:
         break;
     }

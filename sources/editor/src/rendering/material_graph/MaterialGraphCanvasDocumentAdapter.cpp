@@ -571,20 +571,23 @@ MaterialGraphCanvasNode BuildMaterialGraphCanvasNode(const kb::render::RenderMat
     if (node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode ||
         node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
         canvasNode.alignPinRowsAcrossLanes = true;
-        const std::size_t outputCount = node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode && canvasNode.outputs.empty()
-            ? 1U
-            : canvasNode.outputs.size();
-        const std::size_t rowCount = std::max(canvasNode.inputs.size(), outputCount);
-        if (rowCount > 0U) {
-            canvasNode.heightOverride = std::max(
-                canvasNode.heightOverride,
-                MaterialGraphCanvas::HeaderHeight +
-                    MaterialGraphCanvas::BodyTopPadding +
-                    (static_cast<float>(rowCount) * MaterialGraphCanvas::PinRowHeight) +
-                    MaterialGraphCanvas::BodyTopPadding);
-        }
     }
+    canvasNode.heightOverride = std::max(canvasNode.heightOverride, MaterialGraphCanvasPinRowsHeight(canvasNode));
     return canvasNode;
+}
+
+float MaterialGraphCanvasPinRowsHeight(const MaterialGraphCanvasNode& node) noexcept {
+    if (!node.valueFields.empty() || node.texturePreview.enabled) {
+        return 0.0F;
+    }
+    const std::size_t rowCount = std::max(node.inputs.size(), node.outputs.size());
+    if (rowCount == 0U) {
+        return 0.0F;
+    }
+    return MaterialGraphCanvas::HeaderHeight +
+        MaterialGraphCanvas::BodyTopPadding +
+        (static_cast<float>(rowCount) * MaterialGraphCanvas::PinRowHeight) +
+        MaterialGraphCanvas::BodyTopPadding;
 }
 
 MaterialGraphCanvasDocumentBuildResult BuildMaterialGraphCanvasFromDocument(

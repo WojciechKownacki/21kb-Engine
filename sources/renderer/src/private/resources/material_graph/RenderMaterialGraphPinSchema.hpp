@@ -378,7 +378,6 @@ class RenderMaterialGraphPinSchema final {
         case RenderMaterialGraphNodeKind::PartialDerivativeX:
         case RenderMaterialGraphNodeKind::PartialDerivativeY:
         case RenderMaterialGraphNodeKind::BlackBody:
-        case RenderMaterialGraphNodeKind::Noise:
         case RenderMaterialGraphNodeKind::VectorNoise:
         case RenderMaterialGraphNodeKind::ColorRamp:
         case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
@@ -388,6 +387,12 @@ class RenderMaterialGraphPinSchema final {
         case RenderMaterialGraphNodeKind::Normalize:
         case RenderMaterialGraphNodeKind::Length:
             visitor("value", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::Noise:
+            // Unreal's Noise: Position (kept as "value" for saved graphs) and Filter Width.
+            visitor("value", Direction::Input);
+            visitor("filterWidth", Direction::Input);
             visitor("value", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::Sobol:
@@ -557,6 +562,138 @@ class RenderMaterialGraphPinSchema final {
         case RenderMaterialGraphNodeKind::ObjectPosition:
         case RenderMaterialGraphNodeKind::WorldPosition:
             visitor("xyz", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+            visitor("texture", Direction::Input);
+            visitor("textureSize", Direction::Input);
+            visitor("worldPosition", Direction::Input);
+            visitor("projectionTransitionContrast", Direction::Input);
+            visitor("worldSpaceNormal", Direction::Input);
+            visitor("xyzTexture", Direction::Output);
+            visitor("xyTexture", Direction::Output);
+            visitor("zTexture", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::FlipBook:
+            visitor("animationPhase", Direction::Input);
+            visitor("numberOfRows", Direction::Input);
+            visitor("numberOfColumns", Direction::Input);
+            visitor("uv", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::Checkerboard:
+            visitor("uv", Direction::Input);
+            visitor("colorA", Direction::Input);
+            visitor("colorB", Direction::Input);
+            visitor("frequency", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::PolarCoordinates:
+            visitor("uv", Direction::Input);
+            visitor("center", Direction::Input);
+            visitor("radialScale", Direction::Input);
+            visitor("lengthScale", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::Twirl:
+            visitor("uv", Direction::Input);
+            visitor("center", Direction::Input);
+            visitor("strength", Direction::Input);
+            visitor("offset", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::Ellipse:
+            visitor("uv", Direction::Input);
+            visitor("width", Direction::Input);
+            visitor("height", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::Rectangle:
+            visitor("uv", Direction::Input);
+            visitor("width", Direction::Input);
+            visitor("height", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::RoundedRectangle:
+            visitor("uv", Direction::Input);
+            visitor("width", Direction::Input);
+            visitor("height", Direction::Input);
+            visitor("radius", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::BlendOverlay:
+            visitor("base", Direction::Input);
+            visitor("blend", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::BlendScreen:
+            visitor("base", Direction::Input);
+            visitor("blend", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::BlendSoftLight:
+            visitor("base", Direction::Input);
+            visitor("blend", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::BlendHardLight:
+            visitor("base", Direction::Input);
+            visitor("blend", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::BlendLinearLight:
+            visitor("base", Direction::Input);
+            visitor("blend", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::BlendColorBurn:
+            visitor("base", Direction::Input);
+            visitor("blend", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::BlendColorDodge:
+            visitor("base", Direction::Input);
+            visitor("blend", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::BlendDarken:
+            visitor("base", Direction::Input);
+            visitor("blend", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::BlendLighten:
+            visitor("base", Direction::Input);
+            visitor("blend", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::BlendDifference:
+            visitor("base", Direction::Input);
+            visitor("blend", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::Contrast:
+            visitor("input", Direction::Input);
+            visitor("contrast", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::HueShift:
+            visitor("hueShiftPercentage", Direction::Input);
+            visitor("color", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::ChannelMixer:
+            visitor("input", Direction::Input);
+            visitor("red", Direction::Input);
+            visitor("green", Direction::Input);
+            visitor("blue", Direction::Input);
+            visitor("value", Direction::Output);
+            break;
+        case RenderMaterialGraphNodeKind::RemapValueRange:
+            visitor("input", Direction::Input);
+            visitor("inputLow", Direction::Input);
+            visitor("inputHigh", Direction::Input);
+            visitor("targetLow", Direction::Input);
+            visitor("targetHigh", Direction::Input);
+            visitor("value", Direction::Output);
             break;
         }
     }

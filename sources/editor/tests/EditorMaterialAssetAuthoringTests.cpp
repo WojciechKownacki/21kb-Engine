@@ -14,6 +14,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -2609,6 +2610,17 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
                     compileEditor.ConnectGraphPins(colorNodeId, "rgba", declarationNodeId, "input"),
                 "KBMAT-MAT57C: Palette-created named reroute usage should compile with an editor-authored declaration");
         }
+        // A required texture input (WorldAlignedTexture's TextureObject) gets a Texture Object, as a user connects one.
+        for (const std::string& inputPin : kb::render::RenderMaterialGraphNodeInputPinNames(kind)) {
+            if (kb::render::RenderMaterialGraphPinDataType(kind, inputPin, false) != kb::render::RenderMaterialGraphPinType::Texture2D) {
+                continue;
+            }
+            std::uint32_t textureObjectNodeId = 0U;
+            kb::editor::tests::Require(
+                compileEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureObject, -620, 240, &textureObjectNodeId) &&
+                    compileEditor.ConnectGraphPins(textureObjectNodeId, "texture", subjectNodeId, inputPin),
+                "KBMAT-MAT57C: A palette-created node's texture input should accept an editor-authored Texture Object");
+        }
 
         bool routed = false;
         switch (outputType) {
@@ -5070,6 +5082,22 @@ void RunMaterialEditorGraphProductGeometryAuditTest() {
                     hit->pin == outputPins[pinIndex],
                 ("KBMAT-MAT90: output pin hit-test mismatch: " + nodeName + "." + outputPins[pinIndex]).c_str());
         }
+        // As in Unreal, a node grows with its pins: each pin keeps a full row, however many there are
+        // (Material Output's 28 inputs, the material attribute nodes' 25).
+        if (kb::editor::MaterialGraphCanvasPinRowsHeight(kb::editor::BuildMaterialGraphCanvasNode(node)) > 0.0F) {
+            for (std::size_t pinIndex = 1U; pinIndex < inputPins.size(); ++pinIndex) {
+                const LONG step = kb::editor::MaterialEditorPanelInputPinPoint(*rect, node.kind, pinIndex).y -
+                    kb::editor::MaterialEditorPanelInputPinPoint(*rect, node.kind, pinIndex - 1U).y;
+                kb::editor::tests::Require(step >= kb::editor::MaterialEditorPanelMetrics::GraphNodePinRowHeight - 1,
+                    ("KBMAT-MAT90: input pins must keep a full row each: " + nodeName + "." + inputPins[pinIndex]).c_str());
+            }
+            for (std::size_t pinIndex = 1U; pinIndex < outputPins.size(); ++pinIndex) {
+                const LONG step = kb::editor::MaterialEditorPanelOutputPinPoint(*rect, node, pinIndex, outputPins.size()).y -
+                    kb::editor::MaterialEditorPanelOutputPinPoint(*rect, node, pinIndex - 1U, outputPins.size()).y;
+                kb::editor::tests::Require(step >= kb::editor::MaterialEditorPanelMetrics::GraphNodePinRowHeight - 1,
+                    ("KBMAT-MAT90: output pins must keep a full row each: " + nodeName + "." + outputPins[pinIndex]).c_str());
+            }
+        }
 
         if (IsAuditedTextureNode(kind)) {
             if (kb::editor::MaterialEditorPanelIsTextureSamplePreviewNode(kind)) {
@@ -7134,7 +7162,112 @@ void RunMaterialGraphTextureSemanticTraversalTest() {
 
 namespace kb::editor::tests {
 
+// The Unreal/Unity utility nodes in the Material Editor palette: each is listed in its category under its
+// name, found by search (Voronoi and Simplex find Unreal's Noise, Triplanar the World Aligned Texture), named
+// in the editor language and created by the Material Editor; Noise exposes Unreal's properties.
+void RunMaterialEditorUtilityNodePaletteTest() {
+    using Command = kb::editor::MaterialEditorGraphMenuCommand;
+    using Kind = kb::render::RenderMaterialGraphNodeKind;
+    const std::vector<Command> textures = kb::editor::MaterialEditorGraphContextMenuCommands(0U);
+    const std::vector<Command> math = kb::editor::MaterialEditorGraphContextMenuCommands(5U);
+    const std::vector<Command> utility = kb::editor::MaterialEditorGraphContextMenuCommands(6U);
+    struct Entry {
+        Command command;
+        Kind kind;
+        const std::vector<Command>* category;
+        std::string_view english;
+    };
+    const std::array<Entry, 22U> entries{ {
+        { Command::CreateWorldAlignedTexture, Kind::WorldAlignedTexture, &textures, "World Aligned Texture" },
+        { Command::CreateFlipBook, Kind::FlipBook, &textures, "FlipBook" },
+        { Command::CreateRemapValueRange, Kind::RemapValueRange, &math, "Remap Value Range" },
+        { Command::CreateCheckerboard, Kind::Checkerboard, &utility, "Checkerboard" },
+        { Command::CreatePolarCoordinates, Kind::PolarCoordinates, &utility, "Polar Coordinates" },
+        { Command::CreateTwirl, Kind::Twirl, &utility, "Twirl" },
+        { Command::CreateEllipse, Kind::Ellipse, &utility, "Ellipse" },
+        { Command::CreateRectangle, Kind::Rectangle, &utility, "Rectangle" },
+        { Command::CreateRoundedRectangle, Kind::RoundedRectangle, &utility, "Rounded Rectangle" },
+        { Command::CreateBlendOverlay, Kind::BlendOverlay, &utility, "Blend Overlay" },
+        { Command::CreateBlendScreen, Kind::BlendScreen, &utility, "Blend Screen" },
+        { Command::CreateBlendSoftLight, Kind::BlendSoftLight, &utility, "Blend Soft Light" },
+        { Command::CreateBlendHardLight, Kind::BlendHardLight, &utility, "Blend Hard Light" },
+        { Command::CreateBlendLinearLight, Kind::BlendLinearLight, &utility, "Blend Linear Light" },
+        { Command::CreateBlendColorBurn, Kind::BlendColorBurn, &utility, "Blend Color Burn" },
+        { Command::CreateBlendColorDodge, Kind::BlendColorDodge, &utility, "Blend Color Dodge" },
+        { Command::CreateBlendDarken, Kind::BlendDarken, &utility, "Blend Darken" },
+        { Command::CreateBlendLighten, Kind::BlendLighten, &utility, "Blend Lighten" },
+        { Command::CreateBlendDifference, Kind::BlendDifference, &utility, "Blend Difference" },
+        { Command::CreateContrast, Kind::Contrast, &utility, "Contrast" },
+        { Command::CreateHueShift, Kind::HueShift, &utility, "Hue Shift" },
+        { Command::CreateChannelMixer, Kind::ChannelMixer, &utility, "Channel Mixer" },
+    } };
+
+    kb::editor::MaterialEditorState editor;
+    kb::render::RenderMaterialAssetData asset{};
+    asset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    editor.Open(kb::assets::AssetId{ 0x5A10U }, asset);
+    int x = -900;
+    for (const Entry& entry : entries) {
+        kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(*entry.category, entry.command),
+            ("Utility nodes: the palette must list " + std::string{ entry.english } + " in its category").c_str());
+        kb::editor::tests::Require(kb::editor::MaterialEditorGraphMenuCommandNodeKind(entry.command) == entry.kind,
+            ("Utility nodes: " + std::string{ entry.english } + " must create its graph node").c_str());
+        kb::editor::tests::Require(kb::editor::MaterialEditorGraphContextMenuCommandName(entry.command) == entry.english &&
+                kb::editor::MaterialEditorGraphPaletteCommandMatches(entry.command, entry.english),
+            ("Utility nodes: the palette must name and find " + std::string{ entry.english }).c_str());
+        std::uint32_t nodeId = 0U;
+        kb::editor::tests::Require(editor.AddGraphNode(entry.kind, x, 400, &nodeId) && nodeId != 0U,
+            ("Utility nodes: the Material Editor must add " + std::string{ entry.english }).c_str());
+        x += 40;
+    }
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateNoise, "voronoi") &&
+            kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateNoise, "simplex") &&
+            kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateWorldAlignedTexture, "triplanar") &&
+            kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateBlendOverlay, "blend") &&
+            kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateRemapValueRange, "remap"),
+        "Utility nodes: palette search must find Noise by its functions and the new nodes by their Unreal names");
+
+    // Unreal's Noise details: Function and Turbulence dropdowns, then Scale, Quality, Levels, Level Scale,
+    // Output Min and Output Max; edits write the renderer's Noise settings hint.
+    std::uint32_t noiseNodeId = 0U;
+    kb::editor::tests::Require(editor.AddGraphNode(Kind::Noise, -400, 80, &noiseNodeId), "Utility nodes: the Material Editor must add Noise");
+    const std::vector<kb::editor::MaterialEditorGraphNodeProperty> noiseProperties = editor.GraphNodeProperties(noiseNodeId);
+    const auto findProperty = [&noiseProperties](std::string_view stableId) -> const kb::editor::MaterialEditorGraphNodeProperty* {
+        const auto found = std::ranges::find_if(noiseProperties, [stableId](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+            return property.stableId == stableId;
+        });
+        return found == noiseProperties.end() ? nullptr : &*found;
+    };
+    const kb::editor::MaterialEditorGraphNodeProperty* function = findProperty("noise.function");
+    kb::editor::tests::Require(function != nullptr && function->options.size() == 4U && function->options[3].value == "voronoi" &&
+            findProperty("noise.turbulence") != nullptr && findProperty("noise.scale") != nullptr && findProperty("noise.quality") != nullptr &&
+            findProperty("noise.levels") != nullptr && findProperty("noise.levelScale") != nullptr &&
+            findProperty("noise.outputMin") != nullptr && findProperty("noise.outputMax") != nullptr,
+        "Utility nodes: Noise must expose Unreal's Function, Turbulence, Scale, Quality, Levels, Level Scale and Output range");
+    kb::editor::tests::Require(editor.SetGraphNodeEnumValue(noiseNodeId, "noise.function", "voronoi") &&
+            editor.SetGraphNodeEnumValue(noiseNodeId, "noise.turbulence", "false") &&
+            editor.SetGraphConstantComponentValue(noiseNodeId, 1U, 3.0F) &&
+            editor.SetGraphConstantComponentValue(noiseNodeId, 2U, 15.0F),
+        "Utility nodes: Noise properties must be editable");
+    const kb::render::RenderMaterialGraphNode* noise = kb::render::FindRenderMaterialGraphNode(editor.WorkingCopy()->graph, noiseNodeId);
+    kb::editor::tests::Require(noise != nullptr && noise->parameter.defaultValueHint == "voronoi false 1 3 10 2 -1 1",
+        "Utility nodes: Noise edits must write the settings hint, with Levels clamped to Unreal's 10");
+
+    std::string error;
+    kb::editor::tests::Require(kb::editor::EditorLocalization::SetLanguage("pl", KB_EDITOR_LOCALIZATION_DIR, error),
+        ("Utility nodes: the Polish catalog must load: " + error).c_str());
+    for (const Entry& entry : entries) {
+        const std::string_view localized = kb::editor::MaterialEditorGraphContextMenuCommandName(entry.command);
+        kb::editor::tests::Require(!localized.empty() && kb::editor::MaterialEditorGraphPaletteCommandMatches(entry.command, localized),
+            ("Utility nodes: the palette must name " + std::string{ entry.english } + " in Polish").c_str());
+    }
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphContextMenuCommandName(Command::CreateHueShift) != "Hue Shift",
+        "Utility nodes: the Polish palette must translate the new node names");
+    kb::editor::tests::Require(kb::editor::EditorLocalization::SetLanguage("en", {}, error), "Utility nodes: English must come back");
+}
+
 void RunEditorMaterialAssetAuthoringTests() {
+    RunMaterialEditorUtilityNodePaletteTest();
     RunCreateMaterialAssetThroughEditorAuthoringTest();
     RunCreateMaterialGraphAndTypeThroughEditorAuthoringTest();
     RunCreateMaterialFunctionAssetThroughEditorAuthoringTest();

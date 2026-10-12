@@ -14,6 +14,56 @@
 #include <sstream>
 
 namespace kb::editor {
+namespace {
+
+// Unreal's Noise properties edited as numbers: Scale, Quality, Levels, Level Scale, Output Min, Output Max.
+// Quality and Levels are whole numbers in Unreal's ranges; the hint is owned by the renderer's Noise settings.
+struct NoiseNumericProperty {
+    std::string_view stableId;
+    float rangeMin = 0.0F;
+    float rangeMax = 1.0F;
+    bool whole = false;
+};
+
+constexpr std::array<NoiseNumericProperty, 6U> kNoiseNumericProperties{ {
+    { .stableId = "noise.scale", .rangeMin = 0.001F, .rangeMax = 1000.0F },
+    { .stableId = "noise.quality", .rangeMin = 1.0F, .rangeMax = 4.0F, .whole = true },
+    { .stableId = "noise.levels", .rangeMin = 1.0F, .rangeMax = 10.0F, .whole = true },
+    { .stableId = "noise.levelScale", .rangeMin = 0.01F, .rangeMax = 16.0F },
+    { .stableId = "noise.outputMin", .rangeMin = -1000.0F, .rangeMax = 1000.0F },
+    { .stableId = "noise.outputMax", .rangeMin = -1000.0F, .rangeMax = 1000.0F },
+} };
+
+[[nodiscard]] std::array<float, 6U> NoiseNumericValues(const kb::render::RenderMaterialGraphNoiseSettings& settings) noexcept {
+    return { settings.scale, static_cast<float>(settings.quality), static_cast<float>(settings.levels),
+        settings.levelScale, settings.outputMin, settings.outputMax };
+}
+
+void SetNoiseNumericValue(kb::render::RenderMaterialGraphNoiseSettings& settings, std::size_t index, float value) noexcept {
+    const NoiseNumericProperty& property = kNoiseNumericProperties[index];
+    value = std::clamp(property.whole ? std::round(value) : value, property.rangeMin, property.rangeMax);
+    switch (index) {
+    case 0U: settings.scale = value; break;
+    case 1U: settings.quality = static_cast<std::uint32_t>(value); break;
+    case 2U: settings.levels = static_cast<std::uint32_t>(value); break;
+    case 3U: settings.levelScale = value; break;
+    case 4U: settings.outputMin = value; break;
+    default: settings.outputMax = value; break;
+    }
+}
+
+[[nodiscard]] std::string_view NoiseNumericLabel(std::size_t index) {
+    switch (index) {
+    case 0U: return EditorText("materialEditor.property.scale", "Scale");
+    case 1U: return EditorText("materialEditor.quality.quality", "Quality");
+    case 2U: return EditorText("materialEditor.property.levels", "Levels");
+    case 3U: return EditorText("materialEditor.property.levelScale", "Level Scale");
+    case 4U: return EditorText("materialEditor.property.outputMin", "Output Min");
+    default: return EditorText("materialEditor.property.outputMax", "Output Max");
+    }
+}
+
+} // namespace
 
 std::vector<std::string> MaterialEditorState::MaterialDiffRows() const {
     std::vector<std::string> rows;
@@ -784,6 +834,14 @@ std::optional<float> MaterialEditorState::GraphConstantComponentValue(
         const std::array<float, 2U> tiling = TextureCoordinateTiling(*node);
         return tiling[componentIndex];
     }
+    if (node != nullptr && node->kind == kb::render::RenderMaterialGraphNodeKind::Noise) {
+        const kb::render::RenderMaterialGraphNoiseSettingsParseResult noise =
+            kb::render::ParseRenderMaterialGraphNoiseSettings(node->parameter.defaultValueHint);
+        if (!noise.settings.has_value() || componentIndex >= kNoiseNumericProperties.size()) {
+            return std::nullopt;
+        }
+        return NoiseNumericValues(*noise.settings)[componentIndex];
+    }
     if (node != nullptr) {
         const std::span<const GraphHintNumericPropertyDefinition> definitions = GraphHintNumericProperties(node->kind);
         if (!definitions.empty()) {
@@ -830,6 +888,15 @@ std::optional<kb::render::RenderMaterialParameterRange> MaterialEditorState::Gra
     if (node != nullptr && node->kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate && componentIndex < 2U) {
         return kb::render::RenderMaterialParameterRange{ .min = 0.0F, .max = 16.0F };
     }
+    if (node != nullptr && node->kind == kb::render::RenderMaterialGraphNodeKind::Noise) {
+        if (componentIndex >= kNoiseNumericProperties.size()) {
+            return std::nullopt;
+        }
+        return kb::render::RenderMaterialParameterRange{
+            .min = kNoiseNumericProperties[componentIndex].rangeMin,
+            .max = kNoiseNumericProperties[componentIndex].rangeMax,
+        };
+    }
     if (node != nullptr) {
         const std::span<const GraphHintNumericPropertyDefinition> definitions = GraphHintNumericProperties(node->kind);
         if (!definitions.empty() && componentIndex < definitions.size()) {
@@ -870,6 +937,23 @@ bool MaterialEditorState::SetGraphConstantComponentValue(
         textureCoordinateNode->parameter.overrideSupported = false;
         if (textureCoordinateNode->parameter.displayName.empty()) {
             textureCoordinateNode->parameter.displayName = GraphNodeDisplayName(textureCoordinateNode->kind);
+        }
+        SetWorkingCopy(std::move(document));
+        SelectNode(nodeId);
+        return true;
+    }
+    if (kb::render::RenderMaterialGraphNode* noiseNode = FindMutableGraphNode(document.graph, nodeId);
+        noiseNode != nullptr && noiseNode->kind == kb::render::RenderMaterialGraphNodeKind::Noise) {
+        kb::render::RenderMaterialGraphNoiseSettingsParseResult noise =
+            kb::render::ParseRenderMaterialGraphNoiseSettings(noiseNode->parameter.defaultValueHint);
+        if (!noise.settings.has_value() || componentIndex >= kNoiseNumericProperties.size()) {
+            return false;
+        }
+        SetNoiseNumericValue(*noise.settings, componentIndex, componentValue);
+        noiseNode->parameter.defaultValueHint = kb::render::RenderMaterialGraphNoiseSettingsHint(*noise.settings);
+        noiseNode->parameter.overrideSupported = false;
+        if (noiseNode->parameter.displayName.empty()) {
+            noiseNode->parameter.displayName = GraphNodeDisplayName(noiseNode->kind);
         }
         SetWorkingCopy(std::move(document));
         SelectNode(nodeId);
@@ -1014,6 +1098,23 @@ bool MaterialEditorState::SetGraphNodeEnumValue(
         node->parameter.defaultValueHint = StaticComponentMaskHintWithChannel(*node, propertyId, option->value == "true");
     } else if (IsTransformSpacePropertyId(propertyId) && IsTransformSpaceNode(node->kind)) {
         node->parameter.defaultValueHint = TransformSpaceHintWithProperty(*node, propertyId, option->value);
+    } else if (node->kind == kb::render::RenderMaterialGraphNodeKind::Noise) {
+        kb::render::RenderMaterialGraphNoiseSettingsParseResult noise =
+            kb::render::ParseRenderMaterialGraphNoiseSettings(node->parameter.defaultValueHint);
+        if (!noise.settings.has_value()) {
+            return false;
+        }
+        if (propertyId == "noise.function") {
+            const std::optional<kb::render::RenderMaterialGraphNoiseFunction> function =
+                kb::render::ParseRenderMaterialGraphNoiseFunction(option->value);
+            if (!function.has_value()) {
+                return false;
+            }
+            noise.settings->function = *function;
+        } else {
+            noise.settings->turbulence = option->value == "true";
+        }
+        node->parameter.defaultValueHint = kb::render::RenderMaterialGraphNoiseSettingsHint(*noise.settings);
     } else if (node->kind == kb::render::RenderMaterialGraphNodeKind::CustomCode &&
         propertyId == "customCode.outputType") {
         const std::optional<kb::render::RenderMaterialGraphPinType> outputType =
@@ -1510,6 +1611,49 @@ std::vector<MaterialEditorGraphNodeProperty> MaterialEditorState::GraphNodePrope
                 .options = options,
                 .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, propertyId),
             });
+        }
+    }
+    if (node->kind == kb::render::RenderMaterialGraphNodeKind::Noise) {
+        // Unreal's Noise details: Function, Turbulence, then the numeric settings.
+        if (const kb::render::RenderMaterialGraphNoiseSettingsParseResult noise =
+                kb::render::ParseRenderMaterialGraphNoiseSettings(node->parameter.defaultValueHint);
+            noise.settings.has_value()) {
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "noise.function",
+                .displayName = std::string{ EditorText("materialEditor.property.function", "Function") },
+                .kind = MaterialEditorGraphNodePropertyKind::Enum,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(std::string{ kb::render::RenderMaterialGraphNoiseFunctionName(noise.settings->function) }),
+                .options = GraphNodeEnumOptions(node->kind, "noise.function"),
+                .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, "noise.function"),
+            });
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "noise.turbulence",
+                .displayName = std::string{ EditorText("materialEditor.property.turbulence", "Turbulence") },
+                .kind = MaterialEditorGraphNodePropertyKind::Enum,
+                .type = kb::render::RenderMaterialParameterType::Bool,
+                .value = EnumValue(noise.settings->turbulence ? "true" : "false"),
+                .options = GraphNodeEnumOptions(node->kind, "noise.turbulence"),
+                .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, "noise.turbulence"),
+            });
+            const std::array<float, 6U> values = NoiseNumericValues(*noise.settings);
+            for (std::size_t componentIndex = 0U; componentIndex < kNoiseNumericProperties.size(); ++componentIndex) {
+                properties.push_back(MaterialEditorGraphNodeProperty{
+                    .nodeId = node->id,
+                    .stableId = std::string{ kNoiseNumericProperties[componentIndex].stableId },
+                    .displayName = std::string{ NoiseNumericLabel(componentIndex) },
+                    .kind = MaterialEditorGraphNodePropertyKind::Numeric,
+                    .type = kb::render::RenderMaterialParameterType::Scalar,
+                    .value = ScalarValue(values[componentIndex]),
+                    .range = kb::render::RenderMaterialParameterRange{
+                        .min = kNoiseNumericProperties[componentIndex].rangeMin,
+                        .max = kNoiseNumericProperties[componentIndex].rangeMax,
+                    },
+                    .componentIndex = componentIndex,
+                });
+            }
         }
     }
     if (IsTransformSpaceNode(node->kind)) {
@@ -3349,6 +3493,20 @@ std::vector<MaterialEditorGraphNodePropertyOption> MaterialEditorState::GraphNod
     }
     if (IsStaticComponentMaskPropertyId(propertyId) &&
         kind == kb::render::RenderMaterialGraphNodeKind::StaticComponentMask) {
+        return {
+            MaterialEditorGraphNodePropertyOption{ .value = "false", .label = std::string{ EditorText("materialEditor.option.off", "Off") } },
+            MaterialEditorGraphNodePropertyOption{ .value = "true", .label = std::string{ EditorText("materialEditor.option.on", "On") } },
+        };
+    }
+    if (propertyId == "noise.function" && kind == kb::render::RenderMaterialGraphNodeKind::Noise) {
+        return {
+            MaterialEditorGraphNodePropertyOption{ .value = "simplex", .label = std::string{ EditorText("materialEditor.option.simplex", "Simplex") } },
+            MaterialEditorGraphNodePropertyOption{ .value = "gradient", .label = std::string{ EditorText("materialEditor.option.gradient", "Gradient") } },
+            MaterialEditorGraphNodePropertyOption{ .value = "value", .label = std::string{ EditorText("materialEditor.option.valueNoise", "Value") } },
+            MaterialEditorGraphNodePropertyOption{ .value = "voronoi", .label = std::string{ EditorText("materialEditor.option.voronoi", "Voronoi") } },
+        };
+    }
+    if (propertyId == "noise.turbulence" && kind == kb::render::RenderMaterialGraphNodeKind::Noise) {
         return {
             MaterialEditorGraphNodePropertyOption{ .value = "false", .label = std::string{ EditorText("materialEditor.option.off", "Off") } },
             MaterialEditorGraphNodePropertyOption{ .value = "true", .label = std::string{ EditorText("materialEditor.option.on", "On") } },

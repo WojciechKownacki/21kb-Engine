@@ -807,14 +807,12 @@ std::string_view GraphShadingModelColorField(const RenderMaterialGraphShaderSour
     return shader.reflection.shadingModel == RenderMaterialShadingModel::Cloth ? "surface.fuzzColor" : "surface.subsurfaceColor";
 }
 
-void AppendMaterialGraphTangentBasis(std::string& wrapper, const RenderMaterialGraphShaderSource& shader) {
-    if (shader.reflection.hasWorldPositionOffset || shader.reflection.hasDisplacement) {
-        wrapper += "    vec3 basisNormal = normalize(cross(dFdx(v_worldPos), dFdy(v_worldPos)));\n";
-        wrapper += "    basisNormal = dot(basisNormal, basisNormal) > 0.0001 ? basisNormal : normalize(v_normal);\n";
-        wrapper += "    basisNormal = dot(basisNormal, v_normal) < 0.0 ? -basisNormal : basisNormal;\n";
-    } else {
-        wrapper += "    vec3 basisNormal = normalize(v_normal);\n";
-    }
+// The shading basis of a pixel, like Unreal's: the interpolated vertex normal renormalized per pixel. World
+// Position Offset and Displacement move the geometry but keep the vertex normals (a material that bends the
+// surface supplies its own normal); a normal rebuilt from screen derivatives of the position would be the flat
+// normal of each triangle and facet every curved surface.
+void AppendMaterialGraphTangentBasis(std::string& wrapper) {
+    wrapper += "    vec3 basisNormal = normalize(v_normal);\n";
     wrapper += "    vec3 vertexTangent = normalize(v_tangent - basisNormal * dot(basisNormal, v_tangent));\n";
     wrapper += "    vec3 fallbackAxis = abs(basisNormal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n";
     wrapper += "    vec3 fallbackTangent = normalize(cross(fallbackAxis, basisNormal));\n";
@@ -1217,7 +1215,7 @@ std::string BuildGraphFragmentWrapperSource(
         }
         if (gbufferPass) {
             const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
-            AppendMaterialGraphTangentBasis(wrapper, shader);
+            AppendMaterialGraphTangentBasis(wrapper);
             if (shader.reflection.hasTangentOutput) {
                 wrapper += "    vec3 materialTangent = basisTangent * surface.tangentOutput.x + basisBitangent * surface.tangentOutput.y + basisNormal * surface.tangentOutput.z;\n";
                 wrapper += "    materialTangent = dot(materialTangent, materialTangent) > 0.0001 ? normalize(materialTangent) : basisTangent;\n";
@@ -1253,7 +1251,7 @@ std::string BuildGraphFragmentWrapperSource(
             }
         } else {
             // MAT-37 DefaultLit: the metallic-roughness forward PBR path.
-            AppendMaterialGraphTangentBasis(wrapper, shader);
+            AppendMaterialGraphTangentBasis(wrapper);
             if (shader.reflection.hasTangentOutput) {
                 wrapper += "    vec3 materialTangent = basisTangent * surface.tangentOutput.x + basisBitangent * surface.tangentOutput.y + basisNormal * surface.tangentOutput.z;\n";
                 wrapper += "    materialTangent = dot(materialTangent, materialTangent) > 0.0001 ? normalize(materialTangent) : basisTangent;\n";

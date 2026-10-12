@@ -752,9 +752,59 @@ void RunGraphShaderDeepCacheRootCookTest() {
 #endif
 
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
+// The Unreal/Unity utility nodes added after the first sweep, cooked for every graph pass rather than only
+// BaseOpaque: the shadow, G-buffer and motion-vector wrappers each compile the node in their own context.
+[[nodiscard]] bool SweepsEveryPass(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case RenderMaterialGraphNodeKind::FlipBook:
+    case RenderMaterialGraphNodeKind::Checkerboard:
+    case RenderMaterialGraphNodeKind::PolarCoordinates:
+    case RenderMaterialGraphNodeKind::Twirl:
+    case RenderMaterialGraphNodeKind::Ellipse:
+    case RenderMaterialGraphNodeKind::Rectangle:
+    case RenderMaterialGraphNodeKind::RoundedRectangle:
+    case RenderMaterialGraphNodeKind::BlendOverlay:
+    case RenderMaterialGraphNodeKind::BlendScreen:
+    case RenderMaterialGraphNodeKind::BlendSoftLight:
+    case RenderMaterialGraphNodeKind::BlendHardLight:
+    case RenderMaterialGraphNodeKind::BlendLinearLight:
+    case RenderMaterialGraphNodeKind::BlendColorBurn:
+    case RenderMaterialGraphNodeKind::BlendColorDodge:
+    case RenderMaterialGraphNodeKind::BlendDarken:
+    case RenderMaterialGraphNodeKind::BlendLighten:
+    case RenderMaterialGraphNodeKind::BlendDifference:
+    case RenderMaterialGraphNodeKind::Contrast:
+    case RenderMaterialGraphNodeKind::HueShift:
+    case RenderMaterialGraphNodeKind::ChannelMixer:
+    case RenderMaterialGraphNodeKind::RemapValueRange:
+    case RenderMaterialGraphNodeKind::Noise:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// The settings a kind is swept with: the default hint, plus every Noise function and Voronoi quality.
+[[nodiscard]] std::vector<std::string> SweepHints(RenderMaterialGraphNodeKind kind) {
+    if (kind != RenderMaterialGraphNodeKind::Noise) {
+        return { std::string{} };
+    }
+    return {
+        std::string{},
+        "gradient true 1 1 6 2 -1 1",
+        "value false 1 1 6 2 -1 1",
+        "voronoi true 1 1 6 2 -1 1",
+        "voronoi true 1 2 3 2 0 1",
+        "voronoi false 2 3 2 2 0 1",
+        "voronoi false 2 4 1 2 0 1",
+        "simplex false 4 1 10 3 0 1",
+    };
+}
+
 // The negator's sweep: every node kind alone, each of its outputs routed into the Material
 // Output, compiled to shader source and cooked by shaderc (BaseOpaque, SPIR-V). Unconnected
-// inputs take the node's defaults, as in the editor.
+// inputs take the node's defaults, as in the editor; a texture input gets a Texture Object.
 void RunGraphShaderEveryNodeOutputCooksTest() {
     std::ostringstream failures;
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Spirv };
@@ -776,10 +826,14 @@ void RunGraphShaderEveryNodeOutputCooksTest() {
             break;
         }
         const std::string kindName{ RenderMaterialGraphNodeKindName(kind) };
+        for (const std::string& hint : SweepHints(kind))
         for (const std::string& outPin : RenderMaterialGraphNodeOutputPinNames(kind)) {
             const RenderMaterialGraphPinType outType = RenderMaterialGraphPinDataType(kind, outPin, true);
             RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
             RenderMaterialGraphNode subject{ .id = 2U, .kind = kind };
+            if (!hint.empty()) {
+                subject.parameter.defaultValueHint = hint;
+            }
             const bool textureOut = outType == RenderMaterialGraphPinType::Texture2D ||
                 outType == RenderMaterialGraphPinType::TextureCube ||
                 outType == RenderMaterialGraphPinType::Texture3D ||
@@ -788,6 +842,14 @@ void RunGraphShaderEveryNodeOutputCooksTest() {
                 subject.parameter.textureRole = "baseColor";
             }
             graph.nodes.push_back(subject);
+            for (const std::string& inPin : RenderMaterialGraphNodeInputPinNames(kind)) {
+                if (RenderMaterialGraphPinDataType(kind, inPin, false) == RenderMaterialGraphPinType::Texture2D) {
+                    RenderMaterialGraphNode textureObject{ .id = 4U, .kind = RenderMaterialGraphNodeKind::TextureObject };
+                    textureObject.parameter.textureRole = "baseColor";
+                    graph.nodes.push_back(textureObject);
+                    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureObject, 4U, "texture", kind, 2U, inPin));
+                }
+            }
             const std::string sampleOut = RenderMaterialGraphNodeOutputPinNames(RenderMaterialGraphNodeKind::TextureSample).front();
             const auto sampleInto = [&](RenderMaterialGraphNodeKind sampler, const std::string& samplerIn, const std::string& samplerOut) {
                 graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = sampler });
@@ -826,7 +888,7 @@ void RunGraphShaderEveryNodeOutputCooksTest() {
                 graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
                 break;
             }
-            const std::string where = kindName + "." + outPin;
+            const std::string where = kindName + (hint.empty() ? std::string{} : "[" + hint + "]") + "." + outPin;
             bool refused = false;
             for (const RenderMaterialGraphDiagnostic& diagnostic :
                  ValidateRenderMaterialGraphDocument(graph, RenderMaterialGraphRenderPath::GpuForward)) {
@@ -844,11 +906,47 @@ void RunGraphShaderEveryNodeOutputCooksTest() {
                 failures << where << ": source: " << (compiled.diagnostics.empty() ? std::string{} : compiled.diagnostics.front().message) << "@@";
                 continue;
             }
-            const RenderMaterialGraphShaderArtifactResult cooked =
-                CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, MakeCookRequest("BaseOpaque"));
-            if (!cooked.Succeeded()) {
-                failures << where << ": shaderc: "
-                         << (cooked.diagnostics.empty() ? std::string{} : cooked.diagnostics.front().message.substr(cooked.diagnostics.front().message.size() > 700U ? cooked.diagnostics.front().message.size() - 700U : 0U)) << "@@";
+            const std::vector<std::string> passes = SweepsEveryPass(kind)
+                ? std::vector<std::string>{ "BaseOpaque", "GBuffer", "ShadowDepth", std::string{ kRenderMaterialGraphMotionVectorsPass } }
+                : std::vector<std::string>{ "BaseOpaque" };
+            for (const std::string& pass : passes) {
+                // The motion vector pass cooks only graphs that move or clip their surface: sweep it Masked.
+                RenderMaterialGraphCompileResult masked;
+                if (pass == kRenderMaterialGraphMotionVectorsPass) {
+                    RenderMaterialGraphDocument maskedGraph = graph;
+                    maskedGraph.blendMode = "masked";
+                    masked = CompileRenderMaterialGraphToShaderSource(
+                        maskedGraph, RenderMaterialGraphBuildContext{ .assetId = 0xC800U + static_cast<std::uint32_t>(kind) });
+                    if (!masked.Succeeded()) {
+                        failures << where << " (" << pass << "): source: " << (masked.diagnostics.empty() ? std::string{} : masked.diagnostics.front().message) << "@@";
+                        continue;
+                    }
+                }
+                const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(
+                    pass == kRenderMaterialGraphMotionVectorsPass ? masked.shader : compiled.shader, backends, MakeCookRequest(pass));
+                if (!cooked.Succeeded()) {
+                    failures << where << " (" << pass << "): shaderc: "
+                             << (cooked.diagnostics.empty() ? std::string{} : cooked.diagnostics.front().message.substr(cooked.diagnostics.front().message.size() > 700U ? cooked.diagnostics.front().message.size() - 700U : 0U)) << "@@";
+                }
+            }
+            if (SweepsEveryPass(kind)) {
+                // Every shader profile the engine ships: DXBC (-O3, warnings as errors), DXIL, GLSL, ESSL, Metal.
+                const std::array<std::pair<kb::assets::bake::ShaderBakePlatform, std::vector<RenderMaterialGraphShaderBackend>>, 4U> profiles{ {
+                    { kb::assets::bake::ShaderBakePlatform::Windows, { RenderMaterialGraphShaderBackend::Dxbc, RenderMaterialGraphShaderBackend::Dxil } },
+                    { kb::assets::bake::ShaderBakePlatform::Linux, { RenderMaterialGraphShaderBackend::Glsl } },
+                    { kb::assets::bake::ShaderBakePlatform::Android, { RenderMaterialGraphShaderBackend::Essl } },
+                    { kb::assets::bake::ShaderBakePlatform::MacOS, { RenderMaterialGraphShaderBackend::Metal } },
+                } };
+                for (const auto& [platform, profileBackends] : profiles) {
+                    RenderMaterialGraphShaderArtifactRequest request = MakeCookRequest("BaseOpaque");
+                    request.shaderPlatform = platform;
+                    const RenderMaterialGraphShaderArtifactResult cooked =
+                        CookRenderMaterialGraphShaderArtifact(compiled.shader, profileBackends, request);
+                    if (!cooked.Succeeded()) {
+                        failures << where << " (" << kb::assets::bake::ShaderBakePlatformName(platform) << "): shaderc: "
+                                 << (cooked.diagnostics.empty() ? std::string{} : cooked.diagnostics.front().message.substr(cooked.diagnostics.front().message.size() > 700U ? cooked.diagnostics.front().message.size() - 700U : 0U)) << "@@";
+                    }
+                }
             }
         }
     }

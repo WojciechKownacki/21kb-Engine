@@ -152,7 +152,6 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::PartialDerivativeX:
     case RenderMaterialGraphNodeKind::PartialDerivativeY:
     case RenderMaterialGraphNodeKind::BlackBody:
-    case RenderMaterialGraphNodeKind::Noise:
     case RenderMaterialGraphNodeKind::VectorNoise:
     case RenderMaterialGraphNodeKind::ColorRamp:
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
@@ -168,6 +167,11 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (outputPin && pin == "y") return PinId(nodeKind, direction, 3U);
         if (outputPin && pin == "z") return PinId(nodeKind, direction, 4U);
         if (outputPin && pin == "w") return PinId(nodeKind, direction, 5U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::Noise:
+        if (!outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "filterWidth") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::MakeVector:
         if (!outputPin && pin == "x") return PinId(nodeKind, direction, 1U);
@@ -551,6 +555,138 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::WorldPosition:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         if (outputPin && pin == "xyz") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+        if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "textureSize") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "worldPosition") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "projectionTransitionContrast") return PinId(nodeKind, direction, 4U);
+        if (!outputPin && pin == "worldSpaceNormal") return PinId(nodeKind, direction, 5U);
+        if (outputPin && pin == "xyzTexture") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "xyTexture") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "zTexture") return PinId(nodeKind, direction, 3U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::FlipBook:
+        if (!outputPin && pin == "animationPhase") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "numberOfRows") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "numberOfColumns") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "uv") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::Checkerboard:
+        if (!outputPin && pin == "uv") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "colorA") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "colorB") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "frequency") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::PolarCoordinates:
+        if (!outputPin && pin == "uv") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "center") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "radialScale") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "lengthScale") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::Twirl:
+        if (!outputPin && pin == "uv") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "center") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "strength") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "offset") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::Ellipse:
+        if (!outputPin && pin == "uv") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "width") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "height") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::Rectangle:
+        if (!outputPin && pin == "uv") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "width") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "height") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::RoundedRectangle:
+        if (!outputPin && pin == "uv") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "width") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "height") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "radius") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::BlendOverlay:
+        if (!outputPin && pin == "base") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "blend") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::BlendScreen:
+        if (!outputPin && pin == "base") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "blend") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::BlendSoftLight:
+        if (!outputPin && pin == "base") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "blend") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::BlendHardLight:
+        if (!outputPin && pin == "base") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "blend") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::BlendLinearLight:
+        if (!outputPin && pin == "base") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "blend") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::BlendColorBurn:
+        if (!outputPin && pin == "base") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "blend") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::BlendColorDodge:
+        if (!outputPin && pin == "base") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "blend") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::BlendDarken:
+        if (!outputPin && pin == "base") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "blend") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::BlendLighten:
+        if (!outputPin && pin == "base") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "blend") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::BlendDifference:
+        if (!outputPin && pin == "base") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "blend") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::Contrast:
+        if (!outputPin && pin == "input") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "contrast") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::HueShift:
+        if (!outputPin && pin == "hueShiftPercentage") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "color") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::ChannelMixer:
+        if (!outputPin && pin == "input") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "red") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "green") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "blue") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::RemapValueRange:
+        if (!outputPin && pin == "input") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "inputLow") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "inputHigh") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "targetLow") return PinId(nodeKind, direction, 4U);
+        if (!outputPin && pin == "targetHigh") return PinId(nodeKind, direction, 5U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     }
     return 0U;
