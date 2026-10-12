@@ -10,6 +10,7 @@
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/resources/ShapeMeshes.hpp"
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
 #include "kb/render/shadow/PointShadowUniforms.hpp"
 #include "../src/scene/pipeline/MeshPipelinePassPolicy.hpp"
@@ -380,6 +381,14 @@ struct ForwardRenderProbe {
     return request;
 }
 
+// A mesh drawn by the graph's own vertex shader (one identity instance) instead of the harness triangle;
+// viewProjection maps it into the 64x64 target.
+struct HarnessMesh {
+    bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
+    bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
+    std::array<float, 16U> viewProjection{};
+};
+
 class ForwardRenderHarness {
 public:
     [[nodiscard]] bool Init(bgfx::RendererType::Enum renderer = bgfx::RendererType::Direct3D11) {
@@ -427,7 +436,7 @@ public:
         return bgfx::isValid(vbh_) && bgfx::isValid(fb_);
     }
 
-    [[nodiscard]] std::vector<std::uint8_t> RenderPixels(bgfx::ProgramHandle program, bgfx::UniformHandle sampler, bgfx::TextureHandle texture, float time = 0.0F, float instanceRandom = 0.0F, float objectRadius = 0.0F, std::uint32_t samplerFlags = UINT32_MAX, std::uint32_t clearColor = 0x000000ffU, std::uint64_t extraState = 0U, bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE, float dynamicR = 0.0F, float dynamicG = 0.0F, float dynamicB = 0.0F, float dynamicA = 0.0F, bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE, bgfx::UniformHandle graphUniform = BGFX_INVALID_HANDLE, const std::array<float, 4U>* graphUniformValue = nullptr, bool directionalLightFromPositiveX = false, float normalScale = 1.0F) {
+    [[nodiscard]] std::vector<std::uint8_t> RenderPixels(bgfx::ProgramHandle program, bgfx::UniformHandle sampler, bgfx::TextureHandle texture, float time = 0.0F, float instanceRandom = 0.0F, float objectRadius = 0.0F, std::uint32_t samplerFlags = UINT32_MAX, std::uint32_t clearColor = 0x000000ffU, std::uint64_t extraState = 0U, bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE, float dynamicR = 0.0F, float dynamicG = 0.0F, float dynamicB = 0.0F, float dynamicA = 0.0F, bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE, bgfx::UniformHandle graphUniform = BGFX_INVALID_HANDLE, const std::array<float, 4U>* graphUniformValue = nullptr, bool directionalLightFromPositiveX = false, float normalScale = 1.0F, const HarnessMesh* mesh = nullptr) {
         std::array<float, 128U> lightDirKind{};
         std::array<float, 128U> lightPositionRange{};
         std::array<float, 128U> lightColorIntensity{};
@@ -506,7 +515,24 @@ public:
         if (bgfx::isValid(sceneColorTexture)) {
             bgfx::setTexture(4U, uSceneColor_, sceneColorTexture);
         }
-        bgfx::setVertexBuffer(0, vbh_);
+        if (mesh != nullptr) {
+            const std::array<float, 16U> identity{
+                1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F,
+                0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+            bgfx::setViewTransform(0, identity.data(), mesh->viewProjection.data());
+            bgfx::InstanceDataBuffer instanceBuffer{};
+            Require(bgfx::getAvailInstanceDataBuffer(1U, RenderInstanceBuffer::Stride()) == 1U,
+                "GPU harness could not allocate the mesh instance");
+            bgfx::allocInstanceDataBuffer(&instanceBuffer, 1U, RenderInstanceBuffer::Stride());
+            auto* instance = reinterpret_cast<RenderInstanceData*>(instanceBuffer.data);
+            instance->model = identity;
+            instance->color = { 1.0F, 1.0F, 1.0F, 1.0F };
+            bgfx::setVertexBuffer(0, mesh->vertices);
+            bgfx::setIndexBuffer(mesh->indices);
+            bgfx::setInstanceDataBuffer(&instanceBuffer, 0U, 1U);
+        } else {
+            bgfx::setVertexBuffer(0, vbh_);
+        }
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | extraState);
         bgfx::submit(0, program);
         bgfx::frame();
@@ -4124,7 +4150,7 @@ void RunForwardGraphExpLogSrgbNodesCookTest() {
         { RenderMaterialGraphNodeKind::PartialDerivativeY, "dFdy(", "value", 0x500DU },
         { RenderMaterialGraphNodeKind::SphereMask, "(1.0 - distance(", "a", 0x500EU },
         { RenderMaterialGraphNodeKind::BlackBody, "kbBlackBody(", "value", 0x500FU },
-        { RenderMaterialGraphNodeKind::Noise, "kbValueNoise(", "value", 0x5010U },
+        { RenderMaterialGraphNodeKind::Noise, "kbSimplexNoise(", "value", 0x5010U },
         { RenderMaterialGraphNodeKind::VectorNoise, "kbVectorNoise(", "value", 0x5011U },
         { RenderMaterialGraphNodeKind::Sobol, "kbSobol2(", "cell", 0x501CU },
         // AppendVector concatenates its float3 "a" with scalar "b" -> vec4(a.xyz, b.x); the grey feeds "a".
@@ -5024,7 +5050,7 @@ void RunForwardGraphWorldSpaceNodesTest() {
 
 // MAT-50: the Noise node must produce real spatial variation on the GPU. World position (scaled up so the
 // harness quad spans several noise cells) feeds Noise -> baseColor (unlit); pixels sampled across the surface
-// must span a meaningful brightness range, proving the value-noise field actually varies per fragment.
+// must span a meaningful brightness range, proving the noise field (Unreal's default Simplex) varies per fragment.
 void RunForwardGraphNoiseRendersTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat50_noise";
     std::error_code error;
@@ -5051,7 +5077,7 @@ void RunForwardGraphNoiseRendersTest() {
 
     const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x5100U });
     Require(compiled.Succeeded(), "KBMAT-MAT50: noise graph must compile");
-    Require(compiled.shader.source.find("kbValueNoise(") != std::string::npos, "KBMAT-MAT50: Noise node must call the value-noise helper");
+    Require(compiled.shader.source.find("kbSimplexNoise(") != std::string::npos, "KBMAT-MAT50: Noise node must call Unreal's default Simplex function");
     const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
     Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT50: noise graph must cook");
 
@@ -6051,6 +6077,594 @@ void RunFxaaAfterTonemapGpuTest() {
     display.Shutdown();
     harness.Shutdown();
 }
+
+// Unreal keeps a surface's interpolated vertex normal, renormalized per pixel, under World Position Offset.
+// The lit wrapper used to rebuild the normal from screen derivatives of the position whenever WPO or
+// Displacement was connected - the flat normal of each triangle - so a sphere shaded in facets. The editor's
+// preview sphere is drawn by the graph's own vertex shader, lit from +X with WPO = 0 (the geometry does not
+// move) and without WPO. Orthographic, n.x grows linearly across the disc, so the brightness has no kinks:
+// the largest second difference of red along rows and columns inside the disc stays at quantization level.
+[[nodiscard]] int LargestBrightnessKinkInsideDisc(const std::vector<std::uint8_t>& pixels) {
+    const auto red = [&pixels](int x, int y) {
+        return static_cast<int>(pixels[(static_cast<std::size_t>(y) * 64U + static_cast<std::size_t>(x)) * 4U]);
+    };
+    const auto inside = [](int x, int y) {
+        const float dx = static_cast<float>(x) + 0.5F - 32.0F;
+        const float dy = static_cast<float>(y) + 0.5F - 32.0F;
+        return dx * dx + dy * dy < 22.0F * 22.0F;
+    };
+    int largest = 0;
+    for (int y = 1; y < 63; ++y) {
+        for (int x = 1; x < 63; ++x) {
+            if (inside(x - 1, y) && inside(x + 1, y)) {
+                largest = std::max(largest, std::abs(red(x - 1, y) - 2 * red(x, y) + red(x + 1, y)));
+            }
+            if (inside(x, y - 1) && inside(x, y + 1)) {
+                largest = std::max(largest, std::abs(red(x, y - 1) - 2 * red(x, y) + red(x, y + 1)));
+            }
+        }
+    }
+    return largest;
+}
+
+void RunForwardGraphPixelNormalSmoothSphereTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "pixel_normal_sphere";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    const auto buildGraph = [](bool worldPositionOffset) {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        RenderMaterialGraphNode albedo{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
+        // A dark albedo keeps the 9-unit sun below white; no specular, so only N.L shapes the brightness.
+        albedo.parameter.defaultValueHint = "0.06 0.06 0.06 1";
+        RenderMaterialGraphNode roughness{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantScalar };
+        roughness.parameter.defaultValueHint = "1";
+        RenderMaterialGraphNode specular{ .id = 5U, .kind = RenderMaterialGraphNodeKind::ConstantScalar };
+        specular.parameter.defaultValueHint = "0";
+        graph.nodes.push_back(albedo);
+        graph.nodes.push_back(roughness);
+        graph.nodes.push_back(specular);
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "specular"));
+        if (worldPositionOffset) {
+            RenderMaterialGraphNode offset{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantVector };
+            offset.parameter.defaultValueHint = "0 0 0";
+            graph.nodes.push_back(offset);
+            graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantVector, 4U, "xyz", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "worldPositionOffset"));
+        }
+        return graph;
+    };
+    const RenderMaterialGraphCompileResult offsetCompiled = CompileRenderMaterialGraphToShaderSource(buildGraph(true), RenderMaterialGraphBuildContext{ .assetId = 0xA100U });
+    const RenderMaterialGraphCompileResult plainCompiled = CompileRenderMaterialGraphToShaderSource(buildGraph(false), RenderMaterialGraphBuildContext{ .assetId = 0xA101U });
+    Require(offsetCompiled.Succeeded() && plainCompiled.Succeeded(), "Pixel normal: sphere graphs must compile");
+    const RenderMaterialGraphShaderArtifactResult offsetCooked = CookRenderMaterialGraphShaderArtifact(offsetCompiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    const RenderMaterialGraphShaderArtifactResult plainCooked = CookRenderMaterialGraphShaderArtifact(plainCompiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(offsetCooked.Succeeded() && offsetCooked.artifact.has_value() && plainCooked.Succeeded() && plainCooked.artifact.has_value(),
+        "Pixel normal: sphere graphs must cook");
+    const RenderMaterialGraphShaderBinary* graphVs = offsetCooked.artifact->FindVertexBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(graphVs != nullptr && graphVs->byteSize > 0U, "Pixel normal: the WPO graph must cook its own vertex shader");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(std::filesystem::path{ graphVs->binaryPath });
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "Pixel normal: Direct3D11 device unavailable; cannot run the sphere shading proof\n");
+        Require(false, "Pixel normal: A real GPU device is required to prove smooth sphere shading");
+        return;
+    }
+    // Radius 0.5 keeps the harness camera (0, 0, 1) outside the sphere, looking at its +Z hemisphere.
+    const RenderMeshAssetData sphere = ShapeMeshes::Sphere(0.5F, "Preview");
+    HarnessMesh mesh{};
+    mesh.vertices = bgfx::createVertexBuffer(
+        bgfx::copy(sphere.tangentVertices.data(), static_cast<std::uint32_t>(sphere.tangentVertices.size() * sizeof(RenderStaticMeshVertexP3N3T4UV2))),
+        RenderStaticMeshVertexLayout(RenderVertexFormat::P3N3T4UV2));
+    mesh.indices = bgfx::createIndexBuffer(
+        bgfx::copy(sphere.indices32.data(), static_cast<std::uint32_t>(sphere.indices32.size() * sizeof(std::uint32_t))), BGFX_BUFFER_INDEX32);
+    // Orthographic from +Z: x and y scaled to 0.9 of the target, z from 0.5..-0.5 into Direct3D's 0..1 depth.
+    mesh.viewProjection = { 1.8F, 0.0F, 0.0F, 0.0F, 0.0F, 1.8F, 0.0F, 0.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F, 0.0F, 0.5F, 1.0F };
+    const bgfx::ProgramHandle offsetProgram = BuildGraphProgram(vsBytes, *offsetCooked.artifact);
+    const bgfx::ProgramHandle plainProgram = BuildGraphProgram(vsBytes, *plainCooked.artifact);
+    Require(bgfx::isValid(mesh.vertices) && bgfx::isValid(mesh.indices) && bgfx::isValid(offsetProgram) && bgfx::isValid(plainProgram),
+        "Pixel normal: sphere mesh and programs must be created");
+
+    const auto render = [&](bgfx::ProgramHandle program) {
+        return harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, UINT32_MAX, 0x000000ffU,
+            BGFX_STATE_CULL_CCW, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, 0.0F, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, nullptr, true, 1.0F, &mesh);
+    };
+    const std::vector<std::uint8_t> offsetPixels = render(offsetProgram);
+    const std::vector<std::uint8_t> plainPixels = render(plainProgram);
+    const int offsetKink = LargestBrightnessKinkInsideDisc(offsetPixels);
+    const int plainKink = LargestBrightnessKinkInsideDisc(plainPixels);
+    std::fprintf(stderr, "Pixel normal: largest brightness kink inside the sphere: with WPO %d, without WPO %d\n", offsetKink, plainKink);
+    const ForwardRenderProbe litSide = ForwardRenderHarness::ProbeAt(offsetPixels, 50U, 32U);
+    const ForwardRenderProbe darkSide = ForwardRenderHarness::ProbeAt(offsetPixels, 14U, 32U);
+    Require(litSide.r > darkSide.r + 60U, "Pixel normal: the sphere must be lit from +X (proof is not measuring a black image)");
+    Require(plainKink <= 6, "Pixel normal: the sphere without WPO must shade smoothly across triangle edges");
+    Require(offsetKink <= 6,
+        "Pixel normal: a sphere with World Position Offset must shade with the per-pixel normalized vertex normal, not faceted triangle normals");
+
+    bgfx::destroy(offsetProgram);
+    bgfx::destroy(plainProgram);
+    bgfx::destroy(mesh.indices);
+    bgfx::destroy(mesh.vertices);
+    harness.Shutdown();
+}
+
+// The Unreal/Unity utility nodes, each evaluated on the GPU and read back against the node's formula computed
+// here: an unlit graph routes the node into Base Color (a scalar through Multiply), the harness triangle's
+// UV is (x + 0.5, y + 0.5) / 64 and its world position (clip x, clip y, 0) with normal +Z.
+struct UtilityNodeExpectation {
+    std::uint32_t x = 32U;
+    std::uint32_t y = 32U;
+    std::array<float, 3U> rgb{};
+};
+
+struct UtilityNodeCase {
+    std::string name;
+    RenderMaterialGraphDocument graph;
+    std::vector<UtilityNodeExpectation> expectations;
+    std::string sourceMarker;
+};
+
+[[nodiscard]] float Saturate01(float value) noexcept {
+    return std::clamp(value, 0.0F, 1.0F);
+}
+
+[[nodiscard]] float HarnessUv(std::uint32_t pixel) noexcept {
+    return (static_cast<float>(pixel) + 0.5F) / 64.0F;
+}
+
+[[nodiscard]] RenderMaterialGraphNode UtilityConstant(std::uint32_t id, RenderMaterialGraphNodeKind kind, std::string hint) {
+    RenderMaterialGraphNode node{ .id = id, .kind = kind };
+    node.parameter.defaultValueHint = std::move(hint);
+    return node;
+}
+
+[[nodiscard]] std::string_view UtilityConstantPin(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::ConstantVector:
+        return "xyz";
+    case RenderMaterialGraphNodeKind::ConstantVector2:
+        return "xy";
+    case RenderMaterialGraphNodeKind::ConstantColor:
+        return "rgba";
+    default:
+        return "value";
+    }
+}
+
+// subject (id 2) -> Base Color (or -> Multiply(1) -> Base Color for scalar outputs); inputs are constants.
+[[nodiscard]] RenderMaterialGraphDocument UtilityGraph(
+    RenderMaterialGraphNode subject,
+    std::string_view outputPin,
+    const std::vector<std::tuple<std::string, RenderMaterialGraphNodeKind, std::string>>& constants) {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = "unlit";
+    subject.id = 2U;
+    graph.nodes.push_back(subject);
+    std::uint32_t nextId = 10U;
+    for (const auto& [pin, kind, hint] : constants) {
+        graph.nodes.push_back(UtilityConstant(nextId, kind, hint));
+        graph.links.push_back(MakeLink(kind, nextId, std::string{ UtilityConstantPin(kind) }, subject.kind, 2U, pin));
+        ++nextId;
+    }
+    const RenderMaterialGraphPinType outputType = RenderMaterialGraphPinDataType(subject.kind, outputPin, true);
+    if (outputType == RenderMaterialGraphPinType::Float) {
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::Multiply });
+        graph.links.push_back(MakeLink(subject.kind, 2U, std::string{ outputPin }, RenderMaterialGraphNodeKind::Multiply, 3U, "a"));
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::Multiply, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    } else {
+        graph.links.push_back(MakeLink(subject.kind, 2U, std::string{ outputPin }, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    }
+    return graph;
+}
+
+[[nodiscard]] std::array<float, 3U> UnrealBlendReference(RenderMaterialGraphNodeKind kind, std::array<float, 3U> base, std::array<float, 3U> blend) {
+    std::array<float, 3U> result{};
+    for (std::size_t c = 0U; c < 3U; ++c) {
+        const float b = base[c];
+        const float l = blend[c];
+        switch (kind) {
+        case RenderMaterialGraphNodeKind::BlendOverlay: result[c] = b < 0.5F ? 2.0F * b * l : 1.0F - 2.0F * (1.0F - b) * (1.0F - l); break;
+        case RenderMaterialGraphNodeKind::BlendScreen: result[c] = 1.0F - (1.0F - b) * (1.0F - l); break;
+        case RenderMaterialGraphNodeKind::BlendSoftLight:
+            result[c] = l < 0.5F ? 2.0F * b * l + b * b * (1.0F - 2.0F * l) : std::sqrt(b) * (2.0F * l - 1.0F) + 2.0F * b * (1.0F - l);
+            break;
+        case RenderMaterialGraphNodeKind::BlendHardLight: result[c] = l < 0.5F ? 2.0F * b * l : 1.0F - 2.0F * (1.0F - b) * (1.0F - l); break;
+        case RenderMaterialGraphNodeKind::BlendLinearLight: result[c] = b + 2.0F * l - 1.0F; break;
+        case RenderMaterialGraphNodeKind::BlendColorBurn: result[c] = 1.0F - (1.0F - b) / l; break;
+        case RenderMaterialGraphNodeKind::BlendColorDodge: result[c] = b / (1.0F - l); break;
+        case RenderMaterialGraphNodeKind::BlendDarken: result[c] = std::min(b, l); break;
+        case RenderMaterialGraphNodeKind::BlendLighten: result[c] = std::max(b, l); break;
+        case RenderMaterialGraphNodeKind::BlendDifference: result[c] = std::abs(b - l); break;
+        default: result[c] = b; break;
+        }
+    }
+    return result;
+}
+
+// Unreal's Value noise at a lattice point is the lattice hash itself (the fade weights are 0).
+[[nodiscard]] float ValueNoiseLatticeReference(float x, float y, float z) {
+    float px = x * 0.3183099F + 0.1F;
+    float py = y * 0.3183099F + 0.1F;
+    float pz = z * 0.3183099F + 0.1F;
+    px = (px - std::floor(px)) * 17.0F;
+    py = (py - std::floor(py)) * 17.0F;
+    pz = (pz - std::floor(pz)) * 17.0F;
+    const float product = px * py * pz * (px + py + pz);
+    return product - std::floor(product);
+}
+
+[[nodiscard]] std::vector<UtilityNodeCase> BuildUtilityNodeCases() {
+    using K = RenderMaterialGraphNodeKind;
+    std::vector<UtilityNodeCase> cases;
+    const std::array<float, 3U> base{ 0.3F, 0.6F, 0.8F };
+    const std::array<float, 3U> blend{ 0.7F, 0.2F, 0.5F };
+    for (const K kind : { K::BlendOverlay, K::BlendScreen, K::BlendSoftLight, K::BlendHardLight, K::BlendLinearLight,
+             K::BlendColorBurn, K::BlendColorDodge, K::BlendDarken, K::BlendLighten, K::BlendDifference }) {
+        std::array<float, 3U> expected = UnrealBlendReference(kind, base, blend);
+        for (float& channel : expected) {
+            channel = Saturate01(channel);
+        }
+        cases.push_back(UtilityNodeCase{
+            .name = std::string{ RenderMaterialGraphNodeKindName(kind) },
+            .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = kind }, "value",
+                { { "base", K::ConstantVector, "0.3 0.6 0.8" }, { "blend", K::ConstantVector, "0.7 0.2 0.5" } }),
+            .expectations = { UtilityNodeExpectation{ .rgb = expected } },
+            .sourceMarker = "blendBase2",
+        });
+    }
+    {
+        const float midpoint = std::pow(0.5F, 2.2F);
+        const auto contrast = [midpoint](float value) { return Saturate01((value - midpoint) * 1.5F + midpoint); };
+        cases.push_back(UtilityNodeCase{
+            .name = "Contrast",
+            .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::Contrast }, "value",
+                { { "input", K::ConstantVector, "0.3 0.5 0.8" }, { "contrast", K::ConstantScalar, "1.5" } }),
+            .expectations = { UtilityNodeExpectation{ .rgb = { contrast(0.3F), contrast(0.5F), contrast(0.8F) } } },
+            .sourceMarker = "0.217637640824031",
+        });
+    }
+    {
+        // Rodrigues' rotation of (0.8, 0.3, 0.1) about the grey axis by a quarter turn.
+        const std::array<float, 3U> color{ 0.8F, 0.3F, 0.1F };
+        const float k = 1.0F / std::sqrt(3.0F);
+        const float angle = 0.25F * 6.28318530718F;
+        const float cosine = std::cos(angle);
+        const float sine = std::sin(angle);
+        const float kDotC = k * (color[0] + color[1] + color[2]);
+        const std::array<float, 3U> kCrossC{ k * (color[2] - color[1]), k * (color[0] - color[2]), k * (color[1] - color[0]) };
+        std::array<float, 3U> expected{};
+        for (std::size_t c = 0U; c < 3U; ++c) {
+            expected[c] = Saturate01(color[c] * cosine + kCrossC[c] * sine + k * kDotC * (1.0F - cosine));
+        }
+        cases.push_back(UtilityNodeCase{
+            .name = "HueShift",
+            .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::HueShift }, "value",
+                { { "color", K::ConstantVector, "0.8 0.3 0.1" }, { "hueShiftPercentage", K::ConstantScalar, "0.25" } }),
+            .expectations = { UtilityNodeExpectation{ .rgb = expected } },
+            .sourceMarker = "0.577350269190",
+        });
+    }
+    cases.push_back(UtilityNodeCase{
+        .name = "ChannelMixer",
+        .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::ChannelMixer }, "value",
+            { { "input", K::ConstantVector, "0.2 0.5 0.9" }, { "red", K::ConstantVector, "0.5 0.5 0" }, { "blue", K::ConstantVector, "0 0.25 0.25" } }),
+        .expectations = { UtilityNodeExpectation{ .rgb = { 0.35F, 0.5F, 0.35F } } },
+        .sourceMarker = "mixerInput2",
+    });
+    cases.push_back(UtilityNodeCase{
+        .name = "RemapValueRange",
+        .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::RemapValueRange }, "value",
+            { { "input", K::ConstantScalar, "0.25" }, { "inputLow", K::ConstantScalar, "0" }, { "inputHigh", K::ConstantScalar, "0.5" },
+              { "targetLow", K::ConstantScalar, "0.2" }, { "targetHigh", K::ConstantScalar, "0.6" } }),
+        .expectations = { UtilityNodeExpectation{ .rgb = { 0.4F, 0.4F, 0.4F } } },
+        .sourceMarker = "remapInputRange2",
+    });
+    {
+        const float du = HarnessUv(48U) - 0.5F;
+        const float dv = HarnessUv(48U) - 0.5F;
+        cases.push_back(UtilityNodeCase{
+            .name = "PolarCoordinates",
+            .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::PolarCoordinates }, "value", {}),
+            .expectations = { UtilityNodeExpectation{ .x = 48U, .y = 48U,
+                .rgb = { std::sqrt(du * du + dv * dv) * 2.0F, std::atan2(du, dv) / 6.28F, 0.0F } } },
+            .sourceMarker = "polarDelta2",
+        });
+    }
+    {
+        const float dx = HarnessUv(40U) - 0.5F;
+        const float dy = HarnessUv(24U) - 0.5F;
+        const float angle = 1.0F * std::sqrt(dx * dx + dy * dy);
+        cases.push_back(UtilityNodeCase{
+            .name = "Twirl",
+            .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::Twirl }, "value", { { "strength", K::ConstantScalar, "1" } }),
+            .expectations = { UtilityNodeExpectation{ .x = 40U, .y = 24U,
+                .rgb = { std::cos(angle) * dx - std::sin(angle) * dy + 0.5F, std::sin(angle) * dx + std::cos(angle) * dy + 0.5F, 0.0F } } },
+            .sourceMarker = "twirlAngle2",
+        });
+    }
+    // Phase 0.6 of a 2x2 sheet is frame 2: column 0, row 1.
+    cases.push_back(UtilityNodeCase{
+        .name = "FlipBook",
+        .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::FlipBook }, "value",
+            { { "animationPhase", K::ConstantScalar, "0.6" }, { "numberOfRows", K::ConstantScalar, "2" }, { "numberOfColumns", K::ConstantScalar, "2" } }),
+        .expectations = { UtilityNodeExpectation{ .x = 16U, .y = 16U, .rgb = { HarnessUv(16U) * 0.5F, (HarnessUv(16U) + 1.0F) * 0.5F, 0.0F } } },
+        .sourceMarker = "flipBookFrame2",
+    });
+    {
+        // Unity's antialiased checker at a footprint of 2/64 UV per pixel (Frequency 2).
+        const auto checker = [](std::uint32_t px, std::uint32_t py) {
+            const float footprint = 2.0F / 64.0F;
+            const auto axis = [footprint](float uv) {
+                const float scaled = (uv + 0.5F) * 2.0F;
+                const float wrapped = scaled + 0.25F - std::floor(scaled + 0.25F);
+                return std::clamp((4.0F * std::abs(wrapped - 0.5F) - 1.0F) * (0.35F / footprint), -1.0F, 1.0F);
+            };
+            const float limiter = std::sqrt(Saturate01(1.1F - footprint));
+            const float alpha = Saturate01(0.5F + 0.5F * axis(HarnessUv(px)) * axis(HarnessUv(py)) * limiter);
+            const float value = 0.2F + (0.7F - 0.2F) * alpha;
+            return std::array<float, 3U>{ value, value, value };
+        };
+        cases.push_back(UtilityNodeCase{
+            .name = "Checkerboard",
+            .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::Checkerboard }, "value", { { "frequency", K::ConstantVector2, "2 2" } }),
+            .expectations = { UtilityNodeExpectation{ .x = 8U, .y = 8U, .rgb = checker(8U, 8U) }, UtilityNodeExpectation{ .x = 24U, .y = 8U, .rgb = checker(24U, 8U) } },
+            .sourceMarker = "checkerFootprint2",
+        });
+    }
+    for (const K kind : { K::Ellipse, K::Rectangle, K::RoundedRectangle }) {
+        cases.push_back(UtilityNodeCase{
+            .name = std::string{ RenderMaterialGraphNodeKindName(kind) },
+            .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = kind }, "value", {}),
+            .expectations = {
+                UtilityNodeExpectation{ .x = 32U, .y = 32U, .rgb = { 1.0F, 1.0F, 1.0F } },
+                UtilityNodeExpectation{ .x = 2U, .y = 2U, .rgb = { 0.0F, 0.0F, 0.0F } },
+                UtilityNodeExpectation{ .x = 8U, .y = 32U, .rgb = { 0.0F, 0.0F, 0.0F } },
+            },
+            .sourceMarker = "fwidth(",
+        });
+    }
+    {
+        // Value noise, one level, no turbulence: lerp(0.2, 0.6, hash) at the lattice point (3, 5, 7); with
+        // turbulence the octave is |2 hash - 1|; a Filter Width of 1 fades the only level out entirely.
+        const float hash = ValueNoiseLatticeReference(3.0F, 5.0F, 7.0F);
+        const float smooth = 0.2F + 0.4F * hash;
+        const float turbulent = 0.2F + 0.4F * std::abs(hash * 2.0F - 1.0F);
+        RenderMaterialGraphNode smoothNoise{ .kind = K::Noise };
+        smoothNoise.parameter.defaultValueHint = "value false 1 1 1 2 0.2 0.6";
+        RenderMaterialGraphNode turbulentNoise{ .kind = K::Noise };
+        turbulentNoise.parameter.defaultValueHint = "value true 1 1 1 2 0.2 0.6";
+        cases.push_back(UtilityNodeCase{
+            .name = "Noise value",
+            .graph = UtilityGraph(smoothNoise, "value", { { "value", K::ConstantVector, "3 5 7" } }),
+            .expectations = { UtilityNodeExpectation{ .rgb = { smooth, smooth, smooth } } },
+            .sourceMarker = "kbValueNoise(noisePosition2)",
+        });
+        cases.push_back(UtilityNodeCase{
+            .name = "Noise value turbulence",
+            .graph = UtilityGraph(turbulentNoise, "value", { { "value", K::ConstantVector, "3 5 7" } }),
+            .expectations = { UtilityNodeExpectation{ .rgb = { turbulent, turbulent, turbulent } } },
+            .sourceMarker = "abs((kbValueNoise(",
+        });
+        cases.push_back(UtilityNodeCase{
+            .name = "Noise filter width",
+            .graph = UtilityGraph(turbulentNoise, "value", { { "value", K::ConstantVector, "3 5 7" }, { "filterWidth", K::ConstantScalar, "1" } }),
+            .expectations = { UtilityNodeExpectation{ .rgb = { 0.2F, 0.2F, 0.2F } } },
+            .sourceMarker = "noiseFilterWidth2",
+        });
+    }
+    return cases;
+}
+
+void RequirePixelNear(const ForwardRenderProbe& probe, const std::array<float, 3U>& expected, const std::string& what) {
+    const std::array<int, 3U> actual{ probe.r, probe.g, probe.b };
+    for (std::size_t c = 0U; c < 3U; ++c) {
+        const int wanted = static_cast<int>(std::lround(Saturate01(expected[c]) * 255.0F));
+        if (std::abs(actual[c] - wanted) > 3) {
+            std::fprintf(stderr, "%s: channel %zu is %d, the formula gives %d (rgb %d %d %d)\n",
+                what.c_str(), c, actual[c], wanted, actual[0], actual[1], actual[2]);
+            Require(false, "Utility nodes: the GPU result must match the node's formula");
+        }
+    }
+}
+
+void RunForwardGraphUtilityNodeFormulasTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "utility_node_formulas";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "Utility nodes: harness vertex shader must cook");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "Utility nodes: Direct3D11 device unavailable; cannot read the node formulas back\n");
+        Require(false, "Utility nodes: A real GPU device is required to prove the node formulas");
+        return;
+    }
+    std::uint32_t assetId = 0xA200U;
+    for (const UtilityNodeCase& testCase : BuildUtilityNodeCases()) {
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(testCase.graph, RenderMaterialGraphBuildContext{ .assetId = assetId++ });
+        if (!compiled.Succeeded()) {
+            std::fprintf(stderr, "%s: %s\n", testCase.name.c_str(), compiled.diagnostics.empty() ? "" : compiled.diagnostics.front().message.c_str());
+        }
+        Require(compiled.Succeeded(), "Utility nodes: the graph must compile");
+        if (compiled.shader.source.find(testCase.sourceMarker) == std::string::npos) {
+            std::fprintf(stderr, "%s: generated source lacks '%s'\n", testCase.name.c_str(), testCase.sourceMarker.c_str());
+            Require(false, "Utility nodes: the node must emit its formula");
+        }
+        const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+        Require(cooked.Succeeded() && cooked.artifact.has_value(), "Utility nodes: the graph must cook to DXBC");
+        const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *cooked.artifact);
+        Require(bgfx::isValid(program), "Utility nodes: the program must link");
+        const std::vector<std::uint8_t> pixels = harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+        for (const UtilityNodeExpectation& expectation : testCase.expectations) {
+            RequirePixelNear(ForwardRenderHarness::ProbeAt(pixels, expectation.x, expectation.y), expectation.rgb,
+                testCase.name + " at (" + std::to_string(expectation.x) + ", " + std::to_string(expectation.y) + ")");
+        }
+        bgfx::destroy(program);
+    }
+    harness.Shutdown();
+}
+
+// Unreal's WorldAlignedTexture on the harness triangle (world position (clip x, clip y, 0), normal +Z): a
+// 2x2 point-sampled texture (red, green / blue, white) of Texture Size 2. Facing +Z the XY Texture is the
+// projection along Z, UV (x, -y) / 2; turned to face +Y (this engine's up, Unreal's Z) the Z Texture is the
+// top projection, UV (x, z) / 2, with the world position lifted to z = 0.25 to stay off the texel border.
+void RunForwardGraphWorldAlignedTextureTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "world_aligned_texture";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "WorldAlignedTexture: harness vertex shader must cook");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    using K = RenderMaterialGraphNodeKind;
+    const auto buildGraph = [](std::string_view outputPin, bool facingUp) {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        graph.shadingModel = "unlit";
+        RenderMaterialGraphNode texture{ .id = 2U, .kind = K::TextureObject };
+        texture.parameter.stableId = "worldAlignedTex";
+        texture.parameter.textureRole = "baseColor";
+        texture.parameter.expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb;
+        graph.nodes.push_back(texture);
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = K::WorldAlignedTexture });
+        graph.nodes.push_back(UtilityConstant(4U, K::ConstantVector, "2 2 2"));
+        graph.links.push_back(MakeLink(K::TextureObject, 2U, "texture", K::WorldAlignedTexture, 3U, "texture"));
+        graph.links.push_back(MakeLink(K::ConstantVector, 4U, "xyz", K::WorldAlignedTexture, 3U, "textureSize"));
+        if (facingUp) {
+            graph.nodes.push_back(UtilityConstant(5U, K::ConstantVector, "0 1 0"));
+            graph.nodes.push_back(RenderMaterialGraphNode{ .id = 6U, .kind = K::WorldPosition });
+            graph.nodes.push_back(UtilityConstant(7U, K::ConstantColor, "0 0 0.25 0"));
+            graph.nodes.push_back(RenderMaterialGraphNode{ .id = 8U, .kind = K::Add });
+            graph.links.push_back(MakeLink(K::ConstantVector, 5U, "xyz", K::WorldAlignedTexture, 3U, "worldSpaceNormal"));
+            graph.links.push_back(MakeLink(K::WorldPosition, 6U, "xyz", K::Add, 8U, "a"));
+            graph.links.push_back(MakeLink(K::ConstantColor, 7U, "rgba", K::Add, 8U, "b"));
+            graph.links.push_back(MakeLink(K::Add, 8U, "value", K::WorldAlignedTexture, 3U, "worldPosition"));
+        }
+        graph.links.push_back(MakeLink(K::WorldAlignedTexture, 3U, std::string{ outputPin }, K::MaterialOutput, 1U, "baseColor"));
+        return graph;
+    };
+    struct Case {
+        const char* name;
+        RenderMaterialGraphDocument graph;
+        std::array<float, 3U> at40x24;
+        std::array<float, 3U> at24x40;
+    };
+    const std::array<float, 3U> red{ 1.0F, 0.0F, 0.0F };
+    const std::array<float, 3U> green{ 0.0F, 1.0F, 0.0F };
+    const std::array<float, 3U> blue{ 0.0F, 0.0F, 1.0F };
+    const std::array<Case, 4U> cases{ {
+        { "facing +Z, XYZ Texture", buildGraph("xyzTexture", false), blue, green },
+        { "facing +Z, XY Texture", buildGraph("xyTexture", false), blue, green },
+        { "facing +Y, XYZ Texture", buildGraph("xyzTexture", true), red, green },
+        { "facing +Y, Z Texture", buildGraph("zTexture", true), red, green },
+    } };
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "WorldAlignedTexture: Direct3D11 device unavailable; cannot read the projection back\n");
+        Require(false, "WorldAlignedTexture: A real GPU device is required to prove the projection");
+        return;
+    }
+    const std::array<std::uint32_t, 4U> texels{ 0xff0000ffU, 0xff00ff00U, 0xffff0000U, 0xffffffffU };
+    const bgfx::TextureHandle texture = bgfx::createTexture2D(2U, 2U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_POINT,
+        bgfx::copy(texels.data(), sizeof(texels)));
+    std::uint32_t assetId = 0xA300U;
+    for (const Case& testCase : cases) {
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(testCase.graph, RenderMaterialGraphBuildContext{ .assetId = assetId++ });
+        Require(compiled.Succeeded() && compiled.shader.reflection.textures.size() == 1U, "WorldAlignedTexture: the graph must compile with one texture");
+        Require(compiled.shader.source.find("watMask3") != std::string::npos, "WorldAlignedTexture: the node must emit its projection blend");
+        const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+        Require(cooked.Succeeded() && cooked.artifact.has_value(), "WorldAlignedTexture: the graph must cook to DXBC");
+        const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *cooked.artifact);
+        const bgfx::UniformHandle sampler = bgfx::createUniform(compiled.shader.reflection.textures[0].samplerName.c_str(), bgfx::UniformType::Sampler);
+        Require(bgfx::isValid(program) && bgfx::isValid(sampler), "WorldAlignedTexture: the program must link");
+        const std::vector<std::uint8_t> pixels = harness.RenderPixels(program, sampler, texture);
+        RequirePixelNear(ForwardRenderHarness::ProbeAt(pixels, 40U, 24U), testCase.at40x24, std::string{ "WorldAlignedTexture " } + testCase.name + " at (40, 24)");
+        RequirePixelNear(ForwardRenderHarness::ProbeAt(pixels, 24U, 40U), testCase.at24x40, std::string{ "WorldAlignedTexture " } + testCase.name + " at (24, 40)");
+        bgfx::destroy(sampler);
+        bgfx::destroy(program);
+    }
+
+    // Without a Texture Object the node is refused by name, as Unreal reports the missing input.
+    RenderMaterialGraphDocument missing = MakeDefaultRenderMaterialGraphDocument();
+    missing.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = K::WorldAlignedTexture });
+    missing.links.push_back(MakeLink(K::WorldAlignedTexture, 3U, "xyzTexture", K::MaterialOutput, 1U, "baseColor"));
+    const std::vector<RenderMaterialGraphDiagnostic> refused = ValidateRenderMaterialGraphDocument(missing, RenderMaterialGraphRenderPath::GpuForward);
+    Require(HasGraphDiagnostic(refused, RenderMaterialGraphDiagnosticKind::MissingTexture),
+        "WorldAlignedTexture: a node without a Texture Object must be refused with MissingTexture");
+
+    bgfx::destroy(texture);
+    harness.Shutdown();
+}
+
+// Unreal's Noise functions on the GPU over a moving position: each stays within Output Min..Max and varies.
+void RunForwardGraphNoiseFunctionsTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "noise_functions";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "Noise functions: harness vertex shader must cook");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "Noise functions: Direct3D11 device unavailable\n");
+        Require(false, "Noise functions: A real GPU device is required to prove the noise functions");
+        return;
+    }
+    // One level each (a sum of several levels may leave the range, as in Unreal); Output 0.25..0.75 reads 64..191.
+    const std::array<const char*, 6U> hints{
+        "simplex true 4 1 1 2 0.25 0.75",
+        "simplex false 4 1 1 2 0.25 0.75",
+        "gradient false 4 1 1 2 0.25 0.75",
+        "value false 4 1 1 2 0.25 0.75",
+        "voronoi false 4 1 1 2 0.25 0.75",
+        "voronoi true 4 3 1 2 0.25 0.75",
+    };
+    std::uint32_t assetId = 0xA400U;
+    for (const char* hint : hints) {
+        RenderMaterialGraphNode noise{ .kind = RenderMaterialGraphNodeKind::Noise };
+        noise.parameter.defaultValueHint = hint;
+        RenderMaterialGraphDocument graph = UtilityGraph(noise, "value", {});
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 9U, .kind = RenderMaterialGraphNodeKind::WorldPosition });
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::WorldPosition, 9U, "xyz", RenderMaterialGraphNodeKind::Noise, 2U, "value"));
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = assetId++ });
+        Require(compiled.Succeeded(), "Noise functions: the graph must compile");
+        const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+        Require(cooked.Succeeded() && cooked.artifact.has_value(), "Noise functions: the graph must cook to DXBC");
+        const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *cooked.artifact);
+        Require(bgfx::isValid(program), "Noise functions: the program must link");
+        const std::vector<std::uint8_t> pixels = harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+        int lowest = 255;
+        int highest = 0;
+        for (std::uint32_t y = 0U; y < 64U; y += 3U) {
+            for (std::uint32_t x = 0U; x < 64U; x += 3U) {
+                const int value = ForwardRenderHarness::ProbeAt(pixels, x, y).r;
+                lowest = std::min(lowest, value);
+                highest = std::max(highest, value);
+            }
+        }
+        std::fprintf(stderr, "Noise functions: '%s' spans %d..%d\n", hint, lowest, highest);
+        // Voronoi is a distance to the nearest cell point, which with full jitter can pass one cell; only the
+        // -1..1 lattice functions are bounded by Output Max.
+        const bool boundedAbove = std::string_view{ hint }.substr(0U, 7U) != "voronoi";
+        Require(lowest >= 63 && (!boundedAbove || highest <= 192), "Noise functions: the result must stay within Output Min..Max");
+        Require(highest - lowest > 20, "Noise functions: the noise must vary across the surface");
+        bgfx::destroy(program);
+    }
+    harness.Shutdown();
+}
 #endif
 
 } // namespace
@@ -6104,6 +6718,10 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphWorldSpaceNodesTest();
     RunForwardGraphExpLogSrgbNodesCookTest();
     RunForwardGraphNoiseRendersTest();
+    RunForwardGraphNoiseFunctionsTest();
+    RunForwardGraphUtilityNodeFormulasTest();
+    RunForwardGraphWorldAlignedTextureTest();
+    RunForwardGraphPixelNormalSmoothSphereTest();
     RunForwardGraphSobolRendersTest();
     RunForwardGraphMaterialParameterCollectionRendersTest();
     RunMotionVectorPreviousModelGpuTest();

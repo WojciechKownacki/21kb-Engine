@@ -325,6 +325,13 @@ void PrintGraph(const kb::render::RenderMaterialAssetData& asset, const std::str
     if (node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput) {
         return "node " + NodeLabel(node) + " has no value to set";
     }
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::Noise) {
+        // Unreal's Noise settings: "<function> <turbulence> <scale> <quality> <levels> <level scale> <min> <max>".
+        if (const kb::render::RenderMaterialGraphNoiseSettingsParseResult noise = kb::render::ParseRenderMaterialGraphNoiseSettings(text);
+            !noise.settings.has_value()) {
+            return "node " + NodeLabel(node) + ": " + noise.error;
+        }
+    }
     // Every other node keeps its settings (Panner speed, Rotator speed and centre, Texture
     // Coordinate tiling, Fresnel exponent, ...) as the space-separated value the Material
     // Editor's node properties write; the saved material is compiled before it is kept.

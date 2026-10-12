@@ -1750,6 +1750,15 @@ void RunMaterialGraphEveryShaderNodeKindHasCodegenTest() {
             subject.parameter.textureRole = "baseColor";  // a texture parameter must declare its role
         }
         graph.nodes.push_back(subject);
+        // A texture input (WorldAlignedTexture's TextureObject) is required, as in Unreal: feed it a Texture Object.
+        for (const std::string& inPin : RenderMaterialGraphNodeInputPinNames(kind)) {
+            if (RenderMaterialGraphPinDataType(kind, inPin, false) == RenderMaterialGraphPinType::Texture2D) {
+                RenderMaterialGraphNode textureObject{ .id = 5U, .kind = RenderMaterialGraphNodeKind::TextureObject };
+                textureObject.parameter.textureRole = "baseColor";
+                graph.nodes.push_back(textureObject);
+                graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureObject, 5U, "texture", kind, 2U, inPin));
+            }
+        }
         if (kind == RenderMaterialGraphNodeKind::Reroute ||
             kind == RenderMaterialGraphNodeKind::CompositeInput ||
             kind == RenderMaterialGraphNodeKind::CompositeOutput) {
@@ -5073,6 +5082,88 @@ void RunMaterialGraphProgramBindingIdentityKeyTest() {
         "KBMAT-MAT66: Blend/render-state changes must produce distinct pipeline-state keys");
 }
 
+// The Unreal/Unity utility nodes: names parse (Unreal's Blend_* asset names too), every pin has a stable id,
+// a graph of all of them round-trips through the material file, and the Noise settings parse with Unreal's
+// defaults and refuse what Unreal's property ranges refuse.
+void RunMaterialUtilityNodesSchemaTest() {
+    const std::array<RenderMaterialGraphNodeKind, 22U> kinds{
+        RenderMaterialGraphNodeKind::WorldAlignedTexture, RenderMaterialGraphNodeKind::FlipBook, RenderMaterialGraphNodeKind::Checkerboard,
+        RenderMaterialGraphNodeKind::PolarCoordinates, RenderMaterialGraphNodeKind::Twirl, RenderMaterialGraphNodeKind::Ellipse,
+        RenderMaterialGraphNodeKind::Rectangle, RenderMaterialGraphNodeKind::RoundedRectangle, RenderMaterialGraphNodeKind::BlendOverlay,
+        RenderMaterialGraphNodeKind::BlendScreen, RenderMaterialGraphNodeKind::BlendSoftLight, RenderMaterialGraphNodeKind::BlendHardLight,
+        RenderMaterialGraphNodeKind::BlendLinearLight, RenderMaterialGraphNodeKind::BlendColorBurn, RenderMaterialGraphNodeKind::BlendColorDodge,
+        RenderMaterialGraphNodeKind::BlendDarken, RenderMaterialGraphNodeKind::BlendLighten, RenderMaterialGraphNodeKind::BlendDifference,
+        RenderMaterialGraphNodeKind::Contrast, RenderMaterialGraphNodeKind::HueShift, RenderMaterialGraphNodeKind::ChannelMixer,
+        RenderMaterialGraphNodeKind::RemapValueRange,
+    };
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    std::uint32_t nextId = 2U;
+    for (const RenderMaterialGraphNodeKind kind : kinds) {
+        Require(ParseRenderMaterialGraphNodeKind(RenderMaterialGraphNodeKindName(kind)) == kind,
+            "Utility nodes: every new node kind must parse back from its serialized name");
+        Require(RenderMaterialGraphNodeSupportStatus(kind) == RenderMaterialGraphNodeSupport::Production,
+            "Utility nodes: every new node kind must be production on the graph render paths");
+        for (const std::string& pin : RenderMaterialGraphNodeInputPinNames(kind)) {
+            Require(RenderMaterialGraphStablePinId(kind, pin, false) != 0U && RenderMaterialGraphPinDataType(kind, pin, false) != RenderMaterialGraphPinType::Unknown,
+                "Utility nodes: every input pin must have a stable id and a type");
+        }
+        for (const std::string& pin : RenderMaterialGraphNodeOutputPinNames(kind)) {
+            Require(RenderMaterialGraphStablePinId(kind, pin, true) != 0U && RenderMaterialGraphPinDataType(kind, pin, true) != RenderMaterialGraphPinType::Unknown,
+                "Utility nodes: every output pin must have a stable id and a type");
+        }
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = nextId++, .kind = kind });
+    }
+    Require(ParseRenderMaterialGraphNodeKind("Blend_Overlay") == RenderMaterialGraphNodeKind::BlendOverlay &&
+            ParseRenderMaterialGraphNodeKind("Blend_LinearLight") == RenderMaterialGraphNodeKind::BlendLinearLight &&
+            ParseRenderMaterialGraphNodeKind("Triplanar") == RenderMaterialGraphNodeKind::WorldAlignedTexture,
+        "Utility nodes: Unreal's BlendFunctions asset names must parse");
+    RenderMaterialGraphNode noise{ .id = nextId++, .kind = RenderMaterialGraphNodeKind::Noise };
+    noise.parameter.defaultValueHint = "voronoi false 2 3 4 2.5 0 1";
+    graph.nodes.push_back(noise);
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::BlendOverlay, 10U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    RenderMaterialAssetData carrier{};
+    carrier.graph = graph;
+    std::ostringstream serialized;
+    RenderMaterialAssetWriter::Write(serialized, carrier);
+    std::istringstream input{ serialized.str() };
+    const RenderMaterialAssetParseResult parsed = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+    Require(parsed.Succeeded() && parsed.asset.has_value() && parsed.asset->graph.nodes.size() == graph.nodes.size(),
+        "Utility nodes: a graph of the new nodes must load back from the material file");
+    for (std::size_t index = 0U; index < graph.nodes.size(); ++index) {
+        Require(parsed.asset->graph.nodes[index].kind == graph.nodes[index].kind &&
+                parsed.asset->graph.nodes[index].parameter.defaultValueHint == graph.nodes[index].parameter.defaultValueHint,
+            "Utility nodes: node kinds and Noise settings must round-trip through the material file");
+    }
+    Require(parsed.asset->graph.links.size() == 1U && parsed.asset->graph.links[0].fromPin == "value" && parsed.asset->graph.links[0].toPin == "baseColor",
+        "Utility nodes: links of the new nodes must round-trip");
+
+    const RenderMaterialGraphNoiseSettingsParseResult defaults = ParseRenderMaterialGraphNoiseSettings("");
+    Require(defaults.settings.has_value() && defaults.settings->function == RenderMaterialGraphNoiseFunction::Simplex &&
+            defaults.settings->turbulence && defaults.settings->scale == 1.0F && defaults.settings->quality == 1U &&
+            defaults.settings->levels == 6U && defaults.settings->levelScale == 2.0F &&
+            defaults.settings->outputMin == -1.0F && defaults.settings->outputMax == 1.0F,
+        "Utility nodes: an empty Noise hint must be Unreal's defaults");
+    const RenderMaterialGraphNoiseSettingsParseResult voronoi = ParseRenderMaterialGraphNoiseSettings("voronoi false 2 3 4 2.5 0 1");
+    Require(voronoi.settings.has_value() && RenderMaterialGraphNoiseSettingsHint(*voronoi.settings) == "voronoi false 2 3 4 2.5 0 1",
+        "Utility nodes: Noise settings must round-trip through their hint");
+    for (const char* refused : { "perlin", "simplex maybe", "simplex true 0", "simplex true 1 5", "simplex true 1 1 11", "simplex true 1 1 6 0", "simplex true 1 1 6 2 -1 nan" }) {
+        const RenderMaterialGraphNoiseSettingsParseResult result = ParseRenderMaterialGraphNoiseSettings(refused);
+        Require(!result.settings.has_value() && !result.error.empty(), "Utility nodes: invalid Noise settings must be refused with a reason");
+    }
+    RenderMaterialGraphDocument badNoise = MakeDefaultRenderMaterialGraphDocument();
+    RenderMaterialGraphNode badNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::Noise };
+    badNode.parameter.defaultValueHint = "perlin";
+    badNoise.nodes.push_back(badNode);
+    badNoise.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Noise, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    bool namedRefusal = false;
+    for (const RenderMaterialGraphDiagnostic& diagnostic : ValidateRenderMaterialGraphDocument(badNoise, RenderMaterialGraphRenderPath::GpuForward)) {
+        namedRefusal = namedRefusal || (diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error && diagnostic.nodeId == 2U &&
+            diagnostic.message.find("'perlin'") != std::string::npos);
+    }
+    Require(namedRefusal, "Utility nodes: a graph with an unknown Noise function must be refused naming the function");
+}
+
 void RunMaterialVertexDomainOutputCodegenTest() {
     const auto hasPin = [](const std::vector<std::string>& pins, std::string_view pin) {
         return std::find(pins.begin(), pins.end(), pin) != pins.end();
@@ -5115,9 +5206,10 @@ void RunMaterialVertexDomainOutputCodegenTest() {
     Require(RenderMaterialGraphVariantKey(baseResult.shader) != RenderMaterialGraphVariantKey(displacementResult.shader),
         "KBMAT-MAT67: Displacement must participate in graph variant identity");
     const std::string displacedFragment = BuildGraphFragmentWrapperSource(displacementResult.shader, "BaseOpaque");
-    Require(displacedFragment.find("dFdx(v_worldPos)") != std::string::npos &&
-            displacedFragment.find("dFdy(v_worldPos)") != std::string::npos,
-        "KBMAT-MAT67: DefaultLit fragment wrapper must recalculate normals from deformed world position");
+    // Unreal keeps the vertex normals under Displacement/WPO; a derivative normal would facet curved surfaces.
+    Require(displacedFragment.find("dFdx(v_worldPos)") == std::string::npos &&
+            displacedFragment.find("vec3 basisNormal = normalize(v_normal);") != std::string::npos,
+        "KBMAT-MAT67: DefaultLit fragment wrapper must shade a displaced surface with the per-pixel normalized vertex normal");
 
     const RenderMaterialGraphMaterialTypeBuildResult materialType = BuildRenderMaterialGraphMaterialTypeDocument(
         displacementGraph, "test.vertex.domain", 1U, RenderMaterialGraphBuildContext{ .assetId = 0x0673U });
@@ -6829,6 +6921,7 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialStaticPermutationTest();
     RunMaterialGraphProgramBindingIdentityKeyTest();
     RunMaterialVertexDomainOutputCodegenTest();
+    RunMaterialUtilityNodesSchemaTest();
     RunMaterialVariantSwitchPermutationTest();
     RunMaterialCoordinateNodeCodegenTest();
     RunMaterialWorldSpaceNodeCodegenTest();

@@ -155,7 +155,10 @@ public:
         const float expectedX = -vertex.z / radius;
         const float expectedZ = vertex.x / radius;
         const float alignment = (tx * expectedX) + (tz * expectedZ);
-        if (alignment < 0.96F || std::abs(ty) > 0.08F || vertex.tw >= 0.0F) {
+        // The bitangent points up the image (smaller V), where a normal map's +Y points (ShapeMeshes). The
+        // sphere's V grows towards its top pole, so smaller V is down the sphere, along cross(normal, tangent):
+        // w = +1.
+        if (alignment < 0.96F || std::abs(ty) > 0.08F || vertex.tw <= 0.0F) {
             return false;
         }
         ++checked;

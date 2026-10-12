@@ -604,23 +604,10 @@ inline bool MaterialEditorPanelIsTexturePreviewNode(kb::render::RenderMaterialGr
         MaterialEditorPanelIsTextureObjectPreviewNode(kind);
 }
 
-inline SIZE MaterialEditorPanelGraphNodeSize(const kb::render::RenderMaterialGraphNode& node) noexcept {
+inline SIZE MaterialEditorPanelGraphNodeSize(const kb::render::RenderMaterialGraphNode& node) {
     SIZE size = MaterialEditorPanelGraphNodeSize(node.kind);
-    if (node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode ||
-        node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
-        const std::size_t inputCount = node.customCode.inputs.size();
-        const std::size_t outputCount = node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode && node.customCode.outputs.empty()
-            ? 1U
-            : node.customCode.outputs.size();
-        const std::size_t rowCount = std::max(inputCount, outputCount);
-        if (rowCount > 0U) {
-            const LONG requiredHeight = static_cast<LONG>(MaterialEditorPanelMetrics::GraphNodeHeaderHeight +
-                MaterialEditorPanelMetrics::GraphNodeBodyTopPadding +
-                static_cast<int>(rowCount) * MaterialEditorPanelMetrics::GraphNodePinRowHeight +
-                MaterialEditorPanelMetrics::GraphNodeBodyTopPadding);
-            size.cy = std::max(size.cy, requiredHeight);
-        }
-    }
+    // The node grows with its pin rows (Unreal): the canvas that places and hit-tests the pins owns the rule.
+    size.cy = std::max(size.cy, static_cast<LONG>(std::lround(MaterialGraphCanvasPinRowsHeight(BuildMaterialGraphCanvasNode(node)))));
     return size;
 }
 #endif
@@ -2923,7 +2910,7 @@ inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t i
 inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMenuCommands(std::size_t index) {
     switch (index) {
     case 0U:
-        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject, MaterialEditorGraphMenuCommand::CreateTextureSampleCube, MaterialEditorGraphMenuCommand::CreateTextureObjectCube, MaterialEditorGraphMenuCommand::CreateTextureSampleVolume, MaterialEditorGraphMenuCommand::CreateTextureObjectVolume, MaterialEditorGraphMenuCommand::CreateTextureSample2DArray, MaterialEditorGraphMenuCommand::CreateTextureObject2DArray };
+        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject, MaterialEditorGraphMenuCommand::CreateTextureSampleCube, MaterialEditorGraphMenuCommand::CreateTextureObjectCube, MaterialEditorGraphMenuCommand::CreateTextureSampleVolume, MaterialEditorGraphMenuCommand::CreateTextureObjectVolume, MaterialEditorGraphMenuCommand::CreateTextureSample2DArray, MaterialEditorGraphMenuCommand::CreateTextureObject2DArray, MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture, MaterialEditorGraphMenuCommand::CreateFlipBook };
     case 1U:
         return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateDeltaTime, MaterialEditorGraphMenuCommand::CreateDynamicParameter, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreatePixelPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount, MaterialEditorGraphMenuCommand::CreateDistanceCullFade, MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition, MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateTwoSidedSign, MaterialEditorGraphMenuCommand::CreateSceneColor, MaterialEditorGraphMenuCommand::CreateSceneTexture, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreatePixelDepth, MaterialEditorGraphMenuCommand::CreateCameraDepthFade, MaterialEditorGraphMenuCommand::CreateDepthFade };
     case 2U:
@@ -2956,6 +2943,7 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateFresnel,
             MaterialEditorGraphMenuCommand::CreateClamp,
             MaterialEditorGraphMenuCommand::CreateLerp,
+            MaterialEditorGraphMenuCommand::CreateRemapValueRange,
         };
     case 6U:
         return {
@@ -3007,6 +2995,25 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateNormalize,
             MaterialEditorGraphMenuCommand::CreateNormalUnpack,
             MaterialEditorGraphMenuCommand::CreateCustomCode,
+            MaterialEditorGraphMenuCommand::CreateCheckerboard,
+            MaterialEditorGraphMenuCommand::CreatePolarCoordinates,
+            MaterialEditorGraphMenuCommand::CreateTwirl,
+            MaterialEditorGraphMenuCommand::CreateEllipse,
+            MaterialEditorGraphMenuCommand::CreateRectangle,
+            MaterialEditorGraphMenuCommand::CreateRoundedRectangle,
+            MaterialEditorGraphMenuCommand::CreateBlendOverlay,
+            MaterialEditorGraphMenuCommand::CreateBlendScreen,
+            MaterialEditorGraphMenuCommand::CreateBlendSoftLight,
+            MaterialEditorGraphMenuCommand::CreateBlendHardLight,
+            MaterialEditorGraphMenuCommand::CreateBlendLinearLight,
+            MaterialEditorGraphMenuCommand::CreateBlendColorBurn,
+            MaterialEditorGraphMenuCommand::CreateBlendColorDodge,
+            MaterialEditorGraphMenuCommand::CreateBlendDarken,
+            MaterialEditorGraphMenuCommand::CreateBlendLighten,
+            MaterialEditorGraphMenuCommand::CreateBlendDifference,
+            MaterialEditorGraphMenuCommand::CreateContrast,
+            MaterialEditorGraphMenuCommand::CreateHueShift,
+            MaterialEditorGraphMenuCommand::CreateChannelMixer,
         };
     case 7U:
         return {
@@ -3173,6 +3180,28 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return EditorText("materialEditor.palette.createPerInstanceRandom", "Per Instance Random");
     case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount: return EditorText("materialEditor.palette.createPerInstanceFadeAmount", "Per Instance Fade Amount");
     case MaterialEditorGraphMenuCommand::CreateDistanceCullFade: return EditorText("materialEditor.palette.createDistanceCullFade", "Distance Cull Fade");
+    case MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture: return EditorText("materialEditor.palette.createWorldAlignedTexture", "World Aligned Texture");
+    case MaterialEditorGraphMenuCommand::CreateFlipBook: return EditorText("materialEditor.palette.createFlipBook", "FlipBook");
+    case MaterialEditorGraphMenuCommand::CreateCheckerboard: return EditorText("materialEditor.palette.createCheckerboard", "Checkerboard");
+    case MaterialEditorGraphMenuCommand::CreatePolarCoordinates: return EditorText("materialEditor.palette.createPolarCoordinates", "Polar Coordinates");
+    case MaterialEditorGraphMenuCommand::CreateTwirl: return EditorText("materialEditor.palette.createTwirl", "Twirl");
+    case MaterialEditorGraphMenuCommand::CreateEllipse: return EditorText("materialEditor.palette.createEllipse", "Ellipse");
+    case MaterialEditorGraphMenuCommand::CreateRectangle: return EditorText("materialEditor.palette.createRectangle", "Rectangle");
+    case MaterialEditorGraphMenuCommand::CreateRoundedRectangle: return EditorText("materialEditor.palette.createRoundedRectangle", "Rounded Rectangle");
+    case MaterialEditorGraphMenuCommand::CreateBlendOverlay: return EditorText("materialEditor.palette.createBlendOverlay", "Blend Overlay");
+    case MaterialEditorGraphMenuCommand::CreateBlendScreen: return EditorText("materialEditor.palette.createBlendScreen", "Blend Screen");
+    case MaterialEditorGraphMenuCommand::CreateBlendSoftLight: return EditorText("materialEditor.palette.createBlendSoftLight", "Blend Soft Light");
+    case MaterialEditorGraphMenuCommand::CreateBlendHardLight: return EditorText("materialEditor.palette.createBlendHardLight", "Blend Hard Light");
+    case MaterialEditorGraphMenuCommand::CreateBlendLinearLight: return EditorText("materialEditor.palette.createBlendLinearLight", "Blend Linear Light");
+    case MaterialEditorGraphMenuCommand::CreateBlendColorBurn: return EditorText("materialEditor.palette.createBlendColorBurn", "Blend Color Burn");
+    case MaterialEditorGraphMenuCommand::CreateBlendColorDodge: return EditorText("materialEditor.palette.createBlendColorDodge", "Blend Color Dodge");
+    case MaterialEditorGraphMenuCommand::CreateBlendDarken: return EditorText("materialEditor.palette.createBlendDarken", "Blend Darken");
+    case MaterialEditorGraphMenuCommand::CreateBlendLighten: return EditorText("materialEditor.palette.createBlendLighten", "Blend Lighten");
+    case MaterialEditorGraphMenuCommand::CreateBlendDifference: return EditorText("materialEditor.palette.createBlendDifference", "Blend Difference");
+    case MaterialEditorGraphMenuCommand::CreateContrast: return EditorText("materialEditor.palette.createContrast", "Contrast");
+    case MaterialEditorGraphMenuCommand::CreateHueShift: return EditorText("materialEditor.palette.createHueShift", "Hue Shift");
+    case MaterialEditorGraphMenuCommand::CreateChannelMixer: return EditorText("materialEditor.palette.createChannelMixer", "Channel Mixer");
+    case MaterialEditorGraphMenuCommand::CreateRemapValueRange: return EditorText("materialEditor.palette.createRemapValueRange", "Remap Value Range");
     case MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData: return EditorText("materialEditor.palette.createPerInstanceCustomData", "Per Instance Custom Data");
     case MaterialEditorGraphMenuCommand::CreateObjectRadius: return EditorText("materialEditor.palette.createObjectRadius", "Object Radius");
     case MaterialEditorGraphMenuCommand::CreateObjectBounds: return EditorText("materialEditor.palette.createObjectBounds", "Object Bounds");
@@ -3413,6 +3442,28 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return kb::render::RenderMaterialGraphNodeKind::PerInstanceRandom;
     case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount: return kb::render::RenderMaterialGraphNodeKind::PerInstanceFadeAmount;
     case MaterialEditorGraphMenuCommand::CreateDistanceCullFade: return kb::render::RenderMaterialGraphNodeKind::DistanceCullFade;
+    case MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture: return kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture;
+    case MaterialEditorGraphMenuCommand::CreateFlipBook: return kb::render::RenderMaterialGraphNodeKind::FlipBook;
+    case MaterialEditorGraphMenuCommand::CreateCheckerboard: return kb::render::RenderMaterialGraphNodeKind::Checkerboard;
+    case MaterialEditorGraphMenuCommand::CreatePolarCoordinates: return kb::render::RenderMaterialGraphNodeKind::PolarCoordinates;
+    case MaterialEditorGraphMenuCommand::CreateTwirl: return kb::render::RenderMaterialGraphNodeKind::Twirl;
+    case MaterialEditorGraphMenuCommand::CreateEllipse: return kb::render::RenderMaterialGraphNodeKind::Ellipse;
+    case MaterialEditorGraphMenuCommand::CreateRectangle: return kb::render::RenderMaterialGraphNodeKind::Rectangle;
+    case MaterialEditorGraphMenuCommand::CreateRoundedRectangle: return kb::render::RenderMaterialGraphNodeKind::RoundedRectangle;
+    case MaterialEditorGraphMenuCommand::CreateBlendOverlay: return kb::render::RenderMaterialGraphNodeKind::BlendOverlay;
+    case MaterialEditorGraphMenuCommand::CreateBlendScreen: return kb::render::RenderMaterialGraphNodeKind::BlendScreen;
+    case MaterialEditorGraphMenuCommand::CreateBlendSoftLight: return kb::render::RenderMaterialGraphNodeKind::BlendSoftLight;
+    case MaterialEditorGraphMenuCommand::CreateBlendHardLight: return kb::render::RenderMaterialGraphNodeKind::BlendHardLight;
+    case MaterialEditorGraphMenuCommand::CreateBlendLinearLight: return kb::render::RenderMaterialGraphNodeKind::BlendLinearLight;
+    case MaterialEditorGraphMenuCommand::CreateBlendColorBurn: return kb::render::RenderMaterialGraphNodeKind::BlendColorBurn;
+    case MaterialEditorGraphMenuCommand::CreateBlendColorDodge: return kb::render::RenderMaterialGraphNodeKind::BlendColorDodge;
+    case MaterialEditorGraphMenuCommand::CreateBlendDarken: return kb::render::RenderMaterialGraphNodeKind::BlendDarken;
+    case MaterialEditorGraphMenuCommand::CreateBlendLighten: return kb::render::RenderMaterialGraphNodeKind::BlendLighten;
+    case MaterialEditorGraphMenuCommand::CreateBlendDifference: return kb::render::RenderMaterialGraphNodeKind::BlendDifference;
+    case MaterialEditorGraphMenuCommand::CreateContrast: return kb::render::RenderMaterialGraphNodeKind::Contrast;
+    case MaterialEditorGraphMenuCommand::CreateHueShift: return kb::render::RenderMaterialGraphNodeKind::HueShift;
+    case MaterialEditorGraphMenuCommand::CreateChannelMixer: return kb::render::RenderMaterialGraphNodeKind::ChannelMixer;
+    case MaterialEditorGraphMenuCommand::CreateRemapValueRange: return kb::render::RenderMaterialGraphNodeKind::RemapValueRange;
     case MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData: return kb::render::RenderMaterialGraphNodeKind::PerInstanceCustomData;
     case MaterialEditorGraphMenuCommand::CreateObjectRadius: return kb::render::RenderMaterialGraphNodeKind::ObjectRadius;
     case MaterialEditorGraphMenuCommand::CreateObjectBounds: return kb::render::RenderMaterialGraphNodeKind::ObjectBounds;
@@ -3560,6 +3611,34 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
     }
     if (command == MaterialEditorGraphMenuCommand::CreatePixelPosition) {
         haystack += " pixel position viewport pixel screen pixel absolute coordinate coordinates fragcoord";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateNoise) {
+        // Unreal's Noise functions, so typing Voronoi or Simplex finds the node that has them.
+        haystack += " simplex gradient perlin value voronoi cellular worley turbulence fractal levels octaves";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture) {
+        haystack += " triplanar tri planar world aligned box projection worldalignedtexture";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateFlipBook) {
+        haystack += " flipbook flip book sprite sheet subuv animation frames";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateRemapValueRange) {
+        haystack += " remap range map range remapvaluerange fit";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateHueShift) {
+        haystack += " hue shift rotate hue color adjustment hueshift";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateBlendOverlay ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendScreen ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendSoftLight ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendHardLight ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendLinearLight ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendColorBurn ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendColorDodge ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendDarken ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendLighten ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendDifference) {
+        haystack += " blend mode blend_ blendfunctions layer photoshop";
     }
     if (command == MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount) {
         haystack += " per instance fade amount perinstancefade lod fade instance fade";

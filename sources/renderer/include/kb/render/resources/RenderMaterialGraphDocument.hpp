@@ -171,6 +171,29 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     CameraDepthFade,
     DistanceCullFade,
     PixelPosition,
+    // Appended after PixelPosition: stable pin ids derive from the enumerator value.
+    WorldAlignedTexture,
+    FlipBook,
+    Checkerboard,
+    PolarCoordinates,
+    Twirl,
+    Ellipse,
+    Rectangle,
+    RoundedRectangle,
+    BlendOverlay,
+    BlendScreen,
+    BlendSoftLight,
+    BlendHardLight,
+    BlendLinearLight,
+    BlendColorBurn,
+    BlendColorDodge,
+    BlendDarken,
+    BlendLighten,
+    BlendDifference,
+    Contrast,
+    HueShift,
+    ChannelMixer,
+    RemapValueRange,
 };
 
 enum class RenderMaterialGraphRenderPath : std::uint8_t {
@@ -709,6 +732,39 @@ struct RenderMaterialGraphMaterialTypeBuildResult {
     [[nodiscard]] bool Succeeded() const noexcept;
 };
 
+// Unreal's Noise node functions. Unreal's texture-based Simplex is computed here (no lookup texture).
+enum class RenderMaterialGraphNoiseFunction : std::uint8_t {
+    Simplex,
+    Gradient,
+    Value,
+    Voronoi,
+};
+
+// The Noise node's properties, with Unreal's UMaterialExpressionNoise defaults. Stored in the node's value
+// hint as "<function> <turbulence> <scale> <quality> <levels> <levelScale> <outputMin> <outputMax>".
+struct RenderMaterialGraphNoiseSettings {
+    RenderMaterialGraphNoiseFunction function = RenderMaterialGraphNoiseFunction::Simplex;
+    bool turbulence = true;
+    float scale = 1.0F;
+    std::uint32_t quality = 1U;
+    std::uint32_t levels = 6U;
+    float levelScale = 2.0F;
+    float outputMin = -1.0F;
+    float outputMax = 1.0F;
+};
+
+struct RenderMaterialGraphNoiseSettingsParseResult {
+    std::optional<RenderMaterialGraphNoiseSettings> settings;
+    std::string error;
+};
+
+[[nodiscard]] std::string_view RenderMaterialGraphNoiseFunctionName(RenderMaterialGraphNoiseFunction function) noexcept;
+[[nodiscard]] std::optional<RenderMaterialGraphNoiseFunction> ParseRenderMaterialGraphNoiseFunction(std::string_view text) noexcept;
+// An empty hint is Unreal's defaults; missing trailing fields keep their defaults. Unknown functions, non-boolean
+// turbulence, non-finite numbers and values outside Unreal's ranges (Quality 1-4, Levels 1-10, Scale and
+// Level Scale above zero) are refused with the offending token in `error`.
+[[nodiscard]] RenderMaterialGraphNoiseSettingsParseResult ParseRenderMaterialGraphNoiseSettings(std::string_view hint);
+[[nodiscard]] std::string RenderMaterialGraphNoiseSettingsHint(const RenderMaterialGraphNoiseSettings& settings);
 [[nodiscard]] std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kind) noexcept;
 [[nodiscard]] std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std::string_view text) noexcept;
 // Authoritative input/output pin names for a node kind, in layout order. The editor uses these so every

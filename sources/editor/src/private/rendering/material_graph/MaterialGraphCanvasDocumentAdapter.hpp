@@ -19,6 +19,11 @@ struct MaterialGraphCanvasDocumentBuildResult final {
 [[nodiscard]] MaterialGraphCanvasNode BuildMaterialGraphCanvasNode(
     const kb::render::RenderMaterialGraphNode& node);
 
+// The height a node's pins need, as in Unreal where a node grows with its pin rows: the header, the body
+// padding above and below, and one full pin row per pin on its taller side. Zero for the nodes whose pins sit
+// beside value fields or a texture preview, which size themselves around those.
+[[nodiscard]] float MaterialGraphCanvasPinRowsHeight(const MaterialGraphCanvasNode& node) noexcept;
+
 [[nodiscard]] MaterialGraphCanvasDocumentBuildResult BuildMaterialGraphCanvasFromDocument(
     const kb::render::RenderMaterialGraphDocument& document);
 

@@ -127,8 +127,44 @@ PreferredInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
     case kb::render::RenderMaterialGraphNodeKind::BlackBody:
         return {{"value", std::string{ EditorText("materialEditor.pin.tempK", "Temp (K)") }}};
     case kb::render::RenderMaterialGraphNodeKind::Noise:
+        return {{"value", std::string{ EditorText("materialEditor.pin.position", "Position") }}, {"filterWidth", std::string{ EditorText("materialEditor.pin.filterWidth", "Filter Width") }}};
     case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
         return {{"value", std::string{ EditorText("materialEditor.pin.position", "Position") }}};
+    case kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture:
+        return {{"texture", std::string{ EditorText("materialEditor.pin.textureObject", "Texture Object") }}, {"textureSize", std::string{ EditorText("materialEditor.pin.textureSize", "Texture Size") }}, {"worldPosition", std::string{ EditorText("materialEditor.pin.worldPosition", "World Position") }}, {"projectionTransitionContrast", std::string{ EditorText("materialEditor.pin.projectionTransitionContrast", "Projection Transition Contrast") }}, {"worldSpaceNormal", std::string{ EditorText("materialEditor.pin.worldSpaceNormal", "World Space Normal") }}};
+    case kb::render::RenderMaterialGraphNodeKind::FlipBook:
+        return {{"animationPhase", std::string{ EditorText("materialEditor.pin.animationPhase", "Animation Phase") }}, {"numberOfRows", std::string{ EditorText("materialEditor.pin.numberOfRows", "Number of Rows") }}, {"numberOfColumns", std::string{ EditorText("materialEditor.pin.numberOfColumns", "Number of Columns") }}, {"uv", "UVs"}};
+    case kb::render::RenderMaterialGraphNodeKind::Checkerboard:
+        return {{"uv", "UV"}, {"colorA", std::string{ EditorText("materialEditor.pin.colorA", "Color A") }}, {"colorB", std::string{ EditorText("materialEditor.pin.colorB", "Color B") }}, {"frequency", std::string{ EditorText("materialEditor.pin.frequency", "Frequency") }}};
+    case kb::render::RenderMaterialGraphNodeKind::PolarCoordinates:
+        return {{"uv", "UV"}, {"center", std::string{ EditorText("materialEditor.pin.center", "Center") }}, {"radialScale", std::string{ EditorText("materialEditor.pin.radialScale", "Radial Scale") }}, {"lengthScale", std::string{ EditorText("materialEditor.pin.lengthScale", "Length Scale") }}};
+    case kb::render::RenderMaterialGraphNodeKind::Twirl:
+        return {{"uv", "UV"}, {"center", std::string{ EditorText("materialEditor.pin.center", "Center") }}, {"strength", std::string{ EditorText("materialEditor.pin.strength", "Strength") }}, {"offset", std::string{ EditorText("materialEditor.pin.offset", "Offset") }}};
+    case kb::render::RenderMaterialGraphNodeKind::Ellipse:
+        return {{"uv", "UV"}, {"width", std::string{ EditorText("materialEditor.pin.width", "Width") }}, {"height", std::string{ EditorText("materialEditor.pin.height", "Height") }}};
+    case kb::render::RenderMaterialGraphNodeKind::Rectangle:
+        return {{"uv", "UV"}, {"width", std::string{ EditorText("materialEditor.pin.width", "Width") }}, {"height", std::string{ EditorText("materialEditor.pin.height", "Height") }}};
+    case kb::render::RenderMaterialGraphNodeKind::RoundedRectangle:
+        return {{"uv", "UV"}, {"width", std::string{ EditorText("materialEditor.pin.width", "Width") }}, {"height", std::string{ EditorText("materialEditor.pin.height", "Height") }}, {"radius", std::string{ EditorText("materialEditor.pin.radius", "Radius") }}};
+    case kb::render::RenderMaterialGraphNodeKind::BlendOverlay:
+    case kb::render::RenderMaterialGraphNodeKind::BlendScreen:
+    case kb::render::RenderMaterialGraphNodeKind::BlendSoftLight:
+    case kb::render::RenderMaterialGraphNodeKind::BlendHardLight:
+    case kb::render::RenderMaterialGraphNodeKind::BlendLinearLight:
+    case kb::render::RenderMaterialGraphNodeKind::BlendColorBurn:
+    case kb::render::RenderMaterialGraphNodeKind::BlendColorDodge:
+    case kb::render::RenderMaterialGraphNodeKind::BlendDarken:
+    case kb::render::RenderMaterialGraphNodeKind::BlendLighten:
+    case kb::render::RenderMaterialGraphNodeKind::BlendDifference:
+        return {{"base", std::string{ EditorText("materialEditor.pin.base", "Base") }}, {"blend", std::string{ EditorText("materialEditor.pin.blend", "Blend") }}};
+    case kb::render::RenderMaterialGraphNodeKind::Contrast:
+        return {{"input", std::string{ EditorText("materialEditor.pin.in", "In") }}, {"contrast", std::string{ EditorText("materialEditor.pin.contrast", "Contrast") }}};
+    case kb::render::RenderMaterialGraphNodeKind::HueShift:
+        return {{"hueShiftPercentage", std::string{ EditorText("materialEditor.pin.hueShiftPercentage", "Hue Shift Percentage") }}, {"color", std::string{ EditorText("materialEditor.pin.texture", "Texture") }}};
+    case kb::render::RenderMaterialGraphNodeKind::ChannelMixer:
+        return {{"input", std::string{ EditorText("materialEditor.pin.in", "In") }}, {"red", std::string{ EditorText("materialEditor.pin.red", "Red") }}, {"green", std::string{ EditorText("materialEditor.pin.green", "Green") }}, {"blue", std::string{ EditorText("materialEditor.pin.blue", "Blue") }}};
+    case kb::render::RenderMaterialGraphNodeKind::RemapValueRange:
+        return {{"input", std::string{ EditorText("materialEditor.pin.input", "Input") }}, {"inputLow", std::string{ EditorText("materialEditor.pin.inputLow", "Input Low") }}, {"inputHigh", std::string{ EditorText("materialEditor.pin.inputHigh", "Input High") }}, {"targetLow", std::string{ EditorText("materialEditor.pin.targetLow", "Target Low") }}, {"targetHigh", std::string{ EditorText("materialEditor.pin.targetHigh", "Target High") }}};
     case kb::render::RenderMaterialGraphNodeKind::Sobol:
         return {{"cell", std::string{ EditorText("materialEditor.pin.cell", "Cell") }}, {"index", std::string{ EditorText("materialEditor.pin.index", "Index") }}, {"seed", std::string{ EditorText("materialEditor.pin.seed", "Seed") }}};
     case kb::render::RenderMaterialGraphNodeKind::AppendVector:
@@ -267,6 +303,32 @@ PreferredOutputPins(kb::render::RenderMaterialGraphNodeKind kind) {
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
         return {{"value", std::string{ EditorText("materialEditor.pin.value", "Value") }}};
+    case kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture:
+        return {{"xyzTexture", std::string{ EditorText("materialEditor.pin.xyzTexture", "XYZ Texture") }}, {"xyTexture", std::string{ EditorText("materialEditor.pin.xyTexture", "XY Texture") }}, {"zTexture", std::string{ EditorText("materialEditor.pin.zTexture", "Z Texture") }}};
+    case kb::render::RenderMaterialGraphNodeKind::FlipBook:
+        return {{"value", "UVs"}};
+    case kb::render::RenderMaterialGraphNodeKind::BlendOverlay:
+    case kb::render::RenderMaterialGraphNodeKind::BlendScreen:
+    case kb::render::RenderMaterialGraphNodeKind::BlendSoftLight:
+    case kb::render::RenderMaterialGraphNodeKind::BlendHardLight:
+    case kb::render::RenderMaterialGraphNodeKind::BlendLinearLight:
+    case kb::render::RenderMaterialGraphNodeKind::BlendColorBurn:
+    case kb::render::RenderMaterialGraphNodeKind::BlendColorDodge:
+    case kb::render::RenderMaterialGraphNodeKind::BlendDarken:
+    case kb::render::RenderMaterialGraphNodeKind::BlendLighten:
+    case kb::render::RenderMaterialGraphNodeKind::BlendDifference:
+    case kb::render::RenderMaterialGraphNodeKind::HueShift:
+    case kb::render::RenderMaterialGraphNodeKind::RemapValueRange:
+        return {{"value", std::string{ EditorText("materialEditor.pin.result", "Result") }}};
+    case kb::render::RenderMaterialGraphNodeKind::Checkerboard:
+    case kb::render::RenderMaterialGraphNodeKind::PolarCoordinates:
+    case kb::render::RenderMaterialGraphNodeKind::Twirl:
+    case kb::render::RenderMaterialGraphNodeKind::Ellipse:
+    case kb::render::RenderMaterialGraphNodeKind::Rectangle:
+    case kb::render::RenderMaterialGraphNodeKind::RoundedRectangle:
+    case kb::render::RenderMaterialGraphNodeKind::Contrast:
+    case kb::render::RenderMaterialGraphNodeKind::ChannelMixer:
+        return {{"value", std::string{ EditorText("materialEditor.pin.out", "Out") }}};
     case kb::render::RenderMaterialGraphNodeKind::Desaturate:
         return {{"color", std::string{ EditorText("materialEditor.pin.color", "Color") }}};
     case kb::render::RenderMaterialGraphNodeKind::BreakVector:

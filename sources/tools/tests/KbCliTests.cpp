@@ -34,6 +34,7 @@
 #if KB_CLI_RENDERER
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #endif
 
@@ -3528,6 +3529,46 @@ void RunMaterialAuthoringCommandTests() {
             renderer->materialAssetId == kb::assets::MakeAssetId("/Game/Materials/CarRed.kbmatinst:RenderMaterialInstance").value,
         "the Mesh Renderer did not keep the material instance");
 }
+
+// material-graph builds a graph of the Unreal/Unity utility nodes by their names (Unreal's Blend_Overlay
+// and Noise with its Voronoi function, Unity's Checkerboard); invalid Noise settings are refused by name.
+void RunMaterialGraphUtilityNodeCommandTests() {
+    const std::string project = NewAuthoringProject("material_graph_utility_project");
+    Require(Run(&kb::cli::RunMaterialNewCommand, { "--project", project, "--name", "Stone" }).exitCode == 0, "material-new Stone failed");
+    const std::vector<std::string> base{ "--project", project, "--material", "/Game/Materials/Stone.kbmat" };
+    const auto graph = [&](std::vector<std::string> tail) {
+        std::vector<std::string> arguments{ tail.front() };
+        arguments.insert(arguments.end(), base.begin(), base.end());
+        arguments.insert(arguments.end(), tail.begin() + 1, tail.end());
+        return Run(&kb::cli::RunMaterialGraphCommand, arguments);
+    };
+    const CommandRun checker = graph({ "add-node", "--kind", "Checkerboard", "--name", "Checker" });
+    Require(checker.exitCode == 0 && Contains(checker.output, "Checkerboard"), "add-node Checkerboard failed: " + checker.output);
+    const CommandRun noise = graph({ "add-node", "--kind", "Noise", "--name", "Cells", "--value", "voronoi false 2 3 4 2 0 1" });
+    Require(noise.exitCode == 0, "add-node Noise with Unreal's Voronoi settings failed: " + noise.output);
+    const CommandRun blend = graph({ "add-node", "--kind", "Blend_Overlay", "--name", "Mix" });
+    Require(blend.exitCode == 0 && Contains(blend.output, "BlendOverlay"), "add-node Blend_Overlay failed: " + blend.output);
+    Require(graph({ "connect", "--from", "Checker", "--to", "Mix", "--to-pin", "Base" }).exitCode == 0, "Checkerboard -> Base failed");
+    Require(graph({ "connect", "--from", "Cells", "--to", "Mix", "--to-pin", "Blend" }).exitCode == 0, "Noise -> Blend failed");
+    Require(graph({ "connect", "--from", "Mix", "--to", "Output", "--to-pin", "BaseColor" }).exitCode == 0, "Blend -> Base Color failed");
+    const CommandRun refused = graph({ "set", "--node", "Cells", "--value", "perlin" });
+    Require(refused.exitCode != 0 && Contains(refused.output, "'perlin'"), "an unknown Noise function must be refused by name: " + refused.output);
+    const CommandRun shown = graph({ "show" });
+    Require(shown.exitCode == 0 && Contains(shown.output, "Compiles: yes"), "the utility node graph must compile: " + shown.output);
+
+    const std::optional<kb::render::RenderMaterialAssetData> saved = kb::render::RenderMaterialAssetLoader::LoadMaterial(
+        std::filesystem::path{ project } / "Assets" / "Materials" / "Stone.kbmat");
+    Require(saved.has_value() && saved->graph.links.size() == 3U, "the utility node graph must hold its three links");
+    const auto cells = std::ranges::find_if(saved->graph.nodes, [](const kb::render::RenderMaterialGraphNode& node) {
+        return node.kind == kb::render::RenderMaterialGraphNodeKind::Noise;
+    });
+    Require(cells != saved->graph.nodes.end() && cells->parameter.defaultValueHint == "voronoi false 2 3 4 2 0 1",
+        "the Noise settings must be saved and the refused ones must not replace them");
+    const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
+        saved->graph, kb::render::RenderMaterialGraphBuildContext{ .assetId = 0xC11U });
+    Require(compiled.Succeeded() && Contains(compiled.shader.source, "kbVoronoiNoise3(") && Contains(compiled.shader.source, "checkerFootprint"),
+        "the saved graph must compile Unreal's Voronoi and Unity's Checkerboard");
+}
 #endif
 
 int main() {
@@ -3539,6 +3580,7 @@ int main() {
     RunPostProcessCommandTests();
     RunImportSettingsCommandTests();
     RunMaterialAuthoringCommandTests();
+    RunMaterialGraphUtilityNodeCommandTests();
 #endif
     RunSceneCommandTests();
     RunRunCommandTests();

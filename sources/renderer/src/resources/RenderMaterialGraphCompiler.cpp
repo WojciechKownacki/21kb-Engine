@@ -532,6 +532,8 @@ struct GraphCodegen {
         return RenderMaterialGraphPinDataType(kind, "color", true);
     case RenderMaterialGraphNodeKind::NormalUnpack:
         return RenderMaterialGraphPinDataType(kind, "normal", true);
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+        return RenderMaterialGraphPinDataType(kind, "xyzTexture", true);
     default:
         return RenderMaterialGraphPinDataType(kind, "value", true);
     }
@@ -570,6 +572,9 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
+    // Noise and WorldAlignedTexture keep their own temporaries (emittedTemp).
+    case RenderMaterialGraphNodeKind::Noise:
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture:
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
@@ -1179,6 +1184,87 @@ struct TextureCoordinateHint {
     return result;
 }
 
+// One octave of Unreal's Noise function in -1..1. Voronoi is the distance to the nearest cell point, brought
+// to -1..1 like Unreal's VoronoiNoise3D_ALU(...).w * 2 - 1; its quality selects the searched neighbourhood.
+[[nodiscard]] std::string NoiseFunctionCall(const RenderMaterialGraphNoiseSettings& noise, const std::string& position) {
+    switch (noise.function) {
+    case RenderMaterialGraphNoiseFunction::Simplex:
+        return "kbSimplexNoise(" + position + ")";
+    case RenderMaterialGraphNoiseFunction::Gradient:
+        return "kbGradientNoise(" + position + ")";
+    case RenderMaterialGraphNoiseFunction::Value:
+        return "(kbValueNoise(" + position + ") * 2.0 - 1.0)";
+    case RenderMaterialGraphNoiseFunction::Voronoi:
+        return "(kbVoronoiNoise" + std::to_string(noise.quality) + "(" + position + ") * 2.0 - 1.0)";
+    }
+    return "kbSimplexNoise(" + position + ")";
+}
+
+// The Voronoi search of one quality level: Quality 1 checks the 2x2x2 cells nearest the point with points
+// jittered within half a cell, 2 the 3x3x3 neighbourhood at 0.75 jitter, 3 at full jitter, 4 the 4x4x4
+// neighbourhood at full jitter (Unreal trades the cell count against jitter the same way).
+[[nodiscard]] std::string VoronoiNoiseFunctionSource(std::uint32_t quality) {
+    const int cells = quality == 1U ? 2 : (quality == 4U ? 4 : 3);
+    const float jitter = quality == 1U ? 0.5F : (quality == 2U ? 0.75F : 1.0F);
+    const std::string q = std::to_string(quality);
+    std::string source = "float kbVoronoiNoise" + q + "(vec3 p) {\n";
+    source += "    vec3 cell = floor(p);\n";
+    source += "    vec3 local = p - cell;\n";
+    if (cells == 3) {
+        source += "    vec3 first = vec3_splat(-1.0);\n";
+    } else {
+        // Even neighbourhoods start on the side of the cell the point is nearer to.
+        source += "    vec3 first = step(vec3_splat(0.5), local) - vec3_splat(" + FloatLiteral(static_cast<float>(cells / 2)) + ");\n";
+    }
+    source += "    float nearest = 64.0;\n";
+    source += "    for (int z = 0; z < " + std::to_string(cells) + "; ++z) {\n";
+    source += "        for (int y = 0; y < " + std::to_string(cells) + "; ++y) {\n";
+    source += "            for (int x = 0; x < " + std::to_string(cells) + "; ++x) {\n";
+    source += "                vec3 offset = first + vec3(float(x), float(y), float(z));\n";
+    source += "                vec3 feature = offset + vec3_splat(0.5) + (kbHash33(cell + offset) - vec3_splat(0.5)) * " + FloatLiteral(jitter) + ";\n";
+    source += "                vec3 toFeature = feature - local;\n";
+    source += "                nearest = min(nearest, dot(toFeature, toFeature));\n";
+    source += "            }\n";
+    source += "        }\n";
+    source += "    }\n";
+    source += "    return sqrt(nearest);\n";
+    source += "}\n\n";
+    return source;
+}
+
+// Unreal's BlendFunctions on Base (b) and Blend (l). The burn/dodge denominators keep 1e-5 away from zero.
+[[nodiscard]] std::string BlendFunctionExpression(RenderMaterialGraphNodeKind kind, const std::string& b, const std::string& l) {
+    const std::string one = "vec3_splat(1.0)";
+    const std::string half = "vec3_splat(0.5)";
+    const std::string multiply = "(2.0 * " + b + " * " + l + ")";
+    const std::string screen = "(" + one + " - 2.0 * (" + one + " - " + b + ") * (" + one + " - " + l + "))";
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::BlendOverlay:
+        return "mix(" + multiply + ", " + screen + ", step(" + half + ", " + b + "))";
+    case RenderMaterialGraphNodeKind::BlendScreen:
+        return "(" + one + " - (" + one + " - " + b + ") * (" + one + " - " + l + "))";
+    case RenderMaterialGraphNodeKind::BlendSoftLight:
+        return "mix(" + multiply + " + " + b + " * " + b + " * (" + one + " - 2.0 * " + l + "), sqrt(max(" + b + ", vec3_splat(0.0))) * (2.0 * " + l + " - " + one + ") + 2.0 * " +
+            b + " * (" + one + " - " + l + "), step(" + half + ", " + l + "))";
+    case RenderMaterialGraphNodeKind::BlendHardLight:
+        return "mix(" + multiply + ", " + screen + ", step(" + half + ", " + l + "))";
+    case RenderMaterialGraphNodeKind::BlendLinearLight:
+        return "(" + b + " + 2.0 * " + l + " - " + one + ")";
+    case RenderMaterialGraphNodeKind::BlendColorBurn:
+        return "(" + one + " - (" + one + " - " + b + ") / max(" + l + ", vec3_splat(0.00001)))";
+    case RenderMaterialGraphNodeKind::BlendColorDodge:
+        return "(" + b + " / max(" + one + " - " + l + ", vec3_splat(0.00001)))";
+    case RenderMaterialGraphNodeKind::BlendDarken:
+        return "min(" + b + ", " + l + ")";
+    case RenderMaterialGraphNodeKind::BlendLighten:
+        return "max(" + b + ", " + l + ")";
+    case RenderMaterialGraphNodeKind::BlendDifference:
+        return "abs(" + b + " - " + l + ")";
+    default:
+        return b;
+    }
+}
+
 std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
     switch (node.kind) {
     case RenderMaterialGraphNodeKind::Reroute:
@@ -1723,11 +1809,225 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "vec4(kbBlackBody(" +
             CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float, "6500.0") +
             "), 1.0)";
-    case RenderMaterialGraphNodeKind::Noise:
-        // MAT-50: smooth value noise of the input position, broadcast to all channels.
-        return "vec4(vec3_splat(kbValueNoise((" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float3, "ctx.worldPos") +
-            ").xyz)), 1.0)";
+    case RenderMaterialGraphNodeKind::Noise: {
+        // Unreal's Noise (MaterialExpressionNoise): Levels octaves of the chosen function, each LevelScale times
+        // finer and 1/LevelScale as strong, faded by the filter width; turbulence sums |noise|, otherwise the
+        // -1..1 sum is brought to 0..1; the result is lerp(OutputMin, OutputMax, sum), broadcast to float4.
+        if (const auto it = cg.emittedTemp.find(node.id); it != cg.emittedTemp.end()) {
+            return it->second;
+        }
+        const RenderMaterialGraphNoiseSettingsParseResult parsed = ParseRenderMaterialGraphNoiseSettings(node.parameter.defaultValueHint);
+        if (!parsed.settings.has_value()) {
+            AddShaderGenerationDiagnostic(cg.diagnostics, node, "value", parsed.error);
+            return DefaultExpressionForType(RenderMaterialGraphPinType::Float4);
+        }
+        const RenderMaterialGraphNoiseSettings& noise = *parsed.settings;
+        const std::string id = std::to_string(node.id);
+        const std::string position = "noisePosition" + id;
+        const std::string filterWidth = "noiseFilterWidth" + id;
+        const std::string sum = "noiseSum" + id;
+        const std::string weight = "noiseWeight" + id;
+        const std::string level = "noiseLevel" + id;
+        cg.statements += "    vec3 " + position + " = (" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float3, "ctx.worldPos") + ") * " + FloatLiteral(noise.scale) + ";\n";
+        cg.statements += "    float " + filterWidth + " = (" +
+            CompileInputExpression(cg, node, "filterWidth", RenderMaterialGraphPinType::Float, "0.0") + ") * " + FloatLiteral(noise.scale) + ";\n";
+        cg.statements += "    float " + sum + " = 0.0;\n";
+        cg.statements += "    float " + weight + " = 1.0;\n";
+        cg.statements += "    for (int " + level + " = 0; " + level + " < " + std::to_string(noise.levels) + "; ++" + level + ") {\n";
+        cg.statements += "        " + weight + " *= clamp(1.0 - " + filterWidth + ", 0.0, 1.0);\n";
+        const std::string sample = NoiseFunctionCall(noise, position);
+        cg.statements += "        " + sum + " += " + (noise.turbulence ? "abs(" + sample + ")" : sample) + " * " + weight + ";\n";
+        cg.statements += "        " + position + " *= " + FloatLiteral(noise.levelScale) + ";\n";
+        cg.statements += "        " + weight + " *= " + FloatLiteral(1.0F / noise.levelScale) + ";\n";
+        cg.statements += "        " + filterWidth + " *= " + FloatLiteral(noise.levelScale) + ";\n";
+        cg.statements += "    }\n";
+        if (!noise.turbulence) {
+            cg.statements += "    " + sum + " = " + sum + " * 0.5 + 0.5;\n";
+        }
+        const std::string tmp = "noise" + id;
+        cg.statements += "    vec4 " + tmp + " = vec4_splat(mix(" + FloatLiteral(noise.outputMin) + ", " + FloatLiteral(noise.outputMax) + ", " + sum + "));\n";
+        cg.emittedTemp.emplace(node.id, tmp);
+        return tmp;
+    }
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture: {
+        // Unreal's WorldAlignedTexture: the texture projected along the world axes, UVs = WorldPosition /
+        // TextureSize, blended by the CheapContrast of |WorldSpaceNormal| per axis. Unreal is Z-up and this
+        // engine is Y-up, so Unreal's Z projection (the "Z Texture", the top) samples along +Y here and the
+        // "XY Texture" blends the projections along X and Z.
+        if (const auto it = cg.emittedTemp.find(node.id); it != cg.emittedTemp.end()) {
+            return it->second;
+        }
+        if (FindInputLink(cg.graph, node.id, "texture") == nullptr) {
+            AddShaderGenerationDiagnostic(cg.diagnostics, node, "texture", "WorldAlignedTexture needs a Texture Object connected to its TextureObject input.");
+            return DefaultExpressionForType(RenderMaterialGraphPinType::Color);
+        }
+        const std::string texture = CompileTextureInputExpression(cg.graph, node, cg.diagnostics);
+        const std::string id = std::to_string(node.id);
+        const std::string uvw = "watUvw" + id;
+        const std::string contrast = "watContrast" + id;
+        const std::string mask = "watMask" + id;
+        cg.statements += "    vec3 " + uvw + " = (" +
+            CompileInputExpression(cg, node, "worldPosition", RenderMaterialGraphPinType::Float3, "ctx.worldPos") + ") / (" +
+            CompileInputExpression(cg, node, "textureSize", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)") + ");\n";
+        cg.statements += "    vec3 " + contrast + " = " +
+            CompileInputExpression(cg, node, "projectionTransitionContrast", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + ";\n";
+        cg.statements += "    vec3 " + mask + " = clamp(mix(-" + contrast + ", vec3_splat(1.0) + " + contrast + ", abs(normalize(" +
+            CompileInputExpression(cg, node, "worldSpaceNormal", RenderMaterialGraphPinType::Float3, "ctx.normal") + "))), vec3_splat(0.0), vec3_splat(1.0));\n";
+        const std::string alongX = "watAlongX" + id;
+        const std::string alongZ = "watAlongZ" + id;
+        const std::string xy = "watXY" + id;
+        const std::string z = "watZ" + id;
+        const std::string xyz = "watXYZ" + id;
+        cg.statements += "    vec4 " + alongX + " = texture2D(" + texture + ", vec2(" + uvw + ".z, -" + uvw + ".y));\n";
+        cg.statements += "    vec4 " + alongZ + " = texture2D(" + texture + ", vec2(" + uvw + ".x, -" + uvw + ".y));\n";
+        cg.statements += "    vec4 " + xy + " = mix(" + alongZ + ", " + alongX + ", " + mask + ".x);\n";
+        cg.statements += "    vec4 " + z + " = texture2D(" + texture + ", " + uvw + ".xz);\n";
+        cg.statements += "    vec4 " + xyz + " = mix(" + xy + ", " + z + ", " + mask + ".y);\n";
+        cg.customOutputTemps[CustomCodeOutputTempKey(node.id, "xyTexture")] = xy;
+        cg.customOutputTemps[CustomCodeOutputTempKey(node.id, "zTexture")] = z;
+        cg.emittedTemp.emplace(node.id, xyz);
+        return xyz;
+    }
+    case RenderMaterialGraphNodeKind::FlipBook: {
+        // Unreal's FlipBook: frame floor(frac(phase) * rows * columns), read left to right and top to bottom.
+        const std::string id = std::to_string(node.id);
+        const std::string grid = "flipBookGrid" + id;
+        const std::string frame = "flipBookFrame" + id;
+        cg.statements += "    vec2 " + grid + " = vec2(" +
+            CompileInputExpression(cg, node, "numberOfColumns", RenderMaterialGraphPinType::Float, "1.0") + ", " +
+            CompileInputExpression(cg, node, "numberOfRows", RenderMaterialGraphPinType::Float, "1.0") + ");\n";
+        cg.statements += "    float " + frame + " = floor(fract(" +
+            CompileInputExpression(cg, node, "animationPhase", RenderMaterialGraphPinType::Float, "fract(ctx.time)") + ") * " + grid + ".x * " + grid + ".y);\n";
+        return "((" + CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") + " + vec2(mod(" + frame + ", " + grid +
+            ".x), floor(" + frame + " / " + grid + ".x))) / " + grid + ")";
+    }
+    case RenderMaterialGraphNodeKind::Checkerboard: {
+        // Unity Shader Graph's Checkerboard: an analytically antialiased checker of Color A and Color B whose
+        // contrast fades out as the UV footprint of a pixel approaches a cell.
+        const std::string id = std::to_string(node.id);
+        const std::string uv = "checkerUv" + id;
+        const std::string derivatives = "checkerDerivatives" + id;
+        const std::string footprint = "checkerFootprint" + id;
+        const std::string blend = "checkerBlend" + id;
+        cg.statements += "    vec2 " + uv + " = (" + CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") +
+            " + vec2_splat(0.5)) * " + CompileInputExpression(cg, node, "frequency", RenderMaterialGraphPinType::Float2, "vec2(1.0, 1.0)") + ";\n";
+        cg.statements += "    vec4 " + derivatives + " = vec4(dFdx(" + uv + "), dFdy(" + uv + "));\n";
+        cg.statements += "    vec2 " + footprint + " = sqrt(vec2(dot(" + derivatives + ".xz, " + derivatives + ".xz), dot(" + derivatives + ".yw, " + derivatives + ".yw)));\n";
+        cg.statements += "    vec2 " + blend + " = clamp((4.0 * abs(fract(" + uv + " + vec2_splat(0.25)) - vec2_splat(0.5)) - vec2_splat(1.0)) * (vec2_splat(0.35) / max(" +
+            footprint + ", vec2_splat(0.000001))), vec2_splat(-1.0), vec2_splat(1.0));\n";
+        return "mix(" + CompileInputExpression(cg, node, "colorA", RenderMaterialGraphPinType::Float3, "vec3(0.2, 0.2, 0.2)") + ", " +
+            CompileInputExpression(cg, node, "colorB", RenderMaterialGraphPinType::Float3, "vec3(0.7, 0.7, 0.7)") +
+            ", vec3_splat(clamp(0.5 + 0.5 * " + blend + ".x * " + blend + ".y * sqrt(clamp(1.1 - max(" + footprint + ".x, " + footprint + ".y), 0.0, 1.0)), 0.0, 1.0)))";
+    }
+    case RenderMaterialGraphNodeKind::PolarCoordinates: {
+        // Unity Shader Graph's Polar Coordinates: (radius * 2 * Radial Scale, atan2(x, y) / 6.28 * Length Scale).
+        const std::string delta = "polarDelta" + std::to_string(node.id);
+        cg.statements += "    vec2 " + delta + " = " + CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") + " - " +
+            CompileInputExpression(cg, node, "center", RenderMaterialGraphPinType::Float2, "vec2(0.5, 0.5)") + ";\n";
+        return "vec2(length(" + delta + ") * 2.0 * " +
+            CompileInputExpression(cg, node, "radialScale", RenderMaterialGraphPinType::Float, "1.0") + ", atan2(" + delta + ".x, " + delta + ".y) * (1.0 / 6.28) * " +
+            CompileInputExpression(cg, node, "lengthScale", RenderMaterialGraphPinType::Float, "1.0") + ")";
+    }
+    case RenderMaterialGraphNodeKind::Twirl: {
+        // Unity Shader Graph's Twirl: rotate the UV about Center by Strength * distance, then add Offset.
+        const std::string id = std::to_string(node.id);
+        const std::string center = "twirlCenter" + id;
+        const std::string delta = "twirlDelta" + id;
+        const std::string angle = "twirlAngle" + id;
+        cg.statements += "    vec2 " + center + " = " + CompileInputExpression(cg, node, "center", RenderMaterialGraphPinType::Float2, "vec2(0.5, 0.5)") + ";\n";
+        cg.statements += "    vec2 " + delta + " = " + CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") + " - " + center + ";\n";
+        cg.statements += "    float " + angle + " = " + CompileInputExpression(cg, node, "strength", RenderMaterialGraphPinType::Float, "10.0") + " * length(" + delta + ");\n";
+        return "(vec2(cos(" + angle + ") * " + delta + ".x - sin(" + angle + ") * " + delta + ".y, sin(" + angle + ") * " + delta + ".x + cos(" + angle + ") * " +
+            delta + ".y) + " + center + " + " + CompileInputExpression(cg, node, "offset", RenderMaterialGraphPinType::Float2, "vec2(0.0, 0.0)") + ")";
+    }
+    case RenderMaterialGraphNodeKind::Ellipse: {
+        // Unity Shader Graph's Ellipse: saturate((1 - d) / fwidth(d)), d = |(2 UV - 1) / (Width, Height)|.
+        const std::string distanceName = "ellipseDistance" + std::to_string(node.id);
+        cg.statements += "    float " + distanceName + " = length((" + CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") +
+            " * 2.0 - vec2_splat(1.0)) / vec2(" + CompileInputExpression(cg, node, "width", RenderMaterialGraphPinType::Float, "0.5") + ", " +
+            CompileInputExpression(cg, node, "height", RenderMaterialGraphPinType::Float, "0.5") + "));\n";
+        return "vec4_splat(clamp((1.0 - " + distanceName + ") / max(fwidth(" + distanceName + "), 0.000001), 0.0, 1.0))";
+    }
+    case RenderMaterialGraphNodeKind::Rectangle: {
+        // Unity Shader Graph's Rectangle: saturate(min(1 - d / fwidth(d))), d = |2 UV - 1| - (Width, Height).
+        const std::string distanceName = "rectangleDistance" + std::to_string(node.id);
+        cg.statements += "    vec2 " + distanceName + " = abs(" + CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") +
+            " * 2.0 - vec2_splat(1.0)) - vec2(" + CompileInputExpression(cg, node, "width", RenderMaterialGraphPinType::Float, "0.5") + ", " +
+            CompileInputExpression(cg, node, "height", RenderMaterialGraphPinType::Float, "0.5") + ");\n";
+        cg.statements += "    " + distanceName + " = vec2_splat(1.0) - " + distanceName + " / max(fwidth(" + distanceName + "), vec2_splat(0.000001));\n";
+        return "vec4_splat(clamp(min(" + distanceName + ".x, " + distanceName + ".y), 0.0, 1.0))";
+    }
+    case RenderMaterialGraphNodeKind::RoundedRectangle: {
+        // Unity Shader Graph's Rounded Rectangle: the rectangle with corners of Radius (clamped to the half sizes).
+        const std::string id = std::to_string(node.id);
+        const std::string width = "roundedWidth" + id;
+        const std::string height = "roundedHeight" + id;
+        const std::string radius = "roundedRadius" + id;
+        const std::string distanceName = "roundedDistance" + id;
+        cg.statements += "    float " + width + " = " + CompileInputExpression(cg, node, "width", RenderMaterialGraphPinType::Float, "0.5") + ";\n";
+        cg.statements += "    float " + height + " = " + CompileInputExpression(cg, node, "height", RenderMaterialGraphPinType::Float, "0.5") + ";\n";
+        cg.statements += "    float " + radius + " = max(min(min(abs(" + CompileInputExpression(cg, node, "radius", RenderMaterialGraphPinType::Float, "0.1") +
+            " * 2.0), abs(" + width + ")), abs(" + height + ")), 0.00001);\n";
+        cg.statements += "    float " + distanceName + " = length(max(vec2_splat(0.0), abs(" +
+            CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") + " * 2.0 - vec2_splat(1.0)) - vec2(" + width + ", " + height +
+            ") + vec2_splat(" + radius + "))) / " + radius + ";\n";
+        return "vec4_splat(clamp((1.0 - " + distanceName + ") / max(fwidth(" + distanceName + "), 0.000001), 0.0, 1.0))";
+    }
+    case RenderMaterialGraphNodeKind::BlendOverlay:
+    case RenderMaterialGraphNodeKind::BlendScreen:
+    case RenderMaterialGraphNodeKind::BlendSoftLight:
+    case RenderMaterialGraphNodeKind::BlendHardLight:
+    case RenderMaterialGraphNodeKind::BlendLinearLight:
+    case RenderMaterialGraphNodeKind::BlendColorBurn:
+    case RenderMaterialGraphNodeKind::BlendColorDodge:
+    case RenderMaterialGraphNodeKind::BlendDarken:
+    case RenderMaterialGraphNodeKind::BlendLighten:
+    case RenderMaterialGraphNodeKind::BlendDifference: {
+        // Unreal's BlendFunctions (Blend_Overlay, ...): Base and Blend per channel.
+        const std::string id = std::to_string(node.id);
+        const std::string base = "blendBase" + id;
+        const std::string blend = "blendLayer" + id;
+        cg.statements += "    vec3 " + base + " = " + CompileInputExpression(cg, node, "base", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + ";\n";
+        cg.statements += "    vec3 " + blend + " = " + CompileInputExpression(cg, node, "blend", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + ";\n";
+        return BlendFunctionExpression(node.kind, base, blend);
+    }
+    case RenderMaterialGraphNodeKind::Contrast:
+        // Unity Shader Graph's Contrast: scale around the midpoint pow(0.5, 2.2).
+        return "((" + CompileInputExpression(cg, node, "input", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + " - vec3_splat(0.217637640824031)) * " +
+            CompileInputExpression(cg, node, "contrast", RenderMaterialGraphPinType::Float, "1.0") + " + vec3_splat(0.217637640824031))";
+    case RenderMaterialGraphNodeKind::HueShift: {
+        // Unreal's HueShift: the colour rotated about the grey axis (1,1,1)/sqrt(3) by Hue Shift Percentage * 2 pi
+        // (RotateAboutAxis, Rodrigues' rotation).
+        const std::string id = std::to_string(node.id);
+        const std::string color = "hueColor" + id;
+        const std::string angle = "hueAngle" + id;
+        cg.statements += "    vec3 " + color + " = " + CompileInputExpression(cg, node, "color", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + ";\n";
+        cg.statements += "    float " + angle + " = " + CompileInputExpression(cg, node, "hueShiftPercentage", RenderMaterialGraphPinType::Float, "0.0") + " * 6.28318530718;\n";
+        return "(" + color + " * cos(" + angle + ") + cross(vec3_splat(0.577350269190), " + color + ") * sin(" + angle +
+            ") + vec3_splat(0.577350269190) * dot(vec3_splat(0.577350269190), " + color + ") * (1.0 - cos(" + angle + ")))";
+    }
+    case RenderMaterialGraphNodeKind::ChannelMixer: {
+        // Unity Shader Graph's Channel Mixer: each output channel is the dot of the input with its row.
+        const std::string input = "mixerInput" + std::to_string(node.id);
+        cg.statements += "    vec3 " + input + " = " + CompileInputExpression(cg, node, "input", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + ";\n";
+        return "vec3(dot(" + input + ", " + CompileInputExpression(cg, node, "red", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)") + "), dot(" + input + ", " +
+            CompileInputExpression(cg, node, "green", RenderMaterialGraphPinType::Float3, "vec3(0.0, 1.0, 0.0)") + "), dot(" + input + ", " +
+            CompileInputExpression(cg, node, "blue", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)") + "))";
+    }
+    case RenderMaterialGraphNodeKind::RemapValueRange: {
+        // Unreal's RemapValueRange: lerp(Target Low, Target High, (Input - Input Low) / (Input High - Input Low)),
+        // unclamped; coincident input bounds keep the guarded denominator of Inverse Lerp.
+        const std::string id = std::to_string(node.id);
+        const std::string low = "remapInputLow" + id;
+        const std::string range = "remapInputRange" + id;
+        cg.statements += "    float " + low + " = " + CompileInputExpression(cg, node, "inputLow", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        cg.statements += "    float " + range + " = " + CompileInputExpression(cg, node, "inputHigh", RenderMaterialGraphPinType::Float, "1.0") + " - " + low + ";\n";
+        cg.statements += "    " + range + " = mix(" + range + ", 1.0, step(abs(" + range + "), 0.0001));\n";
+        return "mix(" + CompileInputExpression(cg, node, "targetLow", RenderMaterialGraphPinType::Float, "0.0") + ", " +
+            CompileInputExpression(cg, node, "targetHigh", RenderMaterialGraphPinType::Float, "1.0") + ", (" +
+            CompileInputExpression(cg, node, "input", RenderMaterialGraphPinType::Float, "0.0") + " - " + low + ") / " + range + ")";
+    }
     case RenderMaterialGraphNodeKind::VectorNoise:
         // MAT-50: three decorrelated value-noise channels for a vector perturbation field.
         return "vec4(kbVectorNoise((" +
@@ -2131,6 +2431,15 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
             return "(" + baseRef + ")." + std::string{ outputPin };
         }
         return baseRef;
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+        if (outputPin == "xyzTexture") {
+            return baseRef;
+        }
+        if (const auto it = cg.customOutputTemps.find(CustomCodeOutputTempKey(node.id, outputPin)); it != cg.customOutputTemps.end()) {
+            return it->second;
+        }
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "WorldAlignedTexture output pin was not emitted.");
+        return DefaultExpressionForType(RenderMaterialGraphPinType::Color);
     case RenderMaterialGraphNodeKind::CustomCode:
         if (outputPin == "value") {
             return baseRef;
@@ -2275,6 +2584,28 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case RenderMaterialGraphNodeKind::FlipBook:
+    case RenderMaterialGraphNodeKind::Checkerboard:
+    case RenderMaterialGraphNodeKind::PolarCoordinates:
+    case RenderMaterialGraphNodeKind::Twirl:
+    case RenderMaterialGraphNodeKind::Ellipse:
+    case RenderMaterialGraphNodeKind::Rectangle:
+    case RenderMaterialGraphNodeKind::RoundedRectangle:
+    case RenderMaterialGraphNodeKind::BlendOverlay:
+    case RenderMaterialGraphNodeKind::BlendScreen:
+    case RenderMaterialGraphNodeKind::BlendSoftLight:
+    case RenderMaterialGraphNodeKind::BlendHardLight:
+    case RenderMaterialGraphNodeKind::BlendLinearLight:
+    case RenderMaterialGraphNodeKind::BlendColorBurn:
+    case RenderMaterialGraphNodeKind::BlendColorDodge:
+    case RenderMaterialGraphNodeKind::BlendDarken:
+    case RenderMaterialGraphNodeKind::BlendLighten:
+    case RenderMaterialGraphNodeKind::BlendDifference:
+    case RenderMaterialGraphNodeKind::Contrast:
+    case RenderMaterialGraphNodeKind::HueShift:
+    case RenderMaterialGraphNodeKind::ChannelMixer:
+    case RenderMaterialGraphNodeKind::RemapValueRange:
     case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
@@ -2495,6 +2826,28 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case RenderMaterialGraphNodeKind::FlipBook:
+    case RenderMaterialGraphNodeKind::Checkerboard:
+    case RenderMaterialGraphNodeKind::PolarCoordinates:
+    case RenderMaterialGraphNodeKind::Twirl:
+    case RenderMaterialGraphNodeKind::Ellipse:
+    case RenderMaterialGraphNodeKind::Rectangle:
+    case RenderMaterialGraphNodeKind::RoundedRectangle:
+    case RenderMaterialGraphNodeKind::BlendOverlay:
+    case RenderMaterialGraphNodeKind::BlendScreen:
+    case RenderMaterialGraphNodeKind::BlendSoftLight:
+    case RenderMaterialGraphNodeKind::BlendHardLight:
+    case RenderMaterialGraphNodeKind::BlendLinearLight:
+    case RenderMaterialGraphNodeKind::BlendColorBurn:
+    case RenderMaterialGraphNodeKind::BlendColorDodge:
+    case RenderMaterialGraphNodeKind::BlendDarken:
+    case RenderMaterialGraphNodeKind::BlendLighten:
+    case RenderMaterialGraphNodeKind::BlendDifference:
+    case RenderMaterialGraphNodeKind::Contrast:
+    case RenderMaterialGraphNodeKind::HueShift:
+    case RenderMaterialGraphNodeKind::ChannelMixer:
+    case RenderMaterialGraphNodeKind::RemapValueRange:
     case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
@@ -2655,6 +3008,28 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case RenderMaterialGraphNodeKind::FlipBook:
+    case RenderMaterialGraphNodeKind::Checkerboard:
+    case RenderMaterialGraphNodeKind::PolarCoordinates:
+    case RenderMaterialGraphNodeKind::Twirl:
+    case RenderMaterialGraphNodeKind::Ellipse:
+    case RenderMaterialGraphNodeKind::Rectangle:
+    case RenderMaterialGraphNodeKind::RoundedRectangle:
+    case RenderMaterialGraphNodeKind::BlendOverlay:
+    case RenderMaterialGraphNodeKind::BlendScreen:
+    case RenderMaterialGraphNodeKind::BlendSoftLight:
+    case RenderMaterialGraphNodeKind::BlendHardLight:
+    case RenderMaterialGraphNodeKind::BlendLinearLight:
+    case RenderMaterialGraphNodeKind::BlendColorBurn:
+    case RenderMaterialGraphNodeKind::BlendColorDodge:
+    case RenderMaterialGraphNodeKind::BlendDarken:
+    case RenderMaterialGraphNodeKind::BlendLighten:
+    case RenderMaterialGraphNodeKind::BlendDifference:
+    case RenderMaterialGraphNodeKind::Contrast:
+    case RenderMaterialGraphNodeKind::HueShift:
+    case RenderMaterialGraphNodeKind::ChannelMixer:
+    case RenderMaterialGraphNodeKind::RemapValueRange:
     case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
@@ -3238,6 +3613,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     bool usesRuntimeSwitch = false;
     bool usesBlackBody = false;
     bool usesNoise = false;
+    bool usesSimplexNoise = false;
+    bool usesGradientNoise = false;
+    std::vector<std::uint32_t> voronoiQualities;
     bool usesSobol = false;
     bool usesVertexColor = false;
     bool usesPerInstanceRandom = false;
@@ -3286,6 +3664,19 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             usesBlackBody = true;
             break;
         case RenderMaterialGraphNodeKind::Noise:
+            // Unreal's Noise: the value-noise helpers plus the function each node selects; a hint that does
+            // not parse is refused when the node's expression is generated.
+            usesNoise = true;
+            if (const RenderMaterialGraphNoiseSettingsParseResult noise = ParseRenderMaterialGraphNoiseSettings(node.parameter.defaultValueHint);
+                noise.settings.has_value()) {
+                usesSimplexNoise = usesSimplexNoise || noise.settings->function == RenderMaterialGraphNoiseFunction::Simplex;
+                usesGradientNoise = usesGradientNoise || noise.settings->function == RenderMaterialGraphNoiseFunction::Gradient;
+                if (noise.settings->function == RenderMaterialGraphNoiseFunction::Voronoi &&
+                    std::find(voronoiQualities.begin(), voronoiQualities.end(), noise.settings->quality) == voronoiQualities.end()) {
+                    voronoiQualities.push_back(noise.settings->quality);
+                }
+            }
+            break;
         case RenderMaterialGraphNodeKind::VectorNoise:
             // MAT-50: the noise nodes share hash + value-noise helpers emitted into the shader prelude.
             usesNoise = true;
@@ -3631,6 +4022,52 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "    return vec3(kbValueNoise(x), kbValueNoise(x + vec3(31.416, 47.853, 12.793)), kbValueNoise(x + vec3(57.719, 93.981, 74.321)));\n";
         source += "}\n\n";
     }
+    if (usesSimplexNoise || usesGradientNoise || !voronoiQualities.empty()) {
+        // A 3D -> 3D hash in 0..1 (Hoskins' hash33) for the gradient and cell-point lattices.
+        source += "vec3 kbHash33(vec3 p) {\n";
+        source += "    p = fract(p * vec3(0.1031, 0.1030, 0.0973));\n";
+        source += "    p += vec3_splat(dot(p, p.yxz + vec3_splat(33.33)));\n";
+        source += "    return fract((p.xxy + p.yxx) * p.zyx);\n";
+        source += "}\n\n";
+    }
+    if (usesSimplexNoise) {
+        // Unreal's Simplex noise computed on the simplex lattice (Gustavson): r^2 = 0.6 falloff, scaled to -1..1.
+        source += "float kbSimplexNoise(vec3 p) {\n";
+        source += "    vec3 s = floor(p + vec3_splat(dot(p, vec3_splat(0.333333333))));\n";
+        source += "    vec3 x0 = p - s + vec3_splat(dot(s, vec3_splat(0.166666667)));\n";
+        source += "    vec3 e = step(vec3_splat(0.0), x0 - x0.yzx);\n";
+        source += "    vec3 i1 = e * (vec3_splat(1.0) - e.zxy);\n";
+        source += "    vec3 i2 = vec3_splat(1.0) - e.zxy * (vec3_splat(1.0) - e);\n";
+        source += "    vec3 x1 = x0 - i1 + vec3_splat(0.166666667);\n";
+        source += "    vec3 x2 = x0 - i2 + vec3_splat(0.333333333);\n";
+        source += "    vec3 x3 = x0 - vec3_splat(0.5);\n";
+        source += "    vec4 w = max(vec4_splat(0.6) - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), vec4_splat(0.0));\n";
+        source += "    vec4 d = vec4(dot(kbHash33(s) * 2.0 - vec3_splat(1.0), x0), dot(kbHash33(s + i1) * 2.0 - vec3_splat(1.0), x1),\n";
+        source += "        dot(kbHash33(s + i2) * 2.0 - vec3_splat(1.0), x2), dot(kbHash33(s + vec3_splat(1.0)) * 2.0 - vec3_splat(1.0), x3));\n";
+        source += "    w *= w;\n";
+        source += "    return clamp(dot(d, w * w) * 52.0, -1.0, 1.0);\n";
+        source += "}\n\n";
+    }
+    if (usesGradientNoise) {
+        // Unreal's Gradient noise (GradientNoise3D_ALU): Perlin gradients at the lattice, quintic fade.
+        source += "float kbGradientCorner(vec3 cell, vec3 local, vec3 corner) {\n";
+        source += "    return dot(kbHash33(cell + corner) * 2.0 - vec3_splat(1.0), local - corner);\n";
+        source += "}\n\n";
+        source += "float kbGradientNoise(vec3 p) {\n";
+        source += "    vec3 cell = floor(p);\n";
+        source += "    vec3 local = p - cell;\n";
+        source += "    vec3 u = local * local * local * (local * (local * 6.0 - vec3_splat(15.0)) + vec3_splat(10.0));\n";
+        source += "    float x00 = mix(kbGradientCorner(cell, local, vec3(0.0, 0.0, 0.0)), kbGradientCorner(cell, local, vec3(1.0, 0.0, 0.0)), u.x);\n";
+        source += "    float x10 = mix(kbGradientCorner(cell, local, vec3(0.0, 1.0, 0.0)), kbGradientCorner(cell, local, vec3(1.0, 1.0, 0.0)), u.x);\n";
+        source += "    float x01 = mix(kbGradientCorner(cell, local, vec3(0.0, 0.0, 1.0)), kbGradientCorner(cell, local, vec3(1.0, 0.0, 1.0)), u.x);\n";
+        source += "    float x11 = mix(kbGradientCorner(cell, local, vec3(0.0, 1.0, 1.0)), kbGradientCorner(cell, local, vec3(1.0, 1.0, 1.0)), u.x);\n";
+        source += "    return clamp(mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z), -1.0, 1.0);\n";
+        source += "}\n\n";
+    }
+    for (const std::uint32_t quality : voronoiQualities) {
+        source += VoronoiNoiseFunctionSource(quality);
+    }
+
 
     if (usesSobol) {
         // MAT-50 tier2: deterministic 2D Sobol sample computed in-shader, with no lookup texture.
@@ -4117,6 +4554,30 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
         }
         if (node.kind == RenderMaterialGraphNodeKind::CustomCode) {
             ValidateCustomCodeNode(node, diagnostics);
+        }
+        if (node.kind == RenderMaterialGraphNodeKind::WorldAlignedTexture && !HasInputLink(graph, node.id, "texture")) {
+            // Unreal reports a missing TextureObject on WorldAlignedTexture; it has no local texture slot.
+            AddGraphDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticSeverity::Error,
+                RenderMaterialGraphDiagnosticKind::MissingTexture,
+                node.id,
+                0U,
+                "texture",
+                "WorldAlignedTexture node " + std::to_string(node.id) + " needs a Texture Object connected to its TextureObject input.");
+        }
+        if (node.kind == RenderMaterialGraphNodeKind::Noise) {
+            if (const RenderMaterialGraphNoiseSettingsParseResult noise = ParseRenderMaterialGraphNoiseSettings(node.parameter.defaultValueHint);
+                !noise.settings.has_value()) {
+                AddGraphDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                    node.id,
+                    0U,
+                    {},
+                    "Noise node " + std::to_string(node.id) + ": " + noise.error);
+            }
         }
         if (IsRenderMaterialGraphOrganizationNode(node.kind)) {
             const std::string& typeHint = node.parameter.defaultValueHint;

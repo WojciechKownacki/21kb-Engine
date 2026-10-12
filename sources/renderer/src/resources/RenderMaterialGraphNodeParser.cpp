@@ -488,6 +488,73 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "Sobol") || EqualsIgnoreCase(text, "Sobol2D") || EqualsIgnoreCase(text, "LowDiscrepancy")) {
         return RenderMaterialGraphNodeKind::Sobol;
     }
+    // Unreal's material functions keep their asset names (Blend_Overlay, ...) as accepted spellings.
+    if (EqualsIgnoreCase(text, "WorldAlignedTexture") || EqualsIgnoreCase(text, "Triplanar")) {
+        return RenderMaterialGraphNodeKind::WorldAlignedTexture;
+    }
+    if (EqualsIgnoreCase(text, "FlipBook")) {
+        return RenderMaterialGraphNodeKind::FlipBook;
+    }
+    if (EqualsIgnoreCase(text, "Checkerboard")) {
+        return RenderMaterialGraphNodeKind::Checkerboard;
+    }
+    if (EqualsIgnoreCase(text, "PolarCoordinates")) {
+        return RenderMaterialGraphNodeKind::PolarCoordinates;
+    }
+    if (EqualsIgnoreCase(text, "Twirl")) {
+        return RenderMaterialGraphNodeKind::Twirl;
+    }
+    if (EqualsIgnoreCase(text, "Ellipse")) {
+        return RenderMaterialGraphNodeKind::Ellipse;
+    }
+    if (EqualsIgnoreCase(text, "Rectangle")) {
+        return RenderMaterialGraphNodeKind::Rectangle;
+    }
+    if (EqualsIgnoreCase(text, "RoundedRectangle")) {
+        return RenderMaterialGraphNodeKind::RoundedRectangle;
+    }
+    if (EqualsIgnoreCase(text, "BlendOverlay") || EqualsIgnoreCase(text, "Blend_Overlay")) {
+        return RenderMaterialGraphNodeKind::BlendOverlay;
+    }
+    if (EqualsIgnoreCase(text, "BlendScreen") || EqualsIgnoreCase(text, "Blend_Screen")) {
+        return RenderMaterialGraphNodeKind::BlendScreen;
+    }
+    if (EqualsIgnoreCase(text, "BlendSoftLight") || EqualsIgnoreCase(text, "Blend_SoftLight")) {
+        return RenderMaterialGraphNodeKind::BlendSoftLight;
+    }
+    if (EqualsIgnoreCase(text, "BlendHardLight") || EqualsIgnoreCase(text, "Blend_HardLight")) {
+        return RenderMaterialGraphNodeKind::BlendHardLight;
+    }
+    if (EqualsIgnoreCase(text, "BlendLinearLight") || EqualsIgnoreCase(text, "Blend_LinearLight")) {
+        return RenderMaterialGraphNodeKind::BlendLinearLight;
+    }
+    if (EqualsIgnoreCase(text, "BlendColorBurn") || EqualsIgnoreCase(text, "Blend_ColorBurn")) {
+        return RenderMaterialGraphNodeKind::BlendColorBurn;
+    }
+    if (EqualsIgnoreCase(text, "BlendColorDodge") || EqualsIgnoreCase(text, "Blend_ColorDodge")) {
+        return RenderMaterialGraphNodeKind::BlendColorDodge;
+    }
+    if (EqualsIgnoreCase(text, "BlendDarken") || EqualsIgnoreCase(text, "Blend_Darken")) {
+        return RenderMaterialGraphNodeKind::BlendDarken;
+    }
+    if (EqualsIgnoreCase(text, "BlendLighten") || EqualsIgnoreCase(text, "Blend_Lighten")) {
+        return RenderMaterialGraphNodeKind::BlendLighten;
+    }
+    if (EqualsIgnoreCase(text, "BlendDifference") || EqualsIgnoreCase(text, "Blend_Difference")) {
+        return RenderMaterialGraphNodeKind::BlendDifference;
+    }
+    if (EqualsIgnoreCase(text, "Contrast")) {
+        return RenderMaterialGraphNodeKind::Contrast;
+    }
+    if (EqualsIgnoreCase(text, "HueShift")) {
+        return RenderMaterialGraphNodeKind::HueShift;
+    }
+    if (EqualsIgnoreCase(text, "ChannelMixer")) {
+        return RenderMaterialGraphNodeKind::ChannelMixer;
+    }
+    if (EqualsIgnoreCase(text, "RemapValueRange")) {
+        return RenderMaterialGraphNodeKind::RemapValueRange;
+    }
     return std::nullopt;
 }
 

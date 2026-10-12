@@ -377,6 +377,12 @@ RenderMaterialGraphParameterMetadata DefaultRenderMaterialGraphParameterMetadata
             .defaultValueHint = "0.01",
             .overrideSupported = false,
         };
+    case kb::render::RenderMaterialGraphNodeKind::Noise:
+        return kb::render::RenderMaterialGraphParameterMetadata{
+            .displayName = "Noise",
+            .defaultValueHint = RenderMaterialGraphNoiseSettingsHint(RenderMaterialGraphNoiseSettings{}),
+            .overrideSupported = false,
+        };
     case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
         return kb::render::RenderMaterialGraphParameterMetadata{
             .displayName = "Color Ramp",
@@ -415,7 +421,6 @@ RenderMaterialGraphParameterMetadata DefaultRenderMaterialGraphParameterMetadata
     case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeX:
     case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeY:
     case kb::render::RenderMaterialGraphNodeKind::BlackBody:
-    case kb::render::RenderMaterialGraphNodeKind::Noise:
     case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
     case kb::render::RenderMaterialGraphNodeKind::Sobol:
     case kb::render::RenderMaterialGraphNodeKind::AppendVector:
@@ -445,6 +450,28 @@ RenderMaterialGraphParameterMetadata DefaultRenderMaterialGraphParameterMetadata
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
     case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
+    case kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case kb::render::RenderMaterialGraphNodeKind::FlipBook:
+    case kb::render::RenderMaterialGraphNodeKind::Checkerboard:
+    case kb::render::RenderMaterialGraphNodeKind::PolarCoordinates:
+    case kb::render::RenderMaterialGraphNodeKind::Twirl:
+    case kb::render::RenderMaterialGraphNodeKind::Ellipse:
+    case kb::render::RenderMaterialGraphNodeKind::Rectangle:
+    case kb::render::RenderMaterialGraphNodeKind::RoundedRectangle:
+    case kb::render::RenderMaterialGraphNodeKind::BlendOverlay:
+    case kb::render::RenderMaterialGraphNodeKind::BlendScreen:
+    case kb::render::RenderMaterialGraphNodeKind::BlendSoftLight:
+    case kb::render::RenderMaterialGraphNodeKind::BlendHardLight:
+    case kb::render::RenderMaterialGraphNodeKind::BlendLinearLight:
+    case kb::render::RenderMaterialGraphNodeKind::BlendColorBurn:
+    case kb::render::RenderMaterialGraphNodeKind::BlendColorDodge:
+    case kb::render::RenderMaterialGraphNodeKind::BlendDarken:
+    case kb::render::RenderMaterialGraphNodeKind::BlendLighten:
+    case kb::render::RenderMaterialGraphNodeKind::BlendDifference:
+    case kb::render::RenderMaterialGraphNodeKind::Contrast:
+    case kb::render::RenderMaterialGraphNodeKind::HueShift:
+    case kb::render::RenderMaterialGraphNodeKind::ChannelMixer:
+    case kb::render::RenderMaterialGraphNodeKind::RemapValueRange:
         break;
     }
     return {};

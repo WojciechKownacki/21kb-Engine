@@ -1,8 +1,13 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 
+#include <cmath>
 #include <cstddef>
 #include <optional>
+#include <sstream>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace kb::render {
 namespace {
@@ -114,6 +119,102 @@ std::string_view RenderMaterialGraphNodeSupportName(RenderMaterialGraphNodeSuppo
         return "Unsupported";
     }
     return "Unsupported";
+}
+
+std::string_view RenderMaterialGraphNoiseFunctionName(RenderMaterialGraphNoiseFunction function) noexcept {
+    switch (function) {
+    case RenderMaterialGraphNoiseFunction::Simplex:
+        return "simplex";
+    case RenderMaterialGraphNoiseFunction::Gradient:
+        return "gradient";
+    case RenderMaterialGraphNoiseFunction::Value:
+        return "value";
+    case RenderMaterialGraphNoiseFunction::Voronoi:
+        return "voronoi";
+    }
+    return "simplex";
+}
+
+std::optional<RenderMaterialGraphNoiseFunction> ParseRenderMaterialGraphNoiseFunction(std::string_view text) noexcept {
+    if (EqualsIgnoreCase(text, "simplex")) return RenderMaterialGraphNoiseFunction::Simplex;
+    if (EqualsIgnoreCase(text, "gradient")) return RenderMaterialGraphNoiseFunction::Gradient;
+    if (EqualsIgnoreCase(text, "value")) return RenderMaterialGraphNoiseFunction::Value;
+    if (EqualsIgnoreCase(text, "voronoi")) return RenderMaterialGraphNoiseFunction::Voronoi;
+    return std::nullopt;
+}
+
+RenderMaterialGraphNoiseSettingsParseResult ParseRenderMaterialGraphNoiseSettings(std::string_view hint) {
+    RenderMaterialGraphNoiseSettingsParseResult result;
+    RenderMaterialGraphNoiseSettings settings;
+    std::istringstream stream{ std::string{ hint } };
+    std::vector<std::string> tokens;
+    for (std::string token; stream >> token;) {
+        tokens.push_back(token);
+    }
+    if (tokens.size() > 8U) {
+        result.error = "Noise settings take at most 8 fields, got " + std::to_string(tokens.size()) + " in '" + std::string{ hint } + "'.";
+        return result;
+    }
+    if (!tokens.empty()) {
+        const std::optional<RenderMaterialGraphNoiseFunction> function = ParseRenderMaterialGraphNoiseFunction(tokens[0]);
+        if (!function.has_value()) {
+            result.error = "Unknown Noise function '" + tokens[0] + "' (expected simplex, gradient, value or voronoi).";
+            return result;
+        }
+        settings.function = *function;
+    }
+    if (tokens.size() > 1U) {
+        if (EqualsIgnoreCase(tokens[1], "true")) {
+            settings.turbulence = true;
+        } else if (EqualsIgnoreCase(tokens[1], "false")) {
+            settings.turbulence = false;
+        } else {
+            result.error = "Noise turbulence must be true or false, got '" + tokens[1] + "'.";
+            return result;
+        }
+    }
+    static constexpr const char* kNumericNames[] = { "Scale", "Quality", "Levels", "Level Scale", "Output Min", "Output Max" };
+    float numbers[6] = { settings.scale, static_cast<float>(settings.quality), static_cast<float>(settings.levels),
+        settings.levelScale, settings.outputMin, settings.outputMax };
+    for (std::size_t index = 2U; index < tokens.size(); ++index) {
+        if (!ParseFiniteMaterialFloatToken(tokens[index], numbers[index - 2U])) {
+            result.error = std::string{ "Noise " } + kNumericNames[index - 2U] + " must be a finite number, got '" + tokens[index] + "'.";
+            return result;
+        }
+    }
+    const auto isWhole = [](float value) { return std::floor(value) == value; };
+    if (!(numbers[0] > 0.0F)) {
+        result.error = "Noise Scale must be above zero, got " + tokens[2] + ".";
+        return result;
+    }
+    if (!isWhole(numbers[1]) || numbers[1] < 1.0F || numbers[1] > 4.0F) {
+        result.error = "Noise Quality must be a whole number from 1 to 4, got " + tokens[3] + ".";
+        return result;
+    }
+    if (!isWhole(numbers[2]) || numbers[2] < 1.0F || numbers[2] > 10.0F) {
+        result.error = "Noise Levels must be a whole number from 1 to 10, got " + tokens[4] + ".";
+        return result;
+    }
+    if (!(numbers[3] > 0.0F)) {
+        result.error = "Noise Level Scale must be above zero, got " + tokens[5] + ".";
+        return result;
+    }
+    settings.scale = numbers[0];
+    settings.quality = static_cast<std::uint32_t>(numbers[1]);
+    settings.levels = static_cast<std::uint32_t>(numbers[2]);
+    settings.levelScale = numbers[3];
+    settings.outputMin = numbers[4];
+    settings.outputMax = numbers[5];
+    result.settings = settings;
+    return result;
+}
+
+std::string RenderMaterialGraphNoiseSettingsHint(const RenderMaterialGraphNoiseSettings& settings) {
+    std::ostringstream output;
+    output << RenderMaterialGraphNoiseFunctionName(settings.function) << ' ' << (settings.turbulence ? "true" : "false") << ' '
+           << settings.scale << ' ' << settings.quality << ' ' << settings.levels << ' ' << settings.levelScale << ' '
+           << settings.outputMin << ' ' << settings.outputMax;
+    return output.str();
 }
 
 } // namespace kb::render
