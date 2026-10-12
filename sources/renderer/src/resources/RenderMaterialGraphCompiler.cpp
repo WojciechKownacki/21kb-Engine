@@ -1033,7 +1033,9 @@ void AppendCustomCodeFunctionDefinitions(
         "    " + v + ".waterScattering = vec3(0.0, 0.0, 0.0);\n"
         "    " + v + ".waterAbsorption = vec3(0.0, 0.0, 0.0);\n"
         "    " + v + ".waterPhaseG = 0.0;\n"
-        "    " + v + ".waterColorScaleBehind = 1.0;\n";
+        "    " + v + ".waterColorScaleBehind = 1.0;\n"
+        "    " + v + ".subsurfaceColor = vec3(1.0, 1.0, 1.0);\n"
+        "    " + v + ".fuzzColor = vec3(1.0, 1.0, 1.0);\n";
 }
 
 // MAT-39: parse a compile-time boolean from a node's value hint.
@@ -1383,6 +1385,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".waterAbsorption = " + CompileInputExpression(cg, node, "waterAbsorption", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") + ";\n";
         cg.statements += "    " + tmp + ".waterPhaseG = " + CompileInputExpression(cg, node, "waterPhaseG", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
         cg.statements += "    " + tmp + ".waterColorScaleBehind = " + CompileInputExpression(cg, node, "waterColorScaleBehind", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
+        cg.statements += "    " + tmp + ".subsurfaceColor = " + CompileInputExpression(cg, node, "subsurfaceColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)") + ";\n";
+        cg.statements += "    " + tmp + ".fuzzColor = " + CompileInputExpression(cg, node, "fuzzColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)") + ";\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1439,6 +1443,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".waterAbsorption = mix((" + a + ").waterAbsorption, (" + b + ").waterAbsorption, " + fv + ");\n";
         cg.statements += "    " + tmp + ".waterPhaseG = mix((" + a + ").waterPhaseG, (" + b + ").waterPhaseG, " + fv + ");\n";
         cg.statements += "    " + tmp + ".waterColorScaleBehind = mix((" + a + ").waterColorScaleBehind, (" + b + ").waterColorScaleBehind, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".subsurfaceColor = mix((" + a + ").subsurfaceColor, (" + b + ").subsurfaceColor, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".fuzzColor = mix((" + a + ").fuzzColor, (" + b + ").fuzzColor, " + fv + ");\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1524,6 +1530,12 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         }
         if (FindInputLink(cg.graph, node.id, "waterColorScaleBehind") != nullptr) {
             cg.statements += "    " + tmp + ".waterColorScaleBehind = " + CompileInputExpression(cg, node, "waterColorScaleBehind", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "subsurfaceColor") != nullptr) {
+            cg.statements += "    " + tmp + ".subsurfaceColor = " + CompileInputExpression(cg, node, "subsurfaceColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "fuzzColor") != nullptr) {
+            cg.statements += "    " + tmp + ".fuzzColor = " + CompileInputExpression(cg, node, "fuzzColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)") + ";\n";
         }
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
@@ -2045,6 +2057,8 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
         if (outputPin == "waterAbsorption") return "(" + baseRef + ").waterAbsorption";
         if (outputPin == "waterPhaseG") return "(" + baseRef + ").waterPhaseG";
         if (outputPin == "waterColorScaleBehind") return "(" + baseRef + ").waterColorScaleBehind";
+        if (outputPin == "subsurfaceColor") return "(" + baseRef + ").subsurfaceColor";
+        if (outputPin == "fuzzColor") return "(" + baseRef + ").fuzzColor";
         AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "Material attribute output pin is not supported.");
         return "0.0";
     case RenderMaterialGraphNodeKind::BreakVector:
@@ -3492,6 +3506,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    vec3 waterAbsorption;\n";
     source += "    float waterPhaseG;\n";
     source += "    float waterColorScaleBehind;\n";
+    source += "    vec3 subsurfaceColor;\n";
+    source += "    vec3 fuzzColor;\n";
     source += "};\n\n";
 
     if (usesHsv) {
@@ -3662,6 +3678,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     std::string waterAbsorptionExpr;
     std::string waterPhaseGExpr;
     std::string waterColorScaleBehindExpr;
+    std::string subsurfaceColorExpr;
+    std::string fuzzColorExpr;
 
     // MAT-36: when a single MaterialAttributes set is wired into MaterialOutput.attributes it drives the
     // whole surface (the "use material attributes" mode); the per-channel pins are bypassed entirely.
@@ -3687,6 +3705,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         waterAbsorptionExpr = compileOutput("waterAbsorption", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
         waterPhaseGExpr = compileOutput("waterPhaseG", RenderMaterialGraphPinType::Float, "0.0");
         waterColorScaleBehindExpr = compileOutput("waterColorScaleBehind", RenderMaterialGraphPinType::Float, "1.0");
+        subsurfaceColorExpr = compileOutput("subsurfaceColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)");
+        fuzzColorExpr = compileOutput("fuzzColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)");
     }
     {
         std::ostringstream row;
@@ -3726,6 +3746,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "    material.waterAbsorption = " + waterAbsorptionExpr + ";\n";
         source += "    material.waterPhaseG = " + waterPhaseGExpr + ";\n";
         source += "    material.waterColorScaleBehind = " + waterColorScaleBehindExpr + ";\n";
+        source += "    material.subsurfaceColor = " + subsurfaceColorExpr + ";\n";
+        source += "    material.fuzzColor = " + fuzzColorExpr + ";\n";
     }
     source += "    return material;\n";
     source += "}\n";
@@ -3827,6 +3849,14 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     reflection.hasPixelDepthOffset = std::any_of(graph.links.begin(), graph.links.end(),
         [](const RenderMaterialGraphLink& link) { return link.toPin == "pixelDepthOffset"; });
     reflection.hasRefraction = usesRefraction;
+    // Unreal's Subsurface Color / Fuzz Color: the colour the model scatters with, given by the graph.
+    reflection.writesShadingModelColor =
+        (resolvedShadingModel == RenderMaterialShadingModel::Subsurface &&
+         std::any_of(graph.links.begin(), graph.links.end(),
+             [](const RenderMaterialGraphLink& link) { return link.toPin == "subsurfaceColor"; })) ||
+        (resolvedShadingModel == RenderMaterialShadingModel::Cloth &&
+         std::any_of(graph.links.begin(), graph.links.end(),
+             [](const RenderMaterialGraphLink& link) { return link.toPin == "fuzzColor"; }));
     reflection.shadingModel = resolvedShadingModel;
     reflection.blendMode = resolvedBlendMode;
     reflection.usesSceneDepth = usesSceneDepth;

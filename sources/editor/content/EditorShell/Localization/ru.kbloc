@@ -1424,6 +1424,8 @@ text "materialEditor.pin.waterScattering" "Коэффициенты рассея
 text "materialEditor.pin.waterAbsorption" "Коэффициенты поглощения"
 text "materialEditor.pin.waterPhaseG" "Фаза G"
 text "materialEditor.pin.waterColorScaleBehind" "Масштаб цвета за водой"
+text "materialEditor.pin.subsurfaceColor" "Цвет подповерхностного рассеивания"
+text "materialEditor.pin.fuzzColor" "Цвет ворса"
 text "materialEditor.pin.roughness" "Шероховатость"
 text "materialEditor.pin.scalar" "Скаляр"
 text "materialEditor.pin.seed" "Зерно"

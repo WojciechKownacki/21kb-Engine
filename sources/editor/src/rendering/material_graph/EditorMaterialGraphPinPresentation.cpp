@@ -59,6 +59,8 @@ PreferredInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
             {"waterAbsorption", std::string{ EditorText("materialEditor.pin.waterAbsorption", "Absorption Coefficients") }},
             {"waterPhaseG", std::string{ EditorText("materialEditor.pin.waterPhaseG", "Phase G") }},
             {"waterColorScaleBehind", std::string{ EditorText("materialEditor.pin.waterColorScaleBehind", "Color Scale Behind Water") }},
+            {"subsurfaceColor", std::string{ EditorText("materialEditor.pin.subsurfaceColor", "Subsurface Color") }},
+            {"fuzzColor", std::string{ EditorText("materialEditor.pin.fuzzColor", "Fuzz Color") }},
         };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return {{"texture", std::string{ EditorText("materialEditor.pin.tex", "Tex.") }}, {"uv", "UV"}};

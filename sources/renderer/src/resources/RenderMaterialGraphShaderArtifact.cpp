@@ -798,6 +798,11 @@ void AppendMaterialGraphSingleLayerWater(std::string& wrapper, const RenderMater
     wrapper += "    gl_FragColor = vec4(kbBehind * kbWaterTransmittance * max(surface.waterColorScaleBehind, 0.0) + kbWaterInScatter + kbWaterSpecular + surface.emissive, 1.0);\n";
 }
 
+// The surface field with the colour the model scatters with (writesShadingModelColor).
+std::string_view GraphShadingModelColorField(const RenderMaterialGraphShaderSource& shader) {
+    return shader.reflection.shadingModel == RenderMaterialShadingModel::Cloth ? "surface.fuzzColor" : "surface.subsurfaceColor";
+}
+
 void AppendMaterialGraphTangentBasis(std::string& wrapper, const RenderMaterialGraphShaderSource& shader) {
     if (shader.reflection.hasWorldPositionOffset || shader.reflection.hasDisplacement) {
         wrapper += "    vec3 basisNormal = normalize(cross(dFdx(v_worldPos), dFdy(v_worldPos)));\n";
@@ -1154,6 +1159,12 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, KbEncodeGBufferCustomData1(surface.clearCoatRoughness));\n";
             wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), KbEncodeGBufferShadingModel(" + std::to_string(shadingModelId) + ".0));\n";
             wrapper += "    gl_FragData[3] = vec4(surface.emissive, clamp(surface.specular, 0.0, 1.0));\n";
+            if (shader.reflection.writesShadingModelColor) {
+                // Unreal's custom data: the model colour (alpha 1 = given) in the fifth target, which the
+                // G-buffer carries in frames that draw such a material.
+                wrapper += "    gl_FragData[4] = vec4(clamp(" + std::string{ GraphShadingModelColorField(shader) } +
+                    ", vec3_splat(0.0), vec3_splat(1.0)), 1.0);\n";
+            }
         } else if (shader.reflection.shadingModel == RenderMaterialShadingModel::Unlit) {
             // MAT-37 Unlit: the surface emissive plus base color go straight to the framebuffer with no lighting.
             if (shader.reflection.hasRefraction) {
@@ -1180,8 +1191,14 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    float occlusion = clamp(surface.occlusion, 0.0, 1.0);\n";
             wrapper += "    float specular = clamp(surface.specular, 0.0, 1.0);\n";
             const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
-            wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
-                std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0));\n";
+            if (shader.reflection.writesShadingModelColor) {
+                wrapper += "    vec3 lighting = KbEvaluateForwardLightingColor(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
+                    std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0), " +
+                    std::string{ GraphShadingModelColorField(shader) } + ");\n";
+            } else {
+                wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
+                    std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0));\n";
+            }
             if (shader.reflection.shadingModel == RenderMaterialShadingModel::ThinTranslucent) {
                 AppendMaterialGraphThinTranslucent(wrapper, shader, std::to_string(shadingModelId) + ".0");
             } else if (shader.reflection.shadingModel == RenderMaterialShadingModel::SingleLayerWater) {
@@ -1321,6 +1338,7 @@ std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraph
     HashU64(hash, reflection.hasTangentOutput ? 1U : 0U);
     HashU64(hash, reflection.hasPixelDepthOffset ? 1U : 0U);
     HashU64(hash, reflection.hasRefraction ? 1U : 0U);
+    HashU64(hash, reflection.writesShadingModelColor ? 1U : 0U);
     // MAT-37: the shading model selects the fragment wrapper lighting branch, so it is part of program identity.
     HashU64(hash, static_cast<std::uint64_t>(reflection.shadingModel));
     // MAT-38: the blend mode changes the wrapper (masked clip) and the cooked pass, so it is part of identity.

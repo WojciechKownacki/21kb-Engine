@@ -97,7 +97,8 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (pin == "normal") return RenderMaterialGraphPinType::Normal;
         if (pin == "customizedUv0") return RenderMaterialGraphPinType::Float2;
         if (pin == "worldPositionOffset" || pin == "tangentOutput" || pin == "displacement" || pin == "transmittanceColor" ||
-            pin == "waterScattering" || pin == "waterAbsorption") return RenderMaterialGraphPinType::Float3;
+            pin == "waterScattering" || pin == "waterAbsorption" ||
+            pin == "subsurfaceColor" || pin == "fuzzColor") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
             pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "pixelDepthOffset" || pin == "refraction" ||
             pin == "waterPhaseG" || pin == "waterColorScaleBehind") return RenderMaterialGraphPinType::Float;
@@ -107,7 +108,8 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (pin == "baseColor" || pin == "emissive") return RenderMaterialGraphPinType::Color;
         if (pin == "normal") return RenderMaterialGraphPinType::Normal;
         if (pin == "tangentOutput" || pin == "transmittanceColor" || pin == "waterScattering" ||
-            pin == "waterAbsorption") return RenderMaterialGraphPinType::Float3;
+            pin == "waterAbsorption" || pin == "subsurfaceColor" ||
+            pin == "fuzzColor") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
             pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "pixelDepthOffset" || pin == "refraction" ||
             pin == "waterPhaseG" || pin == "waterColorScaleBehind") return RenderMaterialGraphPinType::Float;
@@ -117,7 +119,8 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (pin == "baseColor" || pin == "emissive") return RenderMaterialGraphPinType::Color;
         if (pin == "normal") return RenderMaterialGraphPinType::Normal;
         if (pin == "tangentOutput" || pin == "transmittanceColor" || pin == "waterScattering" ||
-            pin == "waterAbsorption") return RenderMaterialGraphPinType::Float3;
+            pin == "waterAbsorption" || pin == "subsurfaceColor" ||
+            pin == "fuzzColor") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
             pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "pixelDepthOffset" || pin == "refraction" ||
             pin == "waterPhaseG" || pin == "waterColorScaleBehind") return RenderMaterialGraphPinType::Float;
@@ -132,7 +135,8 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (pin == "baseColor" || pin == "emissive") return RenderMaterialGraphPinType::Color;
         if (pin == "normal") return RenderMaterialGraphPinType::Normal;
         if (pin == "tangentOutput" || pin == "transmittanceColor" || pin == "waterScattering" ||
-            pin == "waterAbsorption") return RenderMaterialGraphPinType::Float3;
+            pin == "waterAbsorption" || pin == "subsurfaceColor" ||
+            pin == "fuzzColor") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
             pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "pixelDepthOffset" || pin == "refraction" ||
             pin == "waterPhaseG" || pin == "waterColorScaleBehind") return RenderMaterialGraphPinType::Float;
@@ -143,7 +147,8 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (pin == "baseColor" || pin == "emissive") return RenderMaterialGraphPinType::Color;
         if (pin == "normal") return RenderMaterialGraphPinType::Normal;
         if (pin == "tangentOutput" || pin == "transmittanceColor" || pin == "waterScattering" ||
-            pin == "waterAbsorption") return RenderMaterialGraphPinType::Float3;
+            pin == "waterAbsorption" || pin == "subsurfaceColor" ||
+            pin == "fuzzColor") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
             pin == "specular" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "pixelDepthOffset" || pin == "refraction" ||
             pin == "waterPhaseG" || pin == "waterColorScaleBehind") return RenderMaterialGraphPinType::Float;

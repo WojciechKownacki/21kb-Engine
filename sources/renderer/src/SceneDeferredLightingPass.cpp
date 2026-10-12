@@ -138,6 +138,8 @@ bool SceneDeferredLightingPass::Initialize() {
     backdropEnvironmentSampler_ = bgfx::createUniform("s_deferredBackdropEnvironment", bgfx::UniformType::Sampler);
     skyReflectionSampler_ = bgfx::createUniform("s_skyReflection", bgfx::UniformType::Sampler);
     skyReflectionParamsUniform_ = bgfx::createUniform("u_skyReflectionParams", bgfx::UniformType::Vec4);
+    customDataSampler_ = bgfx::createUniform("s_gbufferCustom", bgfx::UniformType::Sampler);
+    customDataUniform_ = bgfx::createUniform("u_deferredCustomData", bgfx::UniformType::Vec4);
     fallbackShadowTexture_ = CreateFallbackWhiteTexture();
     fallbackBackdropEnvironmentTexture_ = CreateFallbackBlackTexture();
     fallbackSkyReflection_ = CreateFallbackBlackCube();
@@ -209,7 +211,7 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
         bgfx::destroy(fallbackSkyReflection_);
         fallbackSkyReflection_ = BGFX_INVALID_HANDLE;
     }
-    for (bgfx::UniformHandle* uniform : { &skyReflectionSampler_, &skyReflectionParamsUniform_ }) {
+    for (bgfx::UniformHandle* uniform : { &skyReflectionSampler_, &skyReflectionParamsUniform_, &customDataSampler_, &customDataUniform_ }) {
         if (bgfx::isValid(*uniform)) {
             bgfx::destroy(*uniform);
             *uniform = BGFX_INVALID_HANDLE;
@@ -487,6 +489,11 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setTexture(4U, depthSampler_, desc.gbuffer->DepthTexture());
     bgfx::setTexture(5U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_);
     bgfx::setTexture(6U, backdropEnvironmentSampler_, environmentBackdrop ? desc.worldBackdropEnvironment : fallbackBackdropEnvironmentTexture_);
+    // The custom data, or (none this frame) the albedo target, never read then.
+    const bool customData = bgfx::isValid(desc.customData);
+    const std::array<float, 4U> customDataParams{ customData ? 1.0F : 0.0F, 0.0F, 0.0F, 0.0F };
+    bgfx::setUniform(customDataUniform_, customDataParams.data());
+    bgfx::setTexture(13U, customDataSampler_, customData ? desc.customData : desc.gbuffer->AlbedoTexture());
     bgfx::setTexture(12U, skyReflectionSampler_,
         bgfx::isValid(lighting.skyReflection) ? lighting.skyReflection : fallbackSkyReflection_);
     // Adds the bounce light the resolve pass accumulated up to the previous frame; without one

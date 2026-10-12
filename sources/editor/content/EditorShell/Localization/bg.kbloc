@@ -1424,6 +1424,8 @@ text "materialEditor.pin.waterScattering" "Коефициенти на разс�
 text "materialEditor.pin.waterAbsorption" "Коефициенти на поглъщане"
 text "materialEditor.pin.waterPhaseG" "Фаза G"
 text "materialEditor.pin.waterColorScaleBehind" "Мащаб на цвета зад водата"
+text "materialEditor.pin.subsurfaceColor" "Цвят на подповърхностно разсейване"
+text "materialEditor.pin.fuzzColor" "Цвят на мъха"
 text "materialEditor.pin.roughness" "Грапавост"
 text "materialEditor.pin.scalar" "Скалар"
 text "materialEditor.pin.seed" "Начално число"

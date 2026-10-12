@@ -61,6 +61,8 @@ namespace {
             "waterAbsorption",
             "waterPhaseG",
             "waterColorScaleBehind",
+            "subsurfaceColor",
+            "fuzzColor",
         };
     }
     return kb::render::RenderMaterialGraphNodeInputPinNames(node);

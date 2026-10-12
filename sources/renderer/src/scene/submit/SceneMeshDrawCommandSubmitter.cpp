@@ -356,6 +356,10 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
 
         desc.stats.submittedMeshCount += submittedInstances;
         ++desc.stats.submittedDrawCallCount;
+        if (desc.pass == MeshPassType::GBuffer && command.materialResource != nullptr &&
+            command.materialResource->graphProgram.writesShadingModelColor && resolution.graphProgram) {
+            ++desc.stats.shadingModelColorDrawCallCount;
+        }
         ++desc.stats.submittedDrawGroupCount;
         if (desc.pass == MeshPassType::ShadowDepth) {
             desc.stats.submittedShadowCasterCount += submittedInstances;

@@ -54,6 +54,9 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "waterAbsorption") return PinId(nodeKind, direction, 30U);
         if (!outputPin && pin == "waterPhaseG") return PinId(nodeKind, direction, 31U);
         if (!outputPin && pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 32U);
+        // Unreal's Subsurface Color (Subsurface) and Fuzz Color (Cloth).
+        if (!outputPin && pin == "subsurfaceColor") return PinId(nodeKind, direction, 33U);
+        if (!outputPin && pin == "fuzzColor") return PinId(nodeKind, direction, 34U);
         return 0U;
     case RenderMaterialGraphNodeKind::TextureSample:
         if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
@@ -344,6 +347,8 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "waterAbsorption") return PinId(nodeKind, direction, 27U);
         if (pin == "waterPhaseG") return PinId(nodeKind, direction, 28U);
         if (pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 29U);
+        if (pin == "subsurfaceColor") return PinId(nodeKind, direction, 30U);
+        if (pin == "fuzzColor") return PinId(nodeKind, direction, 31U);
         return 0U;
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
         if (outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -372,6 +377,8 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "waterAbsorption") return PinId(nodeKind, direction, 27U);
         if (pin == "waterPhaseG") return PinId(nodeKind, direction, 28U);
         if (pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 29U);
+        if (pin == "subsurfaceColor") return PinId(nodeKind, direction, 30U);
+        if (pin == "fuzzColor") return PinId(nodeKind, direction, 31U);
         return 0U;
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
         if (!outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -395,6 +402,8 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "waterAbsorption") return PinId(nodeKind, direction, 27U);
         if (pin == "waterPhaseG") return PinId(nodeKind, direction, 28U);
         if (pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 29U);
+        if (pin == "subsurfaceColor") return PinId(nodeKind, direction, 30U);
+        if (pin == "fuzzColor") return PinId(nodeKind, direction, 31U);
         return 0U;
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
