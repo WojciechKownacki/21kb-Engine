@@ -441,6 +441,9 @@ struct RenderMaterialGraphDocument {
     std::string materialDomain = "surface";
     std::string shadingModel = "defaultLit";
     std::string blendMode = "opaque";
+    // Unreal's Max World Position Offset Displacement: how far (world units) the graph's World
+    // Position Offset may move a vertex; culling grows the bounds of its objects by it.
+    float maxWorldPositionOffsetDisplacement = 0.0F;
     std::string storageModel = "inline-kbmat";
     std::uint32_t diagnosticSchemaVersion = 1U;
     bool persistCompileDiagnostics = true;

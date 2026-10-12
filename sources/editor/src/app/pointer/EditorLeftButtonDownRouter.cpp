@@ -864,6 +864,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                             sceneContext_.CloseMaterialGraphNodeEnumDropdown();
                             if (property.stableId == "node.name") {
                                 static_cast<void>(sceneContext_.BeginMaterialGraphNodeRenameEdit(materialId, property.nodeId));
+                            } else if (property.nodeId == 0U) {
+                                // A typed material setting (Max World Position Offset Displacement).
+                                const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                                    messageWindow,
+                                    property.displayName,
+                                    MaterialEditorPanelParameterValueText(property.value));
+                                if (value.has_value()) {
+                                    static_cast<void>(sceneContext_.SetMaterialGraphSetting(materialId, property.stableId, *value));
+                                }
                             } else {
                                 const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
                                     messageWindow,

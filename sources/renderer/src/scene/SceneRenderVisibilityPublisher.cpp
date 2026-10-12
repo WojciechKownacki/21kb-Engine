@@ -91,9 +91,13 @@ void SceneRenderVisibilityPublisher::BuildFrame(
                     }
                 }
             }
-            const RenderBoundsSphere worldBounds = MeshPipelineVisibility::TransformBounds(
+            const float boundsMargin = resources != nullptr && resourceMap != nullptr
+                ? MeshPipelineVisibility::MaterialBoundsMargin(*resources, *resourceMap, proxy->desc.materialAssetId,
+                      std::span<const std::uint64_t>{ proxy->desc.materialSlotAssetIds.data(), proxy->desc.materialSlotOverrideCount })
+                : 0.0F;
+            const RenderBoundsSphere worldBounds = MeshPipelineVisibility::GrowBounds(MeshPipelineVisibility::TransformBounds(
                 proxy->desc.boundsOverride.IsValid() ? proxy->desc.boundsOverride : localBounds,
-                proxy->desc.model);
+                proxy->desc.model), boundsMargin);
 
             const bool passesMask = (proxy->desc.layer & cullingMask) != 0U;
             const bool insideFrustum = MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds);

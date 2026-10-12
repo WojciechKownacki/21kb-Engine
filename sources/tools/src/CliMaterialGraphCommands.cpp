@@ -1,4 +1,7 @@
 #include "CliCommands.hpp"
+
+#include <cmath>
+#include <cstdlib>
 #include "CliCommon.hpp"
 #include "CliMaterialShared.hpp"
 
@@ -356,7 +359,18 @@ void PrintGraph(const kb::render::RenderMaterialAssetData& asset, const std::str
         asset.graph.blendMode = std::string{ canonical };
         return {};
     }
-    return "material-graph setting --name takes Domain, Shading Model or Blend Mode, not '" + std::string{ name } + "'";
+    if (wanted == "maxworldpositionoffsetdisplacement") {
+        const std::string number{ value };
+        char* end = nullptr;
+        const float margin = std::strtof(number.c_str(), &end);
+        if (number.empty() || end == number.c_str() || *end != '\0' || !std::isfinite(margin) || margin < 0.0F) {
+            return "Max World Position Offset Displacement takes a value of 0 or more, not '" + number + "'";
+        }
+        asset.graph.maxWorldPositionOffsetDisplacement = margin;
+        return {};
+    }
+    return "material-graph setting --name takes Domain, Shading Model, Blend Mode or Max World Position Offset Displacement, not '" +
+        std::string{ name } + "'";
 }
 
 int GraphCommand(std::string_view action, const ArgumentList& arguments, CommandIo io) {

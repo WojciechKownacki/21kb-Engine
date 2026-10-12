@@ -1,5 +1,7 @@
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/scene/SceneRenderResourceMap.hpp"
 
 #include "kb/render/scene/TransparentDepthKey.hpp"
 
@@ -88,6 +90,31 @@ namespace {
 }
 
 } // namespace
+
+float MeshPipelineVisibility::MaterialBoundsMargin(const RenderMaterialResource* material) noexcept {
+    return material != nullptr && material->graphProgram.active ? std::max(material->graphProgram.boundsMargin, 0.0F) : 0.0F;
+}
+
+float MeshPipelineVisibility::MaterialBoundsMargin(
+    const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap,
+    std::uint64_t materialAssetId,
+    std::span<const std::uint64_t> slotMaterialAssetIds) noexcept {
+    float margin = MaterialBoundsMargin(resources.FindMaterial(resourceMap.ResolveMaterial(materialAssetId)));
+    for (const std::uint64_t slot : slotMaterialAssetIds) {
+        if (slot != 0U) {
+            margin = std::max(margin, MaterialBoundsMargin(resources.FindMaterial(resourceMap.ResolveMaterial(slot))));
+        }
+    }
+    return margin;
+}
+
+RenderBoundsSphere MeshPipelineVisibility::GrowBounds(RenderBoundsSphere bounds, float margin) noexcept {
+    if (bounds.IsValid() && margin > 0.0F) {
+        bounds.radius += margin;
+    }
+    return bounds;
+}
 
 float MeshPipelineVisibility::ScreenCoverage(const SceneRenderCamera* camera, const RenderBoundsSphere& worldBounds) noexcept {
     if (camera == nullptr || !worldBounds.IsValid()) {
