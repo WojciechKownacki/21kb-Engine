@@ -63,6 +63,9 @@ namespace {
             "waterColorScaleBehind",
             "subsurfaceColor",
             "fuzzColor",
+            "irisMask",
+            "irisDistance",
+            "irisNormal",
         };
     }
     return kb::render::RenderMaterialGraphNodeInputPinNames(node);

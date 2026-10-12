@@ -106,7 +106,7 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
 // Material ambient occlusion darkens only the light from the surroundings (Unreal, Unity); a light
 // shining on the surface is not occluded by it.
 vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular,
-    float shadingModel, float customData0, float customData1, vec3 modelColor)
+    float shadingModel, float customData0, float customData1, vec3 modelColor, vec3 irisNormal, vec2 iris)
 {
     vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
     if (u_sceneLightGridDimensions.w > 0.5) {
@@ -168,8 +168,8 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
     // surface returns its albedo, so the physical BRDF above is taken times pi.
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
-    return KbShadingModelLightColor(shadingModel, customData0, customData1, normal, viewDir, lightVector, nDotLRaw,
-        albedo, metallic, roughness, diffuse, specularTerm, modelColor) * radiance;
+    return KbShadingModelLightFull(shadingModel, customData0, customData1, normal, viewDir, lightVector, nDotLRaw,
+        albedo, metallic, roughness, diffuse, specularTerm, modelColor, irisNormal, iris) * radiance;
 }
 
 float SampleShadowVisibility(vec3 shadowCoord)
@@ -221,9 +221,19 @@ void main()
     float customData0 = clamp(albedo.a, 0.0, 1.0);
     float customData1 = KbDecodeGBufferCustomData1(encodedNormal.a);
     vec3 modelColor = KbDefaultShadingModelColor(shadingModel, albedo.rgb, metallic);
+    vec3 irisNormal = normal;
+    vec2 iris = vec2_splat(0.0);
     if (u_deferredCustomData.x > 0.5) {
         vec4 customData = texture2D(s_gbufferCustom, v_texcoord0);
-        modelColor = customData.a > 0.5 ? customData.rgb : modelColor;
+        if (abs(shadingModel - KB_GBUFFER_SHADING_MODEL_EYE) < 0.5) {
+            // Iris normal (octahedral), mask, distance; zero = an eye without iris data.
+            if (dot(customData, vec4_splat(1.0)) > 0.0) {
+                irisNormal = KbOctDecode(customData.xy * 2.0 - 1.0);
+                iris = customData.zw;
+            }
+        } else {
+            modelColor = customData.a > 0.5 ? customData.rgb : modelColor;
+        }
     }
 
     if (abs(shadingModel - KB_GBUFFER_SHADING_MODEL_UNLIT) < 0.5) {
@@ -265,7 +275,7 @@ void main()
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
             vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, specular,
-                shadingModel, customData0, customData1, modelColor);
+                shadingModel, customData0, customData1, modelColor, irisNormal, iris);
             lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, worldPos);
         }
     }

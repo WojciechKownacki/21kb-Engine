@@ -1035,7 +1035,10 @@ void AppendCustomCodeFunctionDefinitions(
         "    " + v + ".waterPhaseG = 0.0;\n"
         "    " + v + ".waterColorScaleBehind = 1.0;\n"
         "    " + v + ".subsurfaceColor = vec3(1.0, 1.0, 1.0);\n"
-        "    " + v + ".fuzzColor = vec3(1.0, 1.0, 1.0);\n";
+        "    " + v + ".fuzzColor = vec3(1.0, 1.0, 1.0);\n"
+        "    " + v + ".irisMask = 0.0;\n"
+        "    " + v + ".irisDistance = 0.0;\n"
+        "    " + v + ".irisNormal = vec3(0.0, 0.0, 1.0);\n";
 }
 
 // MAT-39: parse a compile-time boolean from a node's value hint.
@@ -1387,6 +1390,9 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".waterColorScaleBehind = " + CompileInputExpression(cg, node, "waterColorScaleBehind", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
         cg.statements += "    " + tmp + ".subsurfaceColor = " + CompileInputExpression(cg, node, "subsurfaceColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)") + ";\n";
         cg.statements += "    " + tmp + ".fuzzColor = " + CompileInputExpression(cg, node, "fuzzColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)") + ";\n";
+        cg.statements += "    " + tmp + ".irisMask = " + CompileInputExpression(cg, node, "irisMask", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        cg.statements += "    " + tmp + ".irisDistance = " + CompileInputExpression(cg, node, "irisDistance", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        cg.statements += "    " + tmp + ".irisNormal = " + CompileInputExpression(cg, node, "irisNormal", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)") + ";\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1445,6 +1451,9 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".waterColorScaleBehind = mix((" + a + ").waterColorScaleBehind, (" + b + ").waterColorScaleBehind, " + fv + ");\n";
         cg.statements += "    " + tmp + ".subsurfaceColor = mix((" + a + ").subsurfaceColor, (" + b + ").subsurfaceColor, " + fv + ");\n";
         cg.statements += "    " + tmp + ".fuzzColor = mix((" + a + ").fuzzColor, (" + b + ").fuzzColor, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".irisMask = mix((" + a + ").irisMask, (" + b + ").irisMask, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".irisDistance = mix((" + a + ").irisDistance, (" + b + ").irisDistance, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".irisNormal = mix((" + a + ").irisNormal, (" + b + ").irisNormal, " + fv + ");\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1536,6 +1545,15 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         }
         if (FindInputLink(cg.graph, node.id, "fuzzColor") != nullptr) {
             cg.statements += "    " + tmp + ".fuzzColor = " + CompileInputExpression(cg, node, "fuzzColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "irisMask") != nullptr) {
+            cg.statements += "    " + tmp + ".irisMask = " + CompileInputExpression(cg, node, "irisMask", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "irisDistance") != nullptr) {
+            cg.statements += "    " + tmp + ".irisDistance = " + CompileInputExpression(cg, node, "irisDistance", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "irisNormal") != nullptr) {
+            cg.statements += "    " + tmp + ".irisNormal = " + CompileInputExpression(cg, node, "irisNormal", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)") + ";\n";
         }
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
@@ -2059,6 +2077,9 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
         if (outputPin == "waterColorScaleBehind") return "(" + baseRef + ").waterColorScaleBehind";
         if (outputPin == "subsurfaceColor") return "(" + baseRef + ").subsurfaceColor";
         if (outputPin == "fuzzColor") return "(" + baseRef + ").fuzzColor";
+        if (outputPin == "irisMask") return "(" + baseRef + ").irisMask";
+        if (outputPin == "irisDistance") return "(" + baseRef + ").irisDistance";
+        if (outputPin == "irisNormal") return "(" + baseRef + ").irisNormal";
         AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "Material attribute output pin is not supported.");
         return "0.0";
     case RenderMaterialGraphNodeKind::BreakVector:
@@ -3508,6 +3529,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    float waterColorScaleBehind;\n";
     source += "    vec3 subsurfaceColor;\n";
     source += "    vec3 fuzzColor;\n";
+    source += "    float irisMask;\n";
+    source += "    float irisDistance;\n";
+    source += "    vec3 irisNormal;\n";
     source += "};\n\n";
 
     if (usesHsv) {
@@ -3680,6 +3704,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     std::string waterColorScaleBehindExpr;
     std::string subsurfaceColorExpr;
     std::string fuzzColorExpr;
+    std::string irisMaskExpr;
+    std::string irisDistanceExpr;
+    std::string irisNormalExpr;
 
     // MAT-36: when a single MaterialAttributes set is wired into MaterialOutput.attributes it drives the
     // whole surface (the "use material attributes" mode); the per-channel pins are bypassed entirely.
@@ -3707,6 +3734,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         waterColorScaleBehindExpr = compileOutput("waterColorScaleBehind", RenderMaterialGraphPinType::Float, "1.0");
         subsurfaceColorExpr = compileOutput("subsurfaceColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)");
         fuzzColorExpr = compileOutput("fuzzColor", RenderMaterialGraphPinType::Float3, "vec3(1.0, 1.0, 1.0)");
+        irisMaskExpr = compileOutput("irisMask", RenderMaterialGraphPinType::Float, "0.0");
+        irisDistanceExpr = compileOutput("irisDistance", RenderMaterialGraphPinType::Float, "0.0");
+        irisNormalExpr = compileOutput("irisNormal", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
     }
     {
         std::ostringstream row;
@@ -3748,6 +3778,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "    material.waterColorScaleBehind = " + waterColorScaleBehindExpr + ";\n";
         source += "    material.subsurfaceColor = " + subsurfaceColorExpr + ";\n";
         source += "    material.fuzzColor = " + fuzzColorExpr + ";\n";
+        source += "    material.irisMask = " + irisMaskExpr + ";\n";
+        source += "    material.irisDistance = " + irisDistanceExpr + ";\n";
+        source += "    material.irisNormal = " + irisNormalExpr + ";\n";
     }
     source += "    return material;\n";
     source += "}\n";
@@ -3856,7 +3889,12 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
              [](const RenderMaterialGraphLink& link) { return link.toPin == "subsurfaceColor"; })) ||
         (resolvedShadingModel == RenderMaterialShadingModel::Cloth &&
          std::any_of(graph.links.begin(), graph.links.end(),
-             [](const RenderMaterialGraphLink& link) { return link.toPin == "fuzzColor"; }));
+             [](const RenderMaterialGraphLink& link) { return link.toPin == "fuzzColor"; })) ||
+        // Unreal's Eye: the iris (normal, mask, distance) rides in the same custom data.
+        (resolvedShadingModel == RenderMaterialShadingModel::Eye &&
+         std::any_of(graph.links.begin(), graph.links.end(), [](const RenderMaterialGraphLink& link) {
+             return link.toPin == "irisMask" || link.toPin == "irisDistance" || link.toPin == "irisNormal";
+         }));
     reflection.shadingModel = resolvedShadingModel;
     reflection.blendMode = resolvedBlendMode;
     reflection.usesSceneDepth = usesSceneDepth;

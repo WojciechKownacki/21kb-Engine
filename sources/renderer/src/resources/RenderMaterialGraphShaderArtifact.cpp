@@ -1159,7 +1159,11 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, KbEncodeGBufferCustomData1(surface.clearCoatRoughness));\n";
             wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), KbEncodeGBufferShadingModel(" + std::to_string(shadingModelId) + ".0));\n";
             wrapper += "    gl_FragData[3] = vec4(surface.emissive, clamp(surface.specular, 0.0, 1.0));\n";
-            if (shader.reflection.writesShadingModelColor) {
+            if (shader.reflection.writesShadingModelColor && shader.reflection.shadingModel == RenderMaterialShadingModel::Eye) {
+                // Unreal's Eye: the iris (octahedral world normal, mask, distance) in the fifth target.
+                wrapper += "    vec3 kbIrisNormal = normalize(basisTangent * surface.irisNormal.x + basisBitangent * surface.irisNormal.y + basisNormal * surface.irisNormal.z);\n";
+                wrapper += "    gl_FragData[4] = vec4(KbOctEncode(kbIrisNormal) * 0.5 + 0.5, clamp(surface.irisMask, 0.0, 1.0), clamp(surface.irisDistance, 0.0, 1.0));\n";
+            } else if (shader.reflection.writesShadingModelColor) {
                 // Unreal's custom data: the model colour (alpha 1 = given) in the fifth target, which the
                 // G-buffer carries in frames that draw such a material.
                 wrapper += "    gl_FragData[4] = vec4(clamp(" + std::string{ GraphShadingModelColorField(shader) } +
@@ -1191,7 +1195,14 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    float occlusion = clamp(surface.occlusion, 0.0, 1.0);\n";
             wrapper += "    float specular = clamp(surface.specular, 0.0, 1.0);\n";
             const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
-            if (shader.reflection.writesShadingModelColor) {
+            if (shader.reflection.shadingModel == RenderMaterialShadingModel::Eye) {
+                // Unreal's Eye in the forward pass: the iris normal in world space, as the G-buffer stores it.
+                wrapper += "    vec3 kbIrisNormal = normalize(basisTangent * surface.irisNormal.x + basisBitangent * surface.irisNormal.y + basisNormal * surface.irisNormal.z);\n";
+                wrapper += "    vec3 lighting = KbEvaluateForwardLightingFull(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
+                    std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0), " +
+                    "KbDefaultShadingModelColor(" + std::to_string(shadingModelId) + ".0, surface.baseColor.rgb, metallic), kbIrisNormal, " +
+                    "vec2(clamp(surface.irisMask, 0.0, 1.0), clamp(surface.irisDistance, 0.0, 1.0)));\n";
+            } else if (shader.reflection.writesShadingModelColor) {
                 wrapper += "    vec3 lighting = KbEvaluateForwardLightingColor(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
                     std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0), " +
                     std::string{ GraphShadingModelColorField(shader) } + ");\n";

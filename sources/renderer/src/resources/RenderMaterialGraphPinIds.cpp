@@ -57,6 +57,10 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         // Unreal's Subsurface Color (Subsurface) and Fuzz Color (Cloth).
         if (!outputPin && pin == "subsurfaceColor") return PinId(nodeKind, direction, 33U);
         if (!outputPin && pin == "fuzzColor") return PinId(nodeKind, direction, 34U);
+        // Unreal's Eye: Iris Mask, Iris Distance, Iris Normal.
+        if (!outputPin && pin == "irisMask") return PinId(nodeKind, direction, 35U);
+        if (!outputPin && pin == "irisDistance") return PinId(nodeKind, direction, 36U);
+        if (!outputPin && pin == "irisNormal") return PinId(nodeKind, direction, 37U);
         return 0U;
     case RenderMaterialGraphNodeKind::TextureSample:
         if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
@@ -349,6 +353,9 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 29U);
         if (pin == "subsurfaceColor") return PinId(nodeKind, direction, 30U);
         if (pin == "fuzzColor") return PinId(nodeKind, direction, 31U);
+        if (pin == "irisMask") return PinId(nodeKind, direction, 32U);
+        if (pin == "irisDistance") return PinId(nodeKind, direction, 33U);
+        if (pin == "irisNormal") return PinId(nodeKind, direction, 34U);
         return 0U;
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
         if (outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -379,6 +386,9 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 29U);
         if (pin == "subsurfaceColor") return PinId(nodeKind, direction, 30U);
         if (pin == "fuzzColor") return PinId(nodeKind, direction, 31U);
+        if (pin == "irisMask") return PinId(nodeKind, direction, 32U);
+        if (pin == "irisDistance") return PinId(nodeKind, direction, 33U);
+        if (pin == "irisNormal") return PinId(nodeKind, direction, 34U);
         return 0U;
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
         if (!outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -404,6 +414,9 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "waterColorScaleBehind") return PinId(nodeKind, direction, 29U);
         if (pin == "subsurfaceColor") return PinId(nodeKind, direction, 30U);
         if (pin == "fuzzColor") return PinId(nodeKind, direction, 31U);
+        if (pin == "irisMask") return PinId(nodeKind, direction, 32U);
+        if (pin == "irisDistance") return PinId(nodeKind, direction, 33U);
+        if (pin == "irisNormal") return PinId(nodeKind, direction, 34U);
         return 0U;
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);

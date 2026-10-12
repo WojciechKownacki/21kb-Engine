@@ -84,6 +84,7 @@ enum class RenderMaterialShadingModel : std::uint8_t {
         model == RenderMaterialShadingModel::ClearCoat ||
         model == RenderMaterialShadingModel::Cloth ||
         model == RenderMaterialShadingModel::Hair ||
+        model == RenderMaterialShadingModel::Eye ||
         model == RenderMaterialShadingModel::SingleLayerWater ||
         model == RenderMaterialShadingModel::ThinTranslucent;
 }
