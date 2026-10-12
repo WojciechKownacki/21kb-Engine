@@ -58,6 +58,10 @@ bool RendererFinalCompositeSubmitter::Submit(
         .clearRgba = desc.clearRgba,
         .clearTarget = desc.finalComposite.clearTarget,
         .vignetteIntensity = VignetteIntensity(postProcessOutput),
+        // FXAA is the post-tonemap anti-aliasing: it runs when selected and TAA (which resolves before the
+        // tonemap) is not.
+        .antiAliasing = postProcessOutput.fxaaEnabled && !postProcessOutput.temporalAntiAliasingEnabled,
+        .postProcessExtent = postProcessOutput.extent,
     });
 }
 

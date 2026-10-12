@@ -138,6 +138,7 @@ void SceneRenderer::Shutdown() {
     resourceMap_.Clear();
     resources_.Shutdown();
     skinningPalettes_.Shutdown();
+    motionPreviousModels_.Shutdown();
     initialized_ = false;
 }
 
@@ -267,6 +268,13 @@ void SceneRenderer::SubmitMeshPass(
         } else {
             gpuMeshDrawScratch_.clear();
         }
+        const SceneMotionVectorFrame motionVectors{
+            .previousViewProjection = motionVectorPreviousViewProjection_,
+            .currentViewProjection = motionVectorCurrentViewProjection_,
+            .previousFrameTime = previousFrameTime_,
+            .motionFrame = renderScene.MotionFrame(),
+            .previousModels = &motionPreviousModels_,
+        };
         lastSubmitStats_ = meshSubmitter_->Submit(
             viewId,
             renderScene,
@@ -286,7 +294,7 @@ void SceneRenderer::SubmitMeshPass(
                 ? sceneDepthTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
             pass == MeshPassType::BaseTransparent ? sceneColorTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
             terrainLayersOnly,
-            motionVectorPreviousViewProjection_,
+            pass == MeshPassType::MotionVectors ? &motionVectors : nullptr,
             pass == MeshPassType::BaseTransparent ? particleRenderer_.get() : nullptr,
             // Mesh-output particles (submitted internally through the ordinary mesh pipeline, not
             // particleRenderer_'s quad/billboard path above) need the snapshot in every pass - their
@@ -375,6 +383,7 @@ const std::string& SceneRenderer::GraphShaderCacheRoot() const noexcept {
 }
 
 void SceneRenderer::AdvanceFrameTime(float deltaSeconds) noexcept {
+    previousFrameTime_ = FrameTimeConstants();
     frameDeltaSeconds_ = deltaSeconds;
     frameTimeSeconds_ += deltaSeconds;
     ++frameTimeIndex_;
@@ -400,13 +409,20 @@ void SceneRenderer::SetSceneColorTexture(bgfx::TextureHandle texture) noexcept {
     sceneColorTexture_ = texture;
 }
 
-void SceneRenderer::SetMotionVectorPreviousViewProjection(const std::array<float, 16>& matrix) noexcept {
-    motionVectorPreviousViewProjection_ = matrix;
+void SceneRenderer::SetMotionVectorViewProjections(
+    const std::array<float, 16>& current, const std::array<float, 16>& previous) noexcept {
+    motionVectorCurrentViewProjection_ = current;
+    motionVectorPreviousViewProjection_ = previous;
 }
 
-bool SceneRenderer::BeginSkinningFrame(
+bool SceneRenderer::BeginFrameMatrixRows(
     std::uint64_t frame, std::uint64_t completedFrame) noexcept {
-    return initialized_ && skinningPalettes_.BeginFrame(frame, completedFrame);
+    if (!initialized_) {
+        return false;
+    }
+    const bool skinning = skinningPalettes_.BeginFrame(frame, completedFrame);
+    const bool motion = motionPreviousModels_.BeginFrame(frame, completedFrame);
+    return skinning && motion;
 }
 
 RenderSkinningPaletteAllocator& SceneRenderer::SkinningPalettes() noexcept {

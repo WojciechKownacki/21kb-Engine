@@ -2,8 +2,8 @@
 
 #include "engine/platform/FileSystemPath.hpp"
 
-#include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/ShaderLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "renderer/RendererDebugLog.hpp"
 #include "scene/submit/SceneMeshMaterialBindingResolver.hpp"
@@ -250,6 +250,8 @@ void AppendUniqueValue(std::vector<T>& values, const T& value) {
         return "BaseTransparent";
     case MeshPassType::ShadowDepth:
         return "ShadowDepth";
+    case MeshPassType::MotionVectors:
+        return std::string{ kRenderMaterialGraphMotionVectorsPass };
     default:
         return "BaseOpaque";
     }
@@ -267,9 +269,23 @@ void AppendUniqueValue(std::vector<T>& values, const T& value) {
     return role == "normal" || role == "normalMap";
 }
 
-[[nodiscard]] bool IsGraphCapablePass(MeshPassType pass) noexcept {
+// Whether the graph material draws `pass` with its own cooked program. The motion vector pass needs it only for
+// graphs that move, offset the depth of or clip their surface; any other graph moves like its mesh.
+[[nodiscard]] bool IsGraphCapablePass(const RenderMaterialResource* material, MeshPassType pass) noexcept {
+    if (material == nullptr || !material->graphProgram.active) {
+        return false;
+    }
+    if (pass == MeshPassType::MotionVectors) {
+        return material->graphProgram.drawsOwnMotionVectors;
+    }
     return pass == MeshPassType::BaseOpaque || pass == MeshPassType::GBuffer || pass == MeshPassType::BaseTransparent || pass == MeshPassType::ShadowDepth;
 }
+
+// The sampler stages of the previous-model rows (s_motionPreviousModels): stage 15 is free in the rigid and the
+// graph motion vector programs (graph textures end at 14, no terrain layer is drawn), the skinned program has
+// its palettes at 14 and 15.
+constexpr std::uint8_t kMotionPreviousModelStage = 15U;
+constexpr std::uint8_t kSkinnedMotionPreviousModelStage = 13U;
 
 [[nodiscard]] std::vector<std::uint8_t> ReadShaderBinaryFile(const std::filesystem::path& path) {
     std::ifstream file{ path, std::ios::binary | std::ios::ate };
@@ -329,7 +345,10 @@ bool SceneMeshPassResources::Initialize() {
     previousSkinningPaletteInfoUniform_ = bgfx::createUniform("u_previousSkinningPaletteInfo", bgfx::UniformType::Vec4);
     motionDepthSampler_ = bgfx::createUniform("s_sceneDepth", bgfx::UniformType::Sampler);
     motionPreviousViewProjectionUniform_ = bgfx::createUniform("u_motionPreviousViewProjection", bgfx::UniformType::Mat4);
-    motionVectorParamsUniform_ = bgfx::createUniform("u_motionVectorParams", bgfx::UniformType::Vec4);
+    motionCurrentViewProjectionUniform_ = bgfx::createUniform("u_motionCurrentViewProjection", bgfx::UniformType::Mat4);
+    motionPreviousModelInfoUniform_ = bgfx::createUniform("u_motionPreviousModelInfo", bgfx::UniformType::Vec4);
+    motionPreviousModelsSampler_ = bgfx::createUniform("s_motionPreviousModels", bgfx::UniformType::Sampler);
+    motionPreviousTimeUniform_ = bgfx::createUniform("u_motionPreviousTime", bgfx::UniformType::Vec4);
     normalSampler_ = bgfx::createUniform("s_normal", bgfx::UniformType::Sampler);
     metallicRoughnessSampler_ = bgfx::createUniform("s_metallicRoughness", bgfx::UniformType::Sampler);
     occlusionSampler_ = bgfx::createUniform("s_occlusion", bgfx::UniformType::Sampler);
@@ -378,9 +397,21 @@ bool SceneMeshPassResources::Initialize() {
 
 void SceneMeshPassResources::Shutdown() {
     lightGrid_.Shutdown();
-    if (bgfx::isValid(motionVectorParamsUniform_)) {
-        bgfx::destroy(motionVectorParamsUniform_);
-        motionVectorParamsUniform_ = BGFX_INVALID_HANDLE;
+    if (bgfx::isValid(motionPreviousTimeUniform_)) {
+        bgfx::destroy(motionPreviousTimeUniform_);
+        motionPreviousTimeUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(motionPreviousModelsSampler_)) {
+        bgfx::destroy(motionPreviousModelsSampler_);
+        motionPreviousModelsSampler_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(motionPreviousModelInfoUniform_)) {
+        bgfx::destroy(motionPreviousModelInfoUniform_);
+        motionPreviousModelInfoUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(motionCurrentViewProjectionUniform_)) {
+        bgfx::destroy(motionCurrentViewProjectionUniform_);
+        motionCurrentViewProjectionUniform_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(motionPreviousViewProjectionUniform_)) {
         bgfx::destroy(motionPreviousViewProjectionUniform_);
@@ -605,6 +636,39 @@ void SceneMeshPassResources::BindSkyReflection(const PackedSceneLighting& lighti
     bgfx::setUniform(skyReflectionParamsUniform_, lighting.skyReflectionParams.data());
 }
 
+bool SceneMeshPassResources::BindMotionVectors(const SceneMeshPassBindDesc& desc, bool skinned) const {
+    const SceneMotionVectorFrame& motion = *desc.motionVectors;
+    constexpr std::uint32_t kPointClamp = BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    // A draw whose instances all stayed where they were reads their current models (info.z = 0); the stage
+    // still holds a texture so every backend sees a bound sampler.
+    bgfx::TextureHandle rows = fallbackWhiteTexture_;
+    std::array<float, 4U> rowInfo{ 0.0F, 0.0F, 0.0F, 0.0F };
+    if (desc.motionPreviousModels.IsValid()) {
+        const std::uint32_t rowCapacity = motion.previousModels == nullptr
+            ? 0U : motion.previousModels->Stats().matrixCapacityPerFrame;
+        rows = motion.previousModels == nullptr ? bgfx::TextureHandle{ bgfx::kInvalidHandle }
+            : motion.previousModels->Texture(desc.motionPreviousModels);
+        if (!bgfx::isValid(rows) || rowCapacity == 0U) {
+            return false;
+        }
+        rowInfo = {
+            static_cast<float>(desc.motionPreviousModels.firstMatrix),
+            1.0F / static_cast<float>(rowCapacity),
+            1.0F,
+            0.0F,
+        };
+    }
+    bgfx::setTexture(0U, motionDepthSampler_, desc.sceneDepthTexture, kPointClamp);
+    bgfx::setTexture(skinned ? kSkinnedMotionPreviousModelStage : kMotionPreviousModelStage,
+        motionPreviousModelsSampler_, rows, kPointClamp);
+    bgfx::setUniform(motionPreviousModelInfoUniform_, rowInfo.data());
+    bgfx::setUniform(motionPreviousViewProjectionUniform_, motion.previousViewProjection.data());
+    bgfx::setUniform(motionCurrentViewProjectionUniform_, motion.currentViewProjection.data());
+    bgfx::setUniform(motionPreviousTimeUniform_, motion.previousFrameTime.data());
+    return true;
+}
+
 bool SceneMeshPassResources::IsInitialized() const noexcept {
     return bgfx::isValid(meshProgram_) &&
         bgfx::isValid(gbufferProgram_) &&
@@ -614,6 +678,9 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(shadowSampler_) &&
         bgfx::isValid(skinningPaletteSampler_) &&
         bgfx::isValid(skinningPaletteInfoUniform_) &&
+        bgfx::isValid(motionDepthSampler_) && bgfx::isValid(motionPreviousViewProjectionUniform_) &&
+        bgfx::isValid(motionCurrentViewProjectionUniform_) && bgfx::isValid(motionPreviousModelInfoUniform_) &&
+        bgfx::isValid(motionPreviousModelsSampler_) && bgfx::isValid(motionPreviousTimeUniform_) &&
         bgfx::isValid(normalSampler_) &&
         bgfx::isValid(metallicRoughnessSampler_) &&
         bgfx::isValid(occlusionSampler_) &&
@@ -887,11 +954,11 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
         resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);
         resolution.status = SceneRenderMaterialProgramStatus::Builtin;
         if (skinned && material != nullptr && material->graphProgram.active &&
-            material->graphProgram.requiresGeneratedVertexShader && IsGraphCapablePass(pass)) {
+            material->graphProgram.requiresGeneratedVertexShader && IsGraphCapablePass(material, pass)) {
             resolution.program = BGFX_INVALID_HANDLE;
             resolution.status = SceneRenderMaterialProgramStatus::GraphFallback;
         }
-        if (material != nullptr && material->graphProgram.active && IsGraphCapablePass(pass) &&
+        if (IsGraphCapablePass(material, pass) &&
             (!skinned || !material->graphProgram.requiresGeneratedVertexShader)) {
             const MaterialProgramKey key{
                 .materialTypeId = material->graphProgram.materialTypeId,
@@ -908,7 +975,9 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
                     static_cast<std::uint32_t>(bgfx::getRendererType())),
                 .pipelineStateKey = material->graphProgram.pipelineStateKey,
                 .skinned = skinned,
-                .requiresGeneratedVertexShader = material->graphProgram.requiresGeneratedVertexShader,
+                // The motion vector program always pairs its fragment stage with a generated vertex stage.
+                .requiresGeneratedVertexShader = material->graphProgram.requiresGeneratedVertexShader ||
+                    pass == MeshPassType::MotionVectors,
                 .graphProgram = true,
             };
             resolution.key = key;
@@ -928,9 +997,11 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
                 const bool shadowRequiresGraphProgram = pass == MeshPassType::ShadowDepth &&
                     (material->graphProgram.requiresGeneratedVertexShader ||
                      material->graphProgram.alphaMode == RenderMaterialAlphaMode::Mask);
-                if (shadowRequiresGraphProgram) {
-                    // A fixed/position-only shadow shader would cast the wrong silhouette or ignore graph alpha.
-                    // Fail closed so submit diagnostics expose the missing artifact instead of rendering a false shadow.
+                if (shadowRequiresGraphProgram || pass == MeshPassType::MotionVectors) {
+                    // A fixed/position-only shadow shader would cast the wrong silhouette or ignore graph alpha,
+                    // and the rigid motion vector program would write the motion of the undeformed mesh.
+                    // Fail closed so submit diagnostics expose the missing artifact instead of rendering a false
+                    // shadow or false motion.
                     resolution.program = BGFX_INVALID_HANDLE;
                 } else {
                     resolution.fellBackToBuiltin = true;
@@ -953,7 +1024,7 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
     // A graph-capable material that bound its GPU program lands in the GPU set; any pass that did NOT
     // (missing cooked binary, shadow fail-closed) lands it in the fell-back set. GraphMaterialDrawStats()
     // then treats "fell back in any pass" as a CPU fallback.
-    if (material != nullptr && material->graphProgram.active && IsGraphCapablePass(pass)) {
+    if (IsGraphCapablePass(material, pass)) {
         const void* materialId = static_cast<const void*>(material);
         if (resolution.graphProgram) {
             graphGpuMaterials_.insert(materialId);
@@ -965,7 +1036,7 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
         ++programBindStats_.programSwitchCount;
         lastBoundProgram_ = resolution.program;
     }
-    if (material != nullptr && material->graphProgram.active && IsGraphCapablePass(pass)) {
+    if (IsGraphCapablePass(material, pass)) {
         std::ostringstream row;
         row << "resolve-pass pass=" << GraphMeshPassName(pass)
             << " status=" << static_cast<int>(resolution.status)
@@ -1034,26 +1105,21 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         return resolution.program;
     }
     if (desc.pass == MeshPassType::MotionVectors) {
-        if (!bgfx::isValid(desc.sceneDepthTexture)) {
+        if (!bgfx::isValid(desc.sceneDepthTexture) || desc.motionVectors == nullptr ||
+            !BindMotionVectors(desc, skinned)) {
             return BGFX_INVALID_HANDLE;
         }
-        const std::array<float, 4U> motionVectorParams{
-            SceneDepthPolicy::HomogeneousDepth() ? 1.0F : 0.0F,
-            0.0F, 0.0F, 0.0F,
-        };
-        bgfx::setTexture(0U, motionDepthSampler_, desc.sceneDepthTexture,
-            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
-                BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-        bgfx::setUniform(motionPreviousViewProjectionUniform_, desc.motionVectorPreviousViewProjection.data());
-        bgfx::setUniform(motionVectorParamsUniform_, motionVectorParams.data());
-        return resolution.program;
+        if (!resolution.graphProgram || material == nullptr) {
+            return resolution.program;
+        }
+        // A graph's motion vector program evaluates the material: it binds like the scene passes below.
     }
 
     const SceneMeshMaterialBindingFallbacks fallbacks{
         .whiteTexture = fallbackWhiteTexture_,
         .normalTexture = fallbackNormalTexture_,
     };
-    if (desc.pass != MeshPassType::ShadowDepth) {
+    if (desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::MotionVectors) {
         const RenderMeshResource* mesh = desc.command.meshResource;
         const bool terrainLayerEnabled =
             desc.command.terrainLayerIndex != UINT8_MAX &&

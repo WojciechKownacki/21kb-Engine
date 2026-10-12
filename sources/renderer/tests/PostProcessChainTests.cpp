@@ -35,12 +35,14 @@ void EmptyPostProcessChainIsValidPassthrough() {
 void DefaultPostProcessChainManifestIsComplete() {
     PostProcessChain chain;
     Require(chain.Configure(PostProcessChain::DefaultSceneChainDesc()), "PostProcessChain rejected the default scene manifest");
-    Require(chain.Passes().size() == 5U, "Default post-process manifest has the wrong pass count");
+    Require(chain.Passes().size() == 6U, "Default post-process manifest has the wrong pass count");
     Require(chain.Passes()[0].kind == PostProcessPassKind::IdentityCopy, "Default post-process manifest should start with identity copy");
     Require(chain.Passes()[1].kind == PostProcessPassKind::AntiAliasing, "Default post-process manifest should resolve AA before bloom");
     Require(chain.Passes()[2].kind == PostProcessPassKind::Bloom, "Default post-process manifest should run bloom before overlays and tonemap");
     Require(chain.Passes()[3].kind == PostProcessPassKind::SelectionOutline, "Default post-process manifest should keep selection outline before tonemap");
-    Require(chain.Passes()[4].kind == PostProcessPassKind::Tonemap, "Default post-process manifest should expose tonemap as the final controllable pass");
+    Require(chain.Passes()[4].kind == PostProcessPassKind::Tonemap, "Default post-process manifest should tonemap after bloom and the selection outline");
+    Require(chain.Passes()[5].kind == PostProcessPassKind::Fxaa && !chain.Passes()[5].enabled,
+        "Default post-process manifest should run (disabled by default) FXAA after the tonemap");
 }
 
 void PostProcessChainRejectsDuplicatePassKinds() {
@@ -152,14 +154,14 @@ void EnabledPlaceholderPassesAreValidHdrPassthrough() {
 void AntiAliasingPassPublishesSettings() {
     PostProcessChain chain;
     Require(chain.AddPass(PostProcessPass{
-        .kind = PostProcessPassKind::AntiAliasing,
+        .kind = PostProcessPassKind::Fxaa,
         .enabled = true,
         .postProcessSettings = ScenePostProcessSettings{
             .temporalAntiAliasingEnabled = false,
             .temporalJitterEnabled = false,
             .fxaaEnabled = true,
         },
-    }), "PostProcessChain rejected configured anti-aliasing pass");
+    }), "PostProcessChain rejected configured FXAA pass");
     const PostProcessOutput output = chain.Evaluate(PostProcessInput{
         .sceneColor = TextureHandleForTest(31U),
         .outputFrameBuffer = bgfx::FrameBufferHandle{32U},
@@ -171,6 +173,28 @@ void AntiAliasingPassPublishesSettings() {
     Require(output.IsValid(), "Configured anti-aliasing pass did not produce a valid output");
     Require(output.fxaaEnabled, "PostProcessChain did not publish enabled FXAA state");
     Require(!output.temporalAntiAliasingEnabled, "PostProcessChain published TAA while FXAA is selected");
+    Require(output.colorSpace == PostProcessColorSpace::SceneHdr,
+        "FXAA runs in the display composite: the post-process output must stay scene HDR");
+
+    // The temporal slot publishes TAA only; FXAA there would filter linear HDR before the tonemap.
+    PostProcessChain temporal;
+    Require(temporal.AddPass(PostProcessPass{
+        .kind = PostProcessPassKind::AntiAliasing,
+        .enabled = true,
+        .postProcessSettings = ScenePostProcessSettings{
+            .temporalAntiAliasingEnabled = true,
+            .fxaaEnabled = true,
+        },
+    }), "PostProcessChain rejected configured temporal anti-aliasing pass");
+    const PostProcessOutput temporalOutput = temporal.Evaluate(PostProcessInput{
+        .sceneColor = TextureHandleForTest(34U),
+        .outputFrameBuffer = bgfx::FrameBufferHandle{35U},
+        .outputColor = TextureHandleForTest(36U),
+        .extent = RenderExtent{640U, 480U},
+        .viewId = 6U,
+    });
+    Require(temporalOutput.temporalAntiAliasingEnabled && !temporalOutput.fxaaEnabled,
+        "The temporal anti-aliasing slot must not publish FXAA, which belongs after the tonemap");
 }
 
 void SelectionOutlineRequiresSelectionMaskInput() {

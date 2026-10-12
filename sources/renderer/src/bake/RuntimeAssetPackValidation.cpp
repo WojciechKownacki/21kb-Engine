@@ -13,6 +13,7 @@
 #include "kb/render/bake/TextureBaker.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderToolchain.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderPrewarmer.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
@@ -34,9 +35,6 @@
 namespace kb::render {
 namespace {
 
-constexpr std::array<std::string_view, 4U> kMaterialPasses{
-    "BaseOpaque", "GBuffer", "ShadowDepth", "BaseTransparent"
-};
 
 struct MaterialShaderQualifier final {
     std::uint64_t graphSourceHash = 0U;
@@ -252,12 +250,14 @@ struct MaterialShaderQualifier final {
             return Failure("material shader contains a backend outside the target profile for " +
                 DescribeAsset(asset));
         }
-        if (std::ranges::find(kMaterialPasses, shader.pass) == kMaterialPasses.end() ||
+        if (std::ranges::find(kRenderMaterialGraphScenePasses, shader.pass) == kRenderMaterialGraphScenePasses.end() ||
+            !RenderMaterialGraphCooksScenePass(compiled.shader.reflection, shader.pass) ||
             (shader.stage != "fragment" && shader.stage != "vertex")) {
             return Failure("material shader contains an unsupported pass or stage for " +
                 DescribeAsset(asset));
         }
-        if (!requiresVertex && shader.stage == "vertex") {
+        // The motion vector pass always pairs its fragment stage with a generated vertex stage.
+        if (!requiresVertex && shader.pass != kRenderMaterialGraphMotionVectorsPass && shader.stage == "vertex") {
             return Failure("material without vertex-domain outputs contains generated vertex shaders: " +
                 DescribeAsset(asset));
         }
@@ -272,7 +272,10 @@ struct MaterialShaderQualifier final {
             continue;
         }
         const bgfx::RendererType::Enum renderer = RendererForShaderBackend(backend);
-        for (const std::string_view pass : kMaterialPasses) {
+        for (const std::string_view pass : kRenderMaterialGraphScenePasses) {
+            if (!RenderMaterialGraphCooksScenePass(compiled.shader.reflection, pass)) {
+                continue;
+            }
             const auto validateStage = [&](std::string_view stage) {
                 bytes.clear();
                 std::uint64_t revision = 0U;
@@ -295,7 +298,7 @@ struct MaterialShaderQualifier final {
                     std::string{ kb::assets::bake::ShaderBakeBackendName(backend) } + "): " +
                     DescribeAsset(asset));
             }
-            if (requiresVertex && !validateStage("vertex")) {
+            if ((requiresVertex || pass == kRenderMaterialGraphMotionVectorsPass) && !validateStage("vertex")) {
                 return Failure("vertex-domain graph material is missing a required vertex shader (" +
                     std::string{ pass } + "/" +
                     std::string{ kb::assets::bake::ShaderBakeBackendName(backend) } + "): " +

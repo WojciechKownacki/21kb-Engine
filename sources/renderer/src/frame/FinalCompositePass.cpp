@@ -70,6 +70,8 @@ bool FinalCompositePass::Submit(const FinalCompositePassDesc& desc) const {
         .clearRgba = desc.clearRgba,
         .clearTarget = desc.clearTarget,
         .vignetteIntensity = desc.vignetteIntensity,
+        .antiAliasing = desc.antiAliasing,
+        .hdrExtent = desc.postProcessExtent,
     });
     WriteRendererDebugLog("final_composite", submitted ? "Submit end ok" : "Submit end failed");
     return submitted;

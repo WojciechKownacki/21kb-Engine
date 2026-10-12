@@ -20,6 +20,20 @@
 
 namespace kb::render {
 
+// What the motion vector pass draws with besides the meshes (Unreal's velocity pass).
+struct SceneMotionVectorFrame {
+    // The jitter-free view-projections of the previous frame and of this one; the pass rasterizes with this
+    // frame's jittered view (the prepass depth) and writes motion between these.
+    std::array<float, 16> previousViewProjection{};
+    std::array<float, 16> currentViewProjection{};
+    // u_time of the previous frame: graphs evaluate their previous vertex positions at it.
+    std::array<float, 4> previousFrameTime{};
+    // RenderScene::MotionFrame of the submitted scene: which instances recorded a previous model this frame.
+    std::uint64_t motionFrame = 0U;
+    // Per-frame rows the previous models of moved instances are uploaded to, indexed by instance.
+    RenderSkinningPaletteAllocator* previousModels = nullptr;
+};
+
 struct SceneMeshPassBindDesc {
     const MeshDrawCommand& command;
     const RenderResourceRegistry& resources;
@@ -35,7 +49,10 @@ struct SceneMeshPassBindDesc {
     bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE;
     // MAT-31: the opaque scene-color snapshot for graph fragment shaders that sample SceneColor/SceneTexture.
     bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE;
-    std::array<float, 16> motionVectorPreviousViewProjection{};
+    const SceneMotionVectorFrame* motionVectors = nullptr;
+    // The previous models of this draw's instances (SceneMotionVectorFrame::previousModels); invalid when
+    // none of them moved this frame.
+    RenderSkinningPaletteHandle motionPreviousModels{};
     const RenderSkinningPaletteAllocator* skinningPaletteAllocator = nullptr;
     // What material graphs add to render-space positions to read world positions (SceneMeshSubmitter).
     std::array<float, 4> renderOriginOffset{};
@@ -96,6 +113,8 @@ public:
 private:
     // The sky reflection of the forward lighting at this sampler stage (the fallback cube when none).
     void BindSkyReflection(const PackedSceneLighting& lighting, std::uint8_t stage) const;
+    // The motion vector pass inputs (motion_vectors.sh); false when the draw's previous models are gone.
+    [[nodiscard]] bool BindMotionVectors(const SceneMeshPassBindDesc& desc, bool skinned) const;
 
     struct RetiredGraphUniform {
         bgfx::UniformHandle handle = BGFX_INVALID_HANDLE;
@@ -145,7 +164,10 @@ private:
     bgfx::UniformHandle previousSkinningPaletteInfoUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle motionDepthSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle motionPreviousViewProjectionUniform_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle motionVectorParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionCurrentViewProjectionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionPreviousModelInfoUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionPreviousModelsSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionPreviousTimeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle metallicRoughnessSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle occlusionSampler_ = BGFX_INVALID_HANDLE;

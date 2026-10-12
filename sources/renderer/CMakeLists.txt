@@ -486,7 +486,6 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_post_bloom_combine.sc
     fs_post_bloom_prefilter.sc
     fs_post_exposure_luminance.sc
-    fs_post_fxaa.sc
     fs_post_motion_vectors.sc
     fs_post_taa_resolve.sc
     fs_particle_instanced.sc
@@ -544,8 +543,6 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_skinned_instanced.sc
-            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_motion_vectors_instanced.sc
-            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_skinned_motion_vectors_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_skinned_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_present.sc
@@ -559,6 +556,31 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}
             ${KB_RENDERER_BGFX_SHADER_INCLUDE_DIR}
         OUT_FILES_VAR KB_RENDERER_GENERATED_VERTEX_SHADERS
+    )
+
+    # The motion vector vertex stages index each instance's previous model by gl_InstanceID, which OpenGL ES
+    # has from 3.0 on (the material graph shaders already require it); every other profile is the default.
+    set(KB_RENDERER_INSTANCE_ID_SHADER_PROFILES spirv 120 300_es)
+    if(APPLE)
+        list(APPEND KB_RENDERER_INSTANCE_ID_SHADER_PROFILES metal)
+    elseif(WIN32 OR MINGW OR MSYS OR CYGWIN)
+        list(APPEND KB_RENDERER_INSTANCE_ID_SHADER_PROFILES s_5_0 s_6_0)
+    endif()
+    if(BGFX_CONFIG_RENDERER_WEBGPU)
+        list(APPEND KB_RENDERER_INSTANCE_ID_SHADER_PROFILES wgsl)
+    endif()
+    bgfx_compile_shaders(
+        TYPE VERTEX
+        SHADERS
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_motion_vectors_instanced.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_skinned_motion_vectors_instanced.sc
+        VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
+        OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
+        INCLUDE_DIRS
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}
+            ${KB_RENDERER_BGFX_SHADER_INCLUDE_DIR}
+        PROFILES ${KB_RENDERER_INSTANCE_ID_SHADER_PROFILES}
+        OUT_FILES_VAR KB_RENDERER_GENERATED_INSTANCE_ID_VERTEX_SHADERS
     )
 
     bgfx_compile_shaders(
@@ -576,7 +598,6 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_blur.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_combine.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_exposure_luminance.sc
-            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_fxaa.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_taa_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting.sc
@@ -619,6 +640,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
     add_custom_target(kb_renderer_generated_shaders
         DEPENDS
             ${KB_RENDERER_GENERATED_VERTEX_SHADERS}
+            ${KB_RENDERER_GENERATED_INSTANCE_ID_VERTEX_SHADERS}
             ${KB_RENDERER_GENERATED_FRAGMENT_SHADERS}
             ${KB_RENDERER_GENERATED_COMPUTE_SHADERS}
     )
@@ -644,6 +666,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         DEPENDS
             ${KB_RENDERER_PREBUILT_SHADER_FILES}
             ${KB_RENDERER_GENERATED_VERTEX_SHADERS}
+            ${KB_RENDERER_GENERATED_INSTANCE_ID_VERTEX_SHADERS}
             ${KB_RENDERER_GENERATED_FRAGMENT_SHADERS}
             ${KB_RENDERER_GENERATED_COMPUTE_SHADERS}
         COMMENT "Generate and stage bgfx runtime shaders"

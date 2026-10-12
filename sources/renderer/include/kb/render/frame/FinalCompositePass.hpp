@@ -20,6 +20,10 @@ struct FinalCompositePassDesc {
     bool clearTarget = false;
     // The profile's vignette: 0 = none.
     float vignetteIntensity = 0.0F;
+    // FXAA, which runs on the display image after the tonemap; `postProcessExtent` is the size of
+    // postProcessColor.
+    bool antiAliasing = false;
+    RenderExtent postProcessExtent{};
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

@@ -186,7 +186,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     bgfx::TextureHandle sceneDepthTexture,
     bgfx::TextureHandle sceneColorTexture,
     bool terrainLayersOnly,
-    std::array<float, 16> motionVectorPreviousViewProjection,
+    const SceneMotionVectorFrame* motionVectors,
     ParticleGpuRenderer* particleRenderer,
     const kb::particles::ParticleRenderSnapshot* particleSnapshot,
     std::span<const ParticleGpuMeshDraw> gpuMeshDraws) const {
@@ -439,7 +439,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .shadowMap = shadowMap,
         .sceneDepthTexture = sceneDepthTexture,
         .sceneColorTexture = sceneColorTexture,
-        .motionVectorPreviousViewProjection = motionVectorPreviousViewProjection,
+        .motionVectors = motionVectors,
         .skinningPaletteAllocator = skinningPaletteAllocator_,
         .renderOriginOffset = renderOriginOffset,
         .passResources = passResources_,

@@ -33,7 +33,6 @@ struct PostProcessSubmitSettings {
     float height = 1.0F;
     bool bloomEnabled = false;
     bool taaEnabled = false;
-    bool fxaaEnabled = false;
     float bloomStrength = 0.0F;
     float bloomThreshold = 0.0F;
     float bloomSoftKnee = 0.0F;
@@ -52,7 +51,6 @@ struct PostProcessSubmitSettings {
         .height = static_cast<float>(std::max(1U, desc.target.extent.height)),
         .bloomEnabled = desc.settings.bloomEnabled && desc.settings.bloomStrength > 0.0F,
         .taaEnabled = desc.settings.temporalAntiAliasingEnabled && bgfx::isValid(desc.sceneDepth) && desc.temporal.IsValid(),
-        .fxaaEnabled = !desc.settings.temporalAntiAliasingEnabled && desc.settings.fxaaEnabled,
         .bloomStrength = std::max(desc.settings.bloomStrength, 0.0F),
         .bloomThreshold = std::max(desc.settings.bloomThreshold, 0.0F),
         .bloomSoftKnee = std::clamp(desc.settings.bloomSoftKnee, 0.0F, 1.0F),
@@ -80,7 +78,6 @@ public:
                     << " requestedFxaa=" << BoolText(desc.settings.fxaaEnabled)
                     << " requestedTaa=" << BoolText(desc.settings.temporalAntiAliasingEnabled)
                     << " requestedJitter=" << BoolText(desc.settings.temporalJitterEnabled)
-                    << " resolvedFxaa=" << BoolText(settings.fxaaEnabled)
                     << " resolvedTaa=" << BoolText(settings.taaEnabled)
                     << " historyBlend=" << settings.historyBlend
                     << " sceneDepthValid=" << BoolText(bgfx::isValid(desc.sceneDepth))
@@ -93,7 +90,7 @@ public:
         {
             std::ostringstream message;
             message << "ScenePostProcessRenderer AA output"
-                    << " path=" << (settings.taaEnabled ? "TAA" : (settings.fxaaEnabled ? "FXAA" : "Copy"))
+                    << " path=" << (settings.taaEnabled ? "TAA" : "Copy")
                     << " postSource=" << postSource.idx
                     << " bloom=" << BoolText(settings.bloomEnabled);
             WriteRendererDebugLog("aa_trace", message.str());
@@ -133,14 +130,13 @@ private:
             desc.viewIds.postProcessTaaResolve,
             desc.target.temporalHistoryFrameBuffer,
             desc.target.extent,
-            settings.taaEnabled ? "KB Post TAA Resolve" : (settings.fxaaEnabled ? "KB Post FXAA" : "KB Post AA Copy"));
+            settings.taaEnabled ? "KB Post TAA Resolve" : "KB Post AA Copy");
         {
             std::ostringstream message;
             message << "ScenePostProcessRenderer SubmitAntiAliasing"
                     << " view=" << desc.viewIds.postProcessTaaResolve
-                    << " path=" << (settings.taaEnabled ? "TAA" : (settings.fxaaEnabled ? "FXAA" : "Copy"))
+                    << " path=" << (settings.taaEnabled ? "TAA" : "Copy")
                     << " taa=" << BoolText(settings.taaEnabled)
-                    << " fxaa=" << BoolText(settings.fxaaEnabled)
                     << " motionVectors=" << BoolText(settings.taaEnabled)
                     << " historyBlend=" << settings.historyBlend
                     << " historyValid=" << BoolText(desc.temporal.historyValid)
@@ -152,13 +148,7 @@ private:
                     << " previousHistoryTexture=" << desc.target.previousTemporalHistoryTexture.idx;
             WriteRendererDebugLog("aa_trace", message.str());
         }
-        if (settings.fxaaEnabled) {
-            const float fxaaParams[4] = {1.0F / settings.width, 1.0F / settings.height, 0.0F, 0.0F};
-            bgfx::setUniform(renderer_.temporalParamsUniform_, fxaaParams);
-            bgfx::setTexture(0, renderer_.sourceSampler_, desc.sceneColor);
-            SubmitFullscreen(desc.viewIds.postProcessTaaResolve, renderer_.fxaaProgram_, renderer_.fullscreenVertexBuffer_);
-            return desc.target.temporalHistoryTexture;
-        }
+        // FXAA is not resolved here: it filters the display image after the tonemap (fs_present_tex.sc).
         const float temporalParams[4] = {
             settings.historyBlend,
             settings.taaEnabled && desc.temporal.historyValid ? 1.0F : 0.0F,

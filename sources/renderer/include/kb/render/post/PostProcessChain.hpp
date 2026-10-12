@@ -15,10 +15,13 @@ namespace kb::render {
 
 enum class PostProcessPassKind : std::uint8_t {
     IdentityCopy,
+    // Temporal anti-aliasing: resolves the HDR scene colour before bloom and the tonemap.
     AntiAliasing,
     Tonemap,
     Bloom,
     SelectionOutline,
+    // FXAA: filters the display image after the tonemap (Unreal's order).
+    Fxaa,
 };
 
 enum class PostProcessColorSpace : std::uint8_t {
@@ -38,6 +41,8 @@ enum class PostProcessColorSpace : std::uint8_t {
         return "Bloom";
     case PostProcessPassKind::SelectionOutline:
         return "SelectionOutline";
+    case PostProcessPassKind::Fxaa:
+        return "Fxaa";
     }
 
     return "Unknown";

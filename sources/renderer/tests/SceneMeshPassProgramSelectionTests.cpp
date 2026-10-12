@@ -416,6 +416,33 @@ void RunSceneMeshPassProgramSelectionTest() {
                 !missingRequiredShadowResolution.fellBackToBuiltin,
             "P0.5: missing WPO/masked ShadowDepth binary must fail closed instead of using position-only/opaque fallback");
 
+        // Unreal's velocity pass runs the material's own shaders for a surface that moves beyond its mesh: the
+        // WPO graph writes its motion vectors with its cooked MotionVectors program, never the rigid one.
+        Require(CookGraphForActiveBackend(wpoShader, cacheRoot.generic_string(), kRenderMaterialGraphMotionVectorsPass),
+            "A masked WPO graph must cook its MotionVectors program");
+        RenderMaterialResource wpoMotionMaterial = wpoMaterial;
+        wpoMotionMaterial.graphProgram.drawsOwnMotionVectors = RenderMaterialGraphDrawsOwnMotionVectors(wpoShader.reflection);
+        Require(wpoMotionMaterial.graphProgram.drawsOwnMotionVectors, "A masked WPO graph must draw its own motion vectors");
+        const SceneMeshPassProgramResolution motionReady =
+            passResources.ResolveMeshPassProgram(&wpoMotionMaterial, MeshPassType::MotionVectors);
+        Require(motionReady.graphProgram && bgfx::isValid(motionReady.program) && !motionReady.fellBackToBuiltin &&
+                motionReady.key.pass == kRenderMaterialGraphMotionVectorsPass && motionReady.key.requiresGeneratedVertexShader &&
+                motionReady.program.idx != motionVectorResolution.program.idx,
+            "The motion vector pass must bind the WPO graph's generated MotionVectors program");
+        RenderMaterialResource missingMotion = wpoMotionMaterial;
+        missingMotion.graphProgram.variantKey ^= 0x0400'0000'0000'0000ULL;
+        const SceneMeshPassProgramResolution missingMotionResolution =
+            passResources.ResolveMeshPassProgram(&missingMotion, MeshPassType::MotionVectors);
+        Require(!bgfx::isValid(missingMotionResolution.program) && !missingMotionResolution.graphProgram &&
+                !missingMotionResolution.fellBackToBuiltin,
+            "A missing graph MotionVectors program must fail closed instead of writing the rigid mesh motion");
+        RenderMaterialResource rigidGraph = wpoMaterial;
+        rigidGraph.graphProgram.drawsOwnMotionVectors = false;
+        const SceneMeshPassProgramResolution rigidMotion = passResources.ResolveMeshPassProgram(&rigidGraph, MeshPassType::MotionVectors);
+        Require(bgfx::isValid(rigidMotion.program) && !rigidMotion.graphProgram && !rigidMotion.fellBackToBuiltin &&
+                rigidMotion.program.idx == motionVectorResolution.program.idx,
+            "A graph moving like its mesh must write its motion vectors with the rigid program");
+
         const std::filesystem::path wpoBackendRoot = cacheRoot /
             "windows" /
             ("graph_" + std::to_string(wpoShader.sourceHash)) /
@@ -449,7 +476,7 @@ void RunSceneMeshPassProgramSelectionTest() {
                 passResources.ProgramRegistryStats().failures == registryStatsBefore.failures + 1U,
             "KBMAT-MAT99-19: missing current WPO vertex binary must not silently bind the fixed mesh vertex shader as a graph program");
 
-        Require(passResources.ProgramBindStats().graphProgramBindCount == 10U,
+        Require(passResources.ProgramBindStats().graphProgramBindCount == 11U,
             "KBMAT-MAT07/P0.5/SMA-36: static and skinned graph program binds must be counted in submit stats");
 #endif
 

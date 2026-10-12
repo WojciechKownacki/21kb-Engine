@@ -687,10 +687,14 @@ void RunMaterialPassPolicyAppliesMaterialRenderStateTest() {
     const std::uint64_t alphaState = MeshPipelinePassPolicy::State(MeshPassType::BaseTransparent, nullptr, &alpha);
     const std::uint64_t additiveState = MeshPipelinePassPolicy::State(MeshPassType::BaseTransparent, nullptr, &additive);
     Require((alphaState & BGFX_STATE_BLEND_MASK) != 0U, "KBMAT-MAT79: translucent material must receive a blend state");
-    Require((alphaState & BGFX_STATE_BLEND_MASK) == (BGFX_STATE_BLEND_ALPHA & BGFX_STATE_BLEND_MASK),
-        "KBMAT-MAT79: alpha translucency must map to bgfx alpha blend");
-    Require((additiveState & BGFX_STATE_BLEND_MASK) == (BGFX_STATE_BLEND_ADD & BGFX_STATE_BLEND_MASK),
-        "KBMAT-MAT79: additive translucency must map to bgfx additive blend");
+    // The colour factors are the blend mode's; the alpha factors (ZERO, INV_SRC_ALPHA) lower the share of the
+    // opaque surface still visible by the layer's opacity, which the TAA resolve reads as its reactive mask.
+    Require((alphaState & BGFX_STATE_BLEND_MASK) == BGFX_STATE_BLEND_FUNC_SEPARATE(
+            BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA, BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA),
+        "KBMAT-MAT79: alpha translucency must map to bgfx alpha blend and hide the surface behind by its opacity");
+    Require((additiveState & BGFX_STATE_BLEND_MASK) == BGFX_STATE_BLEND_FUNC_SEPARATE(
+            BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA),
+        "KBMAT-MAT79: additive translucency must map to bgfx additive blend and hide the surface behind by its opacity");
     Require((alphaState & BGFX_STATE_BLEND_MASK) != (additiveState & BGFX_STATE_BLEND_MASK),
         "KBMAT-MAT79: distinct translucency blend modes must produce distinct render state");
 
@@ -704,9 +708,15 @@ void RunMaterialPassPolicyAppliesMaterialRenderStateTest() {
     const std::uint64_t modulateState = blendState(RenderMaterialTranslucencyBlend::Modulate);
     const std::uint64_t premultState = blendState(RenderMaterialTranslucencyBlend::PreMultipliedAlpha);
     const std::uint64_t holdoutState = blendState(RenderMaterialTranslucencyBlend::AlphaHoldout);
-    Require(modulateState == (BGFX_STATE_BLEND_MULTIPLY & BGFX_STATE_BLEND_MASK), "KBMAT-MAT38: modulate must map to bgfx multiply blend");
-    Require(premultState == (BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA) & BGFX_STATE_BLEND_MASK), "KBMAT-MAT38: premultiplied/AlphaComposite must map to one/inv-src-alpha");
-    Require(holdoutState == (BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA) & BGFX_STATE_BLEND_MASK), "KBMAT-MAT38: alpha holdout must map to zero/inv-src-alpha");
+    Require(modulateState == BGFX_STATE_BLEND_FUNC_SEPARATE(
+            BGFX_STATE_BLEND_DST_COLOR, BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_ONE),
+        "KBMAT-MAT38: modulate must map to bgfx multiply blend and keep the surface behind fully visible");
+    Require(premultState == BGFX_STATE_BLEND_FUNC_SEPARATE(
+            BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA, BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA),
+        "KBMAT-MAT38: premultiplied/AlphaComposite must map to one/inv-src-alpha");
+    Require(holdoutState == BGFX_STATE_BLEND_FUNC_SEPARATE(
+            BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA, BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA),
+        "KBMAT-MAT38: alpha holdout must map to zero/inv-src-alpha");
     const std::array<std::uint64_t, 5U> allStates{ alphaState & BGFX_STATE_BLEND_MASK, additiveState & BGFX_STATE_BLEND_MASK, modulateState, premultState, holdoutState };
     for (std::size_t i = 0U; i < allStates.size(); ++i) {
         for (std::size_t j = i + 1U; j < allStates.size(); ++j) {

@@ -1,5 +1,6 @@
 #include "kb/render/overlay/SceneGridPass.hpp"
 
+#include "kb/render/SceneColorAlphaPolicy.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/ShaderLoader.hpp"
 #include "renderer/RendererDebugLog.hpp"
@@ -404,7 +405,9 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
     bgfx::setUniform(gridStyleUniform_, gridStyle.data());
     bgfx::setUniform(depthParamsUniform_, depthParams.data());
     bgfx::setUniform(viewProjectionUniform_, camera.viewProjection.data());
-    bgfx::setState(SceneDepthPolicy::SceneOverlayState(true) | BGFX_STATE_BLEND_ALPHA);
+    // The grid lines are a translucent layer over the HDR scene (SceneColorAlphaPolicy).
+    bgfx::setState(SceneDepthPolicy::SceneOverlayState(true) |
+        SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);
     return true;

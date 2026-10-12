@@ -32,6 +32,7 @@
 #include "kb/render/resources/RenderMaterialCookPayload.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderToolchain.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
@@ -102,9 +103,6 @@ constexpr std::string_view kSourceFileBakerId = "SourceFile";
 constexpr std::string_view kShaderBinaryBakerId = "ShaderBinary";
 constexpr std::string_view kRuntimeManifestBakerId = "RuntimeManifest";
 constexpr std::string_view kStoredBytesBakerVersion = "1";
-constexpr std::array<std::string_view, 4U> kMaterialPasses{
-    "BaseOpaque", "GBuffer", "ShadowDepth", "BaseTransparent"
-};
 
 class VectorWriter final : public bx::WriterI {
 public:
@@ -1712,7 +1710,10 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
         backends.push_back(*mapped);
     }
 
-    for (const std::string_view pass : kMaterialPasses) {
+    for (const std::string_view pass : kb::render::kRenderMaterialGraphScenePasses) {
+        if (!kb::render::RenderMaterialGraphCooksScenePass(payload.graphShader.reflection, pass)) {
+            continue;
+        }
         kb::render::RenderMaterialGraphShaderArtifactRequest shaderRequest{};
         shaderRequest.shadercPath = request.shadercPath.generic_string();
         shaderRequest.varyingDefPath = (shaderSources / "varying.def.sc").generic_string();

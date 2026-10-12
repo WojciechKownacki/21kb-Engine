@@ -34,6 +34,8 @@ bool SceneDisplayCompositeRenderer::Submit(const SceneDisplayCompositeDesc& desc
         .clearTarget = desc.clearTarget,
         .viewName = "KB Display Composite",
         .vignetteIntensity = desc.vignetteIntensity,
+        .antiAliasing = desc.antiAliasing,
+        .sourceExtent = desc.hdrExtent,
     });
 }
 

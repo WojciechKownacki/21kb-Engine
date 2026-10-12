@@ -693,7 +693,7 @@ void AddArtifactDiagnostic(
 // the view axis of an orthographic one (a directional light's shadow cascade). The shadow pass pushes
 // the caster by the same amount, so the pushed surface the lighting reconstructs does not shadow
 // itself. Writing gl_FragDepth turns off early depth testing for the material.
-void AppendMaterialGraphPixelDepthOffset(std::string& wrapper) {
+void AppendMaterialGraphPixelDepthOffsetDepth(std::string& wrapper) {
     wrapper += "    vec4 kbPdoView = mul(u_view, vec4(v_worldPos, 1.0));\n";
     wrapper += "    float kbPdoOffset = max(surface.pixelDepthOffset, 0.0);\n";
     wrapper += "    float kbPdoDistance = max(length(kbPdoView.xyz), 0.0001);\n";
@@ -706,6 +706,10 @@ void AppendMaterialGraphPixelDepthOffset(std::string& wrapper) {
     // OpenGL clip depth is -1..1; the depth buffer stores 0..1.
     wrapper += "    kbPdoDepth = kbPdoDepth * 0.5 + 0.5;\n";
     wrapper += "#endif\n";
+}
+
+void AppendMaterialGraphPixelDepthOffset(std::string& wrapper) {
+    AppendMaterialGraphPixelDepthOffsetDepth(wrapper);
     wrapper += "    gl_FragDepth = kbPdoDepth;\n";
 }
 
@@ -1046,9 +1050,120 @@ const RenderMaterialGraphShaderManifestEntry* RenderMaterialGraphShaderManifest:
     return match;
 }
 
+namespace {
+
+// The material context of a fragment. The shadow pass has no lighting uniforms, so it uses explicit
+// neutral constants for the view and light inputs; every other pass reads the real camera and light.
+void AppendMaterialGraphFragmentContext(std::string& wrapper, bool shadowPass) {
+    wrapper += "    MaterialGraphContext ctx;\n";
+    wrapper += "    ctx.uv0 = v_texcoord0;\n";
+    wrapper += "    ctx.uv1 = v_shadowFlags.zw;\n";
+    wrapper += "    ctx.normal = normalize(v_normal);\n";
+    wrapper += "    ctx.tangent = normalize(v_tangent);\n";
+    wrapper += "    ctx.bitangent = normalize(v_bitangent);\n";
+    wrapper += "    ctx.worldPos = v_worldPos + u_renderOriginOffset.xyz;\n";
+    if (shadowPass) {
+        wrapper += "    ctx.viewDir = vec3(0.0, 0.0, 1.0);\n";
+    } else {
+        wrapper += "    ctx.viewDir = normalize(u_cameraPosition.xyz - v_worldPos);\n";
+    }
+    wrapper += "    ctx.vertexColor = v_color0;\n";
+    wrapper += "    ctx.time = u_time.x;\n";
+    wrapper += "    ctx.deltaTime = u_time.y;\n";
+    wrapper += "    ctx.dynamicParameter = u_dynamicParameter;\n";
+    // MAT-75 screen-space coordinate (0..1) from the fragment position and bgfx viewport rect.
+    wrapper += "    ctx.screenPosition = gl_FragCoord.xy / max(u_viewRect.zw, vec2(1.0, 1.0));\n";
+    // MAT-76 object-space inputs interpolated from the vertex shader.
+    wrapper += "    ctx.localPosition = v_objectLocalPos.xyz;\n";
+    wrapper += "    ctx.objectPosition = v_objectWorldPos.xyz + u_renderOriginOffset.xyz;\n";
+    // MAT-77 per-instance scalars carried in the free .w lanes of the object-space varyings.
+    wrapper += "    ctx.perInstanceRandom = v_objectLocalPos.w;\n";
+    wrapper += "    ctx.objectRadius = v_objectWorldPos.w;\n";
+    wrapper += "    ctx.perInstanceFadeAmount = v_shadowFlags.y;\n";
+    wrapper += "    ctx.perInstanceCustomData = v_objectOrientation.w;\n";
+    wrapper += "    ctx.objectBounds = vec4(v_objectWorldPos.xyz + u_renderOriginOffset.xyz, max(v_objectWorldPos.w, 0.0));\n";
+    wrapper += "    ctx.objectOrientation = dot(v_objectOrientation.xyz, v_objectOrientation.xyz) > 0.0001 ? normalize(v_objectOrientation.xyz) : vec3(0.0, 0.0, 1.0);\n";
+    wrapper += "    ctx.preSkinnedPosition = v_objectLocalPos.xyz;\n";
+    wrapper += "    ctx.preSkinnedNormal = dot(v_preSkinnedNormal, v_preSkinnedNormal) > 0.0001 ? normalize(v_preSkinnedNormal) : vec3(0.0, 0.0, 1.0);\n";
+    // MAT-46: world-space view/light inputs.
+    wrapper += "    ctx.viewSize = u_viewRect.zw;\n";
+    wrapper += "    ctx.twoSidedSign = gl_FrontFacing ? 1.0 : -1.0;\n";
+    // MAT-80/#18b: this fragment's device depth, so DepthFade can compare against the sampled scene depth.
+    wrapper += "    ctx.fragmentDepth = gl_FragCoord.z;\n";
+    if (shadowPass) {
+        wrapper += "    ctx.cameraPosition = vec3(0.0, 0.0, 0.0);\n";
+        wrapper += "    ctx.lightVector = vec3(0.0, 1.0, 0.0);\n";
+    } else {
+        wrapper += "    ctx.cameraPosition = u_cameraPosition.xyz + u_renderOriginOffset.xyz;\n";
+        wrapper += "    ctx.lightVector = (u_lightParams.x > 0.5) ? normalize(-u_lightDirKind[0].xyz) : vec3(0.0, 1.0, 0.0);\n";
+    }
+    wrapper += "    MaterialSurface surface = EvaluateMaterialGraph(ctx);\n";
+}
+
+[[nodiscard]] bool MaterialGraphWritesDepth(const RenderMaterialGraphShaderSource& shader) noexcept {
+    return shader.reflection.blendMode == RenderMaterialGraphBlendMode::Opaque ||
+        shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked;
+}
+
+// Unreal's velocity pass with the material's own shaders: the surface the base pass kept - clipped by a
+// Masked material, at the depth its Pixel Depth Offset wrote - writes the motion between the positions its
+// vertex shader produces for this frame and for the previous one (BuildGraphVertexWrapperSource).
+std::string BuildGraphMotionVectorFragmentWrapperSource(const RenderMaterialGraphShaderSource& shader) {
+    const bool masked = shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked;
+    const bool pixelDepthOffset = shader.reflection.hasPixelDepthOffset && MaterialGraphWritesDepth(shader);
+    std::string wrapper;
+    wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal, v_currentClip, v_previousClip\n\n";
+    wrapper += "#include <bgfx_shader.sh>\n";
+    wrapper += "#include \"motion_vectors.sh\"\n";
+    wrapper += "SAMPLER2D(s_sceneDepth, 0);\n";
+    wrapper += "uniform vec4 u_time;\n";
+    wrapper += "uniform vec4 u_dynamicParameter;\n";
+    wrapper += "uniform vec4 u_materialParams;\n";
+    wrapper += "uniform vec4 u_renderOriginOffset;\n";
+    wrapper += "uniform vec4 u_cameraPosition;\n";
+    wrapper += "uniform vec4 u_lightDirKind[32];\n";
+    wrapper += "uniform vec4 u_lightParams;\n";
+    wrapper += "\n// pass:MotionVectors\n\n";
+    wrapper += shader.source;
+    wrapper += "\nvoid main()\n{\n";
+    wrapper += "    float kbMotionDepth = gl_FragCoord.z;\n";
+    if (masked || pixelDepthOffset) {
+        AppendMaterialGraphFragmentContext(wrapper, false);
+    }
+    if (pixelDepthOffset) {
+        AppendMaterialGraphPixelDepthOffsetDepth(wrapper);
+        wrapper += "    kbMotionDepth = kbPdoDepth;\n";
+    }
+    wrapper += "    bool kbMotionVisible = KbMotionSurfaceVisible(s_sceneDepth, gl_FragCoord.xy, kbMotionDepth);\n";
+    if (masked) {
+        wrapper += "    kbMotionVisible = kbMotionVisible && surface.alpha >= surface.alphaClipThreshold;\n";
+    }
+    wrapper += "    if (!kbMotionVisible)\n    {\n        discard;\n    }\n";
+    wrapper += "    gl_FragColor = vec4(KbMotionVelocity(v_currentClip, v_previousClip), 0.0, 1.0);\n";
+    wrapper += "}\n";
+    return wrapper;
+}
+
+} // namespace
+
+bool RenderMaterialGraphDrawsOwnMotionVectors(const RenderMaterialGraphReflection& reflection) noexcept {
+    const bool writesDepth = reflection.blendMode == RenderMaterialGraphBlendMode::Opaque ||
+        reflection.blendMode == RenderMaterialGraphBlendMode::Masked;
+    return writesDepth &&
+        (reflection.hasWorldPositionOffset || reflection.hasDisplacement || reflection.hasPixelDepthOffset ||
+         reflection.blendMode == RenderMaterialGraphBlendMode::Masked);
+}
+
+bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& reflection, std::string_view pass) noexcept {
+    return pass != kRenderMaterialGraphMotionVectorsPass || RenderMaterialGraphDrawsOwnMotionVectors(reflection);
+}
+
 std::string BuildGraphFragmentWrapperSource(
     const RenderMaterialGraphShaderSource& shader,
     std::string_view pass) {
+    if (pass == kRenderMaterialGraphMotionVectorsPass) {
+        return BuildGraphMotionVectorFragmentWrapperSource(shader);
+    }
     const bool shadowPass = pass == "ShadowDepth";
     const bool gbufferPass = pass == "GBuffer";
 
@@ -1080,52 +1195,8 @@ std::string BuildGraphFragmentWrapperSource(
     wrapper += "\n// pass:" + std::string{ pass } + "\n\n";
     wrapper += shader.source;
     wrapper += "\nvoid main()\n{\n";
-    wrapper += "    MaterialGraphContext ctx;\n";
-    wrapper += "    ctx.uv0 = v_texcoord0;\n";
-    wrapper += "    ctx.uv1 = v_shadowFlags.zw;\n";
-    wrapper += "    ctx.normal = normalize(v_normal);\n";
-    wrapper += "    ctx.tangent = normalize(v_tangent);\n";
-    wrapper += "    ctx.bitangent = normalize(v_bitangent);\n";
-    wrapper += "    ctx.worldPos = v_worldPos + u_renderOriginOffset.xyz;\n";
-    if (shadowPass) {
-        wrapper += "    ctx.viewDir = vec3(0.0, 0.0, 1.0);\n";
-    } else {
-        wrapper += "    ctx.viewDir = normalize(u_cameraPosition.xyz - v_worldPos);\n";
-    }
-    wrapper += "    ctx.vertexColor = v_color0;\n";
-    wrapper += "    ctx.time = u_time.x;\n";
-    wrapper += "    ctx.deltaTime = u_time.y;\n";
-    wrapper += "    ctx.dynamicParameter = u_dynamicParameter;\n";
-    // MAT-75 screen-space coordinate (0..1) from the fragment position and bgfx viewport rect.
-    wrapper += "    ctx.screenPosition = gl_FragCoord.xy / max(u_viewRect.zw, vec2(1.0, 1.0));\n";
-    // MAT-76 object-space inputs interpolated from the vertex shader.
-    wrapper += "    ctx.localPosition = v_objectLocalPos.xyz;\n";
-    wrapper += "    ctx.objectPosition = v_objectWorldPos.xyz + u_renderOriginOffset.xyz;\n";
-    // MAT-77 per-instance scalars carried in the free .w lanes of the object-space varyings.
-    wrapper += "    ctx.perInstanceRandom = v_objectLocalPos.w;\n";
-    wrapper += "    ctx.objectRadius = v_objectWorldPos.w;\n";
-    wrapper += "    ctx.perInstanceFadeAmount = v_shadowFlags.y;\n";
-    wrapper += "    ctx.perInstanceCustomData = v_objectOrientation.w;\n";
-    wrapper += "    ctx.objectBounds = vec4(v_objectWorldPos.xyz + u_renderOriginOffset.xyz, max(v_objectWorldPos.w, 0.0));\n";
-    wrapper += "    ctx.objectOrientation = dot(v_objectOrientation.xyz, v_objectOrientation.xyz) > 0.0001 ? normalize(v_objectOrientation.xyz) : vec3(0.0, 0.0, 1.0);\n";
-    wrapper += "    ctx.preSkinnedPosition = v_objectLocalPos.xyz;\n";
-    wrapper += "    ctx.preSkinnedNormal = dot(v_preSkinnedNormal, v_preSkinnedNormal) > 0.0001 ? normalize(v_preSkinnedNormal) : vec3(0.0, 0.0, 1.0);\n";
-    // MAT-46: world-space view/light inputs. The shadow pass has no lighting uniforms, so it uses explicit
-    // neutral constants; only the forward pass reads the real camera/light/viewport state.
-    wrapper += "    ctx.viewSize = u_viewRect.zw;\n";
-    wrapper += "    ctx.twoSidedSign = gl_FrontFacing ? 1.0 : -1.0;\n";
-    // MAT-80/#18b: this fragment's device depth, so DepthFade can compare against the sampled scene depth.
-    wrapper += "    ctx.fragmentDepth = gl_FragCoord.z;\n";
-    if (shadowPass) {
-        wrapper += "    ctx.cameraPosition = vec3(0.0, 0.0, 0.0);\n";
-        wrapper += "    ctx.lightVector = vec3(0.0, 1.0, 0.0);\n";
-    } else {
-        wrapper += "    ctx.cameraPosition = u_cameraPosition.xyz + u_renderOriginOffset.xyz;\n";
-        wrapper += "    ctx.lightVector = (u_lightParams.x > 0.5) ? normalize(-u_lightDirKind[0].xyz) : vec3(0.0, 1.0, 0.0);\n";
-    }
-    wrapper += "    MaterialSurface surface = EvaluateMaterialGraph(ctx);\n";
-    const bool writesDepth = shader.reflection.blendMode == RenderMaterialGraphBlendMode::Opaque ||
-        shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked;
+    AppendMaterialGraphFragmentContext(wrapper, shadowPass);
+    const bool writesDepth = MaterialGraphWritesDepth(shader);
     if (shader.reflection.hasPixelDepthOffset && writesDepth) {
         AppendMaterialGraphPixelDepthOffset(wrapper);
     }
@@ -1136,6 +1207,9 @@ std::string BuildGraphFragmentWrapperSource(
         wrapper += "    float terrainLayerOpacity = KbTerrainLayerOpacity(v_shadowFlags.zw);\n";
         wrapper += "    if (u_terrainLayerParams.y > 0.5 && terrainLayerOpacity <= 0.0001)\n    {\n        discard;\n    }\n";
         wrapper += "    surface.alpha *= terrainLayerOpacity;\n";
+        // The scene colour alpha (SceneColorAlphaPolicy): an opaque or masked surface covers what is behind it,
+        // only a translucent one has an opacity; a terrain layer blends by its weight.
+        const std::string outputAlpha = writesDepth ? "terrainLayerOpacity" : "surface.alpha";
         // MAT-38 Masked: clip fragments whose alpha is below the clip threshold so the background shows
         // through (binary opacity). The transparent modes keep every fragment and blend at the ROP stage.
         if (shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked) {
@@ -1175,7 +1249,7 @@ std::string BuildGraphFragmentWrapperSource(
                 wrapper += "    vec3 worldNormal = normalize(v_normal) * (gl_FrontFacing ? 1.0 : -1.0);\n";
                 AppendMaterialGraphRefraction(wrapper, "worldNormal", "surface.baseColor.rgb + surface.emissive");
             } else {
-                wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, surface.alpha);\n";
+                wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, " + outputAlpha + ");\n";
             }
         } else {
             // MAT-37 DefaultLit: the metallic-roughness forward PBR path.
@@ -1217,7 +1291,7 @@ std::string BuildGraphFragmentWrapperSource(
             } else if (shader.reflection.hasRefraction) {
                 AppendMaterialGraphRefraction(wrapper, "worldNormal", "lighting + surface.emissive");
             } else {
-                wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);\n";
+                wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, " + outputAlpha + ");\n";
             }
         }
     }
@@ -1225,15 +1299,96 @@ std::string BuildGraphFragmentWrapperSource(
     return wrapper;
 }
 
-std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource& shader) {
+namespace {
+
+// The vertex-domain evaluation of a graph for one model and one material time: the instanced mesh vertex
+// transform (vs_mesh_instanced.sc) with the graph's vertex outputs applied before projection. Every name it
+// declares ends in `suffix`, so the motion vector pass evaluates the previous frame next to the current one.
+void AppendGraphVertexEvaluation(std::string& vs, const RenderMaterialGraphShaderSource& shader,
+    const std::string& suffix, const std::string& model, const std::string& time, const std::string& deltaTime) {
+    const auto name = [&suffix](const char* base) { return std::string{ base } + suffix; };
+    vs += "    mat4 " + name("model") + " = " + model + ";\n";
+    vs += "    vec4 " + name("worldPos") + " = mul(" + name("model") + ", vec4(a_position, 1.0));\n";
+    vs += "    vec3 " + name("objectWorldPos") + " = mul(" + name("model") + ", vec4(0.0, 0.0, 0.0, 1.0)).xyz;\n";
+    vs += "    vec3 " + name("objectOrientationRaw") + " = mul(" + name("model") + ", vec4(0.0, 0.0, 1.0, 0.0)).xyz;\n";
+    vs += "    vec3 " + name("objectOrientation") + " = dot(" + name("objectOrientationRaw") + ", " + name("objectOrientationRaw") +
+        ") > 0.0001 ? normalize(" + name("objectOrientationRaw") + ") : vec3(0.0, 0.0, 1.0);\n";
+    vs += "    vec3 " + name("vsNormal") + " = normalize(mul(" + name("model") + ", vec4(a_normal, 0.0)).xyz);\n";
+    vs += "    vec3 " + name("vsTangent") + " = mul(" + name("model") + ", vec4(a_tangent.xyz, 0.0)).xyz;\n";
+    vs += "    vec3 " + name("fallbackAxis") + " = abs(" + name("vsNormal") + ".y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n";
+    vs += "    " + name("vsTangent") + " = dot(" + name("vsTangent") + ", " + name("vsTangent") + ") > 0.0001 ? normalize(" +
+        name("vsTangent") + ") : normalize(cross(" + name("fallbackAxis") + ", " + name("vsNormal") + "));\n";
+    vs += "    " + name("vsTangent") + " = normalize(" + name("vsTangent") + " - " + name("vsNormal") + " * dot(" + name("vsNormal") +
+        ", " + name("vsTangent") + "));\n";
+    vs += "    float " + name("handedness") + " = abs(a_tangent.w) > 0.0001 ? a_tangent.w : 1.0;\n";
+    vs += "    vec3 " + name("vsBitangent") + " = normalize(cross(" + name("vsNormal") + ", " + name("vsTangent") + ") * " + name("handedness") + ");\n";
+    vs += "    vec3 " + name("preSkinnedNormal") + " = dot(a_normal, a_normal) > 0.0001 ? normalize(a_normal) : vec3(0.0, 0.0, 1.0);\n";
+    const std::string ctx = name("ctx");
+    vs += "    MaterialGraphContext " + ctx + ";\n";
+    vs += "    " + ctx + ".uv0 = a_texcoord0;\n";
+    vs += "    " + ctx + ".uv1 = a_texcoord1;\n";
+    vs += "    " + ctx + ".normal = " + name("vsNormal") + ";\n";
+    vs += "    " + ctx + ".tangent = " + name("vsTangent") + ";\n";
+    vs += "    " + ctx + ".bitangent = " + name("vsBitangent") + ";\n";
+    vs += "    " + ctx + ".worldPos = " + name("worldPos") + ".xyz + u_renderOriginOffset.xyz;\n";
+    vs += "    " + ctx + ".viewDir = vec3(0.0, 0.0, 1.0);\n";
+    vs += "    " + ctx + ".vertexColor = a_color0 * vec4(i_data4.rgb, abs(i_data4.w));\n";
+    vs += "    " + ctx + ".time = " + time + ";\n";
+    vs += "    " + ctx + ".deltaTime = " + deltaTime + ";\n";
+    vs += "    " + ctx + ".dynamicParameter = u_dynamicParameter;\n";
+    vs += "    " + ctx + ".screenPosition = vec2(0.0, 0.0);\n";
+    vs += "    " + ctx + ".localPosition = a_position;\n";
+    vs += "    " + ctx + ".objectPosition = " + name("objectWorldPos") + " + u_renderOriginOffset.xyz;\n";
+    vs += "    " + ctx + ".perInstanceRandom = instanceRandom;\n";
+    vs += "    " + ctx + ".objectRadius = instanceRadius;\n";
+    vs += "    " + ctx + ".perInstanceFadeAmount = instanceFadeAmount;\n";
+    vs += "    " + ctx + ".perInstanceCustomData = instanceCustomData;\n";
+    vs += "    " + ctx + ".objectBounds = vec4(" + name("objectWorldPos") + " + u_renderOriginOffset.xyz, max(instanceRadius, 0.0));\n";
+    vs += "    " + ctx + ".objectOrientation = " + name("objectOrientation") + ";\n";
+    vs += "    " + ctx + ".preSkinnedPosition = a_position;\n";
+    vs += "    " + ctx + ".preSkinnedNormal = " + name("preSkinnedNormal") + ";\n";
+    vs += "    " + ctx + ".cameraPosition = vec3(0.0, 0.0, 0.0);\n";
+    vs += "    " + ctx + ".lightVector = vec3(0.0, 1.0, 0.0);\n";
+    vs += "    " + ctx + ".viewSize = vec2(0.0, 0.0);\n";
+    vs += "    " + ctx + ".twoSidedSign = 1.0;\n";
+    vs += "    " + ctx + ".fragmentDepth = 0.0;\n";
+    vs += "    vec2 " + name("materialUv0") + " = a_texcoord0;\n";
+    if (shader.reflection.hasCustomizedUv0) {
+        vs += "    " + name("materialUv0") + " = EvaluateCustomizedUv0(" + ctx + ");\n";
+        vs += "    " + ctx + ".uv0 = " + name("materialUv0") + ";\n";
+    }
+    if (shader.reflection.hasWorldPositionOffset) {
+        vs += "    " + name("worldPos") + ".xyz += EvaluateWorldPositionOffset(" + ctx + ");\n";
+    }
+    if (shader.reflection.hasDisplacement) {
+        vs += "    " + name("worldPos") + ".xyz += EvaluateDisplacement(" + ctx + ");\n";
+    }
+}
+
+} // namespace
+
+std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource& shader, std::string_view pass) {
     // MAT-67/#54: the instanced mesh vertex shader with graph vertex-domain outputs applied before
     // projection/rasterization. WPO and displacement move real geometry; CustomizedUV0 rewrites the
     // interpolated UV that fragment TextureSample nodes read. Mirrors vs_mesh_instanced.sc.
+    // The motion vector pass evaluates the graph twice, like Unreal's velocity pass runs the material's
+    // vertex factory with the previous frame's parameters: at this frame's material time with the current
+    // model, and at the previous frame's time with the previous model (motion_vectors.sh).
+    const bool motionVectors = pass == kRenderMaterialGraphMotionVectorsPass;
     std::string vs;
     vs += "$input a_position, a_normal, a_tangent, a_texcoord0, a_texcoord1, a_color0, i_data0, i_data1, i_data2, i_data3, i_data4\n";
-    vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal\n\n";
-    vs += "#include <bgfx_shader.sh>\n";
-    vs += "uniform mat4 u_shadowViewProj;\n";
+    if (motionVectors) {
+        vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal, v_currentClip, v_previousClip\n\n";
+        vs += "#include <bgfx_shader.sh>\n";
+        vs += "#include \"motion_vectors.sh\"\n";
+        vs += "SAMPLER2D(s_motionPreviousModels, 15);\n";
+        // x: the material time of the previous frame, y: its delta time.
+        vs += "uniform vec4 u_motionPreviousTime;\n";
+    } else {
+        vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal\n\n";
+        vs += "#include <bgfx_shader.sh>\n";
+        vs += "uniform mat4 u_shadowViewProj;\n";
+    }
     vs += "uniform vec4 u_time;\n";
     vs += "uniform vec4 u_dynamicParameter;\n";
     vs += "uniform vec4 u_renderOriginOffset;\n\n";
@@ -1243,64 +1398,25 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     vs += "    float instanceRadius = i_data1.w;\n";
     vs += "    float instanceFadeAmount = i_data2.w;\n";
     vs += "    float instanceCustomData = i_data3.w;\n";
-    vs += "    mat4 model = mtxFromCols(vec4(i_data0.xyz, 0.0), vec4(i_data1.xyz, 0.0), vec4(i_data2.xyz, 0.0), vec4(i_data3.xyz, 1.0));\n";
-    vs += "    vec4 worldPos = mul(model, vec4(a_position, 1.0));\n";
-    vs += "    vec3 objectWorldPos = mul(model, vec4(0.0, 0.0, 0.0, 1.0)).xyz;\n";
-    vs += "    vec3 objectOrientationRaw = mul(model, vec4(0.0, 0.0, 1.0, 0.0)).xyz;\n";
-    vs += "    vec3 objectOrientation = dot(objectOrientationRaw, objectOrientationRaw) > 0.0001 ? normalize(objectOrientationRaw) : vec3(0.0, 0.0, 1.0);\n";
-    vs += "    vec3 vsNormal = normalize(mul(model, vec4(a_normal, 0.0)).xyz);\n";
-    vs += "    vec3 vsTangent = mul(model, vec4(a_tangent.xyz, 0.0)).xyz;\n";
-    vs += "    vec3 fallbackAxis = abs(vsNormal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n";
-    vs += "    vsTangent = dot(vsTangent, vsTangent) > 0.0001 ? normalize(vsTangent) : normalize(cross(fallbackAxis, vsNormal));\n";
-    vs += "    vsTangent = normalize(vsTangent - vsNormal * dot(vsNormal, vsTangent));\n";
-    vs += "    float handedness = abs(a_tangent.w) > 0.0001 ? a_tangent.w : 1.0;\n";
-    vs += "    vec3 vsBitangent = normalize(cross(vsNormal, vsTangent) * handedness);\n";
-    vs += "    vec3 preSkinnedNormal = dot(a_normal, a_normal) > 0.0001 ? normalize(a_normal) : vec3(0.0, 0.0, 1.0);\n";
-    vs += "    MaterialGraphContext ctx;\n";
-    vs += "    ctx.uv0 = a_texcoord0;\n";
-    vs += "    ctx.uv1 = a_texcoord1;\n";
-    vs += "    ctx.normal = vsNormal;\n";
-    vs += "    ctx.tangent = vsTangent;\n";
-    vs += "    ctx.bitangent = vsBitangent;\n";
-    vs += "    ctx.worldPos = worldPos.xyz + u_renderOriginOffset.xyz;\n";
-    vs += "    ctx.viewDir = vec3(0.0, 0.0, 1.0);\n";
-    vs += "    ctx.vertexColor = a_color0 * vec4(i_data4.rgb, abs(i_data4.w));\n";
-    vs += "    ctx.time = u_time.x;\n";
-    vs += "    ctx.deltaTime = u_time.y;\n";
-    vs += "    ctx.dynamicParameter = u_dynamicParameter;\n";
-    vs += "    ctx.screenPosition = vec2(0.0, 0.0);\n";
-    vs += "    ctx.localPosition = a_position;\n";
-    vs += "    ctx.objectPosition = objectWorldPos + u_renderOriginOffset.xyz;\n";
-    vs += "    ctx.perInstanceRandom = instanceRandom;\n";
-    vs += "    ctx.objectRadius = instanceRadius;\n";
-    vs += "    ctx.perInstanceFadeAmount = instanceFadeAmount;\n";
-    vs += "    ctx.perInstanceCustomData = instanceCustomData;\n";
-    vs += "    ctx.objectBounds = vec4(objectWorldPos + u_renderOriginOffset.xyz, max(instanceRadius, 0.0));\n";
-    vs += "    ctx.objectOrientation = objectOrientation;\n";
-    vs += "    ctx.preSkinnedPosition = a_position;\n";
-    vs += "    ctx.preSkinnedNormal = preSkinnedNormal;\n";
-    vs += "    ctx.cameraPosition = vec3(0.0, 0.0, 0.0);\n";
-    vs += "    ctx.lightVector = vec3(0.0, 1.0, 0.0);\n";
-    vs += "    ctx.viewSize = vec2(0.0, 0.0);\n";
-    vs += "    ctx.twoSidedSign = 1.0;\n";
-    vs += "    ctx.fragmentDepth = 0.0;\n";
-    vs += "    vec2 materialUv0 = a_texcoord0;\n";
-    if (shader.reflection.hasCustomizedUv0) {
-        vs += "    materialUv0 = EvaluateCustomizedUv0(ctx);\n";
-        vs += "    ctx.uv0 = materialUv0;\n";
-    }
-    if (shader.reflection.hasWorldPositionOffset) {
-        vs += "    worldPos.xyz += EvaluateWorldPositionOffset(ctx);\n";
-    }
-    if (shader.reflection.hasDisplacement) {
-        vs += "    worldPos.xyz += EvaluateDisplacement(ctx);\n";
-    }
+    vs += "    vec4 modelColumn0 = vec4(i_data0.xyz, 0.0);\n";
+    vs += "    vec4 modelColumn1 = vec4(i_data1.xyz, 0.0);\n";
+    vs += "    vec4 modelColumn2 = vec4(i_data2.xyz, 0.0);\n";
+    vs += "    vec4 modelColumn3 = vec4(i_data3.xyz, 1.0);\n";
+    AppendGraphVertexEvaluation(vs, shader, "", "mtxFromCols(modelColumn0, modelColumn1, modelColumn2, modelColumn3)", "u_time.x", "u_time.y");
     vs += "    gl_Position = mul(u_viewProj, worldPos);\n";
+    if (motionVectors) {
+        AppendGraphVertexEvaluation(vs, shader, "Previous",
+            "KbMotionPreviousModel(s_motionPreviousModels, float(gl_InstanceID), modelColumn0, modelColumn1, modelColumn2, modelColumn3)",
+            "u_motionPreviousTime.x", "u_motionPreviousTime.y");
+        vs += "    v_currentClip = mul(u_motionCurrentViewProjection, worldPos);\n";
+        vs += "    v_previousClip = mul(u_motionPreviousViewProjection, worldPosPrevious);\n";
+    } else {
+        vs += "    v_shadowPos = mul(u_shadowViewProj, worldPos);\n";
+    }
     vs += "    v_worldPos = worldPos.xyz;\n";
     vs += "    v_objectLocalPos = vec4(a_position, instanceRandom);\n";
     vs += "    v_objectWorldPos = vec4(objectWorldPos, instanceRadius);\n";
     vs += "    v_objectOrientation = vec4(objectOrientation, instanceCustomData);\n";
-    vs += "    v_shadowPos = mul(u_shadowViewProj, worldPos);\n";
     vs += "    v_shadowFlags = vec4(i_data4.w >= 0.0 ? 1.0 : 0.0, instanceFadeAmount, a_texcoord1.x, a_texcoord1.y);\n";
     vs += "    v_normal = vsNormal;\n";
     vs += "    v_tangent = vsTangent;\n";
@@ -1377,6 +1493,14 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     if (request.shadercPath.empty() || request.cacheRoot.empty() || !request.shaderPlatform.has_value()) {
         AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
             "Material graph shader cook requires a shaderc tool path, cache root and explicit target platform.");
+        return result;
+    }
+    if (!RenderMaterialGraphCooksScenePass(shader.reflection, request.pass)) {
+        AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+            "Material graph shader cook refused pass '" + request.pass + "': the graph neither moves nor clips its "
+            "surface (no world position offset, displacement, pixel depth offset or Masked blend mode), so the "
+            "motion vector pass draws it with the builtin program.",
+            request.pass);
         return result;
     }
     for (const RenderMaterialGraphShaderBackend backend : backends) {
@@ -1704,9 +1828,9 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         shader.reflection.hasWorldPositionOffset ||
         shader.reflection.hasCustomizedUv0 ||
         shader.reflection.hasDisplacement;
-    if (hasVertexDomainOutput) {
+    if (hasVertexDomainOutput || request.pass == kRenderMaterialGraphMotionVectorsPass) {
         artifact.hasVertexShader = true;
-        artifact.vertexWrapperSource = BuildGraphVertexWrapperSource(shader);
+        artifact.vertexWrapperSource = BuildGraphVertexWrapperSource(shader, request.pass);
 
         std::uint64_t vsCookKey = 1469598103934665603ULL;
         HashString64(vsCookKey, artifact.vertexWrapperSource);
