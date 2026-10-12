@@ -51,7 +51,7 @@ public:
         bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE,
         bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE,
         bool terrainLayersOnly = false,
-        std::array<float, 16> motionVectorPreviousViewProjection = {},
+        const SceneMotionVectorFrame* motionVectors = nullptr,
         ParticleGpuRenderer* particleRenderer = nullptr,
         const kb::particles::ParticleRenderSnapshot* particleSnapshot = nullptr,
         std::span<const ParticleGpuMeshDraw> gpuMeshDraws = {}) const;

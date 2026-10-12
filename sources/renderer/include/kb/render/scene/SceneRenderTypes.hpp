@@ -183,6 +183,11 @@ struct SceneRenderMeshInstance {
     float customData0 = 0.0F;
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
+    // The model the instance had when the motion frame `previousModelFrame` began (RenderScene::MotionFrame).
+    // In any later motion frame the instance has not moved since, so its previous model is `model`
+    // (SceneRenderPreviousModel); 0 names no frame.
+    std::array<float, 16> previousModel{};
+    std::uint64_t previousModelFrame = 0U;
     RenderBoundsSphere worldBounds{};
     std::uint16_t depthBucket = 0;
     bool castsShadow = true;
@@ -200,6 +205,15 @@ struct SceneRenderMeshInstance {
     std::int32_t lodBias = 0;
     bool lodEnabled = true;
 };
+
+// The model an instance was drawn with in the previous motion frame, as seen from `motionFrame`: what it
+// recorded when it moved in this frame, its current model otherwise (Unreal's PreviousLocalToWorld).
+[[nodiscard]] inline const std::array<float, 16>& SceneRenderPreviousModel(
+    const SceneRenderMeshInstance& instance, std::uint64_t motionFrame) noexcept {
+    return instance.previousModelFrame != 0U && instance.previousModelFrame == motionFrame
+        ? instance.previousModel
+        : instance.model;
+}
 
 // A homogeneous generated range; origin bounds are padded by the resolved
 // section bound at submission. Ordinary mesh proxies keep per-instance culling.
@@ -405,6 +419,8 @@ struct SceneRenderSubmitStats {
     std::uint32_t submittedDrawCallCount = 0;
     // G-buffer draws of graph materials that write the model colour (the custom data target).
     std::uint32_t shadingModelColorDrawCallCount = 0;
+    // Motion vector instances drawn with an uploaded previous model (draws with an instance that moved).
+    std::uint32_t motionVectorMovedInstanceCount = 0;
     std::uint32_t droppedInstanceCount = 0;
     std::uint32_t meshPipelineCommandCount = 0;
     std::uint32_t meshPipelineCommandCapacity = 0;
@@ -564,6 +580,12 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     UITextUnavailable,
     PostProcessProfileUnavailable,
     LightGridUnavailable,
+    // A motion vector draw whose instances moved could not upload their previous models (the per-frame rows
+    // are exhausted). The draw is skipped: those pixels keep the camera motion. `instanceCount` names how many.
+    MotionVectorPreviousModelsUnavailable,
+    // Instances simulated on the GPU (mesh particles) keep no previous transforms: their own motion is not
+    // written and their pixels keep the camera motion.
+    MotionVectorGpuInstancesUnsupported,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -623,6 +645,7 @@ struct SceneRenderDiagnostics {
     lhs.submittedDrawGroupCount += rhs.submittedDrawGroupCount;
     lhs.submittedDrawCallCount += rhs.submittedDrawCallCount;
     lhs.shadingModelColorDrawCallCount += rhs.shadingModelColorDrawCallCount;
+    lhs.motionVectorMovedInstanceCount += rhs.motionVectorMovedInstanceCount;
     lhs.droppedInstanceCount += rhs.droppedInstanceCount;
     lhs.meshPipelineCommandCount += rhs.meshPipelineCommandCount;
     lhs.meshPipelineCommandCapacity += rhs.meshPipelineCommandCapacity;

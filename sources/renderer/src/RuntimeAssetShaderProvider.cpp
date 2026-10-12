@@ -3,6 +3,7 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 
 #include <algorithm>
 #include <array>
@@ -90,7 +91,8 @@ namespace {
         return false;
     }
     const bool validPass = fields[2] == "BaseOpaque" || fields[2] == "GBuffer" ||
-        fields[2] == "ShadowDepth" || fields[2] == "BaseTransparent";
+        fields[2] == "ShadowDepth" || fields[2] == "BaseTransparent" ||
+        fields[2] == kRenderMaterialGraphMotionVectorsPass;
     kb::assets::bake::ShaderBakePlatform platform{};
     if (!kb::assets::bake::TryParseShaderBakePlatform(fields[4], platform)) {
         return false;

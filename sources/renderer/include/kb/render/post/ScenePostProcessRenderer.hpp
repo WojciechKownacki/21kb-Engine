@@ -60,7 +60,6 @@ private:
     bgfx::ProgramHandle combineProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle motionVectorsProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle taaResolveProgram_ = BGFX_INVALID_HANDLE;
-    bgfx::ProgramHandle fxaaProgram_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sourceSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle bloomSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle depthSampler_ = BGFX_INVALID_HANDLE;

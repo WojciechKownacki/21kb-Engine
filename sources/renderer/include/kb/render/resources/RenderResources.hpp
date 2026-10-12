@@ -425,6 +425,9 @@ struct RenderMaterialGraphProgramBinding {
     std::vector<RenderMaterialGraphTextureBinding> textures;
     std::vector<std::string> requiredVaryings;
     bool requiresGeneratedVertexShader = false;
+    // The motion vector pass runs the graph's cooked MotionVectors program, because the graph moves, offsets
+    // the depth of or clips its surface (RenderMaterialGraphDrawsOwnMotionVectors).
+    bool drawsOwnMotionVectors = false;
     // MAT-38/#25d: scene render state resolved from the graph blend mode, so a translucent graph material
     // is submitted in the transparent pass with the correct blend equation (not just previewed).
     RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque;

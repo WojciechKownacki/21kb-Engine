@@ -1766,6 +1766,9 @@ void RuntimeMaterialResolver::CookGraphShader(
     }
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackendForActiveRenderer() };
     for (const std::string_view pass : kRenderMaterialGraphScenePasses) {
+        if (!RenderMaterialGraphCooksScenePass(shader.reflection, pass)) {
+            continue;
+        }
         RenderMaterialGraphShaderArtifactRequest request{};
         request.shadercPath = graphShaderCook_->toolchain.shadercPath;
         request.varyingDefPath = graphShaderCook_->toolchain.varyingDefPath;

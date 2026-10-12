@@ -188,6 +188,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
         proxy.id = AllocateProxyId();
         proxy.desc = desc;
         proxy.dirty = RenderProxyDirtyFlag::All;
+        proxy.spawnMotionFrame = motionFrame_;
         if (!drawGroupsDirty_ && desc.visible) AppendMeshInstance(proxy);
         return proxy.id;
     }
@@ -195,6 +196,9 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
     const RenderProxyDirtyFlag dirty = RenderSceneProxyDirtyTracker::DirtyForMeshChange(proxy.desc, desc);
     if (dirty != RenderProxyDirtyFlag::None) {
         meshContentRevision_ = NextContentRevision();
+        if (proxy.desc.model != desc.model) {
+            RecordPreviousModel(proxy, proxy.desc.model);
+        }
         const bool sameGroupFlags = proxy.desc.visible && desc.visible &&
             proxy.desc.morphDeformationEnabled == desc.morphDeformationEnabled &&
             (proxy.desc.materialSlotOverrideCount != 0U) == (desc.materialSlotOverrideCount != 0U);
@@ -204,8 +208,9 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
             SceneRenderDrawGroup& group = drawGroups_[proxy.instanceGroupIndex];
             if (proxy.instanceIndexInGroup < group.instances.size() &&
                 group.instances[proxy.instanceIndexInGroup].entityId == desc.entityId) {
-                SceneRenderMeshInstance instance = RenderSceneMeshInstanceBuilder::Build(desc);
-                ApplySurfaceCasts(instance);
+                MeshRenderProxy updated = proxy;
+                updated.desc = desc;
+                const SceneRenderMeshInstance instance = BuildMeshInstance(updated);
                 if (instance.meshAssetId == group.meshAssetId && instance.materialAssetId == group.materialAssetId) {
                     group.instances[proxy.instanceIndexInGroup] = instance;
                     group.contentRevision = NextContentRevision();
@@ -277,7 +282,12 @@ RenderProxyId RenderScene::UpsertVisibilityBlocker(const VisibilityBlockerRender
 RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDesc& desc) {
     auto [it, inserted] = geometrySwarms_.try_emplace(desc.entityId);
     GeometrySwarmRenderProxy& proxy = it->second;
-    if (inserted) { proxy.id = AllocateProxyId(); proxy.desc = desc; proxy.dirty = RenderProxyDirtyFlag::All; InvalidateDrawGroups(); return proxy.id; }
+    if (inserted) {
+        proxy.id = AllocateProxyId(); proxy.desc = desc; proxy.dirty = RenderProxyDirtyFlag::All;
+        proxy.spawnMotionFrame = motionFrame_;
+        InvalidateDrawGroups();
+        return proxy.id;
+    }
     const GeometrySwarmRenderProxyDesc& previous = proxy.desc;
     const bool onlyGrew = previous.meshAssetId == desc.meshAssetId && previous.materialAssetId == desc.materialAssetId &&
         previous.model == desc.model && previous.instanceCount < desc.instanceCount && previous.columns == desc.columns &&
@@ -318,6 +328,16 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
         previous.instanceCount != desc.instanceCount || previous.columns != desc.columns || previous.rows != desc.rows || previous.layers != desc.layers ||
         previous.spacing != desc.spacing || previous.instanceScale != desc.instanceScale || previous.visible != desc.visible ||
         previous.castsShadow != desc.castsShadow || previous.receivesShadow != desc.receivesShadow || previous.layer != desc.layer) {
+        GeometrySwarmRenderProxyDesc movedOnly = desc;
+        movedOnly.model = previous.model;
+        if (movedOnly.instanceCount == previous.instanceCount && movedOnly.columns == previous.columns &&
+            movedOnly.rows == previous.rows && movedOnly.layers == previous.layers && movedOnly.spacing == previous.spacing &&
+            movedOnly.instanceScale == previous.instanceScale) {
+            RecordPreviousSwarmModel(proxy, previous.model);
+        } else {
+            // A new layout places other instances at each index: none of them has a previous frame.
+            proxy.previousModelFrame = 0U;
+        }
         proxy.desc = desc; proxy.dirty |= RenderProxyDirtyFlag::All; InvalidateDrawGroups();
     }
     return proxy.id;
@@ -396,6 +416,7 @@ bool RenderScene::ApplyGeometrySwarmTransform(std::uint64_t entityId, const std:
     if (found == geometrySwarms_.end()) return false;
     GeometrySwarmRenderProxy& proxy = found->second;
     if (proxy.desc.model != model) {
+        RecordPreviousSwarmModel(proxy, proxy.desc.model);
         proxy.desc.model = model;
         proxy.dirty |= RenderProxyDirtyFlag::Transform;
         return true;
@@ -593,6 +614,14 @@ kb::math::DVec3 RenderScene::RenderOriginFor(const kb::math::DVec3& eye, const R
     return kb::math::DVec3{ std::round(eye.x / step) * step, std::round(eye.y / step) * step, std::round(eye.z / step) * step };
 }
 
+void RenderScene::BeginMotionFrame(std::uint64_t rendererFrame) noexcept {
+    if (rendererFrame == motionRendererFrame_) {
+        return;
+    }
+    motionRendererFrame_ = rendererFrame;
+    ++motionFrame_;
+}
+
 bool RenderScene::SetRenderOrigin(const kb::math::DVec3& origin) {
     if (origin == renderOrigin_) return false;
     const kb::math::DVec3 previous = renderOrigin_;
@@ -759,9 +788,7 @@ void RenderScene::BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t v
             static_cast<void>(entityId);
             continue;
         }
-        SceneRenderMeshInstance instance = RenderSceneMeshInstanceBuilder::Build(mesh);
-        ApplySurfaceCasts(instance);
-        outSnapshot.meshes.push_back(instance);
+        outSnapshot.meshes.push_back(BuildMeshInstance(proxy));
     }
     for (const auto& [entityId, proxy] : geometrySwarms_) {
         const GeometrySwarmRenderProxyDesc& swarm = proxy.desc;
@@ -769,17 +796,7 @@ void RenderScene::BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t v
             continue;
         }
         for (std::uint32_t index = 0U; index < swarm.instanceCount; ++index) {
-            SceneRenderMeshInstance instance{
-                .entityId = GeometrySwarmInstanceId(entityId, index),
-                .meshAssetId = swarm.meshAssetId,
-                .materialAssetId = swarm.materialAssetId,
-                .model = GeometrySwarmModel(swarm, index),
-                .castsShadow = swarm.castsShadow,
-                .receivesShadow = swarm.receivesShadow,
-                .layer = swarm.layer,
-            };
-            ApplySurfaceCasts(instance);
-            outSnapshot.meshes.push_back(instance);
+            outSnapshot.meshes.push_back(BuildGeometrySwarmInstance(entityId, proxy, index));
         }
     }
     for (const auto& [entityId, proxy] : spaceStrokes_) {
@@ -810,9 +827,40 @@ RenderProxyId RenderScene::AllocateProxyId() noexcept {
     return RenderProxyId{ nextProxyId_++ };
 }
 
-void RenderScene::AppendMeshInstance(MeshRenderProxy& proxy) {
+SceneRenderMeshInstance RenderScene::BuildMeshInstance(const MeshRenderProxy& proxy) const {
     SceneRenderMeshInstance instance = RenderSceneMeshInstanceBuilder::Build(proxy.desc);
+    instance.previousModel = proxy.previousModel;
+    instance.previousModelFrame = proxy.previousModelFrame;
     ApplySurfaceCasts(instance);
+    return instance;
+}
+
+SceneRenderMeshInstance RenderScene::BuildGeometrySwarmInstance(
+    std::uint64_t entityId, const GeometrySwarmRenderProxy& proxy, std::uint32_t index) const {
+    const GeometrySwarmRenderProxyDesc& swarm = proxy.desc;
+    SceneRenderMeshInstance instance{
+        .entityId = GeometrySwarmInstanceId(entityId, index),
+        .meshAssetId = swarm.meshAssetId,
+        .materialAssetId = swarm.materialAssetId,
+        .model = GeometrySwarmModel(swarm, index),
+        .castsShadow = swarm.castsShadow,
+        .receivesShadow = swarm.receivesShadow,
+        .layer = swarm.layer,
+    };
+    if (proxy.previousModelFrame != 0U) {
+        // A generated instance moves with its swarm: its previous model is the same layout placed by the
+        // previous model of the swarm.
+        GeometrySwarmRenderProxyDesc previous = swarm;
+        previous.model = proxy.previousModel;
+        instance.previousModel = GeometrySwarmModel(previous, index);
+        instance.previousModelFrame = proxy.previousModelFrame;
+    }
+    ApplySurfaceCasts(instance);
+    return instance;
+}
+
+void RenderScene::AppendMeshInstance(MeshRenderProxy& proxy) {
+    const SceneRenderMeshInstance instance = BuildMeshInstance(proxy);
     const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId, .owner = proxy.desc.entityId / 1024U, .kind = 0U };
     auto [groupIt, newGroup] = drawGroupLookupScratch_.try_emplace(key, drawGroups_.size());
     if (newGroup) {
@@ -904,8 +952,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             continue;
         }
 
-        SceneRenderMeshInstance instance = RenderSceneMeshInstanceBuilder::Build(mesh);
-        ApplySurfaceCasts(instance);
+        const SceneRenderMeshInstance instance = BuildMeshInstance(proxy);
         const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId, .owner = entityId / 1024U, .kind = 0U };
         auto lookupIt = drawGroupLookupScratch_.find(key);
         if (lookupIt == drawGroupLookupScratch_.end()) {
@@ -946,16 +993,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
         }
         std::size_t firstGenerated = 0U, generatedGroup = 0U;
         for (std::uint32_t index = 0U; index < swarm.instanceCount; ++index) {
-            SceneRenderMeshInstance instance{
-                .entityId = GeometrySwarmInstanceId(entityId, index),
-                .meshAssetId = swarm.meshAssetId,
-                .materialAssetId = swarm.materialAssetId,
-                .model = GeometrySwarmModel(swarm, index),
-                .castsShadow = swarm.castsShadow,
-                .receivesShadow = swarm.receivesShadow,
-                .layer = swarm.layer,
-            };
-            ApplySurfaceCasts(instance);
+            const SceneRenderMeshInstance instance = BuildGeometrySwarmInstance(entityId, proxy, index);
             const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId, .owner = entityId, .kind = 1U };
             auto lookupIt = drawGroupLookupScratch_.find(key);
             if (lookupIt == drawGroupLookupScratch_.end()) {
@@ -1017,7 +1055,28 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
     return ApplyMeshTransform(entityId, proxyIt->second, model);
 }
 
+void RenderScene::RecordPreviousModel(MeshRenderProxy& proxy, const std::array<float, 16>& model) const noexcept {
+    // A proxy created in this motion frame has no previous frame: it draws without motion of its own.
+    // Later changes in the same frame keep the model the frame began with.
+    if (proxy.spawnMotionFrame == motionFrame_ || proxy.previousModelFrame == motionFrame_) {
+        return;
+    }
+    proxy.previousModel = model;
+    proxy.previousModelFrame = motionFrame_;
+}
+
+void RenderScene::RecordPreviousSwarmModel(GeometrySwarmRenderProxy& proxy, const std::array<float, 16>& model) const noexcept {
+    if (proxy.spawnMotionFrame == motionFrame_ || proxy.previousModelFrame == motionFrame_) {
+        return;
+    }
+    proxy.previousModel = model;
+    proxy.previousModelFrame = motionFrame_;
+}
+
 RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_t entityId, MeshRenderProxy& proxy, const std::array<float, 16>& model, bool markGroupChanged) {
+    if (proxy.desc.model != model) {
+        RecordPreviousModel(proxy, proxy.desc.model);
+    }
     proxy.desc.model = model; // source of truth, always current
 
     // Fast path: clean cache + a location stamped by the current build. Single
@@ -1027,7 +1086,10 @@ RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_
         SceneRenderDrawGroup& group = drawGroups_[proxy.instanceGroupIndex];
         if (proxy.instanceIndexInGroup < group.instances.size() &&
             group.instances[proxy.instanceIndexInGroup].entityId == entityId) {
-            group.instances[proxy.instanceIndexInGroup].model = model;
+            SceneRenderMeshInstance& instance = group.instances[proxy.instanceIndexInGroup];
+            instance.model = model;
+            instance.previousModel = proxy.previousModel;
+            instance.previousModelFrame = proxy.previousModelFrame;
             // Parallel affine publication writes disjoint instances in the same page.
             if (markGroupChanged) std::atomic_ref<std::uint64_t>(group.contentRevision).store(NextContentRevision(), std::memory_order_relaxed);
             proxy.dirty |= RenderProxyDirtyFlag::Transform;

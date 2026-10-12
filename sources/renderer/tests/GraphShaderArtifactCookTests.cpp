@@ -42,9 +42,11 @@ namespace {
 
 [[nodiscard]] RenderMaterialGraphShaderSource CompileConstantColorGraph(
     std::string_view colorHint,
-    std::string_view shadingModel = "defaultLit") {
+    std::string_view shadingModel = "defaultLit",
+    std::string_view blendMode = "opaque") {
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
     graph.shadingModel = std::string{ shadingModel };
+    graph.blendMode = std::string{ blendMode };
     graph.nodes.push_back(RenderMaterialGraphNode{
         .id = 2U,
         .kind = RenderMaterialGraphNodeKind::ConstantColor,
@@ -112,8 +114,14 @@ void RunGraphShaderWrapperSourceTest() {
         "KBMAT-MAT87: Forward graph normal mapping must honor material normalScale before TBN lighting");
     Require(opaque.find("ctx.twoSidedSign = gl_FrontFacing ? 1.0 : -1.0;") != std::string::npos,
         "KBMAT-MAT46: Forward wrapper must expose a real front/back-face sign to graph nodes");
-    Require(opaque.find("gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);") != std::string::npos,
-        "KBMAT-MAT08: Forward wrapper must combine lit color, emissive and surface alpha");
+    // The scene colour alpha is the share of the opaque surface still visible (the TAA reactive mask): an opaque
+    // surface covers what is behind it, only a translucent one writes its opacity.
+    Require(opaque.find("gl_FragColor = vec4(lighting + surface.emissive, terrainLayerOpacity);") != std::string::npos,
+        "KBMAT-MAT08: Forward wrapper must combine lit color and emissive, covering what is behind an opaque surface");
+    const std::string translucent = BuildGraphFragmentWrapperSource(
+        CompileConstantColorGraph("0.25 0.5 0.75 0.5", "defaultLit", "translucent"), "BaseTransparent");
+    Require(translucent.find("gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);") != std::string::npos,
+        "KBMAT-MAT08: A translucent forward wrapper must write its surface opacity");
     Require(opaque.find("basisTangent = vertexTangent;") != std::string::npos &&
             opaque.find("basisBitangent = vertexBitangent;") != std::string::npos &&
             opaque.find("basisTangent = derivativeTangent") == std::string::npos &&

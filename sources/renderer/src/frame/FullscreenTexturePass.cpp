@@ -110,7 +110,8 @@ float ResolveFullscreenTextureExposureStops(const FullscreenTextureOutputTransfo
 }
 
 bool FullscreenTexturePassDesc::IsValid() const noexcept {
-    return bgfx::isValid(sourceTexture) && extent.IsValid() && (!outputRect.extent.IsValid() || outputRect.IsValid());
+    return bgfx::isValid(sourceTexture) && extent.IsValid() && (!outputRect.extent.IsValid() || outputRect.IsValid()) &&
+        (!antiAliasing || sourceExtent.IsValid());
 }
 
 bool FullscreenTexturePass::Initialize() {
@@ -124,10 +125,11 @@ bool FullscreenTexturePass::Initialize() {
     tonemapParams_ = bgfx::createUniform("u_tonemapParams", bgfx::UniformType::Vec4);
     colorGradeParams_ = bgfx::createUniform("u_colorGradeParams", bgfx::UniformType::Vec4);
     vignetteParams_ = bgfx::createUniform("u_vignetteParams", bgfx::UniformType::Vec4);
+    displayAntiAliasing_ = bgfx::createUniform("u_displayAntiAliasing", bgfx::UniformType::Vec4);
     neutralColorGradeLut_ = CreateNeutralColorGradeLut();
     if (!bgfx::isValid(program_) || !bgfx::isValid(colorSampler_) || !bgfx::isValid(colorGradeSampler_) ||
         !bgfx::isValid(tonemapParams_) || !bgfx::isValid(colorGradeParams_) || !bgfx::isValid(vignetteParams_) ||
-        !bgfx::isValid(neutralColorGradeLut_)) {
+        !bgfx::isValid(displayAntiAliasing_) || !bgfx::isValid(neutralColorGradeLut_)) {
         Shutdown();
         return false;
     }
@@ -139,6 +141,10 @@ void FullscreenTexturePass::Shutdown() noexcept {
     if (bgfx::isValid(neutralColorGradeLut_)) {
         bgfx::destroy(neutralColorGradeLut_);
         neutralColorGradeLut_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(displayAntiAliasing_)) {
+        bgfx::destroy(displayAntiAliasing_);
+        displayAntiAliasing_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(vignetteParams_)) {
         bgfx::destroy(vignetteParams_);
@@ -227,6 +233,13 @@ bool FullscreenTexturePass::Submit(const FullscreenTexturePassDesc& desc) const 
     };
     bgfx::setUniform(colorGradeParams_, colorGradeParams);
     bgfx::setUniform(vignetteParams_, vignetteParams);
+    const float displayAntiAliasing[4] = {
+        desc.antiAliasing ? 1.0F : 0.0F,
+        desc.antiAliasing ? 1.0F / static_cast<float>(desc.sourceExtent.width) : 0.0F,
+        desc.antiAliasing ? 1.0F / static_cast<float>(desc.sourceExtent.height) : 0.0F,
+        0.0F,
+    };
+    bgfx::setUniform(displayAntiAliasing_, displayAntiAliasing);
     bgfx::setTexture(0, colorSampler_, desc.sourceTexture);
     bgfx::setTexture(1, colorGradeSampler_, neutralColorGradeLut_);
     bgfx::setVertexBuffer(0, &vertices);
@@ -237,7 +250,7 @@ bool FullscreenTexturePass::Submit(const FullscreenTexturePassDesc& desc) const 
 bool FullscreenTexturePass::IsInitialized() const noexcept {
     return bgfx::isValid(program_) && bgfx::isValid(colorSampler_) && bgfx::isValid(colorGradeSampler_) &&
            bgfx::isValid(tonemapParams_) && bgfx::isValid(colorGradeParams_) && bgfx::isValid(vignetteParams_) &&
-           bgfx::isValid(neutralColorGradeLut_);
+           bgfx::isValid(displayAntiAliasing_) && bgfx::isValid(neutralColorGradeLut_);
 }
 
 } // namespace kb::render

@@ -474,7 +474,7 @@ bool Renderer::BeginFrame() {
         skinningSynchronizedSceneIds_.clear();
         frameState_.Begin(static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL);
         if (sceneRenderer_ != nullptr) {
-            static_cast<void>(sceneRenderer_->BeginSkinningFrame(
+            static_cast<void>(sceneRenderer_->BeginFrameMatrixRows(
                 static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
                 static_cast<std::uint64_t>(lastCompletedFrame_)));
         }
@@ -1010,6 +1010,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor begin");
     RenderScene& renderScene = RenderSceneFor(scene);
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor end");
+    // Transform changes synchronized below record the models this frame's motion vectors start from.
+    renderScene.BeginMotionFrame(static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL);
     const bool skinningAlreadySynchronized = std::ranges::find(
         skinningSynchronizedSceneIds_, scene.Id()) != skinningSynchronizedSceneIds_.end();
     const std::uint64_t renderProxyUpdateRevision = scene.Runtime().RenderProxyUpdateRevision();
@@ -1876,13 +1878,15 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             if (postProcessOutput.temporalAntiAliasingEnabled && overlayCamera != nullptr &&
                 bgfx::isValid(sampledSceneDesc.postProcess.motionVectorFrameBuffer) &&
                 bgfx::isValid(sampledSceneDesc.SceneOverlayDepthTexture())) {
-                sceneRenderer_->SetMotionVectorPreviousViewProjection(previousMotionViewProjection);
+                sceneRenderer_->SetMotionVectorViewProjections(currentUnjitteredViewProjection, previousMotionViewProjection);
+                // Rasterized with the jittered camera the depth prepass used, so each fragment meets the depth
+                // it wrote; the motion itself is written between the jitter-free view-projections above.
                 const RendererMeshPassSubmitDesc motionVectorSubmitDesc{
                     .sceneRenderer = *sceneRenderer_,
                     .renderScene = renderScene,
                     .sceneDesc = sampledSceneDesc,
                     .viewportPlan = viewportPlan,
-                    .sceneCamera = overlayCamera,
+                    .sceneCamera = sceneCamera,
                     .lightingConfig = effectiveLightingConfig,
                     .width = width,
                     .height = height,
@@ -2309,9 +2313,14 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
     settings.ambientOcclusionRadius = std::max(settings.ambientOcclusionRadius, 0.01F);
     defaultPostProcessSettings_ = settings;
     if (std::optional<PostProcessPass> antiAliasing = postProcessChain_.FindPass(PostProcessPassKind::AntiAliasing); antiAliasing.has_value()) {
-        antiAliasing->enabled = settings.temporalAntiAliasingEnabled || settings.fxaaEnabled;
+        antiAliasing->enabled = settings.temporalAntiAliasingEnabled;
         antiAliasing->postProcessSettings = settings;
         static_cast<void>(postProcessChain_.SetPass(*antiAliasing));
+    }
+    if (std::optional<PostProcessPass> fxaa = postProcessChain_.FindPass(PostProcessPassKind::Fxaa); fxaa.has_value()) {
+        fxaa->enabled = settings.fxaaEnabled;
+        fxaa->postProcessSettings = settings;
+        static_cast<void>(postProcessChain_.SetPass(*fxaa));
     }
     if (std::optional<PostProcessPass> bloom = postProcessChain_.FindPass(PostProcessPassKind::Bloom); bloom.has_value()) {
         bloom->enabled = settings.bloomEnabled;

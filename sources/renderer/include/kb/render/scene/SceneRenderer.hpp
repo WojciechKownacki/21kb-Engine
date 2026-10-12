@@ -79,9 +79,14 @@ public:
     void SetSceneDepthTexture(bgfx::TextureHandle texture) noexcept;
     // MAT-31: opaque scene color snapshot bound to color-sampling graph materials (SceneColor / SceneTexture).
     void SetSceneColorTexture(bgfx::TextureHandle texture) noexcept;
-    void SetMotionVectorPreviousViewProjection(const std::array<float, 16>& matrix) noexcept;
+    // The jitter-free view-projections of this frame and of the previous one, between which the motion vector
+    // pass writes motion; the pass itself rasterizes with the camera it is submitted with.
+    void SetMotionVectorViewProjections(
+        const std::array<float, 16>& current, const std::array<float, 16>& previous) noexcept;
     void TickFrame() noexcept;
-    [[nodiscard]] bool BeginSkinningFrame(
+    // Begins this frame in the per-frame matrix row allocators: the skinning palettes and the previous models the
+    // motion vector pass uploads for moved instances. `completedFrame` is the frame the GPU finished.
+    [[nodiscard]] bool BeginFrameMatrixRows(
         std::uint64_t frame, std::uint64_t completedFrame) noexcept;
     [[nodiscard]] RenderSkinningPaletteAllocator& SkinningPalettes() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
@@ -111,6 +116,10 @@ private:
     SceneRenderResourceMap resourceMap_;
     RenderSkinningPaletteAllocator skinningPalettes_{
         RenderSkinningPaletteAllocatorDesc{ .matrixCapacityPerFrame = 4096U } };
+    // One row per instance of each motion vector draw with a moved instance (all viewports of a frame); the
+    // const mesh pass submit allocates and uploads them.
+    mutable RenderSkinningPaletteAllocator motionPreviousModels_{
+        RenderSkinningPaletteAllocatorDesc{ .matrixCapacityPerFrame = 8192U } };
     std::unique_ptr<SceneMeshSubmitter> meshSubmitter_;
     std::unique_ptr<ParticleGpuRenderer> particleRenderer_;
     mutable std::vector<ParticleGpuMeshDraw> gpuMeshDrawScratch_;
@@ -129,9 +138,16 @@ private:
         0.0F, 1.0F, 0.0F, 0.0F,
         0.0F, 0.0F, 1.0F, 0.0F,
         0.0F, 0.0F, 0.0F, 1.0F};
+    std::array<float, 16> motionVectorCurrentViewProjection_{
+        1.0F, 0.0F, 0.0F, 0.0F,
+        0.0F, 1.0F, 0.0F, 0.0F,
+        0.0F, 0.0F, 1.0F, 0.0F,
+        0.0F, 0.0F, 0.0F, 1.0F};
     float frameTimeSeconds_ = 0.0F;
     float frameDeltaSeconds_ = 0.0F;
     std::uint32_t frameTimeIndex_ = 0U;
+    // FrameTimeConstants of the previous frame: where graphs evaluate their previous vertex positions.
+    std::array<float, 4> previousFrameTime_{};
     std::array<float, 4> dynamicParameter_{};
     bool particleVolumetricLowQuality_ = false;
     bool initialized_ = false;

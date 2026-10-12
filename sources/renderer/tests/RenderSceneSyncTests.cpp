@@ -2227,13 +2227,23 @@ void RunRendererStoresDefaultPostProcessSettingsTest() {
     Require(settings.fxaaEnabled, "Renderer did not store configured FXAA toggle");
     Require(!settings.temporalAntiAliasingEnabled, "Renderer did not store configured TAA toggle");
 
+    // TAA resolves in the HDR anti-aliasing slot before the tonemap; FXAA filters after it (its own pass).
     const auto antiAliasingPass = std::ranges::find_if(renderer.PostProcessPasses(), [](const PostProcessPass& pass) {
         return pass.kind == PostProcessPassKind::AntiAliasing;
     });
     Require(antiAliasingPass != renderer.PostProcessPasses().end(), "Renderer post-process chain is missing anti-aliasing after settings update");
-    Require(antiAliasingPass->enabled, "Renderer did not enable anti-aliasing pass for FXAA");
-    Require(antiAliasingPass->postProcessSettings.fxaaEnabled, "Renderer did not synchronize FXAA to the anti-aliasing pass");
+    Require(!antiAliasingPass->enabled, "Renderer enabled the temporal anti-aliasing pass for FXAA");
     Require(!antiAliasingPass->postProcessSettings.temporalAntiAliasingEnabled, "Renderer did not synchronize disabled TAA to the anti-aliasing pass");
+    const auto fxaaPass = std::ranges::find_if(renderer.PostProcessPasses(), [](const PostProcessPass& pass) {
+        return pass.kind == PostProcessPassKind::Fxaa;
+    });
+    const auto tonemapPosition = std::ranges::find_if(renderer.PostProcessPasses(), [](const PostProcessPass& pass) {
+        return pass.kind == PostProcessPassKind::Tonemap;
+    });
+    Require(fxaaPass != renderer.PostProcessPasses().end() && fxaaPass > tonemapPosition,
+        "Renderer post-process chain must run FXAA after the tonemap");
+    Require(fxaaPass->enabled, "Renderer did not enable the FXAA pass for FXAA");
+    Require(fxaaPass->postProcessSettings.fxaaEnabled, "Renderer did not synchronize FXAA to the FXAA pass");
 
     const auto bloomPass = std::ranges::find_if(renderer.PostProcessPasses(), [](const PostProcessPass& pass) {
         return pass.kind == PostProcessPassKind::Bloom;
@@ -2874,6 +2884,80 @@ void RunUpdateMeshTransformRefreshesInstanceInPlaceTest() {
     Require(renderScene.DrawGroups()[1].instances.size() == 1U, "Hidden mesh insertion changed visible instances");
     Require(renderScene.RemoveMesh(6U), "Mesh removal did not find appended proxy");
     Require(renderScene.DrawGroups()[0].instances.size() == 1U, "Draw group rebuild kept removed instance");
+}
+
+// Unreal's previous LocalToWorld per primitive, which the motion vector pass reads: a proxy records the model it
+// had when the motion frame began on its first transform change in that frame; a proxy that does not change in
+// a frame has no motion of its own, and a new proxy has none in its first frame.
+void RunRenderSceneRecordsPreviousModelsPerMotionFrameTest() {
+    const auto translationX = [](float x) {
+        return std::array<float, 16>{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, x, 0.0F, 0.0F, 1.0F };
+    };
+    // The previous model the motion vector pass draws an instance with (the draw-group instance cache).
+    const auto previousX = [](const RenderScene& scene, std::uint64_t entityId) {
+        for (const SceneRenderDrawGroup& group : scene.DrawGroups()) {
+            for (const SceneRenderMeshInstance& instance : group.instances) {
+                if (instance.entityId == entityId) {
+                    return SceneRenderPreviousModel(instance, scene.MotionFrame())[12];
+                }
+            }
+        }
+        Require(false, "Motion history test lost a mesh instance");
+        return 0.0F;
+    };
+    RenderScene scene;
+    scene.BeginMotionFrame(1U);
+    MeshRenderProxyDesc car{ .entityId = 10U, .meshAssetId = 42U, .materialAssetId = 7U, .model = translationX(1.0F) };
+    MeshRenderProxyDesc building{ .entityId = 11U, .meshAssetId = 42U, .materialAssetId = 7U, .model = translationX(-5.0F) };
+    static_cast<void>(scene.UpsertMesh(car));
+    static_cast<void>(scene.UpsertMesh(building));
+    static_cast<void>(scene.DrawGroups());
+    Require(scene.UpdateMeshTransform(10U, translationX(2.0F)), "Motion history test could not move the car");
+    Require(NearlyEqual(previousX(scene, 10U), 2.0F),
+        "A proxy created in this frame must have no previous model of its own (previous == current)");
+
+    scene.BeginMotionFrame(2U);
+    Require(scene.UpdateMeshTransform(10U, translationX(3.0F)), "Motion history test could not move the car");
+    Require(scene.Stats().transformInPlaceUpdateCount >= 1U, "Motion history test expected the in-place instance update");
+    Require(NearlyEqual(previousX(scene, 10U), 2.0F), "A moved proxy must draw with the model the frame began with");
+    Require(scene.UpdateMeshTransform(10U, translationX(4.0F)), "Motion history test could not move the car again");
+    Require(NearlyEqual(previousX(scene, 10U), 2.0F), "A second change in the same frame must keep the frame's previous model");
+    Require(NearlyEqual(previousX(scene, 11U), -5.0F), "A static proxy must draw with its current model as the previous one");
+    scene.BeginMotionFrame(2U);
+    Require(NearlyEqual(previousX(scene, 10U), 2.0F), "Beginning the same renderer frame again (another viewport) must keep the motion");
+
+    scene.BeginMotionFrame(3U);
+    Require(NearlyEqual(previousX(scene, 10U), 4.0F),
+        "A proxy not updated this frame must not keep a stale previous model (it did not move)");
+
+    // A full sync re-upserts the proxy: a changed model records its previous one the same way, also when the
+    // draw groups are rebuilt from the proxies.
+    scene.BeginMotionFrame(4U);
+    car.model = translationX(6.0F);
+    static_cast<void>(scene.UpsertMesh(car));
+    Require(NearlyEqual(previousX(scene, 10U), 4.0F), "An upsert moving the proxy must record its previous model");
+    // A geometry swarm entering the scene rebuilds every draw group from the proxies.
+    static_cast<void>(scene.UpsertGeometrySwarm(GeometrySwarmRenderProxyDesc{
+        .entityId = 77U, .meshAssetId = 44U, .materialAssetId = 9U, .model = translationX(0.0F),
+        .instanceCount = 2U, .columns = 2U, .rows = 1U, .layers = 1U, .spacing = { 2.0F, 1.0F, 1.0F },
+    }));
+    Require(NearlyEqual(previousX(scene, 10U), 4.0F), "A draw-group rebuild must keep the recorded previous model");
+
+    // The swarm moves its generated instances by its model.
+    scene.BeginMotionFrame(5U);
+    Require(scene.UpdateGeometrySwarmTransform(77U, translationX(10.0F)), "Motion history test could not move the swarm");
+    bool swarmChecked = false;
+    for (const SceneRenderDrawGroup& group : scene.DrawGroups()) {
+        for (const SceneRenderMeshInstance& instance : group.instances) {
+            if (instance.meshAssetId != 44U) {
+                continue;
+            }
+            Require(NearlyEqual(instance.model[12] - SceneRenderPreviousModel(instance, scene.MotionFrame())[12], 10.0F),
+                "A geometry swarm instance must move by the swarm's motion");
+            swarmChecked = true;
+        }
+    }
+    Require(swarmChecked, "Motion history test lost the swarm instances");
 }
 
 void RunSyncMeshWorldAffinesPushesColumnarTransformTest() {
@@ -4078,6 +4162,7 @@ void RunRenderSceneSyncTests() {
     RunSyncConsumesPrecomputedWorldTransformTest();
     RunSyncFallsBackToResolveForDirtyTransformTest();
     RunUpdateMeshTransformRefreshesInstanceInPlaceTest();
+    RunRenderSceneRecordsPreviousModelsPerMotionFrameTest();
     RunSyncMeshWorldAffinesPushesColumnarTransformTest();
     RunSyncMeshWorldAffinesParallelTest();
     RunRenderBridgeTelemetryAggregatesBridgeStatsTest();

@@ -39,6 +39,8 @@ PostProcessChainDesc PostProcessChain::DefaultSceneChainDesc() {
                     },
                 },
             },
+            // FXAA is off by default: the default anti-aliasing is temporal.
+            PostProcessPass{.kind = PostProcessPassKind::Fxaa, .enabled = false},
         },
     };
 }
@@ -167,7 +169,6 @@ PostProcessOutput PostProcessChain::Evaluate(const PostProcessInput& input) cons
             break;
         case PostProcessPassKind::AntiAliasing:
             output.postProcessSettings = pass.postProcessSettings;
-            output.fxaaEnabled = pass.postProcessSettings.fxaaEnabled;
             output.temporalAntiAliasingEnabled = pass.postProcessSettings.temporalAntiAliasingEnabled;
             output.colorSpace = PostProcessColorSpace::SceneHdr;
             output.sceneHdrPreserved = true;
@@ -193,6 +194,13 @@ PostProcessOutput PostProcessChain::Evaluate(const PostProcessInput& input) cons
             output.postProcessSettings = pass.postProcessSettings;
             output.outputTransform = pass.outputTransform;
             output.tonemapEnabled = true;
+            output.colorSpace = PostProcessColorSpace::SceneHdr;
+            output.sceneHdrPreserved = true;
+            output.passthrough = true;
+            break;
+        case PostProcessPassKind::Fxaa:
+            // The display composite runs it on the tonemapped image; the post-process output stays scene HDR.
+            output.fxaaEnabled = pass.postProcessSettings.fxaaEnabled;
             output.colorSpace = PostProcessColorSpace::SceneHdr;
             output.sceneHdrPreserved = true;
             output.passthrough = true;

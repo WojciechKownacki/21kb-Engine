@@ -1,6 +1,8 @@
 #include "RendererTestSupport.hpp"
 
 #include "kb/render/MaterialProgramRegistry.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
+#include "kb/render/frame/FullscreenTexturePass.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
@@ -10,8 +12,10 @@
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
 #include "kb/render/shadow/PointShadowUniforms.hpp"
+#include "../src/scene/pipeline/MeshPipelinePassPolicy.hpp"
 
 #include <bgfx/bgfx.h>
+#include <bx/math.h>
 
 #include <algorithm>
 #include <array>
@@ -21,6 +25,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -521,6 +526,7 @@ public:
         bgfx::UniformHandle previousPaletteSampler,
         bgfx::UniformHandle previousPaletteInfo,
         bgfx::UniformHandle previousViewProjection,
+        bgfx::UniformHandle currentViewProjection,
         bgfx::UniformHandle shadowViewProjection,
         bool motionVectors = false) {
         const std::array<RenderStaticMeshVertexSkinned, 3U> vertices{{
@@ -582,6 +588,7 @@ public:
                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
             bgfx::setUniform(previousPaletteInfo, info.data());
             bgfx::setUniform(previousViewProjection, identity.data());
+            bgfx::setUniform(currentViewProjection, identity.data());
         }
         bgfx::setVertexBuffer(0U, vertexBuffer);
         bgfx::setInstanceDataBuffer(&instanceBuffer, 0U, 1U);
@@ -2579,16 +2586,26 @@ void RunForwardGraphVertexColorTest() {
     const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
 
-    // Harness sets v_color0 = (0.15, 0.45, 0.85, 0.6): blue-dominant RGB and alpha 0.6.
-    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
-    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::VertexColor, .positionX = 60, .positionY = 60 });
-    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::VertexColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
-    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::VertexColor, 2U, "a", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
-    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x7400U });
-    Require(compiled.Succeeded(), "KBMAT-MAT74: VertexColor graph must compile");
-    Require(compiled.shader.source.find("ctx.vertexColor") != std::string::npos, "KBMAT-MAT74: VertexColor node must emit ctx.vertexColor");
-    const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
-    Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT74: VertexColor graph must cook");
+    // Harness sets v_color0 = (0.15, 0.45, 0.85, 0.6): blue-dominant RGB and alpha 0.6. The opacity of a
+    // translucent graph reaches the output alpha; an opaque graph covers what is behind it whatever its alpha
+    // pin says, so it writes 1 (the scene colour alpha convention the TAA reactive mask reads).
+    const auto cookVertexColorGraph = [&](std::string_view blendMode, std::uint64_t assetId, std::string_view directory) {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        graph.blendMode = std::string{ blendMode };
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::VertexColor, .positionX = 60, .positionY = 60 });
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::VertexColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::VertexColor, 2U, "a", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = assetId });
+        Require(compiled.Succeeded(), "KBMAT-MAT74: VertexColor graph must compile");
+        Require(compiled.shader.source.find("ctx.vertexColor") != std::string::npos, "KBMAT-MAT74: VertexColor node must emit ctx.vertexColor");
+        RenderMaterialGraphShaderArtifactRequest request = CookRequest((cacheDir / directory).generic_string());
+        request.pass = IsRenderMaterialGraphBlendModeTransparent(compiled.shader.reflection.blendMode) ? "BaseTransparent" : "BaseOpaque";
+        const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request);
+        Require(cooked.Succeeded() && cooked.artifact.has_value(), "KBMAT-MAT74: VertexColor graph must cook");
+        return *cooked.artifact;
+    };
+    const RenderMaterialGraphShaderArtifact translucentArtifact = cookVertexColorGraph("translucent", 0x7400U, "translucent");
+    const RenderMaterialGraphShaderArtifact opaqueArtifact = cookVertexColorGraph("opaque", 0x7401U, "opaque");
 
     ForwardRenderHarness harness;
     if (!harness.Init()) {
@@ -2597,15 +2614,21 @@ void RunForwardGraphVertexColorTest() {
         return;
     }
 
-    const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *result.artifact);
-    Require(bgfx::isValid(program), "KBMAT-MAT74: VertexColor graph program must link");
+    const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, translucentArtifact);
+    const bgfx::ProgramHandle opaqueProgram = BuildGraphProgram(vsBytes, opaqueArtifact);
+    Require(bgfx::isValid(program) && bgfx::isValid(opaqueProgram), "KBMAT-MAT74: VertexColor graph program must link");
 
     const ForwardRenderProbe probe = harness.Render(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
     Require(probe.b > probe.r && probe.b > probe.g && probe.b > 60U,
         "KBMAT-MAT74: Per-vertex VertexColor RGB must drive a blue-dominant pixel through the graph shader");
     Require(probe.a > 120U && probe.a < 190U,
         "KBMAT-MAT74: VertexColor.a (0.6) must drive the output alpha channel (~153), distinct from opaque 255");
+    const ForwardRenderProbe opaqueProbe = harness.Render(opaqueProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    Require(opaqueProbe.b > opaqueProbe.r && opaqueProbe.a == 255U,
+        ("An opaque graph must write scene colour alpha 1 whatever its alpha pin (got " + std::to_string(opaqueProbe.a) + ")").c_str());
 
+    bgfx::destroy(opaqueProgram);
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -2938,6 +2961,7 @@ void RunSkinnedMeshPassGpuReadbackTest() {
     const bgfx::UniformHandle previousPaletteSampler = bgfx::createUniform("s_previousSkinningPalette", bgfx::UniformType::Sampler);
     const bgfx::UniformHandle previousPaletteInfo = bgfx::createUniform("u_previousSkinningPaletteInfo", bgfx::UniformType::Vec4);
     const bgfx::UniformHandle previousViewProjection = bgfx::createUniform("u_motionPreviousViewProjection", bgfx::UniformType::Mat4);
+    const bgfx::UniformHandle currentViewProjection = bgfx::createUniform("u_motionCurrentViewProjection", bgfx::UniformType::Mat4);
     const bgfx::UniformHandle shadowViewProjection = bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
     for (const auto& [name, vertexSource, fragmentSource, motionVectors] : variants) {
         const std::filesystem::path vertexBinary = cacheDir / (std::string{name} + ".vs.bin");
@@ -2953,7 +2977,7 @@ void RunSkinnedMeshPassGpuReadbackTest() {
             (std::string{"SMA-38: skinned pass shaders must link for GPU readback: "} + name).c_str());
         const ForwardRenderProbe pixel = harness.RenderSkinnedProbe(program,
             paletteSampler, paletteInfo, previousPaletteSampler, previousPaletteInfo,
-            previousViewProjection, shadowViewProjection, motionVectors);
+            previousViewProjection, currentViewProjection, shadowViewProjection, motionVectors);
         const bool expected = std::string_view{name} == "depth_shadow"
             ? pixel.r > 230U && pixel.g < 8U && pixel.b < 8U
             : pixel.r < 90U && pixel.g < 8U && pixel.b < 8U;
@@ -2963,6 +2987,7 @@ void RunSkinnedMeshPassGpuReadbackTest() {
         bgfx::destroy(program);
     }
     bgfx::destroy(shadowViewProjection);
+    bgfx::destroy(currentViewProjection);
     bgfx::destroy(previousViewProjection);
     bgfx::destroy(previousPaletteInfo);
     bgfx::destroy(previousPaletteSampler);
@@ -3061,8 +3086,10 @@ void RunForwardGraphTransparentBlendTest() {
     const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
 
-    // Blue base color with explicit alpha 0.5; BaseColor.a must not implicitly drive surface alpha.
+    // Blue base color with explicit alpha 0.5; BaseColor.a must not implicitly drive surface alpha. Only a
+    // translucent graph has an opacity: an opaque one covers what is behind it (alpha 1).
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.blendMode = "translucent";
     RenderMaterialGraphNode color{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 40, .positionY = 40 };
     color.parameter.defaultValueHint = "0 0 1 0.5";
     graph.nodes.push_back(color);
@@ -4505,9 +4532,10 @@ void RunForwardGraphBlendModeCompositeTest() {
     const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
 
-    // Unlit red with explicit alpha 0.5 over an opaque green background.
+    // Unlit translucent red with explicit alpha 0.5 over an opaque green background.
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
     graph.shadingModel = "unlit";
+    graph.blendMode = "translucent";
     RenderMaterialGraphNode color{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
     color.parameter.defaultValueHint = "1 0 0 0.5";
     graph.nodes.push_back(color);
@@ -5207,6 +5235,822 @@ void RunForwardGraphMaterialParameterCollectionRendersTest() {
     bgfx::destroy(tintUniform);
     harness.Shutdown();
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// The motion vector pass (Unreal's velocity pass), the TAA reactive mask and FXAA after the tonemap, drawn with
+// the production shaders on a real device.
+
+using MotionMatrix = std::array<float, 16U>;
+
+[[nodiscard]] MotionMatrix MotionTranslation(float x, float y, float z, float scale = 1.0F) {
+    return MotionMatrix{ scale, 0.0F, 0.0F, 0.0F, 0.0F, scale, 0.0F, 0.0F, 0.0F, 0.0F, scale, 0.0F, x, y, z, 1.0F };
+}
+
+[[nodiscard]] std::array<float, 4U> MotionClip(const MotionMatrix& viewProjection, float x, float y, float z) {
+    const float point[4]{ x, y, z, 1.0F };
+    std::array<float, 4U> clip{};
+    bx::vec4MulMtx(clip.data(), point, viewProjection.data());
+    return clip;
+}
+
+// The screen UV a world point projects to, in the convention of motion_vectors.sh.
+[[nodiscard]] std::array<float, 2U> MotionProjectUv(const MotionMatrix& viewProjection, float x, float y, float z) {
+    const std::array<float, 4U> clip = MotionClip(viewProjection, x, y, z);
+    return { clip[0] / clip[3] * 0.5F + 0.5F, 0.5F - clip[1] / clip[3] * 0.5F };
+}
+
+// A camera ten metres in front of the origin looking at it, with a reversed-Z perspective; `jitter` offsets
+// the projection by that many pixels like RendererTemporalJitter.
+struct MotionCamera {
+    MotionMatrix view{};
+    MotionMatrix projection{};
+    MotionMatrix viewProjection{};
+};
+
+[[nodiscard]] MotionCamera MakeMotionCamera(std::uint16_t size, std::array<float, 2U> jitterPixels = { 0.0F, 0.0F }) {
+    MotionCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F });
+    SceneDepthPolicy::MakePerspective(camera.projection.data(), 60.0F, 1.0F, 0.1F, 1000.0F, SceneDepthPolicy::HomogeneousDepth());
+    camera.projection[8] += jitterPixels[0] * 2.0F / static_cast<float>(size);
+    camera.projection[9] += jitterPixels[1] * 2.0F / static_cast<float>(size);
+    bx::mtxMul(camera.viewProjection.data(), camera.view.data(), camera.projection.data());
+    return camera;
+}
+
+struct MotionDraw {
+    bgfx::ProgramHandle program = BGFX_INVALID_HANDLE;
+    std::vector<MotionMatrix> models;
+    // The previous model of each instance when the draw uploads them (an instance moved); empty otherwise.
+    std::vector<MotionMatrix> previousModels;
+};
+
+// One frame of the motion vector pass as the scene renderer draws it: a depth prepass with the base pass vertex
+// stage (reversed Z), then motion vector draws into an RGBA32F target that sample the prepass depth, bound like
+// SceneMeshPassResources::BindMotionVectors (scene depth at stage 0, previous-model rows at stage 15).
+class MotionVectorHarness {
+public:
+    static constexpr std::uint16_t kSize = 64U;
+
+    [[nodiscard]] bool Init() {
+#if defined(_WIN32)
+        window_ = CreateWindowExW(0, L"STATIC", L"motion", WS_OVERLAPPEDWINDOW, 0, 0, kSize, kSize, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+#endif
+        bgfx::Init init;
+        init.type = bgfx::RendererType::Direct3D11;
+        init.resolution.width = kSize;
+        init.resolution.height = kSize;
+        init.resolution.reset = BGFX_RESET_NONE;
+#if defined(_WIN32)
+        init.platformData.nwh = window_;
+#endif
+        if (!bgfx::init(init)) {
+            return false;
+        }
+        const std::array<RenderStaticMeshVertexP3N3T4UV2, 4U> quad{ {
+            { .x = -1.0F, .y = -1.0F, .ny = 0.0F, .nz = -1.0F, .u = 0.0F, .v = 1.0F },
+            { .x = 1.0F, .y = -1.0F, .ny = 0.0F, .nz = -1.0F, .u = 1.0F, .v = 1.0F },
+            { .x = 1.0F, .y = 1.0F, .ny = 0.0F, .nz = -1.0F, .u = 1.0F, .v = 0.0F },
+            { .x = -1.0F, .y = 1.0F, .ny = 0.0F, .nz = -1.0F, .u = 0.0F, .v = 0.0F },
+        } };
+        const std::array<std::uint16_t, 6U> indices{ 0U, 1U, 2U, 0U, 2U, 3U };
+        vertexBuffer_ = bgfx::createVertexBuffer(bgfx::copy(quad.data(), sizeof(quad)), RenderStaticMeshVertexLayout(RenderVertexFormat::P3N3T4UV2));
+        indexBuffer_ = bgfx::createIndexBuffer(bgfx::copy(indices.data(), sizeof(indices)));
+        prepassColor_ = bgfx::createTexture2D(kSize, kSize, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+        depth_ = bgfx::createTexture2D(kSize, kSize, false, 1U, bgfx::TextureFormat::D32F, BGFX_TEXTURE_RT | kPointClamp);
+        const std::array<bgfx::TextureHandle, 2U> prepassAttachments{ prepassColor_, depth_ };
+        prepassFrameBuffer_ = bgfx::createFrameBuffer(2U, prepassAttachments.data(), false);
+        velocity_ = bgfx::createTexture2D(kSize, kSize, false, 1U, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_RT);
+        velocityFrameBuffer_ = bgfx::createFrameBuffer(1U, &velocity_, false);
+        readback_ = bgfx::createTexture2D(kSize, kSize, false, 1U, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+        const std::uint32_t white = 0xFFFFFFFFU;
+        white_ = bgfx::createTexture2D(1U, 1U, false, 1U, bgfx::TextureFormat::RGBA8, kPointClamp, bgfx::copy(&white, sizeof(white)));
+        sceneDepthSampler_ = bgfx::createUniform("s_sceneDepth", bgfx::UniformType::Sampler);
+        previousModelsSampler_ = bgfx::createUniform("s_motionPreviousModels", bgfx::UniformType::Sampler);
+        previousViewProjection_ = bgfx::createUniform("u_motionPreviousViewProjection", bgfx::UniformType::Mat4);
+        currentViewProjection_ = bgfx::createUniform("u_motionCurrentViewProjection", bgfx::UniformType::Mat4);
+        previousModelInfo_ = bgfx::createUniform("u_motionPreviousModelInfo", bgfx::UniformType::Vec4);
+        previousTime_ = bgfx::createUniform("u_motionPreviousTime", bgfx::UniformType::Vec4);
+        time_ = bgfx::createUniform("u_time", bgfx::UniformType::Vec4);
+        shadowViewProjection_ = bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
+        bgfx::frame();
+        bgfx::frame();
+        return bgfx::isValid(vertexBuffer_) && bgfx::isValid(indexBuffer_) && bgfx::isValid(prepassFrameBuffer_) &&
+            bgfx::isValid(velocityFrameBuffer_) && bgfx::isValid(readback_);
+    }
+
+    // `camera`: this frame's (jittered) camera; the motion is written between the jitter-free view-projections.
+    void SetCamera(const MotionCamera& camera, const MotionMatrix& currentViewProjection, const MotionMatrix& previousViewProjection) {
+        camera_ = camera;
+        currentViewProjectionValue_ = currentViewProjection;
+        previousViewProjectionValue_ = previousViewProjection;
+    }
+
+    void SetTimes(float current, float previous) {
+        timeValue_ = { current, current - previous, 0.0F, 0.0F };
+        previousTimeValue_ = { previous, 0.0F, 0.0F, 0.0F };
+    }
+
+    [[nodiscard]] std::vector<float> Render(std::span<const MotionDraw> prepass, std::span<const MotionDraw> motion) {
+        for (const bgfx::ViewId view : { bgfx::ViewId{ 0U }, bgfx::ViewId{ 1U } }) {
+            bgfx::setViewFrameBuffer(view, view == 0U ? prepassFrameBuffer_ : velocityFrameBuffer_);
+            bgfx::setViewRect(view, 0U, 0U, kSize, kSize);
+            bgfx::setViewTransform(view, camera_.view.data(), camera_.projection.data());
+            bgfx::setViewMode(view, bgfx::ViewMode::Sequential);
+            bgfx::touch(view);
+        }
+        bgfx::setViewClear(0U, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000FFU, SceneDepthPolicy::ClearDepth(), 0U);
+        // A pixel no motion vector draw wrote keeps blue = 1; the pass writes (u, v, 0, 1).
+        bgfx::setViewClear(1U, BGFX_CLEAR_COLOR, 0x0000FF00U);
+        std::vector<bgfx::TextureHandle> rows;
+        for (const MotionDraw& draw : prepass) {
+            Submit(0U, draw, BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | SceneDepthPolicy::DepthTestState(), false, rows);
+        }
+        for (const MotionDraw& draw : motion) {
+            Submit(1U, draw, BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A, true, rows);
+        }
+        bgfx::frame();
+        bgfx::blit(2U, readback_, 0U, 0U, velocity_, 0U, 0U, kSize, kSize);
+        std::vector<float> pixels(static_cast<std::size_t>(kSize) * kSize * 4U, 0.0F);
+        const std::uint32_t readyFrame = bgfx::readTexture(readback_, pixels.data());
+        std::uint32_t frame = bgfx::frame();
+        for (int guard = 0; frame < readyFrame && guard < 8; ++guard) {
+            frame = bgfx::frame();
+        }
+        Require(frame >= readyFrame, "Motion vector readback did not become ready");
+        for (const bgfx::TextureHandle texture : rows) {
+            bgfx::destroy(texture);
+        }
+        return pixels;
+    }
+
+    [[nodiscard]] static std::array<float, 4U> At(const std::vector<float>& pixels, std::array<float, 2U> uv) {
+        const std::size_t x = std::min<std::size_t>(static_cast<std::size_t>(uv[0] * kSize), kSize - 1U);
+        const std::size_t y = std::min<std::size_t>(static_cast<std::size_t>(uv[1] * kSize), kSize - 1U);
+        const std::size_t index = (y * kSize + x) * 4U;
+        return { pixels[index], pixels[index + 1U], pixels[index + 2U], pixels[index + 3U] };
+    }
+
+    void Shutdown() {
+        for (bgfx::UniformHandle uniform : { sceneDepthSampler_, previousModelsSampler_, previousViewProjection_, currentViewProjection_,
+                 previousModelInfo_, previousTime_, time_, shadowViewProjection_ }) {
+            bgfx::destroy(uniform);
+        }
+        bgfx::destroy(white_);
+        bgfx::destroy(readback_);
+        bgfx::destroy(velocityFrameBuffer_);
+        bgfx::destroy(velocity_);
+        bgfx::destroy(prepassFrameBuffer_);
+        bgfx::destroy(depth_);
+        bgfx::destroy(prepassColor_);
+        bgfx::destroy(indexBuffer_);
+        bgfx::destroy(vertexBuffer_);
+        bgfx::shutdown();
+#if defined(_WIN32)
+        if (window_ != nullptr) { DestroyWindow(window_); window_ = nullptr; }
+#endif
+    }
+
+private:
+    static constexpr std::uint64_t kPointClamp = BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+
+    void Submit(bgfx::ViewId view, const MotionDraw& draw, std::uint64_t state, bool motionVectors, std::vector<bgfx::TextureHandle>& rows) {
+        const auto count = static_cast<std::uint32_t>(draw.models.size());
+        Require(bgfx::getAvailInstanceDataBuffer(count, RenderInstanceBuffer::Stride()) == count, "Motion vector harness could not allocate instances");
+        bgfx::InstanceDataBuffer instances{};
+        bgfx::allocInstanceDataBuffer(&instances, count, RenderInstanceBuffer::Stride());
+        auto* data = reinterpret_cast<RenderInstanceData*>(instances.data);
+        for (std::uint32_t index = 0U; index < count; ++index) {
+            data[index] = RenderInstanceData{ .model = draw.models[index], .color = { 1.0F, 1.0F, 1.0F, 1.0F } };
+        }
+        const MotionMatrix identity = MotionTranslation(0.0F, 0.0F, 0.0F);
+        bgfx::setUniform(shadowViewProjection_, identity.data());
+        bgfx::setUniform(time_, timeValue_.data());
+        if (motionVectors) {
+            bgfx::setTexture(0U, sceneDepthSampler_, depth_, kPointClamp);
+            bgfx::setUniform(previousViewProjection_, previousViewProjectionValue_.data());
+            bgfx::setUniform(currentViewProjection_, currentViewProjectionValue_.data());
+            bgfx::setUniform(previousTime_, previousTimeValue_.data());
+            std::array<float, 4U> rowInfo{ 0.0F, 0.0F, 0.0F, 0.0F };
+            bgfx::TextureHandle rowTexture = white_;
+            if (!draw.previousModels.empty()) {
+                Require(draw.previousModels.size() == draw.models.size(), "Motion vector harness needs one previous model per instance");
+                rowTexture = bgfx::createTexture2D(4U, static_cast<std::uint16_t>(count), false, 1U, bgfx::TextureFormat::RGBA32F, kPointClamp,
+                    bgfx::copy(draw.previousModels.data(), static_cast<std::uint32_t>(draw.previousModels.size() * sizeof(MotionMatrix))));
+                rows.push_back(rowTexture);
+                rowInfo = { 0.0F, 1.0F / static_cast<float>(count), 1.0F, 0.0F };
+            }
+            bgfx::setTexture(15U, previousModelsSampler_, rowTexture, kPointClamp);
+            bgfx::setUniform(previousModelInfo_, rowInfo.data());
+        }
+        bgfx::setVertexBuffer(0U, vertexBuffer_);
+        bgfx::setIndexBuffer(indexBuffer_);
+        bgfx::setInstanceDataBuffer(&instances, 0U, count);
+        bgfx::setState(state);
+        bgfx::submit(view, draw.program);
+    }
+
+#if defined(_WIN32)
+    HWND window_ = nullptr;
+#endif
+    bgfx::VertexBufferHandle vertexBuffer_ = BGFX_INVALID_HANDLE;
+    bgfx::IndexBufferHandle indexBuffer_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle prepassColor_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle depth_ = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle prepassFrameBuffer_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle velocity_ = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle velocityFrameBuffer_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle readback_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle white_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle sceneDepthSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle previousModelsSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle previousViewProjection_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle currentViewProjection_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle previousModelInfo_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle previousTime_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle time_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle shadowViewProjection_ = BGFX_INVALID_HANDLE;
+    MotionCamera camera_{};
+    MotionMatrix currentViewProjectionValue_{};
+    MotionMatrix previousViewProjectionValue_{};
+    std::array<float, 4U> timeValue_{};
+    std::array<float, 4U> previousTimeValue_{};
+};
+
+// The base pass fragment stage for the prepass: every scene varying in, depth is all that matters.
+[[nodiscard]] bool CookMotionPrepassFragmentShader(const std::filesystem::path& outBin) {
+    const std::filesystem::path source = outBin.parent_path() / "fs_motion_prepass.sc";
+    {
+        std::ofstream out{ source, std::ios::binary | std::ios::trunc };
+        out << "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal\n"
+               "#include <bgfx_shader.sh>\n"
+               "void main() { gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); }\n";
+    }
+    return CookShaderSource(source, outBin, "fragment");
+}
+
+[[nodiscard]] bgfx::ProgramHandle BuildCookedProgram(const std::filesystem::path& vertex, const std::filesystem::path& fragment) {
+    return BuildProgram(ReadAllBytes(vertex), ReadAllBytes(fragment));
+}
+
+[[nodiscard]] bool VelocityNear(const std::array<float, 4U>& pixel, std::array<float, 2U> expected, float tolerance) noexcept {
+    return pixel[2] < 0.5F && std::fabs(pixel[0] - expected[0]) <= tolerance && std::fabs(pixel[1] - expected[1]) <= tolerance;
+}
+
+[[nodiscard]] std::string VelocityText(const std::array<float, 4U>& pixel) {
+    return " (got " + std::to_string(pixel[0]) + ", " + std::to_string(pixel[1]) + ", b=" + std::to_string(pixel[2]) + ")";
+}
+
+// Unreal's previous LocalToWorld: a moving car writes its own motion, not the camera's. The rigid motion vector
+// program draws each instance's previous model from the rows its draw uploaded (indexed by instance), and a
+// draw without rows has no motion of its own. The pass rasterizes with the jittered prepass camera and still
+// writes jitter-free motion.
+void RunMotionVectorPreviousModelGpuTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "motion_previous_model";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    Require(CookHarnessRendererShader("vs_mesh_instanced.sc", "vertex", cacheDir / "vs_mesh_instanced.bin") &&
+            CookMotionPrepassFragmentShader(cacheDir / "fs_motion_prepass.bin") &&
+            CookHarnessRendererShader("vs_mesh_motion_vectors_instanced.sc", "vertex", cacheDir / "vs_motion.bin") &&
+            CookHarnessRendererShader("fs_mesh_motion_vectors.sc", "fragment", cacheDir / "fs_motion.bin"),
+        "Motion vector shaders must cook");
+    MotionVectorHarness harness;
+    Require(harness.Init(), "Motion vector test requires a Direct3D11 device");
+    const bgfx::ProgramHandle prepass = BuildCookedProgram(cacheDir / "vs_mesh_instanced.bin", cacheDir / "fs_motion_prepass.bin");
+    const bgfx::ProgramHandle motion = BuildCookedProgram(cacheDir / "vs_motion.bin", cacheDir / "fs_motion.bin");
+    Require(bgfx::isValid(prepass) && bgfx::isValid(motion), "Motion vector programs must link");
+
+    const MotionCamera camera = MakeMotionCamera(MotionVectorHarness::kSize, { 0.31F, -0.27F });
+    const MotionCamera unjittered = MakeMotionCamera(MotionVectorHarness::kSize);
+    harness.SetCamera(camera, unjittered.viewProjection, unjittered.viewProjection);
+
+    // One moved instance: the car went from x = -0.5 to x = 0.5.
+    const MotionMatrix car = MotionTranslation(0.5F, 0.0F, 0.0F);
+    const MotionMatrix carBefore = MotionTranslation(-0.5F, 0.0F, 0.0F);
+    const std::array<float, 2U> carUv = MotionProjectUv(unjittered.viewProjection, 0.5F, 0.0F, 0.0F);
+    const std::array<float, 2U> carBeforeUv = MotionProjectUv(unjittered.viewProjection, -0.5F, 0.0F, 0.0F);
+    const std::array<float, 2U> carMotion{ carUv[0] - carBeforeUv[0], carUv[1] - carBeforeUv[1] };
+    const std::array<MotionDraw, 1U> carPrepass{ MotionDraw{ .program = prepass, .models = { car } } };
+    const std::array<MotionDraw, 1U> carMoving{ MotionDraw{ .program = motion, .models = { car }, .previousModels = { carBefore } } };
+    const std::array<float, 4U> moving = MotionVectorHarness::At(harness.Render(carPrepass, carMoving), carUv);
+    Require(VelocityNear(moving, carMotion, 0.0002F),
+        ("A moving instance must write its own motion from its previous model" + VelocityText(moving)).c_str());
+    const std::array<MotionDraw, 1U> carStill{ MotionDraw{ .program = motion, .models = { car } } };
+    const std::array<float, 4U> still = MotionVectorHarness::At(harness.Render(carPrepass, carStill), carUv);
+    Require(VelocityNear(still, { 0.0F, 0.0F }, 0.000001F),
+        ("An instance that did not move must write no motion under a jittered camera" + VelocityText(still)).c_str());
+
+    // Two instances of one draw read their own rows.
+    const MotionMatrix left = MotionTranslation(-2.5F, 0.0F, 0.0F);
+    const MotionMatrix right = MotionTranslation(2.5F, 0.0F, 0.0F);
+    const std::array<MotionDraw, 1U> pairPrepass{ MotionDraw{ .program = prepass, .models = { left, right } } };
+    const std::array<MotionDraw, 1U> pairMoving{ MotionDraw{ .program = motion, .models = { left, right },
+        .previousModels = { MotionTranslation(-3.0F, 0.0F, 0.0F), MotionTranslation(3.25F, 0.0F, 0.0F) } } };
+    const std::vector<float> pair = harness.Render(pairPrepass, pairMoving);
+    const auto expectedMotion = [&unjittered](float from, float to) {
+        const std::array<float, 2U> now = MotionProjectUv(unjittered.viewProjection, to, 0.0F, 0.0F);
+        const std::array<float, 2U> before = MotionProjectUv(unjittered.viewProjection, from, 0.0F, 0.0F);
+        return std::array<float, 2U>{ now[0] - before[0], now[1] - before[1] };
+    };
+    const std::array<float, 4U> leftPixel = MotionVectorHarness::At(pair, MotionProjectUv(unjittered.viewProjection, -2.5F, 0.0F, 0.0F));
+    const std::array<float, 4U> rightPixel = MotionVectorHarness::At(pair, MotionProjectUv(unjittered.viewProjection, 2.5F, 0.0F, 0.0F));
+    Require(VelocityNear(leftPixel, expectedMotion(-3.0F, -2.5F), 0.0002F) && VelocityNear(rightPixel, expectedMotion(3.25F, 2.5F), 0.0002F),
+        ("Each instance of a draw must read its own previous model" + VelocityText(leftPixel) + VelocityText(rightPixel)).c_str());
+
+    bgfx::destroy(motion);
+    bgfx::destroy(prepass);
+    harness.Shutdown();
+    std::filesystem::remove_all(cacheDir, error);
+}
+
+// Unreal renders velocity with a near-or-equal depth test against the prepass depth: a far moving surface hidden
+// behind a near one writes nothing there, at any distance (the old 0.002 depth tolerance let far surfaces
+// through in reversed Z), while it still writes where it is visible.
+void RunMotionVectorOcclusionGpuTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "motion_occlusion";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    Require(CookHarnessRendererShader("vs_mesh_instanced.sc", "vertex", cacheDir / "vs_mesh_instanced.bin") &&
+            CookMotionPrepassFragmentShader(cacheDir / "fs_motion_prepass.bin") &&
+            CookHarnessRendererShader("vs_mesh_motion_vectors_instanced.sc", "vertex", cacheDir / "vs_motion.bin") &&
+            CookHarnessRendererShader("fs_mesh_motion_vectors.sc", "fragment", cacheDir / "fs_motion.bin"),
+        "Motion vector occlusion shaders must cook");
+    MotionVectorHarness harness;
+    Require(harness.Init(), "Motion vector occlusion test requires a Direct3D11 device");
+    const bgfx::ProgramHandle prepass = BuildCookedProgram(cacheDir / "vs_mesh_instanced.bin", cacheDir / "fs_motion_prepass.bin");
+    const bgfx::ProgramHandle motion = BuildCookedProgram(cacheDir / "vs_motion.bin", cacheDir / "fs_motion.bin");
+    Require(bgfx::isValid(prepass) && bgfx::isValid(motion), "Motion vector occlusion programs must link");
+
+    const MotionCamera camera = MakeMotionCamera(MotionVectorHarness::kSize, { -0.18F, 0.41F });
+    const MotionCamera unjittered = MakeMotionCamera(MotionVectorHarness::kSize);
+    harness.SetCamera(camera, unjittered.viewProjection, unjittered.viewProjection);
+    // A wall 60 m away in front of a moving backdrop 200 m away; their reversed-Z depths are closer than the
+    // old tolerance.
+    const MotionMatrix wall = MotionTranslation(0.0F, 0.0F, 50.0F, 10.0F);
+    const MotionMatrix backdrop = MotionTranslation(0.0F, 0.0F, 190.0F, 150.0F);
+    const MotionMatrix backdropBefore = MotionTranslation(-5.0F, 0.0F, 190.0F, 150.0F);
+    const std::array<float, 4U> wallClip = MotionClip(camera.viewProjection, 0.0F, 0.0F, 50.0F);
+    const std::array<float, 4U> backdropClip = MotionClip(camera.viewProjection, 0.0F, 0.0F, 190.0F);
+    Require(std::fabs(wallClip[2] / wallClip[3] - backdropClip[2] / backdropClip[3]) < 0.002F,
+        "Occlusion test depths must lie within the old absolute tolerance to prove the depth test");
+    const std::array<MotionDraw, 2U> scenePrepass{ MotionDraw{ .program = prepass, .models = { wall } },
+        MotionDraw{ .program = prepass, .models = { backdrop } } };
+    const std::array<MotionDraw, 1U> backdropMoving{ MotionDraw{ .program = motion, .models = { backdrop }, .previousModels = { backdropBefore } } };
+    const std::vector<float> pixels = harness.Render(scenePrepass, backdropMoving);
+    const std::array<float, 4U> behindWall = MotionVectorHarness::At(pixels, { 0.5F, 0.5F });
+    Require(behindWall[2] > 0.5F,
+        ("A moving surface hidden behind a nearer one must not write its motion over it" + VelocityText(behindWall)).c_str());
+    const std::array<float, 2U> cornerUv{ 3.5F / MotionVectorHarness::kSize, 3.5F / MotionVectorHarness::kSize };
+    const std::array<float, 4U> visible = MotionVectorHarness::At(pixels, cornerUv);
+    const std::array<float, 2U> now = MotionProjectUv(unjittered.viewProjection, 0.0F, 0.0F, 190.0F);
+    const std::array<float, 2U> before = MotionProjectUv(unjittered.viewProjection, -5.0F, 0.0F, 190.0F);
+    Require(VelocityNear(visible, { now[0] - before[0], now[1] - before[1] }, 0.0002F),
+        ("The moving surface must write its motion where it is visible" + VelocityText(visible)).c_str());
+
+    bgfx::destroy(motion);
+    bgfx::destroy(prepass);
+    harness.Shutdown();
+    std::filesystem::remove_all(cacheDir, error);
+}
+
+[[nodiscard]] RenderMaterialGraphShaderArtifact CookMotionGraph(
+    const RenderMaterialGraphShaderSource& shader, const std::filesystem::path& cacheDir, std::string_view pass) {
+    RenderMaterialGraphShaderArtifactRequest request = CookRequest(cacheDir.generic_string());
+    request.pass = std::string{ pass };
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(shader, backends, request);
+    if (!cooked.Succeeded()) {
+        for (const RenderMaterialGraphDiagnostic& diagnostic : cooked.diagnostics) {
+            std::fprintf(stderr, "%s\n", diagnostic.message.c_str());
+        }
+    }
+    Require(cooked.Succeeded() && cooked.artifact.has_value(), "Motion vector graph must cook");
+    return *cooked.artifact;
+}
+
+[[nodiscard]] bgfx::ProgramHandle BuildArtifactProgram(const RenderMaterialGraphShaderArtifact& artifact) {
+    const RenderMaterialGraphShaderBinary* vertex = artifact.FindVertexBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    const RenderMaterialGraphShaderBinary* fragment = artifact.FindBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(vertex != nullptr && fragment != nullptr, "Motion vector graph artifact must carry both stages");
+    return BuildProgram(ReadAllBytes(std::filesystem::path{ vertex->binaryPath }), ReadAllBytes(std::filesystem::path{ fragment->binaryPath }));
+}
+
+[[nodiscard]] RenderMaterialGraphShaderSource CompileMotionGraph(const RenderMaterialGraphDocument& graph, std::uint64_t assetId) {
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = assetId });
+    Require(compiled.Succeeded(), "Motion vector graph must compile");
+    return compiled.shader;
+}
+
+// Unreal's velocity pass runs the material's vertex shader with the previous frame's parameters: a world
+// position offset animated by time writes the motion between the offset at the previous frame's time and at
+// this frame's, though the object itself stands still. A graph that neither moves, offsets nor clips its surface
+// draws with the rigid program and has no MotionVectors cook.
+void RunMotionVectorWorldPositionOffsetGpuTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "motion_wpo";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::Time });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::MakeVector });
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::Time, 2U, "value", RenderMaterialGraphNodeKind::MakeVector, 3U, "x"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::MakeVector, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "worldPositionOffset"));
+    const RenderMaterialGraphShaderSource shader = CompileMotionGraph(graph, 0x6E01U);
+    Require(RenderMaterialGraphDrawsOwnMotionVectors(shader.reflection),
+        "A world position offset graph must draw its own motion vectors");
+    const RenderMaterialGraphShaderSource plain = CompileMotionGraph(MakeAcceptanceColorGraph("0.2 0.3 0.4 1", "defaultLit"), 0x6E02U);
+    Require(!RenderMaterialGraphDrawsOwnMotionVectors(plain.reflection) &&
+            !RenderMaterialGraphCooksScenePass(plain.reflection, kRenderMaterialGraphMotionVectorsPass),
+        "A graph moving like its mesh must keep the rigid motion vector program");
+    RenderMaterialGraphShaderArtifactRequest refusedRequest = CookRequest((cacheDir / "plain").generic_string());
+    refusedRequest.pass = std::string{ kRenderMaterialGraphMotionVectorsPass };
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    const RenderMaterialGraphShaderArtifactResult refused = CookRenderMaterialGraphShaderArtifact(plain, backends, refusedRequest);
+    Require(!refused.Succeeded() && !refused.diagnostics.empty() &&
+            refused.diagnostics.front().message.find("MotionVectors") != std::string::npos,
+        "A MotionVectors cook of a rigid graph must be refused by name");
+
+    const RenderMaterialGraphShaderArtifact baseArtifact = CookMotionGraph(shader, cacheDir / "base", "BaseOpaque");
+    const RenderMaterialGraphShaderArtifact motionArtifact = CookMotionGraph(shader, cacheDir / "motion", kRenderMaterialGraphMotionVectorsPass);
+    Require(CookMotionPrepassFragmentShader(cacheDir / "fs_motion_prepass.bin"), "Motion vector prepass fragment shader must cook");
+
+    MotionVectorHarness harness;
+    Require(harness.Init(), "Motion vector world position offset test requires a Direct3D11 device");
+    const RenderMaterialGraphShaderBinary* baseVertex = baseArtifact.FindVertexBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(baseVertex != nullptr, "World position offset graph must cook its base vertex stage");
+    const bgfx::ProgramHandle prepass = BuildProgram(ReadAllBytes(std::filesystem::path{ baseVertex->binaryPath }),
+        ReadAllBytes(cacheDir / "fs_motion_prepass.bin"));
+    const bgfx::ProgramHandle motion = BuildArtifactProgram(motionArtifact);
+    Require(bgfx::isValid(prepass) && bgfx::isValid(motion), "World position offset motion programs must link");
+
+    const MotionCamera camera = MakeMotionCamera(MotionVectorHarness::kSize, { 0.22F, 0.13F });
+    const MotionCamera unjittered = MakeMotionCamera(MotionVectorHarness::kSize);
+    harness.SetCamera(camera, unjittered.viewProjection, unjittered.viewProjection);
+    // The offset is (time, 0, 0): at 1.5 s the surface stands 0.5 m right of where it stood at 1.0 s.
+    harness.SetTimes(1.5F, 1.0F);
+    const MotionMatrix still = MotionTranslation(0.0F, 0.0F, 0.0F);
+    const std::array<MotionDraw, 1U> prepassDraws{ MotionDraw{ .program = prepass, .models = { still } } };
+    const std::array<MotionDraw, 1U> motionDraws{ MotionDraw{ .program = motion, .models = { still } } };
+    const std::array<float, 2U> nowUv = MotionProjectUv(unjittered.viewProjection, 1.5F, 0.0F, 0.0F);
+    const std::array<float, 2U> beforeUv = MotionProjectUv(unjittered.viewProjection, 1.0F, 0.0F, 0.0F);
+    const std::array<float, 4U> animated = MotionVectorHarness::At(harness.Render(prepassDraws, motionDraws), nowUv);
+    Require(VelocityNear(animated, { nowUv[0] - beforeUv[0], nowUv[1] - beforeUv[1] }, 0.0002F),
+        ("A time-animated world position offset must write the motion between the previous and current frame" + VelocityText(animated)).c_str());
+
+    // The previous model moves the offset surface too.
+    const std::array<MotionDraw, 1U> movedDraws{ MotionDraw{ .program = motion, .models = { still },
+        .previousModels = { MotionTranslation(0.0F, -1.0F, 0.0F) } } };
+    const std::array<float, 2U> movedBeforeUv = MotionProjectUv(unjittered.viewProjection, 1.0F, -1.0F, 0.0F);
+    const std::array<float, 4U> moved = MotionVectorHarness::At(harness.Render(prepassDraws, movedDraws), nowUv);
+    Require(VelocityNear(moved, { nowUv[0] - movedBeforeUv[0], nowUv[1] - movedBeforeUv[1] }, 0.0002F),
+        ("A world position offset graph must evaluate its previous position with the previous model" + VelocityText(moved)).c_str());
+
+    bgfx::destroy(motion);
+    bgfx::destroy(prepass);
+    harness.Shutdown();
+    std::filesystem::remove_all(cacheDir, error);
+}
+
+// The visibility test of a graph's motion vectors meets the depth its base pass wrote: a Pixel Depth Offset
+// surface writes the pushed depth, so a surface standing between the pushed and the rasterized depth hides it
+// there; a Masked surface clips its motion where its base pass clipped it.
+void RunMotionVectorPixelDepthOffsetAndMaskGpuTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "motion_pdo_mask";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    // Pushed 0.5 m away from the viewer.
+    RenderMaterialGraphDocument pdoGraph = MakeDefaultRenderMaterialGraphDocument();
+    RenderMaterialGraphNode push{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantScalar };
+    push.parameter.defaultValueHint = "0.5";
+    pdoGraph.nodes.push_back(push);
+    pdoGraph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "pixelDepthOffset"));
+    const RenderMaterialGraphShaderSource pdoShader = CompileMotionGraph(pdoGraph, 0x6E03U);
+    Require(pdoShader.reflection.hasPixelDepthOffset && RenderMaterialGraphDrawsOwnMotionVectors(pdoShader.reflection),
+        "A pixel depth offset graph must draw its own motion vectors");
+    const auto maskedGraph = [](std::string_view alpha) {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        graph.blendMode = "masked";
+        RenderMaterialGraphNode opacity{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantScalar };
+        opacity.parameter.defaultValueHint = std::string{ alpha };
+        graph.nodes.push_back(opacity);
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+        return graph;
+    };
+    const RenderMaterialGraphShaderSource clippedShader = CompileMotionGraph(maskedGraph("0.1"), 0x6E04U);
+    const RenderMaterialGraphShaderSource keptShader = CompileMotionGraph(maskedGraph("0.9"), 0x6E05U);
+
+    const RenderMaterialGraphShaderArtifact pdoBase = CookMotionGraph(pdoShader, cacheDir / "pdo_base", "BaseOpaque");
+    const RenderMaterialGraphShaderArtifact pdoMotion = CookMotionGraph(pdoShader, cacheDir / "pdo_motion", kRenderMaterialGraphMotionVectorsPass);
+    const RenderMaterialGraphShaderArtifact clippedMotion = CookMotionGraph(clippedShader, cacheDir / "clipped_motion", kRenderMaterialGraphMotionVectorsPass);
+    const RenderMaterialGraphShaderArtifact keptMotion = CookMotionGraph(keptShader, cacheDir / "kept_motion", kRenderMaterialGraphMotionVectorsPass);
+    Require(CookHarnessRendererShader("vs_mesh_instanced.sc", "vertex", cacheDir / "vs_mesh_instanced.bin") &&
+            CookMotionPrepassFragmentShader(cacheDir / "fs_motion_prepass.bin"),
+        "Motion vector prepass shaders must cook");
+
+    MotionVectorHarness harness;
+    Require(harness.Init(), "Motion vector pixel depth offset test requires a Direct3D11 device");
+    const bgfx::ProgramHandle rigidPrepass = BuildCookedProgram(cacheDir / "vs_mesh_instanced.bin", cacheDir / "fs_motion_prepass.bin");
+    const RenderMaterialGraphShaderBinary* pdoFragment = pdoBase.FindBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(pdoFragment != nullptr, "Pixel depth offset graph must cook its base fragment stage");
+    const bgfx::ProgramHandle pdoPrepass = BuildProgram(ReadAllBytes(cacheDir / "vs_mesh_instanced.bin"),
+        ReadAllBytes(std::filesystem::path{ pdoFragment->binaryPath }));
+    const bgfx::ProgramHandle pdoMotionProgram = BuildArtifactProgram(pdoMotion);
+    const bgfx::ProgramHandle clippedProgram = BuildArtifactProgram(clippedMotion);
+    const bgfx::ProgramHandle keptProgram = BuildArtifactProgram(keptMotion);
+    Require(bgfx::isValid(rigidPrepass) && bgfx::isValid(pdoPrepass) && bgfx::isValid(pdoMotionProgram) &&
+            bgfx::isValid(clippedProgram) && bgfx::isValid(keptProgram),
+        "Pixel depth offset and masked motion programs must link");
+
+    const MotionCamera camera = MakeMotionCamera(MotionVectorHarness::kSize);
+    harness.SetCamera(camera, camera.viewProjection, camera.viewProjection);
+    // The offset surface stands at z = 0 (10 m away) and writes the depth of 10.5 m; a small panel at z = 0.25
+    // lies between them and is what the prepass keeps at the centre.
+    const MotionMatrix surface = MotionTranslation(0.0F, 0.0F, 0.0F, 3.0F);
+    const MotionMatrix surfaceBefore = MotionTranslation(0.4F, 0.0F, 0.0F, 3.0F);
+    const MotionMatrix panel = MotionTranslation(0.0F, 0.0F, 0.25F, 0.5F);
+    const std::array<MotionDraw, 2U> prepassDraws{ MotionDraw{ .program = pdoPrepass, .models = { surface } },
+        MotionDraw{ .program = rigidPrepass, .models = { panel } } };
+    const std::array<MotionDraw, 1U> pdoMoving{ MotionDraw{ .program = pdoMotionProgram, .models = { surface }, .previousModels = { surfaceBefore } } };
+    const std::vector<float> pdoPixels = harness.Render(prepassDraws, pdoMoving);
+    const std::array<float, 4U> overPanel = MotionVectorHarness::At(pdoPixels, { 0.5F, 0.5F });
+    Require(overPanel[2] > 0.5F,
+        ("A pixel depth offset surface must test the depth it wrote: the panel in front of it hides its motion" + VelocityText(overPanel)).c_str());
+    const std::array<float, 2U> besideUv = MotionProjectUv(camera.viewProjection, 2.0F, 0.0F, 0.0F);
+    const std::array<float, 2U> besideBeforeUv = MotionProjectUv(camera.viewProjection, 2.4F, 0.0F, 0.0F);
+    const std::array<float, 4U> beside = MotionVectorHarness::At(pdoPixels, besideUv);
+    Require(VelocityNear(beside, { besideUv[0] - besideBeforeUv[0], besideUv[1] - besideBeforeUv[1] }, 0.0002F),
+        ("A pixel depth offset surface must write its motion where its pushed depth is the visible one" + VelocityText(beside)).c_str());
+
+    // The masked surfaces are not in the prepass: what is behind them is the cleared far plane.
+    const std::array<MotionDraw, 0U> emptyPrepass{};
+    const MotionMatrix masked = MotionTranslation(0.0F, 0.0F, 0.0F);
+    const std::array<MotionDraw, 1U> clippedDraws{ MotionDraw{ .program = clippedProgram, .models = { masked },
+        .previousModels = { MotionTranslation(0.3F, 0.0F, 0.0F) } } };
+    const std::array<float, 4U> clipped = MotionVectorHarness::At(harness.Render(emptyPrepass, clippedDraws), { 0.5F, 0.5F });
+    Require(clipped[2] > 0.5F, ("A Masked surface must clip its motion where its opacity mask clips it" + VelocityText(clipped)).c_str());
+    const std::array<MotionDraw, 1U> keptDraws{ MotionDraw{ .program = keptProgram, .models = { masked },
+        .previousModels = { MotionTranslation(0.3F, 0.0F, 0.0F) } } };
+    const std::array<float, 4U> kept = MotionVectorHarness::At(harness.Render(emptyPrepass, keptDraws), { 0.5F, 0.5F });
+    Require(kept[2] < 0.5F && kept[0] < 0.0F, ("A Masked surface must write its motion where it is kept" + VelocityText(kept)).c_str());
+
+    bgfx::destroy(keptProgram);
+    bgfx::destroy(clippedProgram);
+    bgfx::destroy(pdoMotionProgram);
+    bgfx::destroy(pdoPrepass);
+    bgfx::destroy(rigidPrepass);
+    harness.Shutdown();
+    std::filesystem::remove_all(cacheDir, error);
+}
+
+// A fullscreen pass of the production post shaders into one RGBA16F target on a real device.
+class FullscreenFloatHarness {
+public:
+    static constexpr std::uint16_t kSize = 64U;
+
+    [[nodiscard]] bool Init() {
+#if defined(_WIN32)
+        window_ = CreateWindowExW(0, L"STATIC", L"post", WS_OVERLAPPEDWINDOW, 0, 0, kSize, kSize, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+#endif
+        bgfx::Init init;
+        init.type = bgfx::RendererType::Direct3D11;
+        init.resolution.width = kSize;
+        init.resolution.height = kSize;
+        init.resolution.reset = BGFX_RESET_NONE;
+#if defined(_WIN32)
+        init.platformData.nwh = window_;
+#endif
+        if (!bgfx::init(init)) {
+            return false;
+        }
+        layout_.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float).end();
+        const std::array<float, 15U> triangle{ -1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 3.0F, 1.0F, 0.0F, 2.0F, 0.0F, -1.0F, -3.0F, 0.0F, 0.0F, 2.0F };
+        vertexBuffer_ = bgfx::createVertexBuffer(bgfx::copy(triangle.data(), sizeof(triangle)), layout_);
+        target_ = bgfx::createTexture2D(kSize, kSize, false, 1U, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_RT);
+        frameBuffer_ = bgfx::createFrameBuffer(1U, &target_, false);
+        readback_ = bgfx::createTexture2D(kSize, kSize, false, 1U, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+        bgfx::frame();
+        bgfx::frame();
+        return bgfx::isValid(vertexBuffer_) && bgfx::isValid(frameBuffer_) && bgfx::isValid(readback_);
+    }
+
+    // An RGBA16F texture holding `texels` (RGBA, row by row from the top).
+    [[nodiscard]] static bgfx::TextureHandle CreateTexture(const std::vector<float>& texels) {
+        std::vector<std::uint16_t> halves(texels.size());
+        std::transform(texels.begin(), texels.end(), halves.begin(), [](float value) { return bx::halfFromFloat(value); });
+        return bgfx::createTexture2D(kSize, kSize, false, 1U, bgfx::TextureFormat::RGBA16F,
+            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, bgfx::copy(halves.data(), static_cast<std::uint32_t>(halves.size() * sizeof(std::uint16_t))));
+    }
+
+    [[nodiscard]] bgfx::FrameBufferHandle FrameBuffer() const noexcept { return frameBuffer_; }
+
+    // Draws `program` (the caller has bound its textures and uniforms) or, with `submit` false, only reads back
+    // what a pass the caller submitted to view 0 wrote.
+    [[nodiscard]] std::vector<float> Render(bgfx::ProgramHandle program, bool submit = true) {
+        if (submit) {
+            bgfx::setViewFrameBuffer(0U, frameBuffer_);
+            bgfx::setViewRect(0U, 0U, 0U, kSize, kSize);
+            bgfx::setViewClear(0U, BGFX_CLEAR_COLOR, 0x000000FFU);
+            bgfx::setVertexBuffer(0U, vertexBuffer_);
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+            bgfx::submit(0U, program);
+        }
+        bgfx::frame();
+        bgfx::blit(1U, readback_, 0U, 0U, target_, 0U, 0U, kSize, kSize);
+        std::vector<float> pixels(static_cast<std::size_t>(kSize) * kSize * 4U, 0.0F);
+        const std::uint32_t readyFrame = bgfx::readTexture(readback_, pixels.data());
+        std::uint32_t frame = bgfx::frame();
+        for (int guard = 0; frame < readyFrame && guard < 8; ++guard) {
+            frame = bgfx::frame();
+        }
+        Require(frame >= readyFrame, "Fullscreen readback did not become ready");
+        return pixels;
+    }
+
+    [[nodiscard]] static std::array<float, 4U> At(const std::vector<float>& pixels, std::uint32_t x, std::uint32_t y) {
+        const std::size_t index = (static_cast<std::size_t>(y) * kSize + x) * 4U;
+        return { pixels[index], pixels[index + 1U], pixels[index + 2U], pixels[index + 3U] };
+    }
+
+    void Shutdown() {
+        bgfx::destroy(readback_);
+        bgfx::destroy(frameBuffer_);
+        bgfx::destroy(target_);
+        bgfx::destroy(vertexBuffer_);
+        bgfx::shutdown();
+#if defined(_WIN32)
+        if (window_ != nullptr) { DestroyWindow(window_); window_ = nullptr; }
+#endif
+    }
+
+private:
+#if defined(_WIN32)
+    HWND window_ = nullptr;
+#endif
+    bgfx::VertexLayout layout_{};
+    bgfx::VertexBufferHandle vertexBuffer_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle target_ = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle frameBuffer_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle readback_ = BGFX_INVALID_HANDLE;
+};
+
+// FSR2's auto-reactive mask / Unreal's Responsive AA: the scene colour alpha is the share of the opaque surface
+// still visible through translucency, and the TAA resolve trusts the history only by it. A pixel a translucent
+// layer fully covers resolves to the current frame; an opaque pixel keeps blending its history.
+void RunTemporalResolveReactiveAlphaGpuTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "taa_reactive";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    Require(CookHarnessRendererShader("vs_present.sc", "vertex", cacheDir / "vs_present.bin") &&
+            CookHarnessRendererShader("fs_post_taa_resolve.sc", "fragment", cacheDir / "fs_taa.bin"),
+        "TAA resolve shaders must cook");
+    FullscreenFloatHarness harness;
+    Require(harness.Init(), "TAA reactive test requires a Direct3D11 device");
+    const bgfx::ProgramHandle program = BuildCookedProgram(cacheDir / "vs_present.bin", cacheDir / "fs_taa.bin");
+    const bgfx::UniformHandle source = bgfx::createUniform("s_source", bgfx::UniformType::Sampler);
+    const bgfx::UniformHandle history = bgfx::createUniform("s_history", bgfx::UniformType::Sampler);
+    const bgfx::UniformHandle velocity = bgfx::createUniform("s_velocity", bgfx::UniformType::Sampler);
+    const bgfx::UniformHandle params = bgfx::createUniform("u_temporalParams", bgfx::UniformType::Vec4);
+    Require(bgfx::isValid(program), "TAA resolve program must link");
+
+    // A checkerboard of 0 and 1 (its neighbourhood clamp keeps a 0.5 history), the history 0.5, no motion.
+    constexpr std::size_t kTexels = static_cast<std::size_t>(FullscreenFloatHarness::kSize) * FullscreenFloatHarness::kSize;
+    const auto sceneColor = [](float visibleShare) {
+        std::vector<float> texels(kTexels * 4U);
+        for (std::size_t index = 0U; index < kTexels; ++index) {
+            const std::size_t x = index % FullscreenFloatHarness::kSize;
+            const std::size_t y = index / FullscreenFloatHarness::kSize;
+            const float value = ((x + y) % 2U) == 0U ? 1.0F : 0.0F;
+            texels[index * 4U + 0U] = value;
+            texels[index * 4U + 1U] = value;
+            texels[index * 4U + 2U] = value;
+            texels[index * 4U + 3U] = visibleShare;
+        }
+        return texels;
+    };
+    std::vector<float> historyTexels(kTexels * 4U, 0.5F);
+    const bgfx::TextureHandle historyTexture = FullscreenFloatHarness::CreateTexture(historyTexels);
+    const bgfx::TextureHandle velocityTexture = FullscreenFloatHarness::CreateTexture(std::vector<float>(kTexels * 4U, 0.0F));
+    const auto resolve = [&](float visibleShare) {
+        const bgfx::TextureHandle current = FullscreenFloatHarness::CreateTexture(sceneColor(visibleShare));
+        const float temporalParams[4]{ 0.9F, 1.0F, 1.0F / FullscreenFloatHarness::kSize, 1.0F / FullscreenFloatHarness::kSize };
+        bgfx::setUniform(params, temporalParams);
+        bgfx::setTexture(0U, source, current);
+        bgfx::setTexture(1U, history, historyTexture);
+        bgfx::setTexture(2U, velocity, velocityTexture);
+        const std::vector<float> pixels = harness.Render(program);
+        bgfx::destroy(current);
+        return FullscreenFloatHarness::At(pixels, 32U, 32U);
+    };
+    const std::array<float, 4U> opaque = resolve(1.0F);
+    const std::array<float, 4U> covered = resolve(0.0F);
+    Require(opaque[0] < 0.9F,
+        ("An opaque pixel must keep blending its reprojected history (got " + std::to_string(opaque[0]) + ")").c_str());
+    Require(std::fabs(covered[0] - 1.0F) < 0.001F,
+        ("A pixel a translucent layer fully covers must resolve to the current frame, not ghost its history (got " +
+            std::to_string(covered[0]) + ")").c_str());
+    const std::array<float, 4U> half = resolve(0.5F);
+    Require(half[0] > opaque[0] + 0.01F && half[0] < covered[0] - 0.01F,
+        "A half covered pixel must trust its history in between");
+
+    bgfx::destroy(velocityTexture);
+    bgfx::destroy(historyTexture);
+    bgfx::destroy(params);
+    bgfx::destroy(velocity);
+    bgfx::destroy(history);
+    bgfx::destroy(source);
+    bgfx::destroy(program);
+    harness.Shutdown();
+    std::filesystem::remove_all(cacheDir, error);
+}
+
+// The translucent blend states keep the scene colour alpha as the share of the opaque surface still visible:
+// an alpha-blended layer of opacity 0.5 over an opaque background leaves 0.5 of it, a Modulate layer leaves all.
+void RunTranslucentBlendVisibleShareGpuTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "translucent_visible_share";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "Visible share test vertex shader must cook");
+    const RenderMaterialGraphShaderSource shader = CompileMotionGraph(MakeAcceptanceColorGraph("0 0 1 0.5", "unlit", "translucent"), 0x6E06U);
+    const RenderMaterialGraphShaderArtifact artifact = CookMotionGraph(shader, cacheDir, "BaseTransparent");
+    ForwardRenderHarness harness;
+    Require(harness.Init(), "Visible share test requires a Direct3D11 device");
+    const bgfx::ProgramHandle program = BuildGraphProgram(ReadAllBytes(vsBin), artifact);
+    Require(bgfx::isValid(program), "Visible share test program must link");
+    const auto visibleShare = [&](RenderMaterialTranslucencyBlend blend) {
+        RenderMaterialResource material{};
+        material.alphaMode = RenderMaterialAlphaMode::Blend;
+        material.translucencyBlend = blend;
+        const std::uint64_t blendState = MeshPipelinePassPolicy::State(MeshPassType::BaseTransparent, nullptr, &material) &
+            BGFX_STATE_BLEND_MASK;
+        return ForwardRenderHarness::ProbeAt(harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
+            0.0F, 0.0F, 0.0F, UINT32_MAX, 0xFF0000FFU, blendState), 32U, 32U).a;
+    };
+    const std::uint8_t alphaBlended = visibleShare(RenderMaterialTranslucencyBlend::Alpha);
+    const std::uint8_t modulated = visibleShare(RenderMaterialTranslucencyBlend::Modulate);
+    Require(alphaBlended >= 126U && alphaBlended <= 129U,
+        ("An alpha-blended layer of opacity 0.5 must leave half the surface visible (got " + std::to_string(alphaBlended) + ")").c_str());
+    Require(modulated == 255U, ("A Modulate layer must leave the surface fully visible (got " + std::to_string(modulated) + ")").c_str());
+    bgfx::destroy(program);
+    harness.Shutdown();
+    std::filesystem::remove_all(cacheDir, error);
+}
+
+// Unreal runs FXAA after the tonemapper: it finds and blends edges in the display image. Across a 64:0 HDR edge
+// the display values are about 1 and 0, so FXAA leaves an edge pixel in between; blending the HDR values
+// before the tonemap would leave it saturated at the bright side.
+void RunFxaaAfterTonemapGpuTest() {
+    FullscreenFloatHarness harness;
+    Require(harness.Init(), "FXAA test requires a Direct3D11 device");
+    FullscreenTexturePass display;
+    Require(display.Initialize(), "FXAA test could not load the display composite shaders");
+    constexpr std::size_t kTexels = static_cast<std::size_t>(FullscreenFloatHarness::kSize) * FullscreenFloatHarness::kSize;
+    std::vector<float> texels(kTexels * 4U, 1.0F);
+    for (std::size_t index = 0U; index < kTexels; ++index) {
+        const std::size_t x = index % FullscreenFloatHarness::kSize;
+        const std::size_t y = index / FullscreenFloatHarness::kSize;
+        const float value = x > y ? 64.0F : 0.0F;
+        texels[index * 4U + 0U] = value;
+        texels[index * 4U + 1U] = value;
+        texels[index * 4U + 2U] = value;
+    }
+    const bgfx::TextureHandle hdr = FullscreenFloatHarness::CreateTexture(texels);
+    const auto present = [&](bool antiAliasing) {
+        Require(display.Submit(FullscreenTexturePassDesc{
+            .viewId = 0U,
+            .sourceTexture = hdr,
+            .frameBuffer = harness.FrameBuffer(),
+            .extent = RenderExtent{ FullscreenFloatHarness::kSize, FullscreenFloatHarness::kSize },
+            .outputTransform = FullscreenTextureOutputTransform{ .tonemap = FullscreenTextureTonemapOperator::Aces },
+            .antiAliasing = antiAliasing,
+            .sourceExtent = RenderExtent{ FullscreenFloatHarness::kSize, FullscreenFloatHarness::kSize },
+        }), "FXAA test display composite must submit");
+        return harness.Render(BGFX_INVALID_HANDLE, false);
+    };
+    const std::vector<float> aliased = present(false);
+    const std::vector<float> filtered = present(true);
+    // (32, 32) is the dark side of the staircase edge, (33, 32) its bright side. Blended in display values
+    // the dark edge pixel lifts to about 0.2; blended in HDR before the tonemap it would saturate near 1.
+    const std::array<float, 4U> darkAliased = FullscreenFloatHarness::At(aliased, 32U, 32U);
+    const std::array<float, 4U> brightAliased = FullscreenFloatHarness::At(aliased, 33U, 32U);
+    const std::array<float, 4U> darkFiltered = FullscreenFloatHarness::At(filtered, 32U, 32U);
+    const std::array<float, 4U> bright = FullscreenFloatHarness::At(filtered, 60U, 4U);
+    const std::array<float, 4U> dark = FullscreenFloatHarness::At(filtered, 4U, 60U);
+    Require(darkAliased[0] < 0.01F && brightAliased[0] > 0.95F, "Without FXAA the edge must stay a hard display 0/1 step");
+    Require(darkFiltered[0] > 0.1F && darkFiltered[0] < 0.5F,
+        ("FXAA after the tonemap must blend the edge in display values (got " + std::to_string(darkFiltered[0]) + ")").c_str());
+    Require(bright[0] > 0.95F && dark[0] < 0.01F, "FXAA must leave flat display regions unchanged");
+    bgfx::destroy(hdr);
+    display.Shutdown();
+    harness.Shutdown();
+}
 #endif
 
 } // namespace
@@ -5262,6 +6106,13 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphNoiseRendersTest();
     RunForwardGraphSobolRendersTest();
     RunForwardGraphMaterialParameterCollectionRendersTest();
+    RunMotionVectorPreviousModelGpuTest();
+    RunMotionVectorOcclusionGpuTest();
+    RunMotionVectorWorldPositionOffsetGpuTest();
+    RunMotionVectorPixelDepthOffsetAndMaskGpuTest();
+    RunTemporalResolveReactiveAlphaGpuTest();
+    RunTranslucentBlendVisibleShareGpuTest();
+    RunFxaaAfterTonemapGpuTest();
 #endif
 }
 
@@ -5320,6 +6171,7 @@ void RunPrebuiltSkinnedShadersOnVulkanAndOpenGlTest() {
         const bgfx::UniformHandle previousPaletteSampler = bgfx::createUniform("s_previousSkinningPalette", bgfx::UniformType::Sampler);
         const bgfx::UniformHandle previousPaletteInfo = bgfx::createUniform("u_previousSkinningPaletteInfo", bgfx::UniformType::Vec4);
         const bgfx::UniformHandle previousViewProjection = bgfx::createUniform("u_motionPreviousViewProjection", bgfx::UniformType::Mat4);
+        const bgfx::UniformHandle currentViewProjection = bgfx::createUniform("u_motionCurrentViewProjection", bgfx::UniformType::Mat4);
         const bgfx::UniformHandle shadowViewProjection = bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
         for (const auto& [name, vertexBinaryName, fragmentSource, motionVectors] : variants) {
             const std::vector<std::uint8_t> vertexBytes = ReadAllBytes(prebuilt / backend.profileDirectory / vertexBinaryName);
@@ -5336,7 +6188,7 @@ void RunPrebuiltSkinnedShadersOnVulkanAndOpenGlTest() {
                 (std::string{ "prebuilt skinned shader did not link on " } + bgfx::getRendererName(backend.renderer) + ": " + name).c_str());
             const ForwardRenderProbe pixel = harness.RenderSkinnedProbe(program,
                 paletteSampler, paletteInfo, previousPaletteSampler, previousPaletteInfo,
-                previousViewProjection, shadowViewProjection, motionVectors);
+                previousViewProjection, currentViewProjection, shadowViewProjection, motionVectors);
             // The palette halves x: at the probe pixel the deformed position (and, against the
             // identity previous palette, the velocity) encodes to red 62 of 255. The static
             // motion vector stage does not skin, so its velocity is zero: red 128. An undrawn
@@ -5354,6 +6206,7 @@ void RunPrebuiltSkinnedShadersOnVulkanAndOpenGlTest() {
             bgfx::destroy(program);
         }
         bgfx::destroy(shadowViewProjection);
+        bgfx::destroy(currentViewProjection);
         bgfx::destroy(previousViewProjection);
         bgfx::destroy(previousPaletteInfo);
         bgfx::destroy(previousPaletteSampler);

@@ -91,6 +91,62 @@ void EmitProgramUnavailableDiagnostic(
     });
 }
 
+void EmitMotionVectorDiagnostic(
+    SceneRenderDiagnostics* diagnostics,
+    SceneRenderDiagnosticKind kind,
+    SceneRenderDiagnosticSeverity severity,
+    const MeshDrawCommand& command,
+    std::uint32_t instanceCount) {
+    if (diagnostics == nullptr) {
+        return;
+    }
+    diagnostics->events.push_back(SceneRenderDiagnosticEvent{
+        .severity = severity,
+        .kind = kind,
+        .entityId = command.instances.empty() ? 0U : command.instances.front().entityId,
+        .meshAssetId = command.meshAssetId,
+        .materialAssetId = command.materialAssetId,
+        .instanceCount = instanceCount,
+    });
+}
+
+enum class MotionPreviousModelUpload : std::uint8_t {
+    // No instance of the draw moved this motion frame: every previous model is the current one.
+    Unmoved,
+    Uploaded,
+    // The rows for the previous models could not be allocated or written.
+    Unavailable,
+};
+
+// Unreal's previous LocalToWorld per primitive: the previous models of a draw whose instances moved this frame,
+// one row per submitted instance in instance order (the vertex stage indexes them by gl_InstanceID).
+[[nodiscard]] MotionPreviousModelUpload UploadMotionPreviousModels(
+    const SceneMotionVectorFrame& motion,
+    std::span<const SceneRenderMeshInstance> instances,
+    RenderSkinningPaletteHandle& handle) {
+    const bool moved = std::ranges::any_of(instances, [&motion](const SceneRenderMeshInstance& instance) {
+        return SceneRenderPreviousModel(instance, motion.motionFrame) != instance.model;
+    });
+    if (!moved) {
+        return MotionPreviousModelUpload::Unmoved;
+    }
+    if (motion.previousModels == nullptr) {
+        return MotionPreviousModelUpload::Unavailable;
+    }
+    handle = motion.previousModels->Allocate(static_cast<std::uint32_t>(instances.size()));
+    if (!handle.IsValid()) {
+        return MotionPreviousModelUpload::Unavailable;
+    }
+    std::vector<RenderSkinningMatrix> rows;
+    rows.reserve(instances.size());
+    for (const SceneRenderMeshInstance& instance : instances) {
+        rows.push_back(SceneRenderPreviousModel(instance, motion.motionFrame));
+    }
+    return motion.previousModels->Upload(handle, rows)
+        ? MotionPreviousModelUpload::Uploaded
+        : MotionPreviousModelUpload::Unavailable;
+}
+
 [[nodiscard]] bool IsSelectionPass(MeshPassType pass) noexcept {
     return pass == MeshPassType::SelectionId || pass == MeshPassType::EditorSelection;
 }
@@ -218,6 +274,26 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             EmitGroupDiagnostics(desc.diagnostics, SceneRenderDiagnosticKind::DroppedInstances, SceneRenderDiagnosticSeverity::Warning, command, 0U, instanceCount);
             continue;
         }
+        RenderSkinningPaletteHandle motionPreviousModels{};
+        if (desc.pass == MeshPassType::MotionVectors) {
+            if (gpuInstances) {
+                // Instances simulated on the GPU keep no previous transforms, so their own motion cannot be
+                // written; their pixels keep the camera motion of the full-screen pass.
+                EmitMotionVectorDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::MotionVectorGpuInstancesUnsupported,
+                    SceneRenderDiagnosticSeverity::Warning, command, submittedInstances);
+                continue;
+            }
+            const MotionPreviousModelUpload upload = desc.motionVectors == nullptr
+                ? MotionPreviousModelUpload::Unavailable
+                : UploadMotionPreviousModels(*desc.motionVectors,
+                    std::span<const SceneRenderMeshInstance>(command.instances.data(), submittedInstances), motionPreviousModels);
+            if (upload == MotionPreviousModelUpload::Unavailable) {
+                EmitMotionVectorDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::MotionVectorPreviousModelsUnavailable,
+                    SceneRenderDiagnosticSeverity::Error, command, submittedInstances);
+                continue;
+            }
+            desc.stats.motionVectorMovedInstanceCount += upload == MotionPreviousModelUpload::Uploaded ? submittedInstances : 0U;
+        }
         if (submittedInstances < instanceCount) {
             if (meshDrawDebugLogEnabled) {
                 std::ostringstream message;
@@ -271,7 +347,8 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             .shadowMap = desc.shadowMap,
             .sceneDepthTexture = desc.sceneDepthTexture,
             .sceneColorTexture = desc.sceneColorTexture,
-            .motionVectorPreviousViewProjection = desc.motionVectorPreviousViewProjection,
+            .motionVectors = desc.motionVectors,
+            .motionPreviousModels = motionPreviousModels,
             .skinningPaletteAllocator = desc.skinningPaletteAllocator,
             .renderOriginOffset = desc.renderOriginOffset,
         });

@@ -237,6 +237,8 @@ void main()
         }
     }
     vec3 emissive = texture2D(s_emissive, materialUv).rgb * u_materialEmissive.rgb * u_materialEmissive.a;
-    float outputAlpha = (u_materialFlags.x < 0.5 ? 1.0 : albedo.a) * terrainLayerOpacity;
+    // Opaque and masked surfaces cover what is behind them (the scene colour alpha is 1, SceneColorAlphaPolicy);
+    // only a blended material has an opacity. A terrain layer blends by its weight.
+    float outputAlpha = (u_materialFlags.x < 1.5 ? 1.0 : albedo.a) * terrainLayerOpacity;
     gl_FragColor = vec4(lighting + emissive, outputAlpha);
 }

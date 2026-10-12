@@ -196,6 +196,7 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
         shader.reflection.hasWorldPositionOffset ||
         shader.reflection.hasCustomizedUv0 ||
         shader.reflection.hasDisplacement;
+    binding.drawsOwnMotionVectors = RenderMaterialGraphDrawsOwnMotionVectors(shader.reflection);
     binding.usesSceneDepth = shader.reflection.usesSceneDepth;
     binding.usesSceneColor = shader.reflection.usesSceneColor;
     binding.writesShadingModelColor = shader.reflection.writesShadingModelColor;

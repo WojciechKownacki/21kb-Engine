@@ -46,8 +46,9 @@ namespace {
     if (!config.passes.empty()) {
         return config.passes;
     }
-    // BaseOpaque (GPU forward), GBuffer (deferred MRT), ShadowDepth (graph alpha clip) and
-    // BaseTransparent (active alpha-blended submit pass) all have a live runtime consumer.
+    // BaseOpaque (GPU forward), GBuffer (deferred MRT), ShadowDepth (graph alpha clip),
+    // BaseTransparent (active alpha-blended submit pass) and MotionVectors (graphs that move, offset the
+    // depth of or clip their surface) all have a live runtime consumer.
     return { kb::render::kRenderMaterialGraphScenePasses.begin(), kb::render::kRenderMaterialGraphScenePasses.end() };
 }
 
@@ -215,6 +216,9 @@ void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, Edito
     bool anyFailure = false;
     bool allCacheHit = true;
     for (const std::string& pass : EffectivePasses(config)) {
+        if (!kb::render::RenderMaterialGraphCooksScenePass(compiled.shader.reflection, pass)) {
+            continue;
+        }
         kb::render::RenderMaterialGraphShaderArtifactRequest request{};
         request.shadercPath = config.shadercPath;
         request.varyingDefPath = config.varyingDefPath;

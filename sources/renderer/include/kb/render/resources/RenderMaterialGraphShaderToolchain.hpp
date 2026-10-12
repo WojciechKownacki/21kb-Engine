@@ -22,9 +22,11 @@ struct RenderMaterialGraphShaderToolchain {
     [[nodiscard]] bool Available() const noexcept { return !shadercPath.empty() && !varyingDefPath.empty(); }
 };
 
-// The passes a scene uses a graph material in; a scene cook produces each of them.
-inline constexpr std::array<std::string_view, 4U> kRenderMaterialGraphScenePasses{
-    "BaseOpaque", "GBuffer", "ShadowDepth", "BaseTransparent",
+// The passes a scene uses a graph material in; a scene cook produces each of them the graph draws with its
+// own program (RenderMaterialGraphCooksScenePass: MotionVectors only for graphs that move, offset the depth
+// of or clip their surface).
+inline constexpr std::array<std::string_view, 5U> kRenderMaterialGraphScenePasses{
+    "BaseOpaque", "GBuffer", "ShadowDepth", "BaseTransparent", kRenderMaterialGraphMotionVectorsPass,
 };
 
 // Resolves the toolchain: the KB_GRAPH_SHADERC environment variable, then `builtIn` (paths a build
