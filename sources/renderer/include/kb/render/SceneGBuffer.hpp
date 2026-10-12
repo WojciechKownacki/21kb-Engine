@@ -47,6 +47,12 @@ public:
     [[nodiscard]] bgfx::TextureHandle MaterialTexture() const noexcept;
     [[nodiscard]] bgfx::TextureHandle SurfaceTexture() const noexcept;
     [[nodiscard]] bgfx::TextureHandle DepthTexture() const noexcept;
+    // Unreal's custom data (Subsurface Color / Fuzz Color): a fifth RGBA8 target and the
+    // framebuffer that carries it, created with the first frame drawing a material that writes it
+    // and used only by such frames. False when it cannot be created.
+    [[nodiscard]] bool EnsureCustomData();
+    [[nodiscard]] bgfx::FrameBufferHandle CustomDataFrameBuffer() const noexcept;
+    [[nodiscard]] bgfx::TextureHandle CustomDataTexture() const noexcept;
     [[nodiscard]] RenderExtent Extent() const noexcept;
     [[nodiscard]] std::uint32_t Width() const noexcept;
     [[nodiscard]] std::uint32_t Height() const noexcept;
@@ -65,6 +71,8 @@ private:
     bgfx::TextureHandle surfaceTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle depthTexture_ = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle frameBuffer_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle customDataTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle customDataFrameBuffer_ = BGFX_INVALID_HANDLE;
     SceneGBufferFormatSelection selection_{};
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;

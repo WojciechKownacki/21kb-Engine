@@ -1512,6 +1512,22 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         const SceneRenderPassSubmitStats* gbufferPassStats = lastScenePassSubmitStats_.empty()
             ? nullptr
             : &lastScenePassSubmitStats_.back();
+        // Unreal's custom data (Subsurface Color / Fuzz Color) only in frames drawing a material that
+        // writes it: the G-buffer view then renders into the framebuffer with the fifth target.
+        bgfx::TextureHandle customDataTexture = BGFX_INVALID_HANDLE;
+        if (gbufferPassStats != nullptr && gbufferPassStats->stats.shadingModelColorDrawCallCount > 0U) {
+            if (sceneGBuffer.EnsureCustomData()) {
+                bgfx::setViewFrameBuffer(viewportPlan.viewIds.gbufferGeometry, sceneGBuffer.CustomDataFrameBuffer());
+                customDataTexture = sceneGBuffer.CustomDataTexture();
+            } else {
+                lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+                    .severity = SceneRenderDiagnosticSeverity::Error,
+                    .kind = SceneRenderDiagnosticKind::DeferredRendererUnavailable,
+                    .instanceCount = gbufferPassStats->stats.shadingModelColorDrawCallCount,
+                });
+                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport GBuffer custom data target unavailable");
+            }
+        }
         if (gbufferPassStats != nullptr) {
             const SceneRenderSubmitStats& stats = gbufferPassStats->stats;
             if (RendererDebugLogEnabled("renderer")) {
@@ -1567,6 +1583,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 .worldBackdrop = worldBackdrop.has_value() ? &*worldBackdrop : nullptr,
                 .worldBackdropEnvironment = worldBackdropEnvironment,
                 .gi = giEnabled ? &giBinding : nullptr,
+                .customData = customDataTexture,
             }, deferredStats)) {
             lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
                 .severity = SceneRenderDiagnosticSeverity::Error,

@@ -170,6 +170,7 @@ std::uint64_t RenderMaterialGraphPipelineStateKey(const RenderMaterialGraphShade
     HashBool(hash, shader.reflection.hasTangentOutput);
     HashBool(hash, shader.reflection.hasPixelDepthOffset);
     HashBool(hash, shader.reflection.hasRefraction);
+    HashBool(hash, shader.reflection.writesShadingModelColor);
     HashBool(hash, shader.reflection.usesSceneDepth);
     HashBool(hash, shader.reflection.usesSceneColor);
     HashU32(hash, static_cast<std::uint32_t>(shader.reflection.textures.size()));
@@ -197,6 +198,7 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
         shader.reflection.hasDisplacement;
     binding.usesSceneDepth = shader.reflection.usesSceneDepth;
     binding.usesSceneColor = shader.reflection.usesSceneColor;
+    binding.writesShadingModelColor = shader.reflection.writesShadingModelColor;
 
     // MAT-38/#25d: resolve the scene render state from the graph blend mode so the scene submits a
     // translucent graph material in the transparent pass with the matching blend equation.

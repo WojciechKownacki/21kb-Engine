@@ -1424,6 +1424,8 @@ text "materialEditor.pin.waterScattering" "Συντελεστές σκέδαση
 text "materialEditor.pin.waterAbsorption" "Συντελεστές απορρόφησης"
 text "materialEditor.pin.waterPhaseG" "Φάση G"
 text "materialEditor.pin.waterColorScaleBehind" "Κλίμακα χρώματος πίσω από το νερό"
+text "materialEditor.pin.subsurfaceColor" "Χρώμα υποεπιφάνειας"
+text "materialEditor.pin.fuzzColor" "Χρώμα χνουδιού"
 text "materialEditor.pin.roughness" "Τραχύτητα"
 text "materialEditor.pin.scalar" "Βαθμωτό"
 text "materialEditor.pin.seed" "Σπόρος"

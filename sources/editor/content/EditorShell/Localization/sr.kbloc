@@ -1424,6 +1424,8 @@ text "materialEditor.pin.waterScattering" "Коефицијенти расеја
 text "materialEditor.pin.waterAbsorption" "Коефицијенти апсорпције"
 text "materialEditor.pin.waterPhaseG" "Фаза G"
 text "materialEditor.pin.waterColorScaleBehind" "Скала боје иза воде"
+text "materialEditor.pin.subsurfaceColor" "Боја потповршинског расејања"
+text "materialEditor.pin.fuzzColor" "Боја длачица"
 text "materialEditor.pin.roughness" "Храпавост"
 text "materialEditor.pin.scalar" "Скалар"
 text "materialEditor.pin.seed" "Почетна вредност"

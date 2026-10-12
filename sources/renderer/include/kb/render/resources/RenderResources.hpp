@@ -433,6 +433,8 @@ struct RenderMaterialGraphProgramBinding {
     // to the graph fragment shader in the transparent pass.
     bool usesSceneDepth = false;
     bool usesSceneColor = false;
+    // The G-buffer program writes the model colour (fifth target, SceneGBuffer::CustomDataTexture).
+    bool writesShadingModelColor = false;
 };
 
 struct RenderMaterialResource {

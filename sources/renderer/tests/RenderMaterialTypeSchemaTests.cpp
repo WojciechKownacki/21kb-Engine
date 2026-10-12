@@ -4631,6 +4631,30 @@ void RunMaterialShadingModelGatingTest() {
             "KBMAT-MAT37: thin translucent / water must compose the scene behind in its own branch");
     }
 
+    // Unreal's Subsurface Color / Fuzz Color: the model's scattering colour from the graph, written to the
+    // G-buffer's fifth target and lit with directly in the forward pass; other models ignore the pins.
+    for (const auto& [model, pin, field] : std::initializer_list<std::tuple<const char*, const char*, const char*>>{
+             { "subsurface", "subsurfaceColor", "surface.subsurfaceColor" }, { "cloth", "fuzzColor", "surface.fuzzColor" } }) {
+        RenderMaterialGraphDocument colorGraph = litGraph;
+        colorGraph.shadingModel = model;
+        colorGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 9U, .kind = RenderMaterialGraphNodeKind::ConstantColor,
+            .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 0 0 1" } });
+        colorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 9U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, pin));
+        const RenderMaterialGraphCompileResult colorResult = CompileRenderMaterialGraphToShaderSource(colorGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0377U });
+        Require(colorResult.Succeeded() && colorResult.shader.reflection.writesShadingModelColor,
+            "KBMAT-MAT37: a subsurface / cloth graph driving its colour pin must write the model colour");
+        const std::string forward = BuildGraphFragmentWrapperSource(colorResult.shader, "BaseOpaque");
+        const std::string gbuffer = BuildGraphFragmentWrapperSource(colorResult.shader, "GBuffer");
+        Require(forward.find("KbEvaluateForwardLightingColor(") != std::string::npos && forward.find(field) != std::string::npos,
+            "KBMAT-MAT37: the forward pass must light with the graph's model colour");
+        Require(gbuffer.find("gl_FragData[4] = vec4(clamp(" + std::string{ field }) != std::string::npos,
+            "KBMAT-MAT37: the G-buffer pass must write the model colour to the fifth target");
+        colorGraph.shadingModel = "defaultLit";
+        const RenderMaterialGraphCompileResult defaultLit = CompileRenderMaterialGraphToShaderSource(colorGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0378U });
+        Require(defaultLit.Succeeded() && !defaultLit.shader.reflection.writesShadingModelColor,
+            "KBMAT-MAT37: Default Lit ignores the scattering colour pins");
+    }
+
     RenderMaterialGraphDocument eyeGraph = litGraph;
     eyeGraph.shadingModel = "eye";
     const RenderMaterialGraphCompileResult eyeResult = CompileRenderMaterialGraphToShaderSource(eyeGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0376U });

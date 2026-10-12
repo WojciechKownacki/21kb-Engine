@@ -403,6 +403,8 @@ struct SceneRenderSubmitStats {
     std::uint32_t submittedMeshCount = 0;
     std::uint32_t submittedDrawGroupCount = 0;
     std::uint32_t submittedDrawCallCount = 0;
+    // G-buffer draws of graph materials that write the model colour (the custom data target).
+    std::uint32_t shadingModelColorDrawCallCount = 0;
     std::uint32_t droppedInstanceCount = 0;
     std::uint32_t meshPipelineCommandCount = 0;
     std::uint32_t meshPipelineCommandCapacity = 0;
@@ -620,6 +622,7 @@ struct SceneRenderDiagnostics {
     lhs.submittedMeshCount += rhs.submittedMeshCount;
     lhs.submittedDrawGroupCount += rhs.submittedDrawGroupCount;
     lhs.submittedDrawCallCount += rhs.submittedDrawCallCount;
+    lhs.shadingModelColorDrawCallCount += rhs.shadingModelColorDrawCallCount;
     lhs.droppedInstanceCount += rhs.droppedInstanceCount;
     lhs.meshPipelineCommandCount += rhs.meshPipelineCommandCount;
     lhs.meshPipelineCommandCapacity += rhs.meshPipelineCommandCapacity;

@@ -1424,6 +1424,8 @@ text "materialEditor.pin.waterScattering" "प्रकीर्णन गुण
 text "materialEditor.pin.waterAbsorption" "अवशोषण गुणांक"
 text "materialEditor.pin.waterPhaseG" "फ़ेज़ G"
 text "materialEditor.pin.waterColorScaleBehind" "पानी के पीछे रंग स्केल"
+text "materialEditor.pin.subsurfaceColor" "सबसरफेस रंग"
+text "materialEditor.pin.fuzzColor" "फ़ज़ रंग"
 text "materialEditor.pin.roughness" "खुरदरापन"
 text "materialEditor.pin.scalar" "स्केलर"
 text "materialEditor.pin.seed" "सीड"

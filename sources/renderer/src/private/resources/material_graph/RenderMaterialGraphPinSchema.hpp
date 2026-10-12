@@ -43,6 +43,8 @@ class RenderMaterialGraphPinSchema final {
             visitor("waterAbsorption", Direction::Input);
             visitor("waterPhaseG", Direction::Input);
             visitor("waterColorScaleBehind", Direction::Input);
+            visitor("subsurfaceColor", Direction::Input);
+            visitor("fuzzColor", Direction::Input);
             break;
         case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
             visitor("baseColor", Direction::Input);
@@ -64,6 +66,8 @@ class RenderMaterialGraphPinSchema final {
             visitor("waterAbsorption", Direction::Input);
             visitor("waterPhaseG", Direction::Input);
             visitor("waterColorScaleBehind", Direction::Input);
+            visitor("subsurfaceColor", Direction::Input);
+            visitor("fuzzColor", Direction::Input);
             visitor("attributes", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
@@ -87,6 +91,8 @@ class RenderMaterialGraphPinSchema final {
             visitor("waterAbsorption", Direction::Output);
             visitor("waterPhaseG", Direction::Output);
             visitor("waterColorScaleBehind", Direction::Output);
+            visitor("subsurfaceColor", Direction::Output);
+            visitor("fuzzColor", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
             visitor("a", Direction::Input);
@@ -115,6 +121,8 @@ class RenderMaterialGraphPinSchema final {
             visitor("waterAbsorption", Direction::Output);
             visitor("waterPhaseG", Direction::Output);
             visitor("waterColorScaleBehind", Direction::Output);
+            visitor("subsurfaceColor", Direction::Output);
+            visitor("fuzzColor", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::SetMaterialAttributes:
             visitor("attributes", Direction::Input);
@@ -137,6 +145,8 @@ class RenderMaterialGraphPinSchema final {
             visitor("waterAbsorption", Direction::Input);
             visitor("waterPhaseG", Direction::Input);
             visitor("waterColorScaleBehind", Direction::Input);
+            visitor("subsurfaceColor", Direction::Input);
+            visitor("fuzzColor", Direction::Input);
             visitor("attributesOut", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::StaticBoolParameter:

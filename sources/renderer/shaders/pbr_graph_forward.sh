@@ -62,7 +62,7 @@ float KbDiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
 
 // Material ambient occlusion darkens only the light from the surroundings (fs_deferred_lighting.sc).
 vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular,
-    float shadingModel, float customData0, float customData1)
+    float shadingModel, float customData0, float customData1, vec3 modelColor)
 {
     vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
     if (u_sceneLightGridDimensions.w > 0.5) {
@@ -122,8 +122,8 @@ vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldP
     // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
     // surface returns its albedo, so the physical BRDF above is taken times pi.
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
-    return KbShadingModelLight(shadingModel, customData0, customData1, normal, viewDir, lightVector, nDotLRaw,
-        albedo, metallic, roughness, diffuse, specularTerm) * radiance;
+    return KbShadingModelLightColor(shadingModel, customData0, customData1, normal, viewDir, lightVector, nDotLRaw,
+        albedo, metallic, roughness, diffuse, specularTerm, modelColor) * radiance;
 }
 
 vec3 KbEnvironmentColor(vec3 direction)
@@ -150,9 +150,10 @@ vec3 KbEvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metalli
     return diffuseEnv + specularEnv;
 }
 
-// shadingModel and customData0/1 as the G-buffer carries them (gbuffer_contract.sh, shading_models.sh).
-vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion,
-    float shadingModel, float customData0, float customData1)
+// shadingModel and customData0/1 as the G-buffer carries them (gbuffer_contract.sh, shading_models.sh);
+// modelColor the colour the model scatters with (KbDefaultShadingModelColor unless the graph gives one).
+vec3 KbEvaluateForwardLightingColor(vec3 worldNormal, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion,
+    float shadingModel, float customData0, float customData1, vec3 modelColor)
 {
     vec3 viewDir = normalize(u_cameraPosition.xyz - worldPos);
     vec3 lighting = KbEvaluateEnvironment(worldNormal, viewDir, albedo, metallic, roughness, specular, occlusion);
@@ -166,11 +167,18 @@ vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, flo
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
             lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, specular,
-                shadingModel, customData0, customData1) *
+                shadingModel, customData0, customData1, modelColor) *
                 KbPointShadowFactor(lightIndex, worldPos);
         }
     }
     return lighting;
+}
+
+vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion,
+    float shadingModel, float customData0, float customData1)
+{
+    return KbEvaluateForwardLightingColor(worldNormal, worldPos, albedo, metallic, roughness, specular, occlusion,
+        shadingModel, customData0, customData1, KbDefaultShadingModelColor(shadingModel, albedo, metallic));
 }
 
 #endif // KB_PBR_GRAPH_FORWARD_SH

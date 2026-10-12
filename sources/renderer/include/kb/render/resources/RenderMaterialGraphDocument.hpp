@@ -622,6 +622,9 @@ struct RenderMaterialGraphReflection {
     // Unreal's Refraction on a Translucent material: the forward wrapper shows the opaque scene
     // behind the surface bent by the index of refraction (reads the scene-color snapshot).
     bool hasRefraction = false;
+    // The graph gives its model's scattering colour (Subsurface Color / Fuzz Color): the G-buffer
+    // pass carries it in a fifth target in frames that draw such a material.
+    bool writesShadingModelColor = false;
     // MAT-37: resolved surface shading model. Drives the fragment wrapper lighting branch and the program
     // key. Declared models without production shader branches fail compilation instead of falling back.
     RenderMaterialShadingModel shadingModel = RenderMaterialShadingModel::DefaultLit;

@@ -861,6 +861,18 @@ public:
         }
         attachments[4].init(depth_);
         fb_ = bgfx::createFrameBuffer(5U, attachments, false);
+        // The G-buffer with the custom data target (Subsurface Color / Fuzz Color) as the renderer
+        // binds it in frames that draw such a material.
+        customTarget_ = bgfx::createTexture2D(64U, 64U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
+        bgfx::Attachment customAttachments[6U]{};
+        for (std::uint32_t index = 0; index < 4U; ++index) {
+            customAttachments[index].init(targets_[index]);
+        }
+        customAttachments[4].init(customTarget_);
+        customAttachments[5].init(depth_);
+        customFb_ = bgfx::createFrameBuffer(6U, customAttachments, false);
+        customSampler_ = bgfx::createUniform("s_gbufferCustom", bgfx::UniformType::Sampler);
+        customUniform_ = bgfx::createUniform("u_deferredCustomData", bgfx::UniformType::Vec4);
         uCamera_ = bgfx::createUniform("u_cameraPosition", bgfx::UniformType::Vec4);
         uLightDirKind_ = bgfx::createUniform("u_lightDirKind", bgfx::UniformType::Vec4, 4U);
         uLightParams_ = bgfx::createUniform("u_lightParams", bgfx::UniformType::Vec4);
@@ -904,16 +916,18 @@ public:
         bgfx::ProgramHandle program,
         bgfx::UniformHandle sampler = BGFX_INVALID_HANDLE,
         bgfx::TextureHandle texture = BGFX_INVALID_HANDLE,
-        float normalScale = 1.0F) {
+        float normalScale = 1.0F,
+        bool customData = false) {
         const std::array<float, 4U> camera{ 0.0F, 0.0F, 1.0F, 0.0F };
         const std::array<float, 16U> lightDirKind{};
         const std::array<float, 4U> lightParams{};
         const std::array<float, 4U> timeConstants{};
         const std::array<float, 4U> dynamicParameter{};
         const std::array<float, 4U> materialParams{ 0.0F, 1.0F, normalScale, 0.5F };
-        bgfx::setViewFrameBuffer(0, fb_);
+        bgfx::setViewFrameBuffer(0, customData ? customFb_ : fb_);
         bgfx::setViewRect(0, 0U, 0U, 64U, 64U);
-        bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ffU, 0.0F, 0);
+        // The custom data clears to alpha 0 (no model colour given), as the renderer's palette.
+        bgfx::setViewClear(0, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, customData ? 0x00000000U : 0x000000ffU, 0.0F, 0);
         bgfx::setUniform(uCamera_, camera.data());
         bgfx::setUniform(uLightDirKind_, lightDirKind.data(), 4U);
         bgfx::setUniform(uLightParams_, lightParams.data());
@@ -952,7 +966,8 @@ public:
     [[nodiscard]] ForwardRenderProbe Resolve(
         bgfx::ProgramHandle program,
         bool environmentEnabled,
-        bool directionalLightEnabled) {
+        bool directionalLightEnabled,
+        bool customData = false) {
         std::array<float, 128U> lightDirKind{};
         std::array<float, 128U> lightPositionRange{};
         std::array<float, 128U> lightColorIntensity{};
@@ -1011,6 +1026,9 @@ public:
         bgfx::setTexture(3U, deferredSurfaceSampler_, targets_[3]);
         bgfx::setTexture(4U, deferredDepthSampler_, depth_);
         bgfx::setTexture(5U, deferredShadowSampler_, fallbackShadow_);
+        const std::array<float, 4U> customParams{ customData ? 1.0F : 0.0F, 0.0F, 0.0F, 0.0F };
+        bgfx::setUniform(customUniform_, customParams.data());
+        bgfx::setTexture(13U, customSampler_, customData ? customTarget_ : targets_[0]);
         bgfx::setVertexBuffer(0U, vbh_);
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
         bgfx::submit(0U, program);
@@ -1029,6 +1047,10 @@ public:
     }
 
     void Shutdown() {
+        bgfx::destroy(customUniform_);
+        bgfx::destroy(customSampler_);
+        bgfx::destroy(customFb_);
+        bgfx::destroy(customTarget_);
         bgfx::destroy(fallbackShadow_);
         bgfx::destroy(deferredShadowParams_);
         bgfx::destroy(deferredShadowViewProjection_);
@@ -1092,6 +1114,10 @@ private:
         bgfx::TextureHandle{ bgfx::kInvalidHandle },
         bgfx::TextureHandle{ bgfx::kInvalidHandle },
     };
+    bgfx::TextureHandle customTarget_ = BGFX_INVALID_HANDLE;
+    bgfx::FrameBufferHandle customFb_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle customSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle customUniform_ = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle fb_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle depth_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle resolveTarget_ = BGFX_INVALID_HANDLE;
@@ -1453,6 +1479,67 @@ void RunDeferredLightingSurfaceSemanticsGpuTest() {
     bgfx::destroy(emissiveProgram);
     bgfx::destroy(unlitProgram);
     bgfx::destroy(defaultLitProgram);
+    bgfx::destroy(resolveProgram);
+    harness.Shutdown();
+    std::filesystem::remove_all(cacheDir, error);
+}
+
+// Unreal's Fuzz Color: the graph's colour reaches the cloth sheen through the G-buffer custom data
+// target, and only through it.
+void RunDeferredGBufferFuzzColorGpuTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "deferred_fuzz_color";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::filesystem::path geometryVsBin = cacheDir / "vs_graph_probe.bin";
+    const std::filesystem::path resolveVsBin = cacheDir / "vs_present.bin";
+    const std::filesystem::path resolveFsBin = cacheDir / "fs_deferred_lighting.bin";
+    Require(CookHarnessDepthVertexShader(geometryVsBin, 0.5F), "Fuzz Color: geometry vertex shader must cook");
+    Require(CookHarnessRendererShader("vs_present.sc", "vertex", resolveVsBin), "Fuzz Color: resolve vertex shader must cook");
+    Require(CookHarnessRendererShader("fs_deferred_lighting.sc", "fragment", resolveFsBin), "Fuzz Color: deferred lighting must cook");
+
+    const auto clothGraph = [](bool fuzz) {
+        RenderMaterialGraphDocument graph = MakeGBufferProofGraph("0.05 0.05 0.25 1", "cloth", "0", "1.0", "0 0 0 1", "0.5", "0 0 1");
+        if (fuzz) {
+            RenderMaterialGraphNode color{ .id = 8U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 80, .positionY = 740,
+                .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 1 0 1" } };
+            graph.nodes.push_back(color);
+            graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 8U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "fuzzColor"));
+        }
+        return graph;
+    };
+    const RenderMaterialGraphCompileResult compiledFuzz = CompileRenderMaterialGraphToShaderSource(
+        clothGraph(true), RenderMaterialGraphBuildContext{ .assetId = 0xD650U, .shadingPath = RenderMaterialGraphShadingPath::Deferred });
+    Require(compiledFuzz.Succeeded() && compiledFuzz.shader.reflection.writesShadingModelColor,
+        "Fuzz Color: a cloth graph with Fuzz Color must write the model colour");
+    const RenderMaterialGraphShaderArtifact plainArtifact = CookGBufferProofArtifact(clothGraph(false), 0xD651U, cacheDir / "plain");
+    const RenderMaterialGraphShaderArtifact fuzzArtifact = CookGBufferProofArtifact(clothGraph(true), 0xD650U, cacheDir / "fuzz");
+
+    DeferredGBufferHarness harness;
+    if (!harness.Initialize()) {
+        Require(false, "Fuzz Color: a real D3D11 device is required");
+        return;
+    }
+    const std::vector<std::uint8_t> geometryVsBytes = ReadAllBytes(geometryVsBin);
+    const bgfx::ProgramHandle resolveProgram = BuildProgram(ReadAllBytes(resolveVsBin), ReadAllBytes(resolveFsBin));
+    const bgfx::ProgramHandle plainProgram = BuildGraphProgram(geometryVsBytes, plainArtifact);
+    const bgfx::ProgramHandle fuzzProgram = BuildGraphProgram(geometryVsBytes, fuzzArtifact);
+    Require(bgfx::isValid(resolveProgram) && bgfx::isValid(plainProgram) && bgfx::isValid(fuzzProgram),
+        "Fuzz Color: programs must link");
+
+    static_cast<void>(harness.Render(plainProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 1.0F, true));
+    const ForwardRenderProbe plain = harness.Resolve(resolveProgram, false, true, true);
+    static_cast<void>(harness.Render(fuzzProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 1.0F, true));
+    const ForwardRenderProbe fuzz = harness.Resolve(resolveProgram, false, true, true);
+    // The same G-buffer lit without the target: the sheen falls back to the derived colour.
+    const ForwardRenderProbe fuzzWithoutTarget = harness.Resolve(resolveProgram, false, true, false);
+    Require(fuzz.g > plain.g + 15U,
+        "Fuzz Color: the green fuzz colour must tint the deferred cloth sheen");
+    Require(SimilarProbe(fuzzWithoutTarget, plain, 3U),
+        "Fuzz Color: without the custom data target the sheen must keep the derived colour");
+
+    bgfx::destroy(fuzzProgram);
+    bgfx::destroy(plainProgram);
     bgfx::destroy(resolveProgram);
     harness.Shutdown();
     std::filesystem::remove_all(cacheDir, error);
@@ -5050,6 +5137,7 @@ void RunGraphForwardGpuRenderTests() {
     RunDeferredGBufferGraphGpuReadbackProofTest();
     RunDeferredLightingSurfaceSemanticsGpuTest();
     RunDeferredGBufferTextureNormalMapReadbackProofTest();
+    RunDeferredGBufferFuzzColorGpuTest();
     RunForwardGraphRenderTest();
     RunForwardGraphNormalMapLightingTest();
     RunForwardGraphPointShadowTest();
