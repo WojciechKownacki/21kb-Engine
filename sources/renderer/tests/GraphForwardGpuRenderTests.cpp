@@ -1545,6 +1545,86 @@ void RunDeferredGBufferFuzzColorGpuTest() {
     std::filesystem::remove_all(cacheDir, error);
 }
 
+// Unreal's Eye: the iris lights about its own normal (Iris Normal), which reaches deferred lighting
+// through the G-buffer custom data target; without the iris the eye lights like its sclera.
+void RunDeferredGBufferEyeIrisGpuTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "deferred_eye_iris";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::filesystem::path geometryVsBin = cacheDir / "vs_graph_probe.bin";
+    const std::filesystem::path resolveVsBin = cacheDir / "vs_present.bin";
+    const std::filesystem::path resolveFsBin = cacheDir / "fs_deferred_lighting.bin";
+    Require(CookHarnessDepthVertexShader(geometryVsBin, 0.5F), "Eye: geometry vertex shader must cook");
+    Require(CookHarnessRendererShader("vs_present.sc", "vertex", resolveVsBin), "Eye: resolve vertex shader must cook");
+    Require(CookHarnessRendererShader("fs_deferred_lighting.sc", "fragment", resolveFsBin), "Eye: deferred lighting must cook");
+
+    // irisNormal empty = no iris pins (the sclera everywhere).
+    const auto eyeGraph = [](const char* irisNormal) {
+        RenderMaterialGraphDocument graph = MakeGBufferProofGraph("0.6 0.6 0.6 1", "eye", "0", "0.6", "0 0 0 1", "0.5", "0 0 1");
+        if (irisNormal[0] != '\0') {
+            graph.nodes.push_back(RenderMaterialGraphNode{ .id = 8U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .positionX = 80, .positionY = 740,
+                .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" } });
+            graph.nodes.push_back(RenderMaterialGraphNode{ .id = 9U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 80, .positionY = 860,
+                .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = irisNormal } });
+            graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "irisMask"));
+            graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 9U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "irisNormal"));
+        }
+        return graph;
+    };
+    const RenderMaterialGraphShaderArtifact scleraArtifact = CookGBufferProofArtifact(eyeGraph(""), 0xD660U, cacheDir / "sclera");
+    const RenderMaterialGraphShaderArtifact facingArtifact = CookGBufferProofArtifact(eyeGraph("0 0 1 1"), 0xD661U, cacheDir / "facing");
+    const RenderMaterialGraphShaderArtifact awayArtifact = CookGBufferProofArtifact(eyeGraph("0 0 -1 1"), 0xD662U, cacheDir / "away");
+    // The forward pass lights the iris itself; it must cook on every desktop backend.
+    const RenderMaterialGraphCompileResult forwardEye = CompileRenderMaterialGraphToShaderSource(
+        eyeGraph("0 0 1 1"), RenderMaterialGraphBuildContext{ .assetId = 0xD663U });
+    Require(forwardEye.Succeeded(), "Eye: the forward eye graph must compile");
+    RenderMaterialGraphShaderArtifactRequest forwardRequest = CookRequest((cacheDir / "forward").generic_string());
+    forwardRequest.pass = "BaseOpaque";
+    const std::array<RenderMaterialGraphShaderBackend, 2U> forwardBackends{
+        RenderMaterialGraphShaderBackend::Dxbc, RenderMaterialGraphShaderBackend::Spirv };
+    const RenderMaterialGraphShaderArtifactResult forwardCooked =
+        CookRenderMaterialGraphShaderArtifact(forwardEye.shader, forwardBackends, forwardRequest);
+    Require(forwardCooked.Succeeded() && forwardCooked.artifact.has_value() &&
+            forwardCooked.artifact->FindBinary(RenderMaterialGraphShaderBackend::Dxbc) != nullptr &&
+            forwardCooked.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv) != nullptr,
+        "Eye: the forward eye shader must cook for D3D11 and Vulkan");
+
+    DeferredGBufferHarness harness;
+    if (!harness.Initialize()) {
+        Require(false, "Eye: a real D3D11 device is required");
+        return;
+    }
+    const std::vector<std::uint8_t> geometryVsBytes = ReadAllBytes(geometryVsBin);
+    const bgfx::ProgramHandle resolveProgram = BuildProgram(ReadAllBytes(resolveVsBin), ReadAllBytes(resolveFsBin));
+    const bgfx::ProgramHandle scleraProgram = BuildGraphProgram(geometryVsBytes, scleraArtifact);
+    const bgfx::ProgramHandle facingProgram = BuildGraphProgram(geometryVsBytes, facingArtifact);
+    const bgfx::ProgramHandle awayProgram = BuildGraphProgram(geometryVsBytes, awayArtifact);
+    Require(bgfx::isValid(resolveProgram) && bgfx::isValid(scleraProgram) && bgfx::isValid(facingProgram) && bgfx::isValid(awayProgram),
+        "Eye: programs must link");
+
+    static_cast<void>(harness.Render(scleraProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 1.0F, true));
+    const ForwardRenderProbe sclera = harness.Resolve(resolveProgram, false, true, true);
+    static_cast<void>(harness.Render(facingProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 1.0F, true));
+    const ForwardRenderProbe facing = harness.Resolve(resolveProgram, false, true, true);
+    static_cast<void>(harness.Render(awayProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 1.0F, true));
+    const ForwardRenderProbe away = harness.Resolve(resolveProgram, false, true, true);
+    // The same G-buffer lit without the target: no iris, the sclera's N.L.
+    const ForwardRenderProbe awayWithoutTarget = harness.Resolve(resolveProgram, false, true, false);
+    Require(sclera.r > 30U, "Eye: the sclera must be lit by N.L");
+    Require(facing.r > away.r + 20U,
+        "Eye: an iris turned away from the light must lose its diffuse light in deferred lighting");
+    Require(SimilarProbe(awayWithoutTarget, sclera, 3U),
+        "Eye: without the custom data target the eye must light like its sclera");
+
+    bgfx::destroy(awayProgram);
+    bgfx::destroy(facingProgram);
+    bgfx::destroy(scleraProgram);
+    bgfx::destroy(resolveProgram);
+    harness.Shutdown();
+    std::filesystem::remove_all(cacheDir, error);
+}
+
 void RunDeferredGBufferTextureNormalMapReadbackProofTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "deferred_texture_normal_readback";
     std::error_code error;
@@ -5138,6 +5218,7 @@ void RunGraphForwardGpuRenderTests() {
     RunDeferredLightingSurfaceSemanticsGpuTest();
     RunDeferredGBufferTextureNormalMapReadbackProofTest();
     RunDeferredGBufferFuzzColorGpuTest();
+    RunDeferredGBufferEyeIrisGpuTest();
     RunForwardGraphRenderTest();
     RunForwardGraphNormalMapLightingTest();
     RunForwardGraphPointShadowTest();

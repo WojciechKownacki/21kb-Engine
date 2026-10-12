@@ -61,6 +61,9 @@ PreferredInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
             {"waterColorScaleBehind", std::string{ EditorText("materialEditor.pin.waterColorScaleBehind", "Color Scale Behind Water") }},
             {"subsurfaceColor", std::string{ EditorText("materialEditor.pin.subsurfaceColor", "Subsurface Color") }},
             {"fuzzColor", std::string{ EditorText("materialEditor.pin.fuzzColor", "Fuzz Color") }},
+            {"irisMask", std::string{ EditorText("materialEditor.pin.irisMask", "Iris Mask") }},
+            {"irisDistance", std::string{ EditorText("materialEditor.pin.irisDistance", "Iris Distance") }},
+            {"irisNormal", std::string{ EditorText("materialEditor.pin.irisNormal", "Iris Normal") }},
         };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return {{"texture", std::string{ EditorText("materialEditor.pin.tex", "Tex.") }}, {"uv", "UV"}};

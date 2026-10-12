@@ -4656,13 +4656,27 @@ void RunMaterialShadingModelGatingTest() {
             "KBMAT-MAT37: Default Lit ignores the scattering colour pins");
     }
 
+    // Unreal's Eye: Iris Mask, Iris Distance and Iris Normal ride in the fifth target (octahedral
+    // normal, mask, distance); the forward pass lights the iris with them directly.
     RenderMaterialGraphDocument eyeGraph = litGraph;
     eyeGraph.shadingModel = "eye";
+    eyeGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 9U, .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" } });
+    eyeGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 10U, .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0.3 1 1" } });
+    eyeGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 9U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "irisMask"));
+    eyeGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 9U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "irisDistance"));
+    eyeGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 10U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "irisNormal"));
     const RenderMaterialGraphCompileResult eyeResult = CompileRenderMaterialGraphToShaderSource(eyeGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0376U });
-    Require(!eyeResult.Succeeded(), "KBMAT-MAT37: a declared shading model without a production branch must fail instead of falling back");
-    const RenderMaterialGraphDiagnostic* shadingDiag = FindGraphDiagnostic(eyeResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel);
-    Require(shadingDiag != nullptr && shadingDiag->severity == RenderMaterialGraphDiagnosticSeverity::Error,
-        "KBMAT-MAT37: an unimplemented shading model must emit an error diagnostic without a DefaultLit fallback");
+    Require(eyeResult.Succeeded() && eyeResult.shader.reflection.shadingModel == RenderMaterialShadingModel::Eye &&
+            eyeResult.shader.reflection.writesShadingModelColor,
+        "KBMAT-MAT37: an eye graph driving its iris pins must compile and write the custom data");
+    const std::string eyeForward = BuildGraphFragmentWrapperSource(eyeResult.shader, "BaseOpaque");
+    const std::string eyeGBuffer = BuildGraphFragmentWrapperSource(eyeResult.shader, "GBuffer");
+    Require(eyeForward.find("KbEvaluateForwardLightingFull(") != std::string::npos && eyeForward.find("surface.irisMask") != std::string::npos,
+        "KBMAT-MAT37: the forward pass must light the eye with its iris");
+    Require(eyeGBuffer.find("gl_FragData[4] = vec4(KbOctEncode(kbIrisNormal)") != std::string::npos,
+        "KBMAT-MAT37: the G-buffer pass must write the iris to the fifth target");
 
     Require(IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Unlit) &&
             IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::DefaultLit) &&
@@ -4671,10 +4685,9 @@ void RunMaterialShadingModelGatingTest() {
             IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Cloth) &&
             IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Hair) &&
             IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::SingleLayerWater) &&
-            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ThinTranslucent),
-            "KBMAT-MAT37: Unlit, DefaultLit and implemented advanced models must be production shading models");
-    Require(!IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Eye),
-            "KBMAT-MAT37: declared shading models without runtime branches must remain non-production");
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ThinTranslucent) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Eye),
+            "KBMAT-MAT37: Unlit, DefaultLit and every advanced model must be production shading models");
 }
 
 void RunMaterialGraphBlendModeTest() {

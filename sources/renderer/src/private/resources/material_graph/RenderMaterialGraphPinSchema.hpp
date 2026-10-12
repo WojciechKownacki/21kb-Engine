@@ -45,6 +45,9 @@ class RenderMaterialGraphPinSchema final {
             visitor("waterColorScaleBehind", Direction::Input);
             visitor("subsurfaceColor", Direction::Input);
             visitor("fuzzColor", Direction::Input);
+            visitor("irisMask", Direction::Input);
+            visitor("irisDistance", Direction::Input);
+            visitor("irisNormal", Direction::Input);
             break;
         case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
             visitor("baseColor", Direction::Input);
@@ -68,6 +71,9 @@ class RenderMaterialGraphPinSchema final {
             visitor("waterColorScaleBehind", Direction::Input);
             visitor("subsurfaceColor", Direction::Input);
             visitor("fuzzColor", Direction::Input);
+            visitor("irisMask", Direction::Input);
+            visitor("irisDistance", Direction::Input);
+            visitor("irisNormal", Direction::Input);
             visitor("attributes", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
@@ -93,6 +99,9 @@ class RenderMaterialGraphPinSchema final {
             visitor("waterColorScaleBehind", Direction::Output);
             visitor("subsurfaceColor", Direction::Output);
             visitor("fuzzColor", Direction::Output);
+            visitor("irisMask", Direction::Output);
+            visitor("irisDistance", Direction::Output);
+            visitor("irisNormal", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
             visitor("a", Direction::Input);
@@ -123,6 +132,9 @@ class RenderMaterialGraphPinSchema final {
             visitor("waterColorScaleBehind", Direction::Output);
             visitor("subsurfaceColor", Direction::Output);
             visitor("fuzzColor", Direction::Output);
+            visitor("irisMask", Direction::Output);
+            visitor("irisDistance", Direction::Output);
+            visitor("irisNormal", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::SetMaterialAttributes:
             visitor("attributes", Direction::Input);
@@ -147,6 +159,9 @@ class RenderMaterialGraphPinSchema final {
             visitor("waterColorScaleBehind", Direction::Input);
             visitor("subsurfaceColor", Direction::Input);
             visitor("fuzzColor", Direction::Input);
+            visitor("irisMask", Direction::Input);
+            visitor("irisDistance", Direction::Input);
+            visitor("irisNormal", Direction::Input);
             visitor("attributesOut", Direction::Output);
             break;
         case RenderMaterialGraphNodeKind::StaticBoolParameter:

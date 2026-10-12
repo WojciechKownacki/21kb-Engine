@@ -86,11 +86,62 @@ vec3 KbShadingModelLightColor(float model, float customData0, float customData1,
     return defaultLit;
 }
 
+// Octahedral encoding of a unit vector into -1..1 (the eye's iris normal in the custom data).
+vec2 KbOctEncode(vec3 n)
+{
+    n /= max(abs(n.x) + abs(n.y) + abs(n.z), 0.000001);
+    vec2 wrapped = (vec2_splat(1.0) - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return n.z >= 0.0 ? n.xy : wrapped;
+}
+
+vec3 KbOctDecode(vec2 e)
+{
+    vec3 n = vec3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    float t = clamp(-n.z, 0.0, 1.0);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.y += n.y >= 0.0 ? -t : t;
+    return normalize(n);
+}
+
+// Unreal's EyeBxDF: the cornea reflects (the caller's specular lobe on N); the light it lets
+// through (1 - F) lights the sclera by N.L and the iris about its own normal, with a caustic
+// that grows toward the light as the iris lies deeper (Iris Distance) inside the cornea.
+vec3 KbEyeLight(vec3 N, vec3 V, vec3 L, float nDotLRaw, vec3 albedo, float metallic, vec3 specularLobe,
+    vec3 irisNormal, float irisMask, float irisDistance)
+{
+    float nDotL = max(nDotLRaw, 0.0);
+    vec3 H = normalize(V + L);
+    float fresnel = 0.04 + 0.96 * pow(1.0 - clamp(dot(V, H), 0.0, 1.0), 5.0);
+    vec3 causticNormal = normalize(mix(irisNormal, -N, clamp(irisMask * irisDistance, 0.0, 1.0)));
+    float irisNoL = clamp(dot(irisNormal, L), 0.0, 1.0);
+    float power = mix(12.0, 1.0, irisNoL);
+    float caustic = 0.8 + 0.2 * (power + 1.0) * pow(clamp(dot(causticNormal, L), 0.0, 1.0), power);
+    float iris = irisNoL * caustic;
+    return specularLobe * nDotL +
+        albedo * (1.0 - metallic) * 0.31830989 * mix(nDotL, iris, clamp(irisMask, 0.0, 1.0)) * (1.0 - fresnel);
+}
+
+// Every model, with the data some of them read from the material: the scattering colour and
+// the eye's iris (normal; mask and distance in iris.xy).
+vec3 KbShadingModelLightFull(float model, float customData0, float customData1, vec3 N, vec3 V, vec3 L,
+    float nDotLRaw, vec3 albedo, float metallic, float roughness, vec3 diffuseLobe, vec3 specularLobe, vec3 modelColor,
+    vec3 irisNormal, vec2 iris)
+{
+    vec3 light;
+    if (KbIsShadingModel(model, KB_GBUFFER_SHADING_MODEL_EYE)) {
+        light = KbEyeLight(N, V, L, nDotLRaw, albedo, metallic, specularLobe, irisNormal, iris.x, iris.y);
+    } else {
+        light = KbShadingModelLightColor(model, customData0, customData1, N, V, L, nDotLRaw, albedo, metallic, roughness,
+            diffuseLobe, specularLobe, modelColor);
+    }
+    return light;
+}
+
 vec3 KbShadingModelLight(float model, float customData0, float customData1, vec3 N, vec3 V, vec3 L,
     float nDotLRaw, vec3 albedo, float metallic, float roughness, vec3 diffuseLobe, vec3 specularLobe)
 {
-    return KbShadingModelLightColor(model, customData0, customData1, N, V, L, nDotLRaw, albedo, metallic, roughness,
-        diffuseLobe, specularLobe, KbDefaultShadingModelColor(model, albedo, metallic));
+    return KbShadingModelLightFull(model, customData0, customData1, N, V, L, nDotLRaw, albedo, metallic, roughness,
+        diffuseLobe, specularLobe, KbDefaultShadingModelColor(model, albedo, metallic), N, vec2_splat(0.0));
 }
 
 // The clear coat's share of the surroundings: the coat reflects them at its own roughness, the base
