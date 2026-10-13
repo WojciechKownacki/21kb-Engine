@@ -4630,6 +4630,34 @@ void RunMaterialDomainGatingTest() {
         "User Interface domain: Base Color must be refused by name");
 }
 
+// A heavy procedural graph: 300 nodes in one chain (Add and Sine in turn) under Base Color. Code generation
+// inlines single-use nodes by recursion, so a chain this deep used to overflow the stack and end the process;
+// it now compiles, with the chain cut into temporaries.
+void RunDeepMaterialGraphCompilesTest() {
+    using K = RenderMaterialGraphNodeKind;
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = K::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.1" } });
+    std::uint32_t previous = 2U;
+    K previousKind = K::ConstantScalar;
+    for (std::uint32_t id = 3U; id < 303U; ++id) {
+        const K kind = id % 2U == 0U ? K::Sine : K::Add;
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = id, .kind = kind });
+        graph.links.push_back(MakeGraphLink(previousKind, previous, "value", kind, id, kind == K::Sine ? "value" : "a"));
+        if (kind == K::Add) {
+            graph.links.push_back(MakeGraphLink(K::ConstantScalar, 2U, "value", K::Add, id, "b"));
+        }
+        previous = id;
+        previousKind = kind;
+    }
+    graph.links.push_back(MakeGraphLink(previousKind, previous, "value", K::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0346U });
+    std::size_t temporaries = 0U;
+    for (std::size_t at = compiled.shader.source.find("_v = "); at != std::string::npos; at = compiled.shader.source.find("_v = ", at + 1U)) {
+        ++temporaries;
+    }
+    Require(compiled.Succeeded() && temporaries >= 30U, "A 300-node chain must compile, cut into temporaries");
+}
+
 void RunMaterialShadingModelGatingTest() {
     RenderMaterialGraphDocument litGraph = MakeDefaultRenderMaterialGraphDocument();
     litGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 1 1 1" } });
@@ -6967,6 +6995,7 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialOutputPinsCodegenTest();
     RunMaterialCustomOutputsSchemaAndCodegenTest();
     RunMaterialDomainGatingTest();
+    RunDeepMaterialGraphCompilesTest();
     RunMaterialShadingModelGatingTest();
     RunMaterialGraphBlendModeTest();
     RunMaterialGraphBlendSceneStateTest();
