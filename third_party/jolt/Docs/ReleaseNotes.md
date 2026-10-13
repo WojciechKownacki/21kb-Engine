@@ -2,7 +2,7 @@
 
 For breaking API changes see [this document](https://github.com/jrouwe/JoltPhysics/blob/master/Docs/APIChanges.md).
 
-## Unreleased changes
+## v5.6.0
 
 ### New functionality
 
@@ -15,7 +15,8 @@ For breaking API changes see [this document](https://github.com/jrouwe/JoltPhysi
 	* Supports collision with the environment, although it only supports ConvexHull and CompoundShapes at the moment.
 	* The roots of the hairs can be skinned to the scalp mesh.
 	* Note that this is still work in progress, some things that still need to be done are listed in Hair.h.
-* Increased maximum value of HeightFieldShape::mBitsPerSample to 16 to be able to create height fields that more closely match the uncompressed height values.
+* Implemented a new friction model. This friction model is cheaper to execute (15 % faster, 40% less memory for Pyramid test) and doesn't favor the first contact manifold point. Instead of applying friction at every contact point, we now calculate the average contact point and apply friction there. Friction consists of 2 linear constraints and 1 angular constraint. The linear constraints use the `friction_coefficient * sum(contact_impulse)` to determine the max linear friction impulse, the angular constraint uses `friction_coefficient * sum(distance_friction_point_to_contact_point * contact_impulse)` to determine the max angular friction impulse.
+* Increased maximum value of `HeightFieldShape::mBitsPerSample` to 16 to be able to create height fields that more closely match the uncompressed height values.
 * Made tolerance that's used in the internal edge removal algorithm configurable in `CollideShapeSettings::mInternalEdgeRemovalVertexToleranceSq` and `PhysicsSettings::mInternalEdgeRemovalVertexToleranceSq`.
 * Added support for RISC-V RVV, the SIMD extension for RISC-V.
 * Added `JPH_BUILD_SHARED_LIBS` cmake variable to determine whether to build static or shared libraries (it defaults to `BUILD_SHARED_LIBS`). This allows embedding Jolt as a static library within a shared library.
@@ -23,7 +24,8 @@ For breaking API changes see [this document](https://github.com/jrouwe/JoltPhysi
 * Added support for glTF `KHR_physics_rigid_bodies` constraint motors. This adds `ESpringMode::MassNormalizedStiffnessAndDamping` to be able to specify the spring parameters mass-normalized / in acceleration-mode. It also adds `EMotorState::PositionAndVelocity` which creates a force proportional to `stiffness * (position_target - position_current) + damping * (velocity_target - velocity_current)`.
 * Added `Ragdoll::DriveToPoseUsingMotors` variant that drives to a pose using both position and velocity.
 * Added `Body::ApplyBodyCreationSettings` and `Body::ApplySoftBodyCreationSettings` to be able to update a body with creation settings after creation.
-* Various performance and memory optimizations.
+* Added `ShapeCastSettings::mExtraConvexRadius` which inflates the query shape by an extra convex radius.
+* Up to 40% performance improvement (scene dependent) and up to 70% memory reduction (scene dependent).
 
 ### Bug Fixes
 
@@ -36,6 +38,8 @@ For breaking API changes see [this document](https://github.com/jrouwe/JoltPhysi
 * Kinematic bodies were assigned to the same island as bodies that were constrained to / in contact with them. This led to larger simulation islands and impacted performance.
 * Fixed contact callbacks for body with motion quality `LinearCast` vs a soft body. Previously, the contacts would be reported accidentally through the regular `ContactListener`. Now they're properly reported through the `SoftBodyContactListener`.
 * Fixed `CharacterVirtual::GetFirstContactForSweep` crashing if the body that it hit was removed from another thread between `CastShape` and `GetTransformedShape`.
+* Fixed `CharacterVirtual` speeding up beyond requested speed when sliding along a wall that was low enough to trigger stair walking yet high enough to not step up completely.
+* Fixed `CharacterVirtual` sometimes not fully taking character padding into account when moving through the environment.
 * Fixed an issue that broke cross platform determinism between ARM64 and x64 builds when compiling with double precision.
 * Fixed some warnings when compiling with clang using C++26.
 * Fixed unit test failures + floating point exceptions in Samples when using MSVC 18.6.0.

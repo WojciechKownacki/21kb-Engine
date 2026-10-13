@@ -2183,7 +2183,7 @@ void RunPhysicsUnityDefaultsTest() {
     kb::tests::Require(maxBounce < 3.0F && maxBounce > 0.8F,
         "Restitution 1 on a restitution 0 floor must combine by average (0.5), not max");
     const kb::scene::Vec3 swing = scene.Transforms().Get(pendulum).localPosition;
-    kb::tests::Require(swing.y < 4.4F && swing.y > 3.7F,
+    kb::tests::Require(swing.y < 4.03F && swing.y > 3.97F,
         "A hinge limited to 0..30 deg must let the body swing down to 30 deg as in Unity");
     static_cast<void>(floor);
 }
