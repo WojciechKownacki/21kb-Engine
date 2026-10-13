@@ -475,6 +475,8 @@ struct GraphCodegen {
     std::vector<std::uint32_t> stack;
     std::unordered_map<std::uint32_t, std::uint32_t> fanOut;
     std::unordered_map<std::uint32_t, std::string> emittedTemp;
+    // Nodes of a deep chain that get a temporary although used once (EmitDeepGraphTemporaries).
+    std::unordered_set<std::uint32_t> forcedTemp;
     std::unordered_map<std::string, std::string> customOutputTemps;
     std::unordered_set<std::uint32_t> emittedCustomFunctions;
     std::vector<std::pair<std::uint32_t, std::string>> functionDefinitions;
@@ -2595,13 +2597,85 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
 
     const auto fanOutIt = cg.fanOut.find(node.id);
     const std::uint32_t fanOut = fanOutIt == cg.fanOut.end() ? 0U : fanOutIt->second;
-    if (IsGraphCseCandidate(node.kind) && fanOut > 1U) {
+    if (IsGraphCseCandidate(node.kind) && (fanOut > 1U || cg.forcedTemp.contains(node.id))) {
         std::string tempName = "n" + std::to_string(node.id) + "_v";
         cg.statements += "    " + GraphCodegenGlslType(GraphNodeCanonicalType(node.kind)) + " " + tempName + " = " + base + ";\n";
         cg.emittedTemp.emplace(node.id, tempName);
         return SelectGraphPinFromBase(cg, node, tempName, outputPin);
     }
     return SelectGraphPinFromBase(cg, node, base, outputPin);
+}
+
+// Code generation inlines a node used once into its consumer, recursing through the graph. A deep graph (a few
+// dozen nodes in a chain, as heavy procedural materials have) would recurse as deep and overflow the stack, so
+// when the graph below `pin` of `node` is deeper than kGraphInlineDepthLimit, its nodes are emitted bottom-up as
+// temporaries - every shared node and every node whose inlined chain reaches the limit - the way Shader Graph
+// emits a variable per node. Recursion then never goes deeper than the limit. A shallower graph is unchanged.
+constexpr std::uint32_t kGraphInlineDepthLimit = 8U;
+
+void EmitDeepGraphTemporaries(GraphCodegen& cg, const RenderMaterialGraphNode& node, std::string_view pin) {
+    const RenderMaterialGraphLink* rootLink = FindInputLink(cg.graph, node.id, pin);
+    if (rootLink == nullptr) {
+        return;
+    }
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> inputs;
+    for (const RenderMaterialGraphLink& link : cg.graph.links) {
+        inputs[link.toNodeId].push_back(link.fromNodeId);
+    }
+    // Post-order of the nodes below the pin (iterative: the walk itself must not recurse).
+    std::vector<std::uint32_t> order;
+    std::unordered_set<std::uint32_t> seen{ rootLink->fromNodeId };
+    std::vector<std::pair<std::uint32_t, std::size_t>> walk{ { rootLink->fromNodeId, 0U } };
+    while (!walk.empty()) {
+        auto& [id, next] = walk.back();
+        const std::vector<std::uint32_t>& from = inputs[id];
+        if (next < from.size()) {
+            const std::uint32_t input = from[next++];
+            if (seen.insert(input).second) {
+                walk.emplace_back(input, 0U);
+            }
+            continue;
+        }
+        order.push_back(id);
+        walk.pop_back();
+    }
+    std::unordered_map<std::uint32_t, std::uint32_t> depth;
+    std::uint32_t deepest = 0U;
+    for (const std::uint32_t id : order) {
+        std::uint32_t below = 0U;
+        for (const std::uint32_t input : inputs[id]) {
+            below = std::max(below, depth[input]);
+        }
+        depth[id] = below + 1U;
+        deepest = std::max(deepest, below + 1U);
+    }
+    if (deepest <= kGraphInlineDepthLimit) {
+        return;
+    }
+    std::unordered_map<std::uint32_t, std::uint32_t> inlined;
+    for (const std::uint32_t id : order) {
+        const RenderMaterialGraphNode* current = FindRenderMaterialGraphNode(cg.graph, id);
+        if (current == nullptr) {
+            continue;
+        }
+        std::uint32_t below = 0U;
+        for (const std::uint32_t input : inputs[id]) {
+            below = std::max(below, inlined[input]);
+        }
+        inlined[id] = below + 1U;
+        if (!IsGraphCseCandidate(current->kind) || cg.emittedTemp.contains(id)) {
+            continue;
+        }
+        const auto fanOutIt = cg.fanOut.find(id);
+        const bool shared = fanOutIt != cg.fanOut.end() && fanOutIt->second > 1U;
+        if (!shared && inlined[id] < kGraphInlineDepthLimit) {
+            continue;
+        }
+        cg.forcedTemp.insert(id);
+        const std::vector<std::string> outputs = RenderMaterialGraphNodeOutputPinNames(*current);
+        static_cast<void>(CompileNodeOutputExpression(cg, *current, outputs.empty() ? std::string_view{} : std::string_view{ outputs.front() }));
+        inlined[id] = 0U;
+    }
 }
 
 [[nodiscard]] std::string DefaultStableParameterId(const RenderMaterialGraphNode& node) {
@@ -4308,6 +4382,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         ++cg.fanOut[link.fromNodeId];
     }
     const auto compileOutput = [&cg, outputNode](std::string_view outputPin, RenderMaterialGraphPinType outputType, std::string fallback) {
+        EmitDeepGraphTemporaries(cg, *outputNode, outputPin);
         return CompileInputExpression(cg, *outputNode, outputPin, outputType, std::move(fallback));
     };
 
@@ -4434,6 +4509,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         for (const RenderMaterialGraphLink& link : graph.links) {
             ++vertexCg.fanOut[link.fromNodeId];
         }
+        EmitDeepGraphTemporaries(vertexCg, *outputNode, inputPin);
         const std::string expr = CompileInputExpression(vertexCg, *outputNode, inputPin, type, std::string{ defaultExpr });
         AppendCustomCodeFunctionDefinitions(source, vertexCg.functionDefinitions, emittedCustomFunctionDefinitions);
         source += "\n";
