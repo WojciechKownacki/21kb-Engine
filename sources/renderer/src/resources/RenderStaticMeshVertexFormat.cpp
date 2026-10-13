@@ -30,7 +30,11 @@ bgfx::VertexLayout RenderStaticMeshVertexLayout(RenderVertexFormat format) {
             .add(bgfx::Attrib::Tangent, 4, bgfx::AttribType::Float)
             .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
             .add(bgfx::Attrib::TexCoord1, 2, bgfx::AttribType::Float)
-            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float);
+            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
+            // UV2..UV7: the instance data holds TexCoord3..7, so the extra sets ride in Color1..3 (two per attribute).
+            .add(bgfx::Attrib::Color1, 4, bgfx::AttribType::Half)
+            .add(bgfx::Attrib::Color2, 4, bgfx::AttribType::Half)
+            .add(bgfx::Attrib::Color3, 4, bgfx::AttribType::Half);
         break;
     case RenderVertexFormat::SkinnedP3N3T4UV2J4W4:
         layout

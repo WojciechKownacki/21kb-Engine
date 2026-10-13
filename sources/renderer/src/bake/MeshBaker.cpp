@@ -518,10 +518,14 @@ struct ClusterGroup {
     // The clusterizer and the simplifier both do arithmetic on positions, and a NaN there does
     // not fail: it spreads into every bound and every cone as a value that compares false
     // against everything.
-    const std::size_t floatCount = vertexCount * (out.vertexStride / sizeof(float));
-    for (std::size_t index = 0U; index < floatCount; ++index) {
-        if (!std::isfinite(out.positions[index])) {
-            return MeshBakeStatus::NonFiniteGeometry;
+    // The float channels lead the vertex; the tangent layout ends in UV2..UV7 as half floats.
+    const std::size_t vertexFloats = (tangents ? offsetof(RenderStaticMeshVertexP3N3T4UV2, uv2to7) : out.vertexStride) / sizeof(float);
+    const std::size_t strideFloats = out.vertexStride / sizeof(float);
+    for (std::size_t vertex = 0U; vertex < vertexCount; ++vertex) {
+        for (std::size_t channel = 0U; channel < vertexFloats; ++channel) {
+            if (!std::isfinite(out.positions[vertex * strideFloats + channel])) {
+                return MeshBakeStatus::NonFiniteGeometry;
+            }
         }
     }
     const RenderBoundsSphere sourceBounds = BoundsOfVertices(
@@ -531,13 +535,12 @@ struct ClusterGroup {
         return MeshBakeStatus::NonFiniteGeometry;
     }
 
-    // The two supported layouts are all-float and have no padding. Positions occupy the first
-    // three floats; every remaining channel is copied in declaration order.
-    const std::size_t vertexFloats = out.vertexStride / sizeof(float);
+    // Positions occupy the first three floats; every remaining float channel is copied in declaration
+    // order (the simplifier weighs normal, tangent, UV0/UV1 and color).
     out.attributeCount = static_cast<std::uint32_t>(vertexFloats - 3U);
     out.attributes.resize(vertexCount * out.attributeCount);
     for (std::size_t vertex = 0U; vertex < vertexCount; ++vertex) {
-        const float* const vertexFloatsBase = out.positions + vertex * vertexFloats;
+        const float* const vertexFloatsBase = out.positions + vertex * strideFloats;
         std::copy_n(vertexFloatsBase + 3U, out.attributeCount, out.attributes.data() + vertex * out.attributeCount);
     }
     out.attributeWeights = { kSimplifyNormalWeight, kSimplifyNormalWeight, kSimplifyNormalWeight };

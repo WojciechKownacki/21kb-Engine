@@ -6758,6 +6758,60 @@ void RunForwardGraphNoiseFunctionsTest() {
     harness.Shutdown();
 }
 
+// Unreal's Texture Coordinate with Coordinate Index 3: a sphere whose UV3 is (0.25, 0.75) on every vertex (half
+// floats in the vertex); the graph's vertex shader passes UV2..UV7 and the node reads UV3, so Base Color is
+// (0.25, 0.75, 0).
+void RunForwardGraphExtraUvSetsTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "extra_uv_sets";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    using K = RenderMaterialGraphNodeKind;
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = "unlit";
+    graph.nodes.push_back(UtilityConstant(2U, K::TextureCoordinate, "1 1 3"));
+    graph.links.push_back(MakeLink(K::TextureCoordinate, 2U, "uv", K::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0xA390U });
+    if (!compiled.Succeeded()) {
+        std::fprintf(stderr, "UV3: %s\n", compiled.diagnostics.empty() ? "" : compiled.diagnostics.front().message.c_str());
+    }
+    Require(compiled.Succeeded(), "UV3: the graph must compile");
+    const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(cooked.Succeeded() && cooked.artifact.has_value(), "UV3: the graph must cook");
+    const RenderMaterialGraphShaderBinary* graphVs = cooked.artifact->FindVertexBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(graphVs != nullptr && graphVs->byteSize > 0U, "UV3: a graph reading UV2..UV7 must cook its own vertex shader");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "UV3: Direct3D11 device unavailable; cannot read the coordinate set back\n");
+        Require(false, "UV3: A real GPU device is required to prove the coordinate set");
+        return;
+    }
+    const bgfx::ProgramHandle program = BuildGraphProgram(ReadAllBytes(std::filesystem::path{ graphVs->binaryPath }), *cooked.artifact);
+    RenderMeshAssetData sphere = ShapeMeshes::Sphere(0.25F, "Preview");
+    for (RenderStaticMeshVertexP3N3T4UV2& vertex : sphere.tangentVertices) {
+        vertex.uv2to7[2] = bx::halfFromFloat(0.25F);
+        vertex.uv2to7[3] = bx::halfFromFloat(0.75F);
+    }
+    const bgfx::VertexBufferHandle vertices = bgfx::createVertexBuffer(
+        bgfx::copy(sphere.tangentVertices.data(), static_cast<std::uint32_t>(sphere.tangentVertices.size() * sizeof(RenderStaticMeshVertexP3N3T4UV2))),
+        RenderStaticMeshVertexLayout(RenderVertexFormat::P3N3T4UV2));
+    const bgfx::IndexBufferHandle indices = bgfx::createIndexBuffer(
+        bgfx::copy(sphere.indices32.data(), static_cast<std::uint32_t>(sphere.indices32.size() * sizeof(std::uint32_t))), BGFX_BUFFER_INDEX32);
+    Require(bgfx::isValid(program) && bgfx::isValid(vertices) && bgfx::isValid(indices), "UV3: program and sphere must be created");
+    HarnessMesh mesh{ .vertices = vertices, .indices = indices };
+    mesh.viewProjection = { 3.6F, 0.0F, 0.0F, 0.0F, 0.0F, 3.6F, 0.0F, 0.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F, 0.0F, 0.5F, 1.0F };
+    const std::vector<std::uint8_t> pixels = harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, UINT32_MAX, 0x000000ffU,
+        BGFX_STATE_CULL_CCW, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, 0.0F, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, nullptr, true, 1.0F, &mesh);
+    RequirePixelNear(ForwardRenderHarness::ProbeAt(pixels, 32U, 32U), { 0.25F, 0.75F, 0.0F }, "UV3 at the sphere centre");
+    RequirePixelNear(ForwardRenderHarness::ProbeAt(pixels, 40U, 26U), { 0.25F, 0.75F, 0.0F }, "UV3 off the sphere centre");
+    bgfx::destroy(indices);
+    bgfx::destroy(vertices);
+    bgfx::destroy(program);
+    harness.Shutdown();
+}
+
 // Unreal and Unity transform normals by the inverse transpose of the model matrix. A sphere scaled 1 x 4 x 1
 // is an ellipsoid whose normal at the sphere point s is normalize(s.x, s.y / 4, s.z); the model matrix itself
 // would give normalize(s.x, 4 s.y, s.z), tilted towards the long axis, and the side light would fall off.
@@ -6969,6 +7023,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphParallaxOcclusionMappingTest();
     RunForwardGraphPixelNormalSmoothSphereTest();
     RunForwardGraphNonUniformScaleNormalTest();
+    RunForwardGraphExtraUvSetsTest();
     RunForwardGraphPixelNormalWorldSpaceTest();
     RunForwardGraphSobolRendersTest();
     RunForwardGraphMaterialParameterCollectionRendersTest();

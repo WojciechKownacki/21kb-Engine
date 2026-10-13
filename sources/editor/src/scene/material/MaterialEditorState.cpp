@@ -3528,8 +3528,14 @@ std::vector<MaterialEditorGraphNodePropertyOption> MaterialEditorState::GraphNod
         }
         return {};
     }
-    if (kind == kb::render::RenderMaterialGraphNodeKind::Uv ||
-        kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate) {
+    if (kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate) {
+        std::vector<MaterialEditorGraphNodePropertyOption> sets;
+        for (int set = 0; set < 8; ++set) {
+            sets.push_back(MaterialEditorGraphNodePropertyOption{ .value = std::to_string(set), .label = "UV" + std::to_string(set) });
+        }
+        return sets;
+    }
+    if (kind == kb::render::RenderMaterialGraphNodeKind::Uv) {
         return {
             MaterialEditorGraphNodePropertyOption{ .value = "0", .label = "UV0" },
             MaterialEditorGraphNodePropertyOption{ .value = "1", .label = "UV1" },
@@ -3545,10 +3551,7 @@ std::string MaterialEditorState::GraphNodeUvSetValue(const kb::render::RenderMat
             return "1";
         }
         const std::vector<float> numbers = ParseDefaultNumbers(hint);
-        if (numbers.size() > 2U && numbers[2] >= 0.5F) {
-            return "1";
-        }
-        return "0";
+        return numbers.size() > 2U ? std::to_string(std::clamp(std::lround(numbers[2]), 0L, 7L)) : std::string{ "0" };
     }
     if (node.parameter.defaultValueHint == "1" || node.parameter.defaultValueHint == "uv1" || node.parameter.defaultValueHint == "UV1") {
         return "1";
