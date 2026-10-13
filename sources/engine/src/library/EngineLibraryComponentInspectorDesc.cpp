@@ -127,6 +127,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "useGravity", "Use Gravity", "Whether world gravity affects this body." },
                 LibraryComponentInspectorFieldDesc{ "lockRotation", "Lock Rotation", "Whether physics simulation is prevented from rotating this body." },
                 LibraryComponentInspectorFieldDesc{ "useContinuousCollision", "Continuous Collision", "Sweeps this body's shape along its path each step so it cannot tunnel through thin colliders at high speed." },
+                LibraryComponentInspectorFieldDesc{ "linearDamping", "Linear Damping", "Fraction of linear velocity removed per second (0 keeps it)." },
+                LibraryComponentInspectorFieldDesc{ "angularDamping", "Angular Damping", "Fraction of angular velocity removed per second." },
             },
         },
         LibraryComponentInspectorDesc{

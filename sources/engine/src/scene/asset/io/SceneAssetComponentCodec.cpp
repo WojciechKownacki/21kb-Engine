@@ -169,7 +169,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
     }
     if ((componentBits & RigidbodyBit) != 0U) {
         RigidbodyComponent rigidbody;
-        if (!SceneAssetPhysicsComponentCodec::ReadRigidbody(input, rigidbody)) {
+        if (!SceneAssetPhysicsComponentCodec::ReadRigidbody(input, fileVersion, rigidbody)) {
             return false;
         }
         output.rigidbody = rigidbody;

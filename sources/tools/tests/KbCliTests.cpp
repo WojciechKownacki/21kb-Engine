@@ -692,7 +692,7 @@ function Tick(self, dt)
             and not Physics.Sleep(0) and not Physics.Wake(0) and not Physics.IsSleeping(0) then
             -- A loaded backend must also reject the wrong *live* body kind,
             -- not only an unknown entity. Rigidbody controls are Dynamic
-            -- only; Kinematic bodies accept only MoveKinematic.
+            -- only; Kinematic bodies accept only MoveKinematic and report its velocity.
             local staticRejected = not Physics.AddForce(queryTarget, 1.0, 0.0, 0.0)
                 and not Physics.AddImpulse(queryTarget, 1.0, 0.0, 0.0)
                 and not Physics.SetVelocity(queryTarget, 1.0, 0.0, 0.0)
@@ -704,7 +704,7 @@ function Tick(self, dt)
             local kinematicRejected = not Physics.AddForce(kinematicBody, 1.0, 0.0, 0.0)
                 and not Physics.AddImpulse(kinematicBody, 1.0, 0.0, 0.0)
                 and not Physics.SetVelocity(kinematicBody, 1.0, 0.0, 0.0)
-                and kinematicVelocity ~= nil and not kinematicVelocity.found
+                and kinematicVelocity ~= nil and kinematicVelocity.found
                 and not Physics.SetAngularVelocity(kinematicBody, 0.0, 0.0, 1.0)
                 and kinematicAngularVelocity ~= nil and not kinematicAngularVelocity.found
                 and not Physics.Sleep(kinematicBody) and not Physics.Wake(kinematicBody) and not Physics.IsSleeping(kinematicBody)

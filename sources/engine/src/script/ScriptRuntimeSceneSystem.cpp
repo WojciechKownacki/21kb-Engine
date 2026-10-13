@@ -412,6 +412,9 @@ void ScriptRuntimeSceneSystem::DispatchPendingCollisionEvents(kb::scene::Scene& 
         case kb::scene::PhysicsContactPhase::Exit:
             name = pending.isTrigger ? "OnTriggerExit" : "OnCollisionExit";
             break;
+        case kb::scene::PhysicsContactPhase::ControllerHit:
+            name = "OnControllerColliderHit";
+            break;
         }
         ScriptEvent event;
         event.name = name;

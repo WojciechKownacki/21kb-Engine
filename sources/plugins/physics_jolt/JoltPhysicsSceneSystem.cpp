@@ -210,6 +210,8 @@ struct BodySignature {
     bool useGravity = true;
     bool lockRotation = false;
     bool useContinuousCollision = false;
+    float linearDamping = 0.0F;
+    float angularDamping = 0.05F;
     bool trigger = false;
     float friction = 0.5F;
     float restitution = 0.0F;
@@ -408,6 +410,8 @@ void FinalizeWriteBackLocalPose(SceneSystemContext& context, SceneEntity entity,
         .useGravity = rigidbody.useGravity,
         .lockRotation = rigidbody.lockRotation,
         .useContinuousCollision = rigidbody.useContinuousCollision,
+        .linearDamping = rigidbody.linearDamping,
+        .angularDamping = rigidbody.angularDamping,
         .trigger = collider.trigger,
         .friction = collider.friction,
         .restitution = collider.restitution,
@@ -421,6 +425,7 @@ void FinalizeWriteBackLocalPose(SceneSystemContext& context, SceneEntity entity,
         lhs.height == rhs.height && lhs.mass == rhs.mass && lhs.gravityScale == rhs.gravityScale &&
         lhs.useGravity == rhs.useGravity && lhs.lockRotation == rhs.lockRotation &&
         lhs.useContinuousCollision == rhs.useContinuousCollision && lhs.trigger == rhs.trigger &&
+        lhs.linearDamping == rhs.linearDamping && lhs.angularDamping == rhs.angularDamping &&
         lhs.layer == rhs.layer &&
         lhs.friction == rhs.friction && lhs.restitution == rhs.restitution;
 }
@@ -584,6 +589,9 @@ struct CharacterRecord {
     float stepOffset = 0.4F;
     float gravityScale = 1.0F;
     bool useGravity = true;
+    // Velocity the character actually moved with in the last step (Unity's
+    // CharacterController.velocity); Jolt's own linear velocity is the requested one.
+    Vec3 velocity{};
 };
 
 struct RootMotionSegment {
@@ -1005,6 +1013,11 @@ struct ActiveBodyContact {
     // Enter is emitted when it changes empty -> non-empty and Exit only
     // when the final sub-shape contact disappears.
     std::map<JPH::SubShapeIDPair, ContactPayload> subShapes;
+    // Jolt reports OnContactRemoved when both bodies fall asleep while still touching
+    // (ContactListener.h). Like PhysX/Unity, that is no Exit: the pair is kept until a
+    // body wakes up and the contact is either detected again (Stay) or not (Exit).
+    // 1 = asleep, 2 = a body woke up last step and the contact was not reported yet.
+    std::uint8_t sleeping = 0U;
 };
 
 class JoltCollisionContactListener final : public JPH::ContactListener {
@@ -1089,7 +1102,7 @@ private:
 
 } // namespace
 
-class JoltPhysicsSceneSystem::Impl final : public kb::scene::IPhysicsBackend {
+class JoltPhysicsSceneSystem::Impl final : public kb::scene::IPhysicsBackend, public JPH::CharacterContactListener {
 public:
     explicit Impl(JoltPhysicsSceneSystemSettings settings)
         : settings_(settings)
@@ -1342,7 +1355,9 @@ public:
 
     [[nodiscard]] kb::scene::PhysicsVectorResult GetVelocity(SceneEntity entity) const noexcept override {
         JoinStep();
+        // A kinematic body reports the velocity MoveKinematic gives it, as Unity's MovePosition does.
         const BodyRecord* body = FindDynamicBody(entity);
+        body = body != nullptr ? body : FindLiveBody(entity, RigidbodyBodyType::Kinematic);
         if (body == nullptr) {
             return {};
         }
@@ -1439,7 +1454,7 @@ public:
         if (record == nullptr) {
             return {};
         }
-        return kb::scene::PhysicsVectorResult{ .found = true, .value = FromJolt(record->character->GetLinearVelocity()) };
+        return kb::scene::PhysicsVectorResult{ .found = true, .value = record->velocity };
     }
 
     [[nodiscard]] bool CharacterIsGrounded(SceneEntity entity) const noexcept override {
@@ -1751,7 +1766,7 @@ public:
             !std::isfinite(collider.height) || !std::isfinite(collider.friction) ||
             !std::isfinite(collider.restitution) || !std::isfinite(rigidbody.mass) ||
             !std::isfinite(rigidbody.gravityScale) || !IsFinite(rigidbody.linearVelocity) ||
-            !IsFinite(rigidbody.angularVelocity)) {
+            !IsFinite(rigidbody.angularVelocity) || !std::isfinite(rigidbody.linearDamping) || !std::isfinite(rigidbody.angularDamping)) {
             throw std::invalid_argument("Physics body contains non-finite values or an invalid rotation");
         }
         const BodySignature signature = MakeSignature(rigidbody, collider, transform);
@@ -2194,7 +2209,8 @@ private:
         characterSettings.mMaxSlopeAngle = JPH::DegreesToRadians(component.slopeLimitDegrees);
 
         const JPH::Ref<JPH::CharacterVirtual> character = new JPH::CharacterVirtual(
-            &characterSettings, ToJoltPosition(scene_->Transforms().WorldTranslation(entity, transform)), ToJolt(transform.worldRotation), &physicsSystem_);
+            &characterSettings, ToJoltPosition(scene_->Transforms().WorldTranslation(entity, transform)), ToJolt(transform.worldRotation), entity.Id(), &physicsSystem_);
+        character->SetListener(this);
         characters_.emplace(entity.Id(), CharacterRecord{
                                               .character = character,
                                               .signature = signature,
@@ -2292,12 +2308,15 @@ private:
             }
 
             character->SetLinearVelocity(newVelocity);
+            // Jolt changes the character's velocity during the update; a hit compares the move asked for.
+            updatingCharacterVelocity_ = newVelocity;
 
             // LIB-131 step offset: ExtendedUpdate's own WalkStairs pass, magnitude taken from
             // this character's configured stepOffset (not Jolt's built-in 0.4 default, though
             // that IS this field's own default value - see CharacterControllerComponent.hpp).
             JPH::CharacterVirtual::ExtendedUpdateSettings updateSettings;
             updateSettings.mWalkStairsStepUp = up * record.stepOffset;
+            const JPH::RVec3 startPosition = character->GetPosition();
 
             character->ExtendedUpdate(
                 deltaSeconds,
@@ -2308,6 +2327,58 @@ private:
                 {},
                 {},
                 tempAllocator_);
+            record.velocity = FromJolt(JPH::Vec3(character->GetPosition() - startPosition) / deltaSeconds);
+        }
+    }
+
+    // Unity's CharacterController contacts, reported by ExtendedUpdate on the main thread:
+    // a trigger raises OnTrigger* on both sides, a solid collider raises
+    // OnControllerColliderHit on the controller for every step it moves into it.
+    void OnContactAdded(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact, JPH::CharacterContactSettings& settings) override {
+        static_cast<void>(settings);
+        QueueCharacterTouch(*character, contact, kb::scene::PhysicsContactPhase::Enter);
+    }
+
+    void OnContactPersisted(const JPH::CharacterVirtual* character, const JPH::CharacterContact& contact, JPH::CharacterContactSettings& settings) override {
+        static_cast<void>(settings);
+        QueueCharacterTouch(*character, contact, kb::scene::PhysicsContactPhase::Stay);
+    }
+
+    void QueueCharacterTouch(const JPH::CharacterVirtual& character, const JPH::CharacterContact& contact, kb::scene::PhysicsContactPhase triggerPhase) {
+        if (contact.mIsSensorB) {
+            QueueCharacterContact(character, contact.mBodyB, triggerPhase, contact.mPosition, contact.mContactNormal);
+        } else if (updatingCharacterVelocity_.Dot(contact.mContactNormal) < 0.0F) {
+            QueueCharacterContact(character, contact.mBodyB, kb::scene::PhysicsContactPhase::ControllerHit, contact.mPosition, contact.mContactNormal);
+        }
+    }
+
+    void OnContactRemoved(const JPH::CharacterVirtual* character, const JPH::BodyID& bodyId, const JPH::SubShapeID& subShapeId) override {
+        static_cast<void>(subShapeId);
+        if (physicsSystem_.GetBodyInterface().IsSensor(bodyId)) {
+            QueueCharacterContact(*character, bodyId, kb::scene::PhysicsContactPhase::Exit, character->GetPosition(), JPH::Vec3::sZero());
+        }
+    }
+
+    void QueueCharacterContact(const JPH::CharacterVirtual& character, JPH::BodyID bodyId, kb::scene::PhysicsContactPhase phase, JPH::RVec3 point, JPH::Vec3 normal) {
+        const auto other = entityByBodyId_.find(bodyId);
+        if (scene_ == nullptr || other == entityByBodyId_.end() || !kb::scene::PhysicsBackend::HasCollisionEventConsumer(*scene_)) {
+            return;
+        }
+        const bool trigger = phase != kb::scene::PhysicsContactPhase::ControllerHit;
+        kb::scene::PendingCollisionEvent event{
+            .target = SceneEntity{ character.GetUserData() },
+            .other = other->second,
+            .point = kb::math::ToVec3(FromJoltWorldPosition(point)),
+            .normal = FromJolt(normal),
+            .isTrigger = trigger,
+            .phase = phase,
+            .worldPoint = FromJoltWorldPosition(point),
+        };
+        kb::scene::PhysicsBackend::QueueCollisionEvent(*scene_, event);
+        if (trigger) {
+            std::swap(event.target, event.other);
+            event.normal = Vec3{ -event.normal.x, -event.normal.y, -event.normal.z };
+            kb::scene::PhysicsBackend::QueueCollisionEvent(*scene_, event);
         }
     }
 
@@ -2440,6 +2511,8 @@ private:
         bodySettings.mLinearVelocity = ToJolt(rigidbody.linearVelocity);
         bodySettings.mAngularVelocity = ToJolt(rigidbody.angularVelocity);
         bodySettings.mGravityFactor = rigidbody.useGravity ? rigidbody.gravityScale : 0.0F;
+        bodySettings.mLinearDamping = rigidbody.linearDamping;
+        bodySettings.mAngularDamping = rigidbody.angularDamping;
         // LIB-133: fast mover / tunneling - Jolt's own default (Discrete) can tunnel a
         // fast-moving body clean through a thin collider within a single fixed step; LinearCast
         // sweeps the shape from start to destination instead.
@@ -2654,9 +2727,19 @@ private:
     // drain and dispatch as real, entity-local ScriptEvents.
     void DispatchContactEvents(SceneSystemContext& context) {
         const auto drained = contactListener_.DrainAndClear();
-        if (drained.empty()) {
-            return;
-        }
+        kb::scene::Scene& scene = context.GetScene();
+        const auto queue = [&scene](SceneEntity target, SceneEntity other, kb::scene::PhysicsContactPhase phase, const ContactPayload& payload, float normalSign) {
+            kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
+                                                                       .target = target,
+                                                                       .other = other,
+                                                                       .point = kb::math::ToVec3(payload.point),
+                                                                       .normal = Vec3{payload.normal.x * normalSign, payload.normal.y * normalSign, payload.normal.z * normalSign},
+                                                                       .isTrigger = payload.isTrigger,
+                                                                       .phase = phase,
+                                                                       .worldPoint = payload.point,
+                                                                   });
+        };
+        const JPH::BodyInterface& bodies = physicsSystem_.GetBodyInterfaceNoLock();
 
         // Grouping by canonical BodyID pair makes cross-pair callback order
         // independent of Jolt's worker scheduling. The reducer below
@@ -2667,7 +2750,6 @@ private:
             return BodyContactKey{lhs.body1, lhs.body2} < BodyContactKey{rhs.body1, rhs.body2};
         });
 
-        kb::scene::Scene& scene = context.GetScene();
         for (std::size_t begin = 0U; begin < drained.size();) {
             const BodyContactKey bodyPair{drained[begin].body1, drained[begin].body2};
             std::size_t end = begin + 1U;
@@ -2699,8 +2781,13 @@ private:
                         // teardown discarded the authoritative state.
                         continue;
                     }
+                    if (!bodies.IsActive(bodyPair.body1) && !bodies.IsActive(bodyPair.body2)) {
+                        active.sleeping = 1U;
+                        continue;
+                    }
                     active.subShapes.erase(subShapeIt);
                 } else {
+                    active.sleeping = 0U;
                     const ContactPayload payload{
                         .point = contact.point,
                         .normal = contact.normal,
@@ -2714,6 +2801,9 @@ private:
             }
 
             const bool isActive = !active.subShapes.empty();
+            if (active.sleeping != 0U) {
+                continue;
+            }
             if (!wasActive && isActive) {
                 // Use the lowest SubShapeIDPair as representative once
                 // more than one became active. Its operator< is Jolt's own
@@ -2759,33 +2849,40 @@ private:
                 // normal from body1 toward body2, therefore body2 receives
                 // its exact inverse. Point remains a world-space point for
                 // both recipients.
-                kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
-                                                                           .target = entity1It->second,
-                                                                           .other = entity2It->second,
-                                                                           .point = kb::math::ToVec3(dispatch.payload.point),
-                                                                           .normal = dispatch.payload.normal,
-                                                                           .isTrigger = dispatch.payload.isTrigger,
-                                                                           .phase = dispatch.phase,
-                                                                           .worldPoint = dispatch.payload.point,
-                                                                       });
-                kb::scene::PhysicsBackend::QueueCollisionEvent(scene, kb::scene::PendingCollisionEvent{
-                                                                           .target = entity2It->second,
-                                                                           .other = entity1It->second,
-                                                                           .point = kb::math::ToVec3(dispatch.payload.point),
-                                                                           .normal = Vec3{
-                                                                               -dispatch.payload.normal.x,
-                                                                               -dispatch.payload.normal.y,
-                                                                               -dispatch.payload.normal.z,
-                                                                           },
-                                                                           .isTrigger = dispatch.payload.isTrigger,
-                                                                           .phase = dispatch.phase,
-                                                                           .worldPoint = dispatch.payload.point,
-                                                                       });
+                queue(entity1It->second, entity2It->second, dispatch.phase, dispatch.payload, 1.0F);
+                queue(entity2It->second, entity1It->second, dispatch.phase, dispatch.payload, -1.0F);
             }
 
             if (active.subShapes.empty()) {
                 activeContacts_.erase(bodyPair);
             }
+        }
+
+        // Pairs kept through sleep that received nothing this step: a trigger keeps
+        // its Stay; once a body is awake for a full step without the contact, it ended.
+        for (auto it = activeContacts_.begin(); it != activeContacts_.end();) {
+            ActiveBodyContact& active = it->second;
+            const auto entity1It = entityByBodyId_.find(it->first.body1);
+            const auto entity2It = entityByBodyId_.find(it->first.body2);
+            if (active.sleeping == 0U || entity1It == entityByBodyId_.end() || entity2It == entityByBodyId_.end()) {
+                ++it;
+                continue;
+            }
+            const ContactPayload& payload = active.subShapes.begin()->second;
+            const bool awake = bodies.IsActive(it->first.body1) || bodies.IsActive(it->first.body2);
+            if (active.sleeping == 2U) {
+                queue(entity1It->second, entity2It->second, kb::scene::PhysicsContactPhase::Exit, payload, 1.0F);
+                queue(entity2It->second, entity1It->second, kb::scene::PhysicsContactPhase::Exit, payload, -1.0F);
+                it = activeContacts_.erase(it);
+                continue;
+            }
+            if (awake) {
+                active.sleeping = 2U;
+            } else if (payload.isTrigger) {
+                queue(entity1It->second, entity2It->second, kb::scene::PhysicsContactPhase::Stay, payload, 1.0F);
+                queue(entity2It->second, entity1It->second, kb::scene::PhysicsContactPhase::Stay, payload, -1.0F);
+            }
+            ++it;
         }
     }
 
@@ -2892,6 +2989,7 @@ private:
     std::uint64_t collisionAssetRevision_ = 0;
     std::unordered_map<std::uint64_t, RootMotionQueue> pendingRigidbodyRootMotion_;
     kb::scene::Scene* scene_ = nullptr;
+    JPH::Vec3 updatingCharacterVelocity_ = JPH::Vec3::sZero();
     std::unordered_map<JPH::BodyID, SceneEntity> entityByBodyId_;
     std::unordered_map<std::uint64_t, JointRecord> joints_;
     std::vector<JointSnapshot> jointScratch_;

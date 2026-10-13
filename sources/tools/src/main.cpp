@@ -211,6 +211,12 @@ Commands:
                editor's Bake Navigation Mesh does; settings not given are
                those of the mesh it replaces, else the defaults.
                  info <file.21kbnavmesh>
+  physics-layers  Show or edit the project's layer collision matrix.
+                 --project <dir> [--name <index>=<Name>]...
+                 [--ignore <layer>,<layer>]... [--collide <layer>,<layer>]...
+               Layers are indexes 0-30 or names. The asset is the project's
+               [Physics] LayersAsset, created at
+               /Game/Settings/PhysicsLayers.21kbphysicslayers when it has none.
 
 Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).
@@ -374,6 +380,9 @@ int Dispatch(int argc, char** argv) {
     }
     if (command == "navmesh") {
         return kb::cli::RunNavMeshCommand(arguments, io);
+    }
+    if (command == "physics-layers") {
+        return kb::cli::RunPhysicsLayersCommand(arguments, io);
     }
     if (command == "help" || command == "--help" || command == "-h") {
         std::cout << kUsage;
