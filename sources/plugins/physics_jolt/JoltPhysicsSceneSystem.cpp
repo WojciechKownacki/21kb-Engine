@@ -2216,6 +2216,11 @@ private:
         if (constraint == nullptr) {
             return; // A body vanished between FindBodyId and the lock - honest skip, retried next step.
         }
+        // A body on a long arm (pendulum) has very different effective masses for rotation and
+        // motion: with Jolt's default 10/2 solver steps a hinge limit lets it through by 5 deg and
+        // bounces. Jolt recommends more steps for such constraints - the limit holds as in Unity.
+        constraint->SetNumVelocityStepsOverride(40U);
+        constraint->SetNumPositionStepsOverride(10U);
         physicsSystem_.AddConstraint(constraint);
         joints_.emplace(entity.Id(), JointRecord{ .constraint = constraint, .signature = signature });
     }

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
 
-project(JoltPhysics VERSION 5.5.1 LANGUAGES CXX)
+project(JoltPhysics VERSION 5.6.0 LANGUAGES CXX)
 
 # When turning this option on, the library will be compiled using assertions. By default asserts are enabled in Debug build.
 option(USE_ASSERTS "Enable asserts" OFF)
@@ -345,6 +345,12 @@ if (ENABLE_INSTALL)
 			cmake_path(SET DST_FILE NORMALIZE "${CMAKE_INSTALL_INCLUDEDIR}/${DESTINATION_PATH}")
 			install(FILES ${SRC_FILE} DESTINATION ${DST_FILE})
 		endif()
+	endforeach()
+	foreach(SRC_FILE ${JOLT_PHYSICS_DXIL_SHADERS} ${JOLT_PHYSICS_METAL_LIB} ${JOLT_PHYSICS_SPV_SHADERS})
+		string(REPLACE ${PHYSICS_REPO_ROOT} "" RELATIVE_SRC_FILE ${SRC_FILE})
+		get_filename_component(DESTINATION_PATH ${RELATIVE_SRC_FILE} DIRECTORY)
+		cmake_path(SET DST_FILE NORMALIZE "${CMAKE_INSTALL_DATADIR}/${DESTINATION_PATH}")
+		install(FILES ${SRC_FILE} DESTINATION ${DST_FILE})
 	endforeach()
 
 	# Export Jolt library
