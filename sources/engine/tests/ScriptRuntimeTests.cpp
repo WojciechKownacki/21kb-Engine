@@ -12581,7 +12581,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // NavLink adds eleven fields.
     // WorldBackdrop grew eleven procedural sky fields, and the older names of Line Renderer
     // (10), Trail Renderer (9) and Lens Flare (7) are accepted aliases: 628 -> 665.
-    kb::tests::Require(fieldsChecked == 666U, "Script component API generated accessor coverage test did not exercise the expected total field count (666, including collision mesh assets and the compatibility aliases)");
+    kb::tests::Require(fieldsChecked == 668U, "Script component API generated accessor coverage test did not exercise the expected total field count (668, including collision mesh assets and the compatibility aliases)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12663,7 +12663,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 666U, "LIB-082 raw-pointer audit did not exercise the expected total field count (665, including collision mesh assets and the compatibility aliases)");
+    kb::tests::Require(propertiesChecked == 668U, "LIB-082 raw-pointer audit did not exercise the expected total field count (668, including collision mesh assets and the compatibility aliases)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

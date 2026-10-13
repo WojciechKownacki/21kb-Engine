@@ -549,8 +549,11 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDesc
     ScriptSceneComponentPropertyDesc{ "executionOrder", ScriptValueType::Int },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 12> kRigidbodyPropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "bodyType", ScriptValueType::Int },
+constexpr std::array<std::string_view, 3> kRigidbodyBodyTypeNames{ "Static", "Dynamic", "Kinematic" };
+constexpr std::array<std::string_view, 4> kColliderShapeNames{ "Box", "Sphere", "Capsule", "Mesh" };
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 14> kRigidbodyPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "bodyType", ScriptValueType::Int, true, kRigidbodyBodyTypeNames },
     ScriptSceneComponentPropertyDesc{ "mass", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "linearVelocity.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "linearVelocity.y", ScriptValueType::Float },
@@ -562,10 +565,12 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 12> kRigidbodyPropertyDes
     ScriptSceneComponentPropertyDesc{ "useGravity", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "lockRotation", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "useContinuousCollision", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "linearDamping", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "angularDamping", ScriptValueType::Float },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 14> kColliderPropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int, true, kColliderShapeNames },
     ScriptSceneComponentPropertyDesc{ "meshAssetId", ScriptValueType::Hash },
     ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
@@ -763,7 +768,7 @@ constexpr std::array<FieldBinding, 3> kBehaviourFields{
     KB_INT(kb::scene::BehaviourComponent, executionOrder),
 };
 
-constexpr std::array<FieldBinding, 12> kRigidbodyFields{
+constexpr std::array<FieldBinding, 14> kRigidbodyFields{
     KB_RIGIDBODY_BODY_TYPE(kb::scene::RigidbodyComponent, bodyType),
     KB_FLOAT(kb::scene::RigidbodyComponent, mass),
     KB_NESTED_FLOAT(kb::scene::RigidbodyComponent, linearVelocity, x),
@@ -776,6 +781,8 @@ constexpr std::array<FieldBinding, 12> kRigidbodyFields{
     KB_BOOL(kb::scene::RigidbodyComponent, useGravity),
     KB_BOOL(kb::scene::RigidbodyComponent, lockRotation),
     KB_BOOL(kb::scene::RigidbodyComponent, useContinuousCollision),
+    KB_FLOAT(kb::scene::RigidbodyComponent, linearDamping),
+    KB_FLOAT(kb::scene::RigidbodyComponent, angularDamping),
 };
 
 constexpr std::array<FieldBinding, 14> kColliderFields{

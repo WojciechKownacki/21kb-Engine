@@ -98,6 +98,8 @@ std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::Rigidbo
         FloatField(EditorText("inspector.rigidbody.angVelocityX", "Ang Velocity X"), c.angularVelocity.x),
         FloatField(EditorText("inspector.rigidbody.angVelocityY", "Ang Velocity Y"), c.angularVelocity.y),
         FloatField(EditorText("inspector.rigidbody.angVelocityZ", "Ang Velocity Z"), c.angularVelocity.z),
+        FloatField(EditorText("inspector.rigidbody.linearDamping", "Linear Damping"), c.linearDamping),
+        FloatField(EditorText("inspector.rigidbody.angularDamping", "Angular Damping"), c.angularDamping),
     };
 }
 
@@ -111,6 +113,8 @@ bool InspectorPhysicsModel::ReadFloat(const kb::scene::RigidbodyComponent& c, in
     case 9: out = c.angularVelocity.x; return true;
     case 10: out = c.angularVelocity.y; return true;
     case 11: out = c.angularVelocity.z; return true;
+    case 12: out = c.linearDamping; return true;
+    case 13: out = c.angularDamping; return true;
     default: return false;
     }
 }
@@ -125,6 +129,8 @@ bool InspectorPhysicsModel::ApplyFloat(kb::scene::RigidbodyComponent& c, int ind
     case 9: c.angularVelocity.x = v; return true;
     case 10: c.angularVelocity.y = v; return true;
     case 11: c.angularVelocity.z = v; return true;
+    case 12: c.linearDamping = v < 0.0F ? 0.0F : v; return true;
+    case 13: c.angularDamping = v < 0.0F ? 0.0F : v; return true;
     default: return false;
     }
 }

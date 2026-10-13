@@ -2878,7 +2878,7 @@ void RunInspectorPhysicsModelTest() {
     // Rigidbody: enum cycle, float apply/read, bool toggle, kind mismatch rejection.
     kb::scene::RigidbodyComponent rb;
     const std::vector<kb::editor::PhysicsField> rbFields = InspectorPhysicsModel::Fields(rb);
-    kb::editor::tests::Require(rbFields.size() == 12U, "Rigidbody exposes 12 inspector fields");
+    kb::editor::tests::Require(rbFields.size() == 14U, "Rigidbody exposes 14 inspector fields");
     kb::editor::tests::Require(rbFields[0].kind == PhysicsFieldKind::Enum && rbFields[0].value == "Dynamic",
         "Rigidbody field 0 is the Body Type enum defaulting to Dynamic");
     kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(rb, 0) && rb.bodyType == kb::scene::RigidbodyBodyType::Kinematic,
@@ -2889,6 +2889,8 @@ void RunInspectorPhysicsModelTest() {
     kb::editor::tests::Require(rb.useGravity && InspectorPhysicsModel::ToggleBool(rb, 3) && !rb.useGravity, "Toggling Rigidbody Use Gravity flips it");
     kb::editor::tests::Require(!InspectorPhysicsModel::ApplyFloat(rb, 3, 1.0F), "ApplyFloat rejects a Bool field index");
     kb::editor::tests::Require(!InspectorPhysicsModel::ToggleBool(rb, 1), "ToggleBool rejects a Float field index");
+    kb::editor::tests::Require(rb.linearDamping == 0.0F && InspectorPhysicsModel::ApplyFloat(rb, 12, 0.5F) && rb.linearDamping == 0.5F &&
+        InspectorPhysicsModel::ApplyFloat(rb, 13, 2.0F) && rb.angularDamping == 2.0F, "Rigidbody Linear/Angular Damping fields write damping");
 
     // Collider: shape cycle, vec3 flattened into X/Y/Z floats, trigger toggle.
     kb::scene::ColliderComponent col;

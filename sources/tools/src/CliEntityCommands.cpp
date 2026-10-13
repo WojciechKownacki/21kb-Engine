@@ -23,6 +23,7 @@
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptValue.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cstdint>
 #include <optional>
@@ -382,9 +383,17 @@ void ListProperties(std::string_view component, std::ostream& out) {
             io.err << "error: " << component << '.' << property << " is read-only\n";
             return false;
         }
-        const std::optional<kb::script::ScriptValue> parsed = ParseValue(text, desc->type);
+        std::optional<kb::script::ScriptValue> parsed = ParseValue(text, desc->type);
+        const auto named = std::find(desc->enumNames.begin(), desc->enumNames.end(), text);
+        if (!parsed.has_value() && named != desc->enumNames.end()) {
+            parsed = kb::script::ScriptValue{ static_cast<int>(named - desc->enumNames.begin()) };
+        }
         if (!parsed.has_value()) {
-            io.err << "error: " << component << '.' << property << " expects " << TypeName(desc->type) << ", got '" << text << "'\n";
+            io.err << "error: " << component << '.' << property << " expects " << TypeName(desc->type) << ", got '" << text << "'";
+            for (std::size_t index = 0; index < desc->enumNames.size(); ++index) {
+                io.err << (index == 0U ? " (" : ", ") << desc->enumNames[index];
+            }
+            io.err << (desc->enumNames.empty() ? "\n" : ")\n");
             return false;
         }
         const auto set = kb::script::ScriptSceneComponentApi::SetProperty(scene, entity, component, property, *parsed);

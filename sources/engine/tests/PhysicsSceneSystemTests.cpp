@@ -225,8 +225,9 @@ void RunPhysicsSceneSystemFallingBodyTest() {
             "PhysicsBackend::AddImpulse must reject live non-Dynamic bodies rather than report Jolt's no-op as applied");
         kb::tests::Require(!kb::scene::PhysicsBackend::SetVelocity(scene, unsupported, kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
             "PhysicsBackend::SetVelocity must reject a body whose velocity is not a Dynamic simulation result");
-        kb::tests::Require(!kb::scene::PhysicsBackend::GetVelocity(scene, unsupported).found,
-            "PhysicsBackend::GetVelocity must report found=false for a non-Dynamic body");
+        // A Kinematic body reports the velocity MoveKinematic gives it (Unity's MovePosition).
+        kb::tests::Require(kb::scene::PhysicsBackend::GetVelocity(scene, unsupported).found == (unsupported == kinematic.Entity()),
+            "PhysicsBackend::GetVelocity must report found=false for a Static body and the velocity of a Kinematic one");
         kb::tests::Require(!kb::scene::PhysicsBackend::SetAngularVelocity(scene, unsupported, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F }),
             "PhysicsBackend::SetAngularVelocity must reject a non-Dynamic body");
         kb::tests::Require(!kb::scene::PhysicsBackend::GetAngularVelocity(scene, unsupported).found,
@@ -2007,6 +2008,99 @@ void RunPhysicsPersistentSleeperTransitionTest() {
     std::filesystem::remove(path, error);
 }
 
+// Unity-like contact semantics: no hidden damping, and a pair that falls asleep while
+// touching stays in contact (no Exit) until a body wakes up and really leaves.
+void RunPhysicsSleepingContactAndDampingTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
+        return;
+    }
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Physics.Jolt",
+        .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH,
+        .enabled = true,
+    });
+    kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    kb::scene::PhysicsBackend::SetCollisionEventConsumer(scene, true);
+    const auto makeBody = [&scene](const char* name, kb::scene::Vec3 position, kb::scene::RigidbodyComponent rigidbody, kb::scene::ColliderComponent collider) {
+        const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = name, .transform = kb::scene::TransformComponent{.localPosition = position}});
+        scene.Components().Rigidbodies().Set(object.Entity(), rigidbody);
+        scene.Components().Colliders().Set(object.Entity(), collider);
+        return object;
+    };
+    const auto undamped = makeBody("Undamped", {0.0F, 50.0F, 0.0F}, {.linearVelocity = {5.0F, 0.0F, 0.0F}, .useGravity = false}, {.shape = kb::scene::ColliderShape::Sphere});
+    const auto damped = makeBody("Damped", {0.0F, 50.0F, 10.0F}, {.linearVelocity = {5.0F, 0.0F, 0.0F}, .useGravity = false, .linearDamping = 1.0F}, {.shape = kb::scene::ColliderShape::Sphere});
+    const auto floor = makeBody("Floor", {20.0F, -0.5F, 0.0F}, {.bodyType = kb::scene::RigidbodyBodyType::Static}, {.boxSize = {4.0F, 1.0F, 4.0F}});
+    const auto box = makeBody("Resting box", {20.0F, 0.5F, 0.0F}, {}, {});
+    const auto trigger = makeBody("Trigger", {40.0F, 0.0F, 0.0F}, {.bodyType = kb::scene::RigidbodyBodyType::Static}, {.boxSize = {4.0F, 4.0F, 4.0F}, .trigger = true});
+    const auto inside = makeBody("Inside", {40.0F, 0.0F, 0.0F}, {.useGravity = false}, {.shape = kb::scene::ColliderShape::Sphere});
+
+    const auto count = [](const std::vector<kb::scene::PendingCollisionEvent>& events, kb::scene::SceneEntity target, kb::scene::PhysicsContactPhase phase) {
+        return std::count_if(events.begin(), events.end(), [&](const auto& event) { return event.target == target && event.phase == phase; });
+    };
+    std::vector<kb::scene::PendingCollisionEvent> events;
+    const auto run = [&](int steps) {
+        events.clear();
+        for (int i = 0; i < steps; ++i) {
+            static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+            auto drained = kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene);
+            events.insert(events.end(), drained.begin(), drained.end());
+        }
+    };
+    run(10);
+    kb::tests::Require(count(events, box.Entity(), kb::scene::PhysicsContactPhase::Enter) == 1 &&
+            count(events, inside.Entity(), kb::scene::PhysicsContactPhase::Enter) == 1,
+        "Resting box and trigger occupant must enter their contacts");
+    kb::tests::Require(kb::scene::PhysicsBackend::Sleep(scene, box.Entity()) && kb::scene::PhysicsBackend::Sleep(scene, inside.Entity()),
+        "Bodies must be put to sleep");
+    run(30);
+    kb::tests::Require(count(events, box.Entity(), kb::scene::PhysicsContactPhase::Exit) == 0 &&
+            count(events, floor.Entity(), kb::scene::PhysicsContactPhase::Exit) == 0,
+        "A contact that falls asleep must not raise Exit");
+    kb::tests::Require(count(events, inside.Entity(), kb::scene::PhysicsContactPhase::Exit) == 0 &&
+            count(events, inside.Entity(), kb::scene::PhysicsContactPhase::Stay) == 30,
+        "A sleeping trigger occupant must keep Stay and never Exit");
+    kb::tests::Require(kb::scene::PhysicsBackend::Wake(scene, box.Entity()), "Box must wake");
+    run(5);
+    kb::tests::Require(count(events, box.Entity(), kb::scene::PhysicsContactPhase::Enter) == 0 &&
+            count(events, box.Entity(), kb::scene::PhysicsContactPhase::Exit) == 0 &&
+            count(events, box.Entity(), kb::scene::PhysicsContactPhase::Stay) >= 4,
+        "A woken body still touching continues with Stay, no Exit/Enter");
+    kb::tests::Require(kb::scene::PhysicsBackend::SetVelocity(scene, inside.Entity(), {20.0F, 0.0F, 0.0F}), "Occupant must accept a velocity");
+    run(30);
+    kb::tests::Require(count(events, inside.Entity(), kb::scene::PhysicsContactPhase::Exit) == 1, "A woken occupant leaving the trigger must Exit once");
+
+    // Unity CharacterController: walks through a trigger (OnTrigger* on both sides), then
+    // stops at a wall (OnControllerColliderHit each step, velocity reads the real motion).
+    const auto walker = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Walker", .transform = kb::scene::TransformComponent{.localPosition = {60.0F, 1.0F, 20.0F}}});
+    scene.Components().CharacterControllers().Set(walker.Entity(), kb::scene::CharacterControllerComponent{.useGravity = false});
+    const auto gate = makeBody("Gate", {62.0F, 1.0F, 20.0F}, {.bodyType = kb::scene::RigidbodyBodyType::Static}, {.boxSize = {0.5F, 4.0F, 4.0F}, .trigger = true});
+    const auto wall = makeBody("Wall", {64.0F, 1.0F, 20.0F}, {.bodyType = kb::scene::RigidbodyBodyType::Static}, {.boxSize = {0.5F, 4.0F, 4.0F}});
+    run(1);
+    std::vector<kb::scene::PendingCollisionEvent> walk;
+    for (int i = 0; i < 120; ++i) {
+        static_cast<void>(kb::scene::PhysicsBackend::CharacterMove(scene, walker.Entity(), {3.0F, 0.0F, 0.0F}));
+        run(1);
+        walk.insert(walk.end(), events.begin(), events.end());
+    }
+    kb::tests::Require(count(walk, walker.Entity(), kb::scene::PhysicsContactPhase::Enter) == 1 && count(walk, gate.Entity(), kb::scene::PhysicsContactPhase::Enter) == 1 &&
+            count(walk, walker.Entity(), kb::scene::PhysicsContactPhase::Exit) == 1 && count(walk, gate.Entity(), kb::scene::PhysicsContactPhase::Exit) == 1 &&
+            count(walk, gate.Entity(), kb::scene::PhysicsContactPhase::Stay) > 0,
+        "A character walking through a trigger must raise OnTriggerEnter/Stay/Exit on both sides");
+    kb::tests::Require(count(walk, walker.Entity(), kb::scene::PhysicsContactPhase::ControllerHit) > 30 &&
+            count(walk, wall.Entity(), kb::scene::PhysicsContactPhase::ControllerHit) == 0,
+        "A character pushing into a wall must raise OnControllerColliderHit on the controller each step");
+    kb::tests::Require(std::fabs(kb::scene::PhysicsBackend::CharacterVelocity(scene, walker.Entity()).value.x) < 0.1F,
+        "A character blocked by a wall must report the velocity it really moved with, not the requested one");
+
+    const float freeSpeed = kb::scene::PhysicsBackend::GetVelocity(scene, undamped.Entity()).value.x;
+    const float dampedSpeed = kb::scene::PhysicsBackend::GetVelocity(scene, damped.Entity()).value.x;
+    kb::tests::Require(freeSpeed > 4.999F, "A body with zero linear damping must keep its speed (no hidden damping)");
+    kb::tests::Require(dampedSpeed < 2.0F, "Linear damping 1 must slow the body down");
+}
+
 void RunPhysicsIdenticalReplayTest() {
     if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
         return;
@@ -2788,6 +2882,7 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsIdenticalReplayTest();
     RunPhysicsSceneSystemFallingBodyTest();
     RunPhysicsPersistentSleeperTransitionTest();
+    RunPhysicsSleepingContactAndDampingTest();
     RunPhysicsPipelinedStepEquivalenceTest();
 }
 
