@@ -25,8 +25,9 @@ struct RenderMaterialGraphShaderToolchain {
 // The passes a scene uses a graph material in; a scene cook produces each of them the graph draws with its
 // own program (RenderMaterialGraphCooksScenePass: MotionVectors only for graphs that move, offset the depth
 // of or clip their surface).
-inline constexpr std::array<std::string_view, 5U> kRenderMaterialGraphScenePasses{
+inline constexpr std::array<std::string_view, 6U> kRenderMaterialGraphScenePasses{
     "BaseOpaque", "GBuffer", "ShadowDepth", "BaseTransparent", kRenderMaterialGraphMotionVectorsPass,
+    kRenderMaterialGraphPostProcessPass,
 };
 
 // Resolves the toolchain: the KB_GRAPH_SHADERC environment variable, then `builtIn` (paths a build

@@ -655,6 +655,9 @@ struct RenderMaterialGraphReflection {
     // MAT-37: resolved surface shading model. Drives the fragment wrapper lighting branch and the program
     // key. Declared models without production shader branches fail compilation instead of falling back.
     RenderMaterialShadingModel shadingModel = RenderMaterialShadingModel::DefaultLit;
+    // Unreal's Material Domain: the pass the graph is drawn in (a Surface draws the scene passes, a Post Process
+    // material the post-process chain).
+    RenderMaterialDomain domain = RenderMaterialDomain::Surface;
     // MAT-38: resolved blend mode. Masked makes the fragment wrapper clip on alphaClipThreshold; the
     // transparent modes select the BaseTransparent cook and the scene blend equation, and contribute to
     // the program key.

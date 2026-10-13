@@ -6758,6 +6758,66 @@ void RunForwardGraphNoiseFunctionsTest() {
     harness.Shutdown();
 }
 
+// Unreal's Post Process material: the graph's own fullscreen pass, Scene Color reading the chain's input. Scene Color
+// x 0.5 over an input of (0.8, 0.4, 0.2) gives (0.4, 0.2, 0.1) on every pixel.
+void RunPostProcessMaterialPassTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "post_process_material";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    using K = RenderMaterialGraphNodeKind;
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.materialDomain = "postProcess";
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = K::SceneColor });
+    graph.nodes.push_back(UtilityConstant(3U, K::ConstantScalar, "0.5"));
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = K::Multiply });
+    graph.links.push_back(MakeLink(K::SceneColor, 2U, "color", K::Multiply, 4U, "a"));
+    graph.links.push_back(MakeLink(K::ConstantScalar, 3U, "value", K::Multiply, 4U, "b"));
+    graph.links.push_back(MakeLink(K::Multiply, 4U, "value", K::MaterialOutput, 1U, "emissive"));
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0xA3A0U });
+    if (!compiled.Succeeded()) {
+        std::fprintf(stderr, "Post Process: %s\n", compiled.diagnostics.empty() ? "" : compiled.diagnostics.front().message.c_str());
+    }
+    Require(compiled.Succeeded() && compiled.shader.reflection.domain == RenderMaterialDomain::PostProcess, "Post Process: the graph must compile");
+    RenderMaterialGraphShaderArtifactRequest request = CookRequest(cacheDir.generic_string());
+    request.pass = std::string{ kRenderMaterialGraphPostProcessPass };
+    const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request);
+    if (!cooked.Succeeded()) {
+        std::fprintf(stderr, "Post Process cook: %s\n", cooked.diagnostics.empty() ? "" : cooked.diagnostics.front().message.c_str());
+    }
+    Require(cooked.Succeeded() && cooked.artifact.has_value(), "Post Process: the pass must cook");
+    const RenderMaterialGraphShaderBinary* vs = cooked.artifact->FindVertexBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(vs != nullptr && vs->byteSize > 0U, "Post Process: the pass must cook its fullscreen vertex shader");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "Post Process: Direct3D11 device unavailable; cannot read the pass back\n");
+        Require(false, "Post Process: A real GPU device is required to prove the pass");
+        return;
+    }
+    const bgfx::ProgramHandle program = BuildGraphProgram(ReadAllBytes(std::filesystem::path{ vs->binaryPath }), *cooked.artifact);
+    bgfx::VertexLayout layout;
+    layout.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float).end();
+    const std::array<float, 15U> triangle{ -1.0F, -1.0F, 0.0F, 0.0F, 1.0F, 3.0F, -1.0F, 0.0F, 2.0F, 1.0F, -1.0F, 3.0F, 0.0F, 0.0F, -1.0F };
+    const std::array<std::uint16_t, 3U> order{ 0U, 1U, 2U };
+    HarnessMesh mesh{ .vertices = bgfx::createVertexBuffer(bgfx::copy(triangle.data(), sizeof(triangle)), layout),
+                      .indices = bgfx::createIndexBuffer(bgfx::copy(order.data(), sizeof(order))) };
+    const std::array<std::uint32_t, 4U> texels{ 0xff3366ccU, 0xff3366ccU, 0xff3366ccU, 0xff3366ccU };  // (0.8, 0.4, 0.2) ABGR
+    const bgfx::TextureHandle input = bgfx::createTexture2D(2U, 2U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_POINT,
+        bgfx::copy(texels.data(), sizeof(texels)));
+    Require(bgfx::isValid(program) && bgfx::isValid(mesh.vertices) && bgfx::isValid(input), "Post Process: program and input must be created");
+    const std::vector<std::uint8_t> pixels = harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, UINT32_MAX, 0x000000ffU,
+        0U, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, 0.0F, input, BGFX_INVALID_HANDLE, nullptr, false, 1.0F, &mesh);
+    RequirePixelNear(ForwardRenderHarness::ProbeAt(pixels, 5U, 5U), { 0.4F, 0.2F, 0.1F }, "Post Process at a corner");
+    RequirePixelNear(ForwardRenderHarness::ProbeAt(pixels, 40U, 50U), { 0.4F, 0.2F, 0.1F }, "Post Process in the view");
+    bgfx::destroy(input);
+    bgfx::destroy(mesh.indices);
+    bgfx::destroy(mesh.vertices);
+    bgfx::destroy(program);
+    harness.Shutdown();
+}
+
 // Unreal's Texture Coordinate with Coordinate Index 3: a sphere whose UV3 is (0.25, 0.75) on every vertex (half
 // floats in the vertex); the graph's vertex shader passes UV2..UV7 and the node reads UV3, so Base Color is
 // (0.25, 0.75, 0).
@@ -7024,6 +7084,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphPixelNormalSmoothSphereTest();
     RunForwardGraphNonUniformScaleNormalTest();
     RunForwardGraphExtraUvSetsTest();
+    RunPostProcessMaterialPassTest();
     RunForwardGraphPixelNormalWorldSpaceTest();
     RunForwardGraphSobolRendersTest();
     RunForwardGraphMaterialParameterCollectionRendersTest();

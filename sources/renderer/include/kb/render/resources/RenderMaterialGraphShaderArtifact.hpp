@@ -17,6 +17,8 @@ inline constexpr std::uint64_t kRenderMaterialGraphShaderWrapperVersion = 9ULL;
 
 // The scene pass that writes motion vectors with the graph's own program (Unreal's velocity pass).
 inline constexpr std::string_view kRenderMaterialGraphMotionVectorsPass = "MotionVectors";
+// A Post Process material's fullscreen pass (the post-process chain, before the tonemap).
+inline constexpr std::string_view kRenderMaterialGraphPostProcessPass = "PostProcess";
 
 enum class RenderMaterialGraphShaderBackend : std::uint8_t {
     Dxbc,

@@ -3669,6 +3669,24 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         AttachDiagnosticContext(graph, context, result.diagnostics);
         return result;
     }
+    if (requestedDomain == RenderMaterialDomain::PostProcess) {
+        for (const RenderMaterialGraphLink& link : graph.links) {
+            const RenderMaterialGraphNode* to = FindRenderMaterialGraphNode(graph, link.toNodeId);
+            if (to != nullptr && to->kind == RenderMaterialGraphNodeKind::MaterialOutput && link.toPin != "emissive") {
+                result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
+                    .severity = RenderMaterialGraphDiagnosticSeverity::Error,
+                    .kind = RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain,
+                    .nodeId = to->id,
+                    .pin = link.toPin,
+                    .message = "MaterialDomainOutputRefused: a Post Process material writes Emissive Color only, not '" + link.toPin + "'.",
+                });
+            }
+        }
+        if (!result.Succeeded()) {
+            AttachDiagnosticContext(graph, context, result.diagnostics);
+            return result;
+        }
+    }
 
     // MAT-37: resolve the surface shading model. Production models have real fragment-wrapper branches;
     // declared-but-unimplemented models fail here so the runtime never silently shades them as DefaultLit.
@@ -4494,6 +4512,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
              return link.toPin == "irisMask" || link.toPin == "irisDistance" || link.toPin == "irisNormal";
          }));
     reflection.shadingModel = resolvedShadingModel;
+    reflection.domain = requestedDomain;
     reflection.blendMode = resolvedBlendMode;
     reflection.usesSceneDepth = usesSceneDepth;
     reflection.usesSceneColor = usesSceneColor;
