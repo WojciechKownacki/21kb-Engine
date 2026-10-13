@@ -223,9 +223,7 @@ struct MaterialShaderQualifier final {
     const std::uint64_t variantKey = ComputeRenderMaterialGraphVariantKey(compiled.shader);
     const std::string_view expectedPlatform =
         kb::assets::bake::ShaderBakePlatformName(profile.shaderPlatform);
-    const bool requiresVertex = compiled.shader.reflection.hasWorldPositionOffset ||
-        compiled.shader.reflection.hasCustomizedUv0 ||
-        compiled.shader.reflection.hasDisplacement;
+    const bool requiresVertex = RenderMaterialGraphRequiresGeneratedVertexShader(compiled.shader.reflection);
     for (const MaterialShaderQualifier& shader : shaders) {
         if (shader.graphSourceHash != graphSourceHash || shader.variantKey != variantKey) {
             return Failure("one material maps to multiple graph shader identities: " +

@@ -166,6 +166,12 @@ std::uint64_t MeshPipelinePassPolicy::State(
     case MeshPassType::MotionVectors:
         return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | cullState | rasterStateExtra;
     case MeshPassType::BaseTransparent:
+        if (material != nullptr && material->graphProgram.decalDomain) {
+            // A decal draws its box's back faces, so each pixel is drawn once, also with the camera inside the box.
+            // No depth test: the shader keeps only the scene surface that lies inside the box.
+            return (SceneDepthPolicy::SceneDepthReadState() & ~BGFX_STATE_DEPTH_TEST_MASK) |
+                TranslucencyBlendState(material) | BGFX_STATE_CULL_CW | rasterStateExtra;
+        }
         return SceneDepthPolicy::SceneDepthReadState() | TranslucencyBlendState(material) | cullState | rasterStateExtra;
     case MeshPassType::SelectionId:
         return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | cullState | rasterStateExtra;

@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 """Material domains from the command line to the picture (Unreal's Material Domain).
 
+Deferred Decal: a material of that domain on a Mesh Renderer with the engine Cube colours the ground inside the box
+(projected along the box's Y axis); a vertex output in that domain is refused by name.
 Post Process: a material of that domain on a Mesh Renderer (no mesh) is drawn over the whole view before the
 tonemap. The project's game is captured headless (kb_game --headless --screenshot-file) before and after; with
 Scene Color x 0.25 every pixel darkens, and a material writing Base Color in that domain is refused by name.
+The cooked Game.kbpack draws both like the project.
 
 Usage: python scripts/check_material_domains.py [build/perf-release/bin]
 """
@@ -66,6 +69,10 @@ def read_png(path):
     return rows
 
 
+def pink(rows, least):
+    return sum(1 for row in rows for r, g, b in row if r > least and b > least and g * 4 < r)
+
+
 def capture(game, project, name):
     out = pathlib.Path(project).parent / (name + ".png")
     if out.exists():
@@ -82,7 +89,33 @@ def main():
     try:
         run(cli, "new", "--parent", str(work), "--name", "Domains")
         project = work / "Domains"
-        baseline = capture(game, project, "scene")
+        scene = capture(game, project, "scene")
+
+        sticker = "/Game/Materials/Sticker.kbmat"
+        run(cli, "material-new", "--project", str(project), "--name", "Sticker")
+        decal = lambda *args, expect=0: run(cli, "material-graph", args[0], "--project", str(project), "--material", sticker, *args[1:], expect=expect)
+        decal("setting", "--name", "Domain", "--value", "deferredDecal")
+        decal("setting", "--name", "Shading Model", "--value", "unlit")
+        decal("add-node", "--kind", "Constant3Vector", "--name", "Pink", "--value", "1 0 1")
+        decal("connect", "--from", "Pink", "--to", "Output", "--to-pin", "baseColor")
+        moving = "/Game/Materials/Moving.kbmat"
+        run(cli, "material-new", "--project", str(project), "--name", "Moving")
+        run(cli, "material-graph", "setting", "--project", str(project), "--material", moving, "--name", "Domain", "--value", "deferredDecal")
+        run(cli, "material-graph", "add-node", "--project", str(project), "--material", moving, "--kind", "Constant3Vector", "--name", "Up",
+            "--value", "0 1 0")
+        refused = run(cli, "material-graph", "connect", "--project", str(project), "--material", moving, "--from", "Up", "--to", "Output",
+                      "--to-pin", "worldPositionOffset")
+        if "MaterialDomainOutputRefused" not in refused:
+            fail("World Position Offset in a Deferred Decal material must be refused by name, got:\n" + refused)
+        run(cli, "entity", "add", "--project", str(project), "--name", "Sticker", "--create", "Cube")
+        run(cli, "component", "set", "--project", str(project), "--entity", "Sticker", "--type", "MeshRenderer", "--set", "material=" + sticker)
+        run(cli, "component", "set", "--project", str(project), "--entity", "Sticker", "--type", "Transform", "--set", "localScale.x=6",
+            "--set", "localScale.y=2", "--set", "localScale.z=6")
+        baseline = capture(game, project, "decal")
+        coloured, ground = pink(baseline, 150), sum(1 for row in baseline for r, g, b in row if min(r, g, b) > 150 and g * 4 >= r)
+        if pink(scene, 150) != 0 or coloured < 1000 or ground < 1000:
+            fail("the decal must colour the ground inside its box only: %d pink pixels, %d ground pixels left" % (coloured, ground))
+        print("OK: Deferred Decal colours the ground inside its box (%d pixels, %d ground pixels untouched)" % (coloured, ground))
 
         material = "/Game/Materials/Darken.kbmat"
         run(cli, "material-new", "--project", str(project), "--name", "Darken")
@@ -123,6 +156,7 @@ def main():
         # The cook: the game run from the cooked Game.kbpack draws the same darkened view. The project's refused
         # material is removed first (the cook stops on a graph that does not compile, by name).
         (project / "Assets" / "Materials" / "Wrong.kbmat").unlink()
+        (project / "Assets" / "Materials" / "Moving.kbmat").unlink()
         pack = work / "Game.kbpack"
         run(bin_dir / "kb_cooker.exe", "--project", str(project), "--target", "Windows.x64", "--output", str(pack))
         for plugin in ("physics_jolt", "audio_miniaudio", "basic_lighting", "21kb_particle"):
@@ -134,7 +168,9 @@ def main():
         for x, y in samples:
             if any(abs(a - b) > 12 for a, b in zip(packaged[y][x], darkened[y][x])):
                 fail("the packaged game must draw the Post Process material like the project: %s vs %s" % (packaged[y][x], darkened[y][x]))
-        print("OK: the packaged game draws the Post Process material (%s)" % (packaged[samples[0][1]][samples[0][0]],))
+        if pink(packaged, 30) < 1000:
+            fail("the packaged game must draw the Deferred Decal: %d pink pixels" % pink(packaged, 30))
+        print("OK: the packaged game draws the Deferred Decal and the Post Process material (%s)" % (packaged[samples[0][1]][samples[0][0]],))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

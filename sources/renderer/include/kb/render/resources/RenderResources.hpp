@@ -444,6 +444,9 @@ struct RenderMaterialGraphProgramBinding {
     float boundsMargin = 0.0F;
     // Unreal's Post Process domain: the material draws in the post-process chain, not in the scene passes.
     bool postProcessDomain = false;
+    // Unreal's Deferred Decal domain: the material decorates the opaque surfaces inside its box, drawn with the box's
+    // back faces behind them in the transparent pass.
+    bool decalDomain = false;
 };
 
 struct RenderMaterialResource {
