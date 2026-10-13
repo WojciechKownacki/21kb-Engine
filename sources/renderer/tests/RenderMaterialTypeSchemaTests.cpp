@@ -4,6 +4,7 @@
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderToolchain.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 #include "kb/render/resources/RenderMaterialTextureSlots.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -4577,13 +4578,36 @@ void RunMaterialDomainGatingTest() {
     Require(domainDiag != nullptr && domainDiag->severity == RenderMaterialGraphDiagnosticSeverity::Error,
         "KBMAT-MAT34: an unimplemented domain must emit an error diagnostic without a Surface fallback");
 
-    Require(IsRenderMaterialDomainProduction(RenderMaterialDomain::Surface), "KBMAT-MAT34: Surface domain must be production");
-    Require(!IsRenderMaterialDomainProduction(RenderMaterialDomain::DeferredDecal) &&
-            !IsRenderMaterialDomainProduction(RenderMaterialDomain::LightFunction) &&
-            !IsRenderMaterialDomainProduction(RenderMaterialDomain::Volume) &&
-            !IsRenderMaterialDomainProduction(RenderMaterialDomain::PostProcess) &&
-            !IsRenderMaterialDomainProduction(RenderMaterialDomain::UserInterface),
-            "KBMAT-MAT34: only Surface is production; the other declared domains must be non-production");
+    std::array<bool, 6U> production{};
+    for (const RenderMaterialDomain domain : { RenderMaterialDomain::Surface, RenderMaterialDomain::DeferredDecal, RenderMaterialDomain::LightFunction,
+             RenderMaterialDomain::Volume, RenderMaterialDomain::PostProcess, RenderMaterialDomain::UserInterface }) {
+        production[static_cast<std::size_t>(domain)] = IsRenderMaterialDomainProduction(domain);
+    }
+    Require(production[static_cast<std::size_t>(RenderMaterialDomain::Surface)] &&
+            production[static_cast<std::size_t>(RenderMaterialDomain::PostProcess)] &&
+            !production[static_cast<std::size_t>(RenderMaterialDomain::LightFunction)] &&
+            !production[static_cast<std::size_t>(RenderMaterialDomain::Volume)],
+        "KBMAT-MAT34: Surface and Post Process are production; Light Function and Volume are not");
+
+    // Unreal's Post Process material: Emissive Color only, drawn in its own pass and in no scene pass.
+    RenderMaterialGraphDocument postGraph = MakeDefaultRenderMaterialGraphDocument();
+    postGraph.materialDomain = "postProcess";
+    postGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 1 0 1" } });
+    postGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+    const RenderMaterialGraphCompileResult postResult = CompileRenderMaterialGraphToShaderSource(postGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0342U });
+    Require(postResult.Succeeded() && postResult.shader.reflection.domain == RenderMaterialDomain::PostProcess,
+        "Post Process domain: an Emissive Color graph must compile as a Post Process material");
+    for (const std::string_view pass : kRenderMaterialGraphScenePasses) {
+        Require(RenderMaterialGraphCooksScenePass(postResult.shader.reflection, pass) == (pass == kRenderMaterialGraphPostProcessPass),
+            "Post Process domain: the material must cook its Post Process pass only");
+        Require(!RenderMaterialGraphCooksScenePass(surfaceResult.shader.reflection, pass) || pass != kRenderMaterialGraphPostProcessPass,
+            "Post Process domain: a Surface material must not cook the Post Process pass");
+    }
+    postGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult refusedPost = CompileRenderMaterialGraphToShaderSource(postGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0343U });
+    const RenderMaterialGraphDiagnostic* outputDiag = FindGraphDiagnostic(refusedPost.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain);
+    Require(!refusedPost.Succeeded() && outputDiag != nullptr && outputDiag->message.find("MaterialDomainOutputRefused") != std::string::npos,
+        "Post Process domain: Base Color must be refused by name");
 }
 
 void RunMaterialShadingModelGatingTest() {

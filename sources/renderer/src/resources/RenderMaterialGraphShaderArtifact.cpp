@@ -1161,14 +1161,83 @@ bool RenderMaterialGraphDrawsOwnMotionVectors(const RenderMaterialGraphReflectio
 }
 
 bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& reflection, std::string_view pass) noexcept {
+    // A graph of another domain draws in its own pass only.
+    if (reflection.domain == RenderMaterialDomain::PostProcess) {
+        return pass == kRenderMaterialGraphPostProcessPass;
+    }
+    if (pass == kRenderMaterialGraphPostProcessPass) {
+        return false;
+    }
     return pass != kRenderMaterialGraphMotionVectorsPass || RenderMaterialGraphDrawsOwnMotionVectors(reflection);
 }
+
+namespace {
+
+// Unreal's post-process material: the graph evaluated for every pixel of the view with Scene Color / Scene Depth
+// reading the chain's input (s_kbSceneColor at stage 4, s_kbSceneDepth at 5); its Emissive Color replaces the
+// colour.
+std::string BuildGraphPostProcessFragmentWrapperSource(const RenderMaterialGraphShaderSource& shader) {
+    std::string wrapper;
+    wrapper += "$input v_texcoord0\n\n";
+    wrapper += "#include <bgfx_shader.sh>\n";
+    wrapper += "uniform vec4 u_time;\n";
+    wrapper += "uniform vec4 u_dynamicParameter;\n";
+    wrapper += "uniform vec4 u_materialParams;\n";
+    wrapper += "uniform vec4 u_renderOriginOffset;\n";
+    wrapper += "uniform vec4 u_cameraPosition;\n\n";
+    wrapper += shader.source;
+    wrapper += "\nvoid main()\n{\n";
+    wrapper += "    MaterialGraphContext ctx;\n";
+    wrapper += "    ctx.uv0 = v_texcoord0;\n";
+    wrapper += "    ctx.uv1 = v_texcoord0;\n";
+    wrapper += "    ctx.uv23 = vec4_splat(0.0);\n    ctx.uv45 = vec4_splat(0.0);\n    ctx.uv67 = vec4_splat(0.0);\n";
+    wrapper += "    ctx.normal = vec3(0.0, 0.0, 1.0);\n";
+    wrapper += "    ctx.tangent = vec3(1.0, 0.0, 0.0);\n";
+    wrapper += "    ctx.bitangent = vec3(0.0, 1.0, 0.0);\n";
+    wrapper += "    ctx.worldPos = u_cameraPosition.xyz;\n";
+    wrapper += "    ctx.viewDir = vec3(0.0, 0.0, 1.0);\n";
+    wrapper += "    ctx.vertexColor = vec4_splat(1.0);\n";
+    wrapper += "    ctx.time = u_time.x;\n";
+    wrapper += "    ctx.deltaTime = u_time.y;\n";
+    wrapper += "    ctx.dynamicParameter = u_dynamicParameter;\n";
+    wrapper += "    ctx.screenPosition = v_texcoord0;\n";
+    wrapper += "    ctx.localPosition = vec3_splat(0.0);\n";
+    wrapper += "    ctx.objectPosition = vec3_splat(0.0);\n";
+    wrapper += "    ctx.perInstanceRandom = 0.0;\n";
+    wrapper += "    ctx.perInstanceFadeAmount = 0.0;\n";
+    wrapper += "    ctx.perInstanceCustomData = 0.0;\n";
+    wrapper += "    ctx.objectRadius = 0.0;\n";
+    wrapper += "    ctx.objectBounds = vec4_splat(0.0);\n";
+    wrapper += "    ctx.objectOrientation = vec3(0.0, 0.0, 1.0);\n";
+    wrapper += "    ctx.preSkinnedPosition = vec3_splat(0.0);\n";
+    wrapper += "    ctx.preSkinnedNormal = vec3(0.0, 0.0, 1.0);\n";
+    wrapper += "    ctx.cameraPosition = u_cameraPosition.xyz;\n";
+    wrapper += "    ctx.lightVector = vec3(0.0, 1.0, 0.0);\n";
+    wrapper += "    ctx.viewSize = u_viewRect.zw;\n";
+    wrapper += "    ctx.twoSidedSign = 1.0;\n";
+    wrapper += "    ctx.fragmentDepth = 0.0;\n";
+    wrapper += "    MaterialSurface surface = EvaluateMaterialGraph(ctx);\n";
+    wrapper += "    gl_FragColor = vec4(surface.emissive, 1.0);\n";
+    wrapper += "}\n";
+    return wrapper;
+}
+
+// The fullscreen triangle of the post-process chain (vs_present.sc).
+std::string BuildGraphPostProcessVertexWrapperSource() {
+    return "$input a_position, a_texcoord0\n$output v_texcoord0\n\n#include <bgfx_shader.sh>\n\nvoid main()\n{\n"
+           "    gl_Position = vec4(a_position.xy, 0.0, 1.0);\n    v_texcoord0 = a_texcoord0;\n}\n";
+}
+
+} // namespace
 
 std::string BuildGraphFragmentWrapperSource(
     const RenderMaterialGraphShaderSource& shader,
     std::string_view pass) {
     if (pass == kRenderMaterialGraphMotionVectorsPass) {
         return BuildGraphMotionVectorFragmentWrapperSource(shader);
+    }
+    if (pass == kRenderMaterialGraphPostProcessPass) {
+        return BuildGraphPostProcessFragmentWrapperSource(shader);
     }
     const bool shadowPass = pass == "ShadowDepth";
     const bool gbufferPass = pass == "GBuffer";
@@ -1377,6 +1446,9 @@ void AppendGraphVertexEvaluation(std::string& vs, const RenderMaterialGraphShade
 } // namespace
 
 std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource& shader, std::string_view pass) {
+    if (pass == kRenderMaterialGraphPostProcessPass) {
+        return BuildGraphPostProcessVertexWrapperSource();
+    }
     // MAT-67/#54: the instanced mesh vertex shader with graph vertex-domain outputs applied before
     // projection/rasterization. WPO and displacement move real geometry; CustomizedUV0 rewrites the
     // interpolated UV that fragment TextureSample nodes read. Mirrors vs_mesh_instanced.sc.
@@ -1484,6 +1556,7 @@ std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraph
     HashU64(hash, reflection.writesShadingModelColor ? 1U : 0U);
     // MAT-37: the shading model selects the fragment wrapper lighting branch, so it is part of program identity.
     HashU64(hash, static_cast<std::uint64_t>(reflection.shadingModel));
+    HashU64(hash, static_cast<std::uint64_t>(reflection.domain));
     // MAT-38: the blend mode changes the wrapper (masked clip) and the cooked pass, so it is part of identity.
     HashU64(hash, static_cast<std::uint64_t>(reflection.blendMode));
     HashU64(hash, reflection.usesSceneDepth ? 1U : 0U);
@@ -1553,7 +1626,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         shader.reflection.hasCustomizedUv0 ||
         shader.reflection.hasDisplacement ||
         MaterialGraphUsesExtraUvs(shader) ||
-        request.pass == kRenderMaterialGraphMotionVectorsPass;
+        request.pass == kRenderMaterialGraphMotionVectorsPass ||
+        request.pass == kRenderMaterialGraphPostProcessPass;
     const std::string vertexWrapperSource = cooksVertexShader ? BuildGraphVertexWrapperSource(shader, request.pass) : std::string{};
     std::vector<ResolvedShaderDependency> dependencies;
     if (!CollectShaderDependencies(artifact.wrapperSource + vertexWrapperSource, request, dependencies, result.diagnostics)) {

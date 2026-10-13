@@ -163,6 +163,7 @@ std::uint64_t RenderMaterialGraphPipelineStateKey(const RenderMaterialGraphShade
     HashByte(hash, static_cast<std::uint8_t>(AlphaModeForBlendMode(shader.reflection.blendMode)));
     HashByte(hash, static_cast<std::uint8_t>(TranslucencyBlendForBlendMode(shader.reflection.blendMode)));
     HashByte(hash, static_cast<std::uint8_t>(shader.reflection.shadingModel));
+    HashByte(hash, static_cast<std::uint8_t>(shader.reflection.domain));
     HashByte(hash, static_cast<std::uint8_t>(shader.reflection.blendMode));
     HashBool(hash, shader.reflection.hasWorldPositionOffset);
     HashBool(hash, shader.reflection.hasCustomizedUv0);

@@ -57,7 +57,7 @@ enum class RenderMaterialDomain : std::uint8_t {
 // MAT-34: only Surface has a production graph runtime pass. Declared domains without a runtime pass fail
 // compilation instead of silently compiling as Surface.
 [[nodiscard]] constexpr bool IsRenderMaterialDomainProduction(RenderMaterialDomain domain) noexcept {
-    return domain == RenderMaterialDomain::Surface;
+    return domain == RenderMaterialDomain::Surface || domain == RenderMaterialDomain::PostProcess;
 }
 
 [[nodiscard]] RenderMaterialDomain ParseRenderMaterialDomain(std::string_view text) noexcept;
