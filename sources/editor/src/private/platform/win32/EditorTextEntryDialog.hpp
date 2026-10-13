@@ -1,5 +1,6 @@
 #pragma once
 
+#include "localization/EditorLocalization.hpp"
 #include "rendering/HeroIconKind.hpp"
 
 #if defined(_WIN32)
@@ -20,7 +21,7 @@ struct EditorTextEntryDialogDescriptor {
     std::string label;
     std::string value;
     std::string hint;
-    std::string acceptLabel = "Apply";
+    std::string acceptLabel = std::string{ EditorText("common.apply", "Apply") };
     HeroIconKind icon = HeroIconKind::DocumentText;
 };
 

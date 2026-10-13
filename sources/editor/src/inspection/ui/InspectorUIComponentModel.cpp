@@ -1,4 +1,5 @@
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
@@ -31,21 +32,9 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
         static_cast<std::uint16_t>(InspectorPropertyId::UIRectTransformField) + 1U ==
     kComponentCount);
 
+// The Inspector name of a UI property in the editor language, by the engine's property name. A
+// property the engine adds without an entry here shows its name split into words.
 [[nodiscard]] std::string Label(std::string_view name) {
-    if (name == "imageAssetId") return "Image";
-    if (name == "fontAssetId") return "Font";
-    if (name == "spriteAssetId") return "Sprite";
-    if (name == "content") return "Text";
-    if (name == "optionCount") return "Option Count";
-    if (name == "templateEntity") return "Template";
-    if (name == "player") return "Player (-1 = Everyone)";
-    if (name == "respectSafeArea") return "Fit Safe Area";
-    if (name == "maxLines") return "Max Lines (0 = All)";
-    if (name == "group") return "Radio Group";
-    if (name == "fillRect") return "Fill";
-    if (name == "handleRect") return "Handle";
-    if (name == "snapToChildren") return "Snap to Children";
-    if (name == "transitionSeconds") return "Show/Hide Seconds";
     // "options.3.text" -> "Option 4", "options.3.icon" -> "Option 4 Icon": the list reads as numbered
     // choices rather than as indexed fields.
     if (name.starts_with("options.")) {
@@ -54,11 +43,161 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
         std::uint32_t index = 0U;
         if (dot != std::string_view::npos &&
             std::from_chars(rest.data(), rest.data() + dot, index).ec == std::errc{}) {
-            return "Option " + std::to_string(index + 1U) + (rest.substr(dot) == ".icon" ? " Icon" : "");
+            const std::string number = std::to_string(index + 1U);
+            return rest.substr(dot) == ".icon"
+                ? EditorLocalization::Format("uiProperty.optionIcon", "Option {index} Icon", { { "index", number } })
+                : EditorLocalization::Format("uiProperty.option", "Option {index}", { { "index", number } });
         }
     }
-    if (name == "sizeDelta.x") return "Width / Size Delta X";
-    if (name == "sizeDelta.y") return "Height / Size Delta Y";
+    if (name == "allowSwitchOff") return std::string{ EditorText("uiProperty.allowSwitchOff", "Allow Switch Off") };
+    if (name == "alphaFadeSpeed") return std::string{ EditorText("uiProperty.alphaFadeSpeed", "Alpha Fade Speed") };
+    if (name == "alphaHitThreshold") return std::string{ EditorText("uiProperty.alphaHitThreshold", "Alpha Hit Threshold") };
+    if (name == "anchorMax.x") return std::string{ EditorText("uiProperty.anchorMax.x", "Anchor Max x") };
+    if (name == "anchorMax.y") return std::string{ EditorText("uiProperty.anchorMax.y", "Anchor Max y") };
+    if (name == "anchorMin.x") return std::string{ EditorText("uiProperty.anchorMin.x", "Anchor Min x") };
+    if (name == "anchorMin.y") return std::string{ EditorText("uiProperty.anchorMin.y", "Anchor Min y") };
+    if (name == "aspectRatio") return std::string{ EditorText("uiProperty.aspectRatio", "Aspect Ratio") };
+    if (name == "autoSize") return std::string{ EditorText("uiProperty.autoSize", "Auto Size") };
+    if (name == "backgroundColor") return std::string{ EditorText("uiProperty.backgroundColor", "Background Color") };
+    if (name == "blocksRaycasts") return std::string{ EditorText("uiProperty.blocksRaycasts", "Blocks Raycasts") };
+    if (name == "blur") return std::string{ EditorText("uiProperty.blur", "Blur") };
+    if (name == "borderColor") return std::string{ EditorText("uiProperty.borderColor", "Border Color") };
+    if (name == "borderWidth") return std::string{ EditorText("uiProperty.borderWidth", "Border Width") };
+    if (name == "captionImage") return std::string{ EditorText("uiProperty.captionImage", "Caption Image") };
+    if (name == "captionText") return std::string{ EditorText("uiProperty.captionText", "Caption Text") };
+    if (name == "cellSize") return std::string{ EditorText("uiProperty.cellSize", "Cell Size") };
+    if (name == "characterLimit") return std::string{ EditorText("uiProperty.characterLimit", "Character Limit") };
+    if (name == "characterSpacing") return std::string{ EditorText("uiProperty.characterSpacing", "Character Spacing") };
+    if (name == "color") return std::string{ EditorText("uiProperty.color", "Color") };
+    if (name == "colorFadeSeconds") return std::string{ EditorText("uiProperty.colorFadeSeconds", "Color Fade Seconds") };
+    if (name == "columns") return std::string{ EditorText("uiProperty.columns", "Columns") };
+    if (name == "content") return std::string{ EditorText("uiProperty.content", "Text") };
+    if (name == "contentType") return std::string{ EditorText("uiProperty.contentType", "Content Type") };
+    if (name == "controlChildHeight") return std::string{ EditorText("uiProperty.controlChildHeight", "Control Child Height") };
+    if (name == "controlChildWidth") return std::string{ EditorText("uiProperty.controlChildWidth", "Control Child Width") };
+    if (name == "cornerRadius") return std::string{ EditorText("uiProperty.cornerRadius", "Corner Radius") };
+    if (name == "direction") return std::string{ EditorText("uiProperty.direction", "Direction") };
+    if (name == "disabledColor") return std::string{ EditorText("uiProperty.disabledColor", "Disabled Color") };
+    if (name == "disabledImage") return std::string{ EditorText("uiProperty.disabledImage", "Disabled Image") };
+    if (name == "draggable") return std::string{ EditorText("uiProperty.draggable", "Draggable") };
+    if (name == "elasticity") return std::string{ EditorText("uiProperty.elasticity", "Elasticity") };
+    if (name == "eventName") return std::string{ EditorText("uiProperty.eventName", "Event Name") };
+    if (name == "eventTarget") return std::string{ EditorText("uiProperty.eventTarget", "Event Target") };
+    if (name == "expandChildHeight") return std::string{ EditorText("uiProperty.expandChildHeight", "Expand Child Height") };
+    if (name == "expandChildWidth") return std::string{ EditorText("uiProperty.expandChildWidth", "Expand Child Width") };
+    if (name == "fillAmount") return std::string{ EditorText("uiProperty.fillAmount", "Fill Amount") };
+    if (name == "fillClockwise") return std::string{ EditorText("uiProperty.fillClockwise", "Fill Clockwise") };
+    if (name == "fillMethod") return std::string{ EditorText("uiProperty.fillMethod", "Fill Method") };
+    if (name == "fillOrigin") return std::string{ EditorText("uiProperty.fillOrigin", "Fill Origin") };
+    if (name == "fillRect") return std::string{ EditorText("uiProperty.fillRect", "Fill") };
+    if (name == "flexibleHeight") return std::string{ EditorText("uiProperty.flexibleHeight", "Flexible Height") };
+    if (name == "flexibleWidth") return std::string{ EditorText("uiProperty.flexibleWidth", "Flexible Width") };
+    if (name == "fontAssetId") return std::string{ EditorText("uiProperty.fontAssetId", "Font") };
+    if (name == "fontSize") return std::string{ EditorText("uiProperty.fontSize", "Font Size") };
+    if (name == "graphic") return std::string{ EditorText("uiProperty.graphic", "Graphic") };
+    if (name == "group") return std::string{ EditorText("uiProperty.group", "Radio Group") };
+    if (name == "handleRect") return std::string{ EditorText("uiProperty.handleRect", "Handle") };
+    if (name == "hiddenOffset") return std::string{ EditorText("uiProperty.hiddenOffset", "Hidden Offset") };
+    if (name == "hiddenScale") return std::string{ EditorText("uiProperty.hiddenScale", "Hidden Scale") };
+    if (name == "highlightedColor") return std::string{ EditorText("uiProperty.highlightedColor", "Highlighted Color") };
+    if (name == "highlightedImage") return std::string{ EditorText("uiProperty.highlightedImage", "Highlighted Image") };
+    if (name == "horizontal") return std::string{ EditorText("uiProperty.horizontal", "Horizontal") };
+    if (name == "horizontalAlignment") return std::string{ EditorText("uiProperty.horizontalAlignment", "Horizontal Alignment") };
+    if (name == "horizontalFit") return std::string{ EditorText("uiProperty.horizontalFit", "Horizontal Fit") };
+    if (name == "horizontalScrollbar") return std::string{ EditorText("uiProperty.horizontalScrollbar", "Horizontal Scrollbar") };
+    if (name == "ignoreLayout") return std::string{ EditorText("uiProperty.ignoreLayout", "Ignore Layout") };
+    if (name == "ignoreParentGroups") return std::string{ EditorText("uiProperty.ignoreParentGroups", "Ignore Parent Groups") };
+    if (name == "imageAssetId") return std::string{ EditorText("uiProperty.imageAssetId", "Image") };
+    if (name == "inertia") return std::string{ EditorText("uiProperty.inertia", "Inertia") };
+    if (name == "interactable") return std::string{ EditorText("uiProperty.interactable", "Interactable") };
+    if (name == "itemImage") return std::string{ EditorText("uiProperty.itemImage", "Item Image") };
+    if (name == "itemText") return std::string{ EditorText("uiProperty.itemText", "Item Text") };
+    if (name == "layoutPriority") return std::string{ EditorText("uiProperty.layoutPriority", "Layout Priority") };
+    if (name == "lineSpacing") return std::string{ EditorText("uiProperty.lineSpacing", "Line Spacing") };
+    if (name == "localizationKey") return std::string{ EditorText("uiProperty.localizationKey", "Localization Key") };
+    if (name == "materialAssetId") return std::string{ EditorText("uiProperty.materialAssetId", "Material") };
+    if (name == "matchWidthOrHeight") return std::string{ EditorText("uiProperty.matchWidthOrHeight", "Match Width Or Height") };
+    if (name == "maxLines") return std::string{ EditorText("uiProperty.maxLines", "Max Lines (0 = All)") };
+    if (name == "maximum") return std::string{ EditorText("uiProperty.maximum", "Maximum") };
+    if (name == "minFontSize") return std::string{ EditorText("uiProperty.minFontSize", "Min Font Size") };
+    if (name == "minimum") return std::string{ EditorText("uiProperty.minimum", "Minimum") };
+    if (name == "minimumHeight") return std::string{ EditorText("uiProperty.minimumHeight", "Minimum Height") };
+    if (name == "minimumWidth") return std::string{ EditorText("uiProperty.minimumWidth", "Minimum Width") };
+    if (name == "mode") return std::string{ EditorText("uiProperty.mode", "Mode") };
+    if (name == "movementType") return std::string{ EditorText("uiProperty.movementType", "Movement Type") };
+    if (name == "multiline") return std::string{ EditorText("uiProperty.multiline", "Multiline") };
+    if (name == "navigationDown") return std::string{ EditorText("uiProperty.navigationDown", "Navigation Down") };
+    if (name == "navigationLeft") return std::string{ EditorText("uiProperty.navigationLeft", "Navigation Left") };
+    if (name == "navigationMode") return std::string{ EditorText("uiProperty.navigationMode", "Navigation Mode") };
+    if (name == "navigationRight") return std::string{ EditorText("uiProperty.navigationRight", "Navigation Right") };
+    if (name == "navigationUp") return std::string{ EditorText("uiProperty.navigationUp", "Navigation Up") };
+    if (name == "nineSlice") return std::string{ EditorText("uiProperty.nineSlice", "Nine Slice") };
+    if (name == "normalColor") return std::string{ EditorText("uiProperty.normalColor", "Normal Color") };
+    if (name == "offset") return std::string{ EditorText("uiProperty.offset", "Offset") };
+    if (name == "offsetMax.x") return std::string{ EditorText("uiProperty.offsetMax.x", "Offset Max x") };
+    if (name == "offsetMax.y") return std::string{ EditorText("uiProperty.offsetMax.y", "Offset Max y") };
+    if (name == "offsetMin.x") return std::string{ EditorText("uiProperty.offsetMin.x", "Offset Min x") };
+    if (name == "offsetMin.y") return std::string{ EditorText("uiProperty.offsetMin.y", "Offset Min y") };
+    if (name == "opacity") return std::string{ EditorText("uiProperty.opacity", "Opacity") };
+    if (name == "optionCount") return std::string{ EditorText("uiProperty.optionCount", "Option Count") };
+    if (name == "overflow") return std::string{ EditorText("uiProperty.overflow", "Overflow") };
+    if (name == "padding") return std::string{ EditorText("uiProperty.padding", "Padding") };
+    if (name == "pivot.x") return std::string{ EditorText("uiProperty.pivot.x", "Pivot x") };
+    if (name == "pivot.y") return std::string{ EditorText("uiProperty.pivot.y", "Pivot y") };
+    if (name == "pixelPerfect") return std::string{ EditorText("uiProperty.pixelPerfect", "Pixel Perfect") };
+    if (name == "pixelsPerUnit") return std::string{ EditorText("uiProperty.pixelsPerUnit", "Pixels Per Unit") };
+    if (name == "placeholder") return std::string{ EditorText("uiProperty.placeholder", "Placeholder") };
+    if (name == "player") return std::string{ EditorText("uiProperty.player", "Player (-1 = Everyone)") };
+    if (name == "preferredHeight") return std::string{ EditorText("uiProperty.preferredHeight", "Preferred Height") };
+    if (name == "preferredWidth") return std::string{ EditorText("uiProperty.preferredWidth", "Preferred Width") };
+    if (name == "preserveAspect") return std::string{ EditorText("uiProperty.preserveAspect", "Preserve Aspect") };
+    if (name == "pressedColor") return std::string{ EditorText("uiProperty.pressedColor", "Pressed Color") };
+    if (name == "pressedImage") return std::string{ EditorText("uiProperty.pressedImage", "Pressed Image") };
+    if (name == "radius") return std::string{ EditorText("uiProperty.radius", "Radius") };
+    if (name == "raycastPadding") return std::string{ EditorText("uiProperty.raycastPadding", "Raycast Padding") };
+    if (name == "raycastTarget") return std::string{ EditorText("uiProperty.raycastTarget", "Raycast Target") };
+    if (name == "readOnly") return std::string{ EditorText("uiProperty.readOnly", "Read Only") };
+    if (name == "referenceResolution") return std::string{ EditorText("uiProperty.referenceResolution", "Reference Resolution") };
+    if (name == "renderMode") return std::string{ EditorText("uiProperty.renderMode", "Render Mode") };
+    if (name == "respectSafeArea") return std::string{ EditorText("uiProperty.respectSafeArea", "Fit Safe Area") };
+    if (name == "richText") return std::string{ EditorText("uiProperty.richText", "Rich Text") };
+    if (name == "rotationDegrees") return std::string{ EditorText("uiProperty.rotationDegrees", "Rotation Degrees") };
+    if (name == "scale.x") return std::string{ EditorText("uiProperty.scale.x", "Scale x") };
+    if (name == "scale.y") return std::string{ EditorText("uiProperty.scale.y", "Scale y") };
+    if (name == "scaleFactor") return std::string{ EditorText("uiProperty.scaleFactor", "Scale Factor") };
+    if (name == "scaleMode") return std::string{ EditorText("uiProperty.scaleMode", "Scale Mode") };
+    if (name == "scrollSensitivity") return std::string{ EditorText("uiProperty.scrollSensitivity", "Scroll Sensitivity") };
+    if (name == "scrollX") return std::string{ EditorText("uiProperty.scrollX", "Scroll X") };
+    if (name == "scrollY") return std::string{ EditorText("uiProperty.scrollY", "Scroll Y") };
+    if (name == "selectedColor") return std::string{ EditorText("uiProperty.selectedColor", "Selected Color") };
+    if (name == "selectedImage") return std::string{ EditorText("uiProperty.selectedImage", "Selected Image") };
+    if (name == "showGraphic") return std::string{ EditorText("uiProperty.showGraphic", "Show Graphic") };
+    if (name == "size") return std::string{ EditorText("uiProperty.size", "Size") };
+    if (name == "sizeDelta.x") return std::string{ EditorText("uiProperty.sizeDelta.x", "Width / Size Delta X") };
+    if (name == "sizeDelta.y") return std::string{ EditorText("uiProperty.sizeDelta.y", "Height / Size Delta Y") };
+    if (name == "snapToChildren") return std::string{ EditorText("uiProperty.snapToChildren", "Snap to Children") };
+    if (name == "softness") return std::string{ EditorText("uiProperty.softness", "Softness") };
+    if (name == "sortingOrder") return std::string{ EditorText("uiProperty.sortingOrder", "Sorting Order") };
+    if (name == "spacing") return std::string{ EditorText("uiProperty.spacing", "Spacing") };
+    if (name == "spriteAssetId") return std::string{ EditorText("uiProperty.spriteAssetId", "Sprite") };
+    if (name == "submitOnRelease") return std::string{ EditorText("uiProperty.submitOnRelease", "Submit On Release") };
+    if (name == "targetGraphic") return std::string{ EditorText("uiProperty.targetGraphic", "Target Graphic") };
+    if (name == "templateEntity") return std::string{ EditorText("uiProperty.templateEntity", "Template") };
+    if (name == "toggled") return std::string{ EditorText("uiProperty.toggled", "Toggled") };
+    if (name == "tooltip") return std::string{ EditorText("uiProperty.tooltip", "Tooltip") };
+    if (name == "transition") return std::string{ EditorText("uiProperty.transition", "Transition") };
+    if (name == "transitionSeconds") return std::string{ EditorText("uiProperty.transitionSeconds", "Show/Hide Seconds") };
+    if (name == "uvRect") return std::string{ EditorText("uiProperty.uvRect", "Uv Rect") };
+    if (name == "value") return std::string{ EditorText("uiProperty.value", "Value") };
+    if (name == "vertical") return std::string{ EditorText("uiProperty.vertical", "Vertical") };
+    if (name == "verticalAlignment") return std::string{ EditorText("uiProperty.verticalAlignment", "Vertical Alignment") };
+    if (name == "verticalFit") return std::string{ EditorText("uiProperty.verticalFit", "Vertical Fit") };
+    if (name == "verticalScrollbar") return std::string{ EditorText("uiProperty.verticalScrollbar", "Vertical Scrollbar") };
+    if (name == "visible") return std::string{ EditorText("uiProperty.visible", "Visible") };
+    if (name == "wholeNumbers") return std::string{ EditorText("uiProperty.wholeNumbers", "Whole Numbers") };
+    if (name == "width") return std::string{ EditorText("uiProperty.width", "Width") };
+    if (name == "wrapMode") return std::string{ EditorText("uiProperty.wrapMode", "Wrap Mode") };
+    if (name == "zOrder") return std::string{ EditorText("uiProperty.zOrder", "Z Order") };
     std::string output;
     output.reserve(name.size() + 4U);
     for (std::size_t index = 0U; index < name.size(); ++index) {
@@ -80,29 +219,29 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
 [[nodiscard]] std::vector<std::string_view> Choices(kb::scene::UIComponentType component, std::string_view name) {
     using enum kb::scene::UIComponentType;
     if (name == "horizontalAlignment")
-        return component == Text ? std::vector<std::string_view>{"Left", "Center", "Right"}
-                                 : std::vector<std::string_view>{"Left", "Center", "Right", "Stretch"};
+        return component == Text ? std::vector<std::string_view>{EditorText("uiChoice.left", "Left"), EditorText("uiChoice.center", "Center"), EditorText("uiChoice.right", "Right")}
+                                 : std::vector<std::string_view>{EditorText("uiChoice.left", "Left"), EditorText("uiChoice.center", "Center"), EditorText("uiChoice.right", "Right"), EditorText("uiChoice.stretch", "Stretch")};
     if (name == "verticalAlignment")
-        return component == Text ? std::vector<std::string_view>{"Top", "Center", "Bottom"}
-                                 : std::vector<std::string_view>{"Top", "Center", "Bottom", "Stretch"};
-    if (component == Text && name == "wrapMode") return {"No Wrap", "Word", "Character"};
-    if (component == Image && name == "scaleMode") return {"Stretch", "Fit Inside", "Fill and Crop", "Tiled"};
-    if (component == Image && name == "fillMethod") return {"None", "Horizontal", "Vertical", "Radial 360"};
-    if (component == Image && name == "fillOrigin") return {"Start", "End"};
-    if (component == Canvas && name == "renderMode") return {"Screen Space", "World Space"};
-    if (component == Text && name == "overflow") return {"Overflow", "Truncate", "Ellipsis"};
-    if (component == Selectable && name == "transition") return {"None", "Color Tint", "Sprite Swap"};
-    if (component == ScrollView && name == "movementType") return {"Clamped", "Elastic", "Unrestricted"};
+        return component == Text ? std::vector<std::string_view>{EditorText("uiChoice.top", "Top"), EditorText("uiChoice.center", "Center"), EditorText("uiChoice.bottom", "Bottom")}
+                                 : std::vector<std::string_view>{EditorText("uiChoice.top", "Top"), EditorText("uiChoice.center", "Center"), EditorText("uiChoice.bottom", "Bottom"), EditorText("uiChoice.stretch", "Stretch")};
+    if (component == Text && name == "wrapMode") return {EditorText("uiChoice.noWrap", "No Wrap"), EditorText("uiChoice.word", "Word"), EditorText("uiChoice.character", "Character")};
+    if (component == Image && name == "scaleMode") return {EditorText("uiChoice.stretch", "Stretch"), EditorText("uiChoice.fitInside", "Fit Inside"), EditorText("uiChoice.fillAndCrop", "Fill and Crop"), EditorText("uiChoice.tiled", "Tiled")};
+    if (component == Image && name == "fillMethod") return {EditorText("uiChoice.none", "None"), EditorText("uiChoice.horizontal", "Horizontal"), EditorText("uiChoice.vertical", "Vertical"), EditorText("uiChoice.radial360", "Radial 360")};
+    if (component == Image && name == "fillOrigin") return {EditorText("uiChoice.start", "Start"), EditorText("uiChoice.end", "End")};
+    if (component == Canvas && name == "renderMode") return {EditorText("uiChoice.screenSpace", "Screen Space"), EditorText("uiChoice.worldSpace", "World Space")};
+    if (component == Text && name == "overflow") return {EditorText("uiChoice.overflow", "Overflow"), EditorText("uiChoice.truncate", "Truncate"), EditorText("uiChoice.ellipsis", "Ellipsis")};
+    if (component == Selectable && name == "transition") return {EditorText("uiChoice.none", "None"), EditorText("uiChoice.colorTint", "Color Tint"), EditorText("uiChoice.spriteSwap", "Sprite Swap")};
+    if (component == ScrollView && name == "movementType") return {EditorText("uiChoice.clamped", "Clamped"), EditorText("uiChoice.elastic", "Elastic"), EditorText("uiChoice.unrestricted", "Unrestricted")};
     if (component == InputField && name == "contentType")
-        return {"Standard", "Integer Number", "Decimal Number", "Alphanumeric", "Email Address", "Password", "Pin"};
-    if (component == CanvasScaler && name == "scaleMode") return {"Constant Pixel Size", "Scale with Screen Size"};
+        return {EditorText("uiChoice.standard", "Standard"), EditorText("uiChoice.integerNumber", "Integer Number"), EditorText("uiChoice.decimalNumber", "Decimal Number"), EditorText("uiChoice.alphanumeric", "Alphanumeric"), EditorText("uiChoice.emailAddress", "Email Address"), EditorText("uiChoice.password", "Password"), EditorText("uiChoice.pin", "Pin")};
+    if (component == CanvasScaler && name == "scaleMode") return {EditorText("uiChoice.constantPixelSize", "Constant Pixel Size"), EditorText("uiChoice.scaleWithScreenSize", "Scale with Screen Size")};
     if (component == ContentSizeFitter && (name == "horizontalFit" || name == "verticalFit"))
-        return {"Unconstrained", "Minimum Size", "Preferred Size"};
+        return {EditorText("uiChoice.unconstrained", "Unconstrained"), EditorText("uiChoice.minimumSize", "Minimum Size"), EditorText("uiChoice.preferredSize", "Preferred Size")};
     if (component == AspectRatioFitter && name == "mode")
-        return {"None", "Width Controls Height", "Height Controls Width", "Fit Inside Parent", "Fill Parent"};
-    if (component == Selectable && name == "navigationMode") return {"None", "Automatic", "Explicit"};
+        return {EditorText("uiChoice.none", "None"), EditorText("uiChoice.widthControlsHeight", "Width Controls Height"), EditorText("uiChoice.heightControlsWidth", "Height Controls Width"), EditorText("uiChoice.fitInsideParent", "Fit Inside Parent"), EditorText("uiChoice.fillParent", "Fill Parent")};
+    if (component == Selectable && name == "navigationMode") return {EditorText("uiChoice.none", "None"), EditorText("uiChoice.automatic", "Automatic"), EditorText("uiChoice.explicit", "Explicit")};
     if ((component == Slider || component == Scrollbar || component == ProgressBar) && name == "direction")
-        return {"Left to Right", "Right to Left", "Bottom to Top", "Top to Bottom"};
+        return {EditorText("uiChoice.leftToRight", "Left to Right"), EditorText("uiChoice.rightToLeft", "Right to Left"), EditorText("uiChoice.bottomToTop", "Bottom to Top"), EditorText("uiChoice.topToBottom", "Top to Bottom")};
     return {};
 }
 
@@ -149,10 +288,10 @@ std::array<InspectorUIPropertyRow, 4> InspectorUIComponentModel::RectLayoutField
     const float width = rect.offsetMax.x - rect.offsetMin.x;
     const float height = rect.offsetMax.y - rect.offsetMin.y;
     std::array<InspectorUIPropertyRow, 4> fields;
-    fields[0].label = stretchX ? "Left" : "Position X";
-    fields[1].label = stretchY ? "Top" : "Position Y";
-    fields[2].label = stretchX ? "Right" : "Width";
-    fields[3].label = stretchY ? "Bottom" : "Height";
+    fields[0].label = stretchX ? EditorText("uiRect.left", "Left") : EditorText("uiRect.positionX", "Position X");
+    fields[1].label = stretchY ? EditorText("uiRect.top", "Top") : EditorText("uiRect.positionY", "Position Y");
+    fields[2].label = stretchX ? EditorText("uiRect.right", "Right") : EditorText("uiRect.width", "Width");
+    fields[3].label = stretchY ? EditorText("uiRect.bottom", "Bottom") : EditorText("uiRect.height", "Height");
     fields[0].value = Format(stretchX ? rect.offsetMin.x : rect.offsetMin.x + width * rect.pivot.x);
     fields[1].value = Format(stretchY ? rect.offsetMin.y : rect.offsetMin.y + height * rect.pivot.y);
     fields[2].value = Format(stretchX ? -rect.offsetMax.x : width);
@@ -334,9 +473,9 @@ std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
         // The two ends of a fill read as the sides of the image it grows from.
         const auto origin = std::ranges::find(output, std::string_view{"fillOrigin"}, &InspectorUIPropertyRow::name);
         if (origin != output.end())
-            origin->choices = method == "1" ? std::vector<std::string_view>{"Left", "Right"}
-                : method == "2"             ? std::vector<std::string_view>{"Bottom", "Top"}
-                                            : std::vector<std::string_view>{"Top", "Bottom"};
+            origin->choices = method == "1" ? std::vector<std::string_view>{EditorText("uiChoice.left", "Left"), EditorText("uiChoice.right", "Right")}
+                : method == "2"             ? std::vector<std::string_view>{EditorText("uiChoice.bottom", "Bottom"), EditorText("uiChoice.top", "Top")}
+                                            : std::vector<std::string_view>{EditorText("uiChoice.top", "Top"), EditorText("uiChoice.bottom", "Bottom")};
         break;
     }
     case Text:
@@ -356,6 +495,69 @@ std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
         break;
     }
     return output;
+}
+
+std::string_view InspectorUIComponentModel::DisplayName(kb::scene::UIComponentType component) {
+    switch (component) {
+    case kb::scene::UIComponentType::RectTransform: return EditorText("uiComponent.rectTransform", "Rect Transform");
+    case kb::scene::UIComponentType::Canvas: return EditorText("uiComponent.canvas", "Canvas");
+    case kb::scene::UIComponentType::CanvasScaler: return EditorText("uiComponent.canvasScaler", "Canvas Scaler");
+    case kb::scene::UIComponentType::CanvasGroup: return EditorText("uiComponent.canvasGroup", "Canvas Group");
+    case kb::scene::UIComponentType::HorizontalLayout: return EditorText("uiComponent.horizontalLayout", "Horizontal Layout");
+    case kb::scene::UIComponentType::VerticalLayout: return EditorText("uiComponent.verticalLayout", "Vertical Layout");
+    case kb::scene::UIComponentType::GridLayout: return EditorText("uiComponent.gridLayout", "Grid Layout");
+    case kb::scene::UIComponentType::WrapLayout: return EditorText("uiComponent.wrapLayout", "Wrap Layout");
+    case kb::scene::UIComponentType::OverlayLayout: return EditorText("uiComponent.overlayLayout", "Overlay Layout");
+    case kb::scene::UIComponentType::LayoutElement: return EditorText("uiComponent.layoutElement", "Layout Element");
+    case kb::scene::UIComponentType::ContentSizeFitter: return EditorText("uiComponent.contentSizeFitter", "Content Size Fitter");
+    case kb::scene::UIComponentType::AspectRatioFitter: return EditorText("uiComponent.aspectRatioFitter", "Aspect Ratio Fitter");
+    case kb::scene::UIComponentType::Sprite: return EditorText("uiComponent.sprite", "Sprite");
+    case kb::scene::UIComponentType::Image: return EditorText("uiComponent.image", "Image");
+    case kb::scene::UIComponentType::RawImage: return EditorText("uiComponent.rawImage", "Raw Image");
+    case kb::scene::UIComponentType::Text: return EditorText("uiComponent.text", "Text");
+    case kb::scene::UIComponentType::Border: return EditorText("uiComponent.border", "Border");
+    case kb::scene::UIComponentType::Mask: return EditorText("uiComponent.mask", "Mask");
+    case kb::scene::UIComponentType::Shadow: return EditorText("uiComponent.shadow", "Shadow");
+    case kb::scene::UIComponentType::Outline: return EditorText("uiComponent.outline", "Outline");
+    case kb::scene::UIComponentType::BackgroundBlur: return EditorText("uiComponent.backgroundBlur", "Background Blur");
+    case kb::scene::UIComponentType::Selectable: return EditorText("uiComponent.selectable", "Selectable");
+    case kb::scene::UIComponentType::Button: return EditorText("uiComponent.button", "Button");
+    case kb::scene::UIComponentType::Toggle: return EditorText("uiComponent.toggle", "Toggle");
+    case kb::scene::UIComponentType::Slider: return EditorText("uiComponent.slider", "Slider");
+    case kb::scene::UIComponentType::Scrollbar: return EditorText("uiComponent.scrollbar", "Scrollbar");
+    case kb::scene::UIComponentType::ScrollView: return EditorText("uiComponent.scrollView", "Scroll View");
+    case kb::scene::UIComponentType::InputField: return EditorText("uiComponent.inputField", "Input Field");
+    case kb::scene::UIComponentType::Dropdown: return EditorText("uiComponent.dropdown", "Dropdown");
+    case kb::scene::UIComponentType::ProgressBar: return EditorText("uiComponent.progressBar", "Progress Bar");
+    case kb::scene::UIComponentType::WidgetSwitcher: return EditorText("uiComponent.widgetSwitcher", "Widget Switcher");
+    }
+    return EditorText("inspector.uiComponent.title", "UI Component");
+}
+
+std::string_view InspectorUIComponentModel::PresetDisplayName(kb::scene::UIComponentPreset preset) {
+    switch (preset) {
+    case kb::scene::UIComponentPreset::Canvas: return EditorText("uiPreset.canvas", "Canvas");
+    case kb::scene::UIComponentPreset::Text: return EditorText("uiPreset.text", "Text");
+    case kb::scene::UIComponentPreset::Image: return EditorText("uiPreset.image", "Image");
+    case kb::scene::UIComponentPreset::RawImage: return EditorText("uiPreset.rawImage", "Raw Image");
+    case kb::scene::UIComponentPreset::Button: return EditorText("uiPreset.button", "Button");
+    case kb::scene::UIComponentPreset::Toggle: return EditorText("uiPreset.toggle", "Toggle");
+    case kb::scene::UIComponentPreset::Slider: return EditorText("uiPreset.slider", "Slider");
+    case kb::scene::UIComponentPreset::Scrollbar: return EditorText("uiPreset.scrollbar", "Scrollbar");
+    case kb::scene::UIComponentPreset::ScrollView: return EditorText("uiPreset.scrollView", "Scroll View");
+    case kb::scene::UIComponentPreset::InputField: return EditorText("uiPreset.inputField", "Input Field");
+    case kb::scene::UIComponentPreset::Dropdown: return EditorText("uiPreset.dropdown", "Dropdown");
+    case kb::scene::UIComponentPreset::ProgressBar: return EditorText("uiPreset.progressBar", "Progress Bar");
+    case kb::scene::UIComponentPreset::HorizontalBox: return EditorText("uiPreset.horizontalBox", "Horizontal Box");
+    case kb::scene::UIComponentPreset::VerticalBox: return EditorText("uiPreset.verticalBox", "Vertical Box");
+    case kb::scene::UIComponentPreset::Grid: return EditorText("uiPreset.grid", "Grid");
+    case kb::scene::UIComponentPreset::Wrap: return EditorText("uiPreset.wrap", "Wrap");
+    case kb::scene::UIComponentPreset::Overlay: return EditorText("uiPreset.overlay", "Overlay");
+    case kb::scene::UIComponentPreset::Border: return EditorText("uiPreset.border", "Border");
+    case kb::scene::UIComponentPreset::Blur: return EditorText("uiPreset.blur", "Blur");
+    case kb::scene::UIComponentPreset::WidgetSwitcher: return EditorText("uiPreset.widgetSwitcher", "Widget Switcher");
+    }
+    return EditorText("inspector.uiComponent.title", "UI Component");
 }
 
 InspectorSectionId InspectorUIComponentModel::Section(kb::scene::UIComponentType component) noexcept {
@@ -392,11 +594,15 @@ std::optional<kb::scene::UIComponentType> InspectorUIComponentModel::Component(
 
 std::string InspectorUIComponentModel::EntityReferenceLabel(const kb::scene::Scene& scene, std::uint64_t id,
     bool requireSelectable) {
-    if (id == 0U) return "(none)";
+    if (id == 0U) return std::string{ EditorText("inspector.noAsset", "(none)") };
     const kb::scene::SceneEntity entity{ id };
-    if (!scene.Entities().IsAlive(entity)) return "(missing object #" + std::to_string(id) + ")";
+    if (!scene.Entities().IsAlive(entity)) {
+        return EditorLocalization::Format("uiReference.missingObject", "(missing object #{id})", { { "id", std::to_string(id) } });
+    }
     std::string name = scene.Entities().Name(entity);
-    if (requireSelectable && !scene.Components().UI().Has<kb::scene::UISelectable>(entity)) return name + " (not selectable)";
+    if (requireSelectable && !scene.Components().UI().Has<kb::scene::UISelectable>(entity)) {
+        return EditorLocalization::Format("uiReference.notSelectable", "{name} (not selectable)", { { "name", name } });
+    }
     return name;
 }
 
@@ -441,46 +647,53 @@ InspectorUIComponentModel::ReferenceChoice InspectorUIComponentModel::ReferenceT
     };
     if (property.starts_with("navigation")) {
         choice.targets = NavigationTargets(scene, source);
-        choice.title = "Select Navigation Target";
-        choice.description = "Choose the widget focus moves to in this direction.";
+        choice.title = EditorText("uiReference.selectNavigationTarget", "Select Navigation Target");
+        choice.description = EditorText("uiReference.selectNavigationTargetHint", "Choose the widget focus moves to in this direction.");
     } else if (component == kb::scene::UIComponentType::Dropdown && property == "templateEntity") {
         for (std::size_t index = 0U; index < scene.Hierarchy().ChildCount(source); ++index) {
             const kb::scene::SceneEntity child = scene.Hierarchy().ChildAt(source, index);
             if (ui.Has<kb::scene::UIRectTransform>(child)) choice.targets.push_back(child);
         }
-        choice.title = "Select Template";
-        choice.description = "Choose the child object cloned as the open list.";
+        choice.title = EditorText("uiReference.selectTemplate", "Select Template");
+        choice.description = EditorText("uiReference.selectTemplateHint", "Choose the child object cloned as the open list.");
     } else if (component == kb::scene::UIComponentType::Dropdown && (property == "captionText" || property == "itemText")) {
         collect(source, false, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIText>(entity); });
-        choice.title = property == "captionText" ? "Select Caption Text" : "Select Item Text";
-        choice.description = property == "captionText" ? "Choose the Text that shows the chosen option."
-                                                       : "Choose the Text inside the template's item that shows each option.";
+        choice.title = property == "captionText" ? EditorText("uiReference.selectCaptionText", "Select Caption Text")
+                                                 : EditorText("uiReference.selectItemText", "Select Item Text");
+        choice.description = property == "captionText"
+            ? EditorText("uiReference.selectCaptionTextHint", "Choose the Text that shows the chosen option.")
+            : EditorText("uiReference.selectItemTextHint", "Choose the Text inside the template's item that shows each option.");
     } else if (component == kb::scene::UIComponentType::Dropdown && (property == "captionImage" || property == "itemImage")) {
         collect(source, false, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIImage>(entity); });
-        choice.title = property == "captionImage" ? "Select Caption Image" : "Select Item Image";
-        choice.description = property == "captionImage" ? "Choose the Image that shows the chosen option's image."
-                                                        : "Choose the Image inside the template's item that shows each option's image.";
+        choice.title = property == "captionImage" ? EditorText("uiReference.selectCaptionImage", "Select Caption Image")
+                                                  : EditorText("uiReference.selectItemImage", "Select Item Image");
+        choice.description = property == "captionImage"
+            ? EditorText("uiReference.selectCaptionImageHint", "Choose the Image that shows the chosen option's image.")
+            : EditorText("uiReference.selectItemImageHint", "Choose the Image inside the template's item that shows each option's image.");
     } else if (component == kb::scene::UIComponentType::Toggle && property == "group") {
         collect({}, true, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIRectTransform>(entity); });
-        choice.title = "Select Radio Group";
-        choice.description = "Toggles that name the same object switch each other off - usually the parent they share.";
+        choice.title = EditorText("uiReference.selectRadioGroup", "Select Radio Group");
+        choice.description = EditorText("uiReference.selectRadioGroupHint",
+            "Toggles that name the same object switch each other off - usually the parent they share.");
     } else if (property == "fillRect" || property == "handleRect") {
         collect(source, false, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIRectTransform>(entity); });
-        choice.title = property == "fillRect" ? "Select Fill" : "Select Handle";
-        choice.description = property == "fillRect" ? "Choose the child stretched from the start up to the value."
-                                                    : "Choose the child placed at the value.";
+        choice.title = property == "fillRect" ? EditorText("uiReference.selectFill", "Select Fill")
+                                              : EditorText("uiReference.selectHandle", "Select Handle");
+        choice.description = property == "fillRect"
+            ? EditorText("uiReference.selectFillHint", "Choose the child stretched from the start up to the value.")
+            : EditorText("uiReference.selectHandleHint", "Choose the child placed at the value.");
     } else if (property == "eventTarget") {
         collect({}, true, [](kb::scene::SceneEntity) { return true; });
-        choice.title = "Select Event Target";
-        choice.description = "Choose the object whose scripts receive the click's action event.";
+        choice.title = EditorText("uiReference.selectEventTarget", "Select Event Target");
+        choice.description = EditorText("uiReference.selectEventTargetHint", "Choose the object whose scripts receive the click's action event.");
     } else if (component == kb::scene::UIComponentType::ScrollView) {
         collect({}, true, [&ui](kb::scene::SceneEntity entity) { return ui.Has<kb::scene::UIScrollbar>(entity); });
-        choice.title = "Select Scrollbar";
-        choice.description = "Choose the scrollbar that follows this scroll view.";
+        choice.title = EditorText("uiReference.selectScrollbar", "Select Scrollbar");
+        choice.description = EditorText("uiReference.selectScrollbarHint", "Choose the scrollbar that follows this scroll view.");
     } else {
         collect({}, true, draws);
-        choice.title = "Select Graphic";
-        choice.description = "Choose the widget that shows this state.";
+        choice.title = EditorText("uiReference.selectGraphic", "Select Graphic");
+        choice.description = EditorText("uiReference.selectGraphicHint", "Choose the widget that shows this state.");
     }
     return choice;
 }

@@ -312,6 +312,52 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "MaterialFunctionCall";
     case RenderMaterialGraphNodeKind::LayerStack:
         return "LayerStack";
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+        return "WorldAlignedTexture";
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+        return "ParallaxOcclusionMapping";
+    case RenderMaterialGraphNodeKind::FlipBook:
+        return "FlipBook";
+    case RenderMaterialGraphNodeKind::Checkerboard:
+        return "Checkerboard";
+    case RenderMaterialGraphNodeKind::PolarCoordinates:
+        return "PolarCoordinates";
+    case RenderMaterialGraphNodeKind::Twirl:
+        return "Twirl";
+    case RenderMaterialGraphNodeKind::Ellipse:
+        return "Ellipse";
+    case RenderMaterialGraphNodeKind::Rectangle:
+        return "Rectangle";
+    case RenderMaterialGraphNodeKind::RoundedRectangle:
+        return "RoundedRectangle";
+    case RenderMaterialGraphNodeKind::BlendOverlay:
+        return "BlendOverlay";
+    case RenderMaterialGraphNodeKind::BlendScreen:
+        return "BlendScreen";
+    case RenderMaterialGraphNodeKind::BlendSoftLight:
+        return "BlendSoftLight";
+    case RenderMaterialGraphNodeKind::BlendHardLight:
+        return "BlendHardLight";
+    case RenderMaterialGraphNodeKind::BlendLinearLight:
+        return "BlendLinearLight";
+    case RenderMaterialGraphNodeKind::BlendColorBurn:
+        return "BlendColorBurn";
+    case RenderMaterialGraphNodeKind::BlendColorDodge:
+        return "BlendColorDodge";
+    case RenderMaterialGraphNodeKind::BlendDarken:
+        return "BlendDarken";
+    case RenderMaterialGraphNodeKind::BlendLighten:
+        return "BlendLighten";
+    case RenderMaterialGraphNodeKind::BlendDifference:
+        return "BlendDifference";
+    case RenderMaterialGraphNodeKind::Contrast:
+        return "Contrast";
+    case RenderMaterialGraphNodeKind::HueShift:
+        return "HueShift";
+    case RenderMaterialGraphNodeKind::ChannelMixer:
+        return "ChannelMixer";
+    case RenderMaterialGraphNodeKind::RemapValueRange:
+        return "RemapValueRange";
     }
     return "MaterialOutput";
 }
@@ -470,6 +516,29 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::FunctionOutput:
     case RenderMaterialGraphNodeKind::MaterialFunctionCall:
     case RenderMaterialGraphNodeKind::LayerStack:
+    case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+    case RenderMaterialGraphNodeKind::FlipBook:
+    case RenderMaterialGraphNodeKind::Checkerboard:
+    case RenderMaterialGraphNodeKind::PolarCoordinates:
+    case RenderMaterialGraphNodeKind::Twirl:
+    case RenderMaterialGraphNodeKind::Ellipse:
+    case RenderMaterialGraphNodeKind::Rectangle:
+    case RenderMaterialGraphNodeKind::RoundedRectangle:
+    case RenderMaterialGraphNodeKind::BlendOverlay:
+    case RenderMaterialGraphNodeKind::BlendScreen:
+    case RenderMaterialGraphNodeKind::BlendSoftLight:
+    case RenderMaterialGraphNodeKind::BlendHardLight:
+    case RenderMaterialGraphNodeKind::BlendLinearLight:
+    case RenderMaterialGraphNodeKind::BlendColorBurn:
+    case RenderMaterialGraphNodeKind::BlendColorDodge:
+    case RenderMaterialGraphNodeKind::BlendDarken:
+    case RenderMaterialGraphNodeKind::BlendLighten:
+    case RenderMaterialGraphNodeKind::BlendDifference:
+    case RenderMaterialGraphNodeKind::Contrast:
+    case RenderMaterialGraphNodeKind::HueShift:
+    case RenderMaterialGraphNodeKind::ChannelMixer:
+    case RenderMaterialGraphNodeKind::RemapValueRange:
         return RenderMaterialGraphNodeSupport::Production;
     }
     return RenderMaterialGraphNodeSupport::Unsupported;
@@ -686,6 +755,29 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::FunctionOutput,
         RenderMaterialGraphNodeKind::MaterialFunctionCall,
         RenderMaterialGraphNodeKind::LayerStack,
+        RenderMaterialGraphNodeKind::WorldAlignedTexture,
+        RenderMaterialGraphNodeKind::ParallaxOcclusionMapping,
+        RenderMaterialGraphNodeKind::FlipBook,
+        RenderMaterialGraphNodeKind::Checkerboard,
+        RenderMaterialGraphNodeKind::PolarCoordinates,
+        RenderMaterialGraphNodeKind::Twirl,
+        RenderMaterialGraphNodeKind::Ellipse,
+        RenderMaterialGraphNodeKind::Rectangle,
+        RenderMaterialGraphNodeKind::RoundedRectangle,
+        RenderMaterialGraphNodeKind::BlendOverlay,
+        RenderMaterialGraphNodeKind::BlendScreen,
+        RenderMaterialGraphNodeKind::BlendSoftLight,
+        RenderMaterialGraphNodeKind::BlendHardLight,
+        RenderMaterialGraphNodeKind::BlendLinearLight,
+        RenderMaterialGraphNodeKind::BlendColorBurn,
+        RenderMaterialGraphNodeKind::BlendColorDodge,
+        RenderMaterialGraphNodeKind::BlendDarken,
+        RenderMaterialGraphNodeKind::BlendLighten,
+        RenderMaterialGraphNodeKind::BlendDifference,
+        RenderMaterialGraphNodeKind::Contrast,
+        RenderMaterialGraphNodeKind::HueShift,
+        RenderMaterialGraphNodeKind::ChannelMixer,
+        RenderMaterialGraphNodeKind::RemapValueRange,
     };
     return std::span<const RenderMaterialGraphNodeKind>{ kKinds };
 }

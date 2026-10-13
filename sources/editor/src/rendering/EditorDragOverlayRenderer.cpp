@@ -1,4 +1,5 @@
 #include "rendering/EditorDragOverlayRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "engine/scene/SceneEntities.hpp"
@@ -17,7 +18,8 @@ namespace {
     switch (drag.kind) {
     case EditorPointerDragKind::HierarchyEntity:
         if (drag.entities.size() > 1U) {
-            return std::to_string(drag.entities.size()) + " objects";
+            return EditorLocalization::Plural("dragOverlay.objectCount", static_cast<std::int64_t>(drag.entities.size()),
+                "{count} object", "{count} objects");
         }
         return sceneContext.Scene().Entities().IsAlive(drag.entity) ? sceneContext.Scene().Entities().Name(drag.entity) : std::string{};
     case EditorPointerDragKind::PrefabAsset:
@@ -25,7 +27,7 @@ namespace {
     case EditorPointerDragKind::AssetFolder:
         return !drag.assetLabel.empty() ? drag.assetLabel : drag.assetFolderPath.filename().string();
     case EditorPointerDragKind::MaterialGraphPaletteCommand:
-        return !drag.assetLabel.empty() ? drag.assetLabel : std::string{ "Material Graph Node" };
+        return !drag.assetLabel.empty() ? drag.assetLabel : std::string{ EditorText("dragOverlay.materialGraphNode", "Material Graph Node") };
     case EditorPointerDragKind::None:
     default:
         return {};

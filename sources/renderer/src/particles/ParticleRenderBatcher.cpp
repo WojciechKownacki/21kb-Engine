@@ -1,6 +1,7 @@
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
 
 #include "kb/render/particles/ParticleRenderSpace.hpp"
+#include "kb/render/SceneColorAlphaPolicy.hpp"
 
 #include "kb/render/scene/TransparentDepthKey.hpp"
 
@@ -313,12 +314,17 @@ std::uint64_t ParticleBlendState(
     if (depthRead) state |= BGFX_STATE_DEPTH_TEST_GEQUAL;
     if (depthWrite) state |= BGFX_STATE_WRITE_Z;
     switch (blend) {
+    // The alpha channel follows SceneColorAlphaPolicy: particles that cover the scene behind them lower the
+    // share of it still visible; Multiply only tints it and Subtract writes no alpha.
     case kb::particles::ParticleRenderBlendMode::Opaque: break;
-    case kb::particles::ParticleRenderBlendMode::Alpha: state |= BGFX_STATE_BLEND_ALPHA; break;
-    case kb::particles::ParticleRenderBlendMode::Add: state |= BGFX_STATE_BLEND_ADD; break;
-    case kb::particles::ParticleRenderBlendMode::Multiply: state |= BGFX_STATE_BLEND_MULTIPLY; break;
+    case kb::particles::ParticleRenderBlendMode::Alpha:
+        state |= SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA); break;
+    case kb::particles::ParticleRenderBlendMode::Add:
+        state |= SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE); break;
+    case kb::particles::ParticleRenderBlendMode::Multiply:
+        state |= SceneColorAlphaPolicy::KeepingBlend(BGFX_STATE_BLEND_DST_COLOR, BGFX_STATE_BLEND_ZERO); break;
     case kb::particles::ParticleRenderBlendMode::Premultiplied:
-        state |= BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA); break;
+        state |= SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA); break;
     case kb::particles::ParticleRenderBlendMode::Subtract:
         state |= BGFX_STATE_BLEND_FUNC_SEPARATE(
             BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_ONE,

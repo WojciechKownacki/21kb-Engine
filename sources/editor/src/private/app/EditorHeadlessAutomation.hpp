@@ -5,6 +5,8 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputTouchPoint.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
+#include "inspection/InspectorPanelState.hpp"
+#include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
 
 #include <cstddef>
@@ -12,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -118,6 +121,7 @@ public:
         std::string_view property,
         const kb::scene::UIComponentPropertyValue& value);
     [[nodiscard]] bool VerifyUICreationMenu();
+    [[nodiscard]] bool VerifySceneCreationMenu();
     [[nodiscard]] bool VerifyUIComponentCatalog(std::optional<kb::scene::UIComponentType> only = {});
     [[nodiscard]] bool VerifyUIGraphics();
     [[nodiscard]] bool VerifyUINavigationLinks();
@@ -163,6 +167,9 @@ public:
     [[nodiscard]] bool InspectorPointerUp();
     [[nodiscard]] bool InspectorChar(wchar_t character);
     [[nodiscard]] bool InspectorKey(std::uintptr_t key);
+    // Presses the Inspector row the panel itself hit-tests as `property` (and `index`, -1 for any)
+    // with a hit of `kind`: the click a person makes on that row, wherever the layout puts it.
+    [[nodiscard]] bool InspectorClickRow(InspectorPropertyId property, int index, InspectorHitKind kind);
 
     [[nodiscard]] bool CaptureInspector(
         std::string_view checkpoint);
@@ -171,10 +178,21 @@ public:
     [[nodiscard]] bool CapturePanelScreenshotMatrix(
         std::string_view panel, std::string_view checkpoint);
     [[nodiscard]] bool VerifyViewportHostLifecycle();
+    // A toolbar menu opened on a real editor window drops down in a popup above the
+    // window and its scene viewport, paints its rows and passes clicks back.
+    [[nodiscard]] bool VerifyToolbarMenuOverlay();
+    // Clicking the Add Component browser's search box on a real editor window and
+    // typing filters the components, whether the keys reach the window or the popup.
+    [[nodiscard]] bool VerifyAddComponentSearchInput();
     [[nodiscard]] bool CaptureEditorScene(std::string_view checkpoint, bool editorOverlaysEnabled = true);
     // The Scene panel's viewport exactly as the editor presents it: its own camera and the
     // production present settings, editor overlays included (grid lines, the world cell grid).
     [[nodiscard]] bool CaptureSceneViewport(std::string_view checkpoint);
+    // The Material Editor's preview of the open material, presented as the panel presents it.
+    [[nodiscard]] bool CaptureMaterialPreview(std::string_view checkpoint, int width, int height);
+    // The post-process settings the Scene panel's viewport renders with now (its own present
+    // settings, as a paint builds them); nullopt when it renders the renderer's defaults.
+    [[nodiscard]] std::optional<kb::render::ScenePostProcessSettings> SceneViewportPostProcessSettings();
     [[nodiscard]] bool VerifySceneRenderTargetAfterSecondary(
         std::string_view checkpoint);
     [[nodiscard]] bool CaptureRuntime(

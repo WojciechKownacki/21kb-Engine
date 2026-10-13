@@ -1,4 +1,5 @@
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "engine/assets/AssetMetadata.hpp"
@@ -7,6 +8,7 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <string>
@@ -28,17 +30,17 @@ constexpr int kHeaderHeight = 30;
         (GetBValue(a) * percentA + GetBValue(b) * percentB) / 100);
 }
 
-[[nodiscard]] const char* ParameterTypeLabel(kb::scene::AnimatorParameterType type) noexcept {
+[[nodiscard]] std::string_view ParameterTypeLabel(kb::scene::AnimatorParameterType type) {
     switch (type) {
     case kb::scene::AnimatorParameterType::Bool: return "Bool";
     case kb::scene::AnimatorParameterType::Int: return "Int";
     case kb::scene::AnimatorParameterType::Float: return "Float";
-    case kb::scene::AnimatorParameterType::Trigger: return "Trigger";
+    case kb::scene::AnimatorParameterType::Trigger: return EditorText("animatorEditor.parameterTrigger", "Trigger");
     }
-    return "Unknown";
+    return EditorText("inspector.unknown", "Unknown");
 }
 
-[[nodiscard]] const char* ConditionModeLabel(kb::scene::AnimatorConditionMode mode) noexcept {
+[[nodiscard]] std::string_view ConditionModeLabel(kb::scene::AnimatorConditionMode mode) {
     switch (mode) {
     case kb::scene::AnimatorConditionMode::BoolEquals: return "==";
     case kb::scene::AnimatorConditionMode::IntEquals: return "==";
@@ -46,18 +48,18 @@ constexpr int kHeaderHeight = 30;
     case kb::scene::AnimatorConditionMode::IntLess: return "<";
     case kb::scene::AnimatorConditionMode::FloatGreater: return ">";
     case kb::scene::AnimatorConditionMode::FloatLess: return "<";
-    case kb::scene::AnimatorConditionMode::TriggerSet: return "set";
+    case kb::scene::AnimatorConditionMode::TriggerSet: return EditorText("animatorEditor.conditionSet", "set");
     }
     return "?";
 }
 
-void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize, int weight = FW_NORMAL,
+void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize, int weight = FW_NORMAL,
     UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
     const ScopedFont font{ pointSize, weight };
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, flags | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, flags | DT_NOPREFIX);
 }
 
 void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* controller,
@@ -66,7 +68,7 @@ void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* c
     const COLORREF accent = ThemeColor(theme.accent);
     GdiDrawing::FillRectColor(dc, rect, panel);
     GdiDrawing::DrawSharpFrame(dc, rect, panel, ThemeColor(theme.borderPanel));
-    DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, "State Machine",
+    DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, EditorText("animatorEditor.stateMachine", "State Machine"),
         ThemeColor(theme.textPrimary), 12, FW_SEMIBOLD);
     if (controller == nullptr) return;
 
@@ -82,7 +84,7 @@ void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* c
         constexpr int entryWidth = 48;
         const RECT entry{ rect.left + 12, rowTop + 22, rect.left + 12 + entryWidth, rowTop + 22 + nodeHeight };
         GdiDrawing::DrawSharpFrame(dc, entry, RGB(57, 67, 48), RGB(132, 172, 106));
-        DrawText(dc, RECT{ entry.left + 4, entry.top + 3, entry.right - 4, entry.bottom - 3 }, "Entry", RGB(218, 233, 205), 10, FW_SEMIBOLD);
+        DrawText(dc, RECT{ entry.left + 4, entry.top + 3, entry.right - 4, entry.bottom - 3 }, EditorText("animatorEditor.entry", "Entry"), RGB(218, 233, 205), 10, FW_SEMIBOLD);
         for (std::size_t stateIndex = 0U; stateIndex < layer.states.size(); ++stateIndex) {
             const kb::scene::AnimatorControllerState& state = layer.states[stateIndex];
             const auto layout = std::ranges::find_if(controller->graphLayout, [&state](const auto& value) {
@@ -131,7 +133,7 @@ void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController*
     const COLORREF panel = ThemeColor(theme.panel);
     GdiDrawing::FillRectColor(dc, rect, panel);
     GdiDrawing::DrawSharpFrame(dc, rect, panel, ThemeColor(theme.borderPanel));
-    DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, "Details / Assets",
+    DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, EditorText("animatorEditor.detailsAssets", "Details / Assets"),
         ThemeColor(theme.textPrimary), 12, FW_SEMIBOLD);
     if (controller == nullptr) return;
     int y = rect.top + 36;
@@ -140,7 +142,7 @@ void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController*
         y += 20;
     };
     if (debug != nullptr) {
-        row("Live Debug");
+        row(std::string{ EditorText("animatorEditor.liveDebug", "Live Debug") });
         for (const kb::scene::AnimatorDebugLayerSnapshot& layer : debug->layers) {
             row(layer.name + ": " + layer.activeState +
                 (layer.transitioning ? " <- " + layer.previousState + " (" +
@@ -165,57 +167,67 @@ void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController*
             row(parameter.name + " = " + value);
             if (y >= rect.bottom) return;
         }
-        row("Pose bones: " + std::to_string(debug->bones.size()) +
-            " | palette: " + std::to_string(debug->paletteMatrixCount));
-        row("LOD: " + std::string{ debug->lodEnabled ? "enabled" : "disabled" } +
-            " | bias: " + std::to_string(debug->lodBias) +
-            " | bounds: " + (debug->fixedBounds ? "fixed" : "animated"));
-        row("Root motion: " + std::string{ debug->hasRootMotion ? "active" : "none" });
-        row("Root trail samples: " + std::to_string(debug->rootMotionTrail.size()));
+        row(EditorLocalization::Format("animatorEditor.debug.pose", "Pose bones: {bones} | palette: {palette}",
+            { { "bones", std::to_string(debug->bones.size()) }, { "palette", std::to_string(debug->paletteMatrixCount) } }));
+        row(EditorLocalization::Format("animatorEditor.debug.lod", "LOD: {state} | bias: {bias} | bounds: {bounds}", {
+            { "state", std::string{ debug->lodEnabled ? EditorText("animatorEditor.debug.enabled", "enabled")
+                                                      : EditorText("animatorEditor.debug.disabled", "disabled") } },
+            { "bias", std::to_string(debug->lodBias) },
+            { "bounds", std::string{ debug->fixedBounds ? EditorText("animatorEditor.debug.boundsFixed", "fixed")
+                                                        : EditorText("animatorEditor.debug.boundsAnimated", "animated") } },
+        }));
+        row(EditorLocalization::Format("animatorEditor.debug.rootMotion", "Root motion: {state}", {
+            { "state", std::string{ debug->hasRootMotion ? EditorText("animatorEditor.debug.rootMotionActive", "active")
+                                                         : EditorText("animatorEditor.debug.rootMotionNone", "none") } } }));
+        row(EditorLocalization::Format("animatorEditor.debug.rootTrail", "Root trail samples: {count}",
+            { { "count", std::to_string(debug->rootMotionTrail.size()) } }));
         for (std::size_t index = 0U; index < std::min<std::size_t>(debug->bones.size(), 3U); ++index) {
             const kb::scene::AnimatorDebugBoneSnapshot& bone = debug->bones[index];
-            row("Bone " + std::to_string(bone.id) + " final: " +
-                std::to_string(bone.componentPose.position.x) + ", " +
-                std::to_string(bone.componentPose.position.y) + ", " +
-                std::to_string(bone.componentPose.position.z));
+            row(EditorLocalization::Format("animatorEditor.debug.bone", "Bone {id} final: {x}, {y}, {z}", {
+                { "id", std::to_string(bone.id) },
+                { "x", std::to_string(bone.componentPose.position.x) },
+                { "y", std::to_string(bone.componentPose.position.y) },
+                { "z", std::to_string(bone.componentPose.position.z) },
+            }));
             if (y >= rect.bottom) return;
         }
         for (const kb::scene::AnimatorDebugConstraintSnapshot& constraint : debug->constraints) {
-            row("Constraint " + constraint.name + ": " +
-                (constraint.hasTarget ? "target bound" : "target missing"));
+            row(constraint.hasTarget
+                ? EditorLocalization::Format("animatorEditor.debug.constraintBound", "Constraint {name}: target bound", { { "name", constraint.name } })
+                : EditorLocalization::Format("animatorEditor.debug.constraintMissing", "Constraint {name}: target missing", { { "name", constraint.name } }));
             if (y >= rect.bottom) return;
         }
         for (const std::string& diagnostic : debug->compatibilityDiagnostics) {
-            row("Compatibility: " + diagnostic);
+            row(EditorLocalization::Format("animatorEditor.debug.compatibility", "Compatibility: {diagnostic}", { { "diagnostic", diagnostic } }));
             if (y >= rect.bottom) return;
         }
         y += 4;
     }
-    row("Parameters: " + std::to_string(controller->parameters.size()));
+    row(EditorLocalization::Format("animatorEditor.parameters", "Parameters: {count}", { { "count", std::to_string(controller->parameters.size()) } }));
     for (const kb::scene::AnimatorParameterDefinition& parameter : controller->parameters) {
-        row(parameter.name + " : " + ParameterTypeLabel(parameter.type));
+        row(parameter.name + " : " + std::string{ ParameterTypeLabel(parameter.type) });
         if (y >= rect.bottom) return;
     }
-    row("Layers: " + std::to_string(controller->layers.size()));
+    row(EditorLocalization::Format("animatorEditor.layers", "Layers: {count}", { { "count", std::to_string(controller->layers.size()) } }));
     for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
-        row(layer.name + " | Entry: " + layer.defaultState);
+        row(EditorLocalization::Format("animatorEditor.layerEntry", "{layer} | Entry: {state}", { { "layer", layer.name }, { "state", layer.defaultState } }));
         if (y >= rect.bottom) return;
     }
-    row("Constraints: " + std::to_string(controller->rigConstraints.size()));
+    row(EditorLocalization::Format("animatorEditor.constraints", "Constraints: {count}", { { "count", std::to_string(controller->rigConstraints.size()) } }));
     y += 5;
-    DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, "Transitions", ThemeColor(theme.accent), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, EditorText("animatorEditor.transitions", "Transitions"), ThemeColor(theme.accent), 11, FW_SEMIBOLD);
     y += 21;
     for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
         for (const kb::scene::AnimatorControllerTransition& transition : layer.transitions) {
             row(transition.fromState + " -> " + transition.toState + " | " +
                 std::to_string(transition.durationSeconds) + " s");
             for (const kb::scene::AnimatorTransitionCondition& condition : transition.conditions) {
-                row("  " + condition.parameter + " " + ConditionModeLabel(condition.mode));
+                row("  " + condition.parameter + " " + std::string{ ConditionModeLabel(condition.mode) });
             }
             if (y >= rect.bottom) return;
         }
     }
-    DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, "Referenced clips", ThemeColor(theme.accent), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, EditorText("animatorEditor.referencedClips", "Referenced clips"), ThemeColor(theme.accent), 11, FW_SEMIBOLD);
     y += 21;
     for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
         for (const kb::scene::AnimatorControllerState& state : layer.states) {
@@ -242,7 +254,7 @@ void AnimatorEditorPanelRenderer::Paint(
     EditorSceneBgfxViewport* sceneViewport) const {
     if (!sceneContext.HasAnimatorEditorAsset() || sceneContext.AnimatorEditorPreviewScene() == nullptr) {
         GdiDrawing::FillRectColor(dc, content, ThemeColor(theme.background));
-        DrawText(dc, content, "Open an Animator Controller asset to begin editing.", ThemeColor(theme.textSecondary), 15,
+        DrawText(dc, content, EditorText("animatorEditor.empty", "Open an Animator Controller asset to begin editing."), ThemeColor(theme.textSecondary), 15,
             FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
     }
@@ -262,12 +274,14 @@ void AnimatorEditorPanelRenderer::Paint(
         for (const auto& layer : controller->layers) for (const auto& state : layer.states)
             if (state.id == sceneContext.AnimatorEditorGraphDocument().MotionState()) motion = &state;
     }
-    const std::string title = (metadata == nullptr ? std::string{ "Animator Controller" } : metadata->name) +
+    const std::string title = (metadata == nullptr ? std::string{ EditorText("animatorEditor.animatorController", "Animator Controller") } : metadata->name) +
         (sceneContext.HasDirtyAnimatorEditorAssetEdit() ? " *" : "") +
-        (previewMesh == nullptr ? std::string{} : "  |  Preview " + previewMesh->name) +
-        "  |  Debug " + sceneContext.AnimatorEditorDebugTargetLabel() + " (click to switch)";
+        (previewMesh == nullptr ? std::string{}
+                                : "  |  " + EditorLocalization::Format("animatorEditor.previewMesh", "Preview {mesh}", { { "mesh", previewMesh->name } })) +
+        "  |  " + EditorLocalization::Format("animatorEditor.debugTarget", "Debug {target} (click to switch)",
+            { { "target", sceneContext.AnimatorEditorDebugTargetLabel() } });
     DrawText(dc, RECT{ content.left + 10, content.top, content.right - 10, content.top + kHeaderHeight },
-        (title + "  >  " + (motion == nullptr ? "State Machine" : motion->name)).c_str(), ThemeColor(theme.textPrimary), 13, FW_SEMIBOLD);
+        title + "  >  " + (motion == nullptr ? std::string{ EditorText("animatorEditor.stateMachine", "State Machine") } : motion->name), ThemeColor(theme.textPrimary), 13, FW_SEMIBOLD);
 
     const AnimatorEditorPanelLayout layout = ResolveLayout(
         RECT{ content.left, content.top + kHeaderHeight, content.right, content.bottom });
@@ -275,12 +289,12 @@ void AnimatorEditorPanelRenderer::Paint(
     if (motion == nullptr) PaintGraph(dc, layout.graph, controller, debug, theme);
     else {
         GdiDrawing::FillRectColor(dc, layout.graph, ThemeColor(theme.panel));
-        DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 10, layout.graph.right - 12, layout.graph.top + 34 }, "Motion / Blend Document", ThemeColor(theme.textPrimary), 13, FW_SEMIBOLD);
+        DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 10, layout.graph.right - 12, layout.graph.top + 34 }, EditorText("animatorEditor.motionDocument", "Motion / Blend Document"), ThemeColor(theme.textPrimary), 13, FW_SEMIBOLD);
         if (!motion->clipReference.empty()) {
             DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 }, motion->clipReference.c_str(), ThemeColor(theme.textSecondary), 12);
         } else {
             DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 },
-                ("1D Blend Tree | " + motion->blendParameter).c_str(), ThemeColor(theme.accent), 12, FW_SEMIBOLD);
+                EditorLocalization::Format("animatorEditor.blendTree1D", "1D Blend Tree | {parameter}", { { "parameter", motion->blendParameter } }), ThemeColor(theme.accent), 12, FW_SEMIBOLD);
             int y = layout.graph.top + 70;
             for (const kb::scene::AnimatorControllerState::BlendChild& child : motion->blendChildren) {
                 const std::string row = std::to_string(child.threshold) + "  |  " + child.clipReference;

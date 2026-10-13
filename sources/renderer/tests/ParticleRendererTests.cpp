@@ -268,6 +268,29 @@ void TestAllBlendAndOutputContracts() {
             Require((state & (BGFX_STATE_BLEND_MASK | BGFX_STATE_BLEND_EQUATION_MASK)) == exactBlend,
                 "subtractive particles are not dstRGB-srcRGB*srcAlpha with unchanged destination alpha");
         }
+        // The scene colour alpha is the share of the opaque surface still visible (the TAA reactive mask):
+        // particles covering it multiply it by 1 - their opacity (ZERO, INV_SRC_ALPHA), multiplying
+        // particles only tint it (ZERO, ONE).
+        const auto expectBlend = [state](std::uint64_t expected, const char* message) {
+            Require((state & BGFX_STATE_BLEND_MASK) == expected, message);
+        };
+        if (blend == Blend::Alpha) {
+            expectBlend(BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA,
+                    BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA),
+                "alpha particles must blend by alpha and hide the surface behind them by their opacity");
+        } else if (blend == Blend::Add) {
+            expectBlend(BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE,
+                    BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA),
+                "additive particles must add and hide the surface behind them by their opacity");
+        } else if (blend == Blend::Premultiplied) {
+            expectBlend(BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA,
+                    BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA),
+                "premultiplied particles must composite and hide the surface behind them by their opacity");
+        } else if (blend == Blend::Multiply) {
+            expectBlend(BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_DST_COLOR, BGFX_STATE_BLEND_ZERO,
+                    BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_ONE),
+                "multiplying particles must tint and keep the surface behind them visible");
+        }
     }
     for (const auto output : {kb::particles::ParticleRenderOutput::Billboard,
              kb::particles::ParticleRenderOutput::StretchedBillboard,

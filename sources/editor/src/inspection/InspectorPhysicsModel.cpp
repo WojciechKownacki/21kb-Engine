@@ -1,4 +1,5 @@
 #include "inspection/InspectorPhysicsModel.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include <array>
 #include <cstdio>
@@ -21,60 +22,61 @@ namespace {
     return text == "-0" ? "0" : text;
 }
 
-[[nodiscard]] PhysicsField FloatField(std::string label, float value) {
-    return PhysicsField{ .label = std::move(label), .kind = PhysicsFieldKind::Float, .value = FormatFloat(value) };
+[[nodiscard]] PhysicsField FloatField(std::string_view label, float value) {
+    return PhysicsField{ .label = std::string{ label }, .kind = PhysicsFieldKind::Float, .value = FormatFloat(value) };
 }
 
-[[nodiscard]] PhysicsField BoolField(std::string label, bool value) {
-    return PhysicsField{ .label = std::move(label), .kind = PhysicsFieldKind::Bool, .value = value ? "On" : "Off", .boolValue = value };
+[[nodiscard]] PhysicsField BoolField(std::string_view label, bool value) {
+    return PhysicsField{ .label = std::string{ label }, .kind = PhysicsFieldKind::Bool,
+        .value = std::string{ value ? EditorText("inspector.on", "On") : EditorText("inspector.off", "Off") }, .boolValue = value };
 }
 
-[[nodiscard]] PhysicsField EnumField(std::string label, std::string value) {
-    return PhysicsField{ .label = std::move(label), .kind = PhysicsFieldKind::Enum, .value = std::move(value) };
+[[nodiscard]] PhysicsField EnumField(std::string_view label, std::string_view value) {
+    return PhysicsField{ .label = std::string{ label }, .kind = PhysicsFieldKind::Enum, .value = std::string{ value } };
 }
 
-[[nodiscard]] PhysicsField ReadOnlyField(std::string label, std::string value) {
-    return PhysicsField{ .label = std::move(label), .kind = PhysicsFieldKind::ReadOnly, .value = std::move(value) };
+[[nodiscard]] PhysicsField ReadOnlyField(std::string_view label, std::string value) {
+    return PhysicsField{ .label = std::string{ label }, .kind = PhysicsFieldKind::ReadOnly, .value = std::move(value) };
 }
 
-[[nodiscard]] const char* BodyTypeName(kb::scene::RigidbodyBodyType type) noexcept {
+[[nodiscard]] std::string_view BodyTypeName(kb::scene::RigidbodyBodyType type) {
     switch (type) {
     case kb::scene::RigidbodyBodyType::Static:
-        return "Static";
+        return EditorText("inspector.rigidbody.static", "Static");
     case kb::scene::RigidbodyBodyType::Dynamic:
-        return "Dynamic";
+        return EditorText("inspector.rigidbody.dynamic", "Dynamic");
     case kb::scene::RigidbodyBodyType::Kinematic:
-        return "Kinematic";
+        return EditorText("inspector.rigidbody.kinematic", "Kinematic");
     }
-    return "Dynamic";
+    return EditorText("inspector.rigidbody.dynamic", "Dynamic");
 }
 
-[[nodiscard]] const char* ColliderShapeName(kb::scene::ColliderShape shape) noexcept {
+[[nodiscard]] std::string_view ColliderShapeName(kb::scene::ColliderShape shape) {
     switch (shape) {
     case kb::scene::ColliderShape::Box:
-        return "Box";
+        return EditorText("inspector.collider.box", "Box");
     case kb::scene::ColliderShape::Sphere:
-        return "Sphere";
+        return EditorText("inspector.collider.sphere", "Sphere");
     case kb::scene::ColliderShape::Capsule:
-        return "Capsule";
+        return EditorText("inspector.collider.capsule", "Capsule");
     case kb::scene::ColliderShape::Mesh:
-        return "Mesh";
+        return EditorText("inspector.collider.mesh", "Mesh");
     }
-    return "Box";
+    return EditorText("inspector.collider.box", "Box");
 }
 
-[[nodiscard]] const char* JointTypeName(kb::scene::JointType type) noexcept {
+[[nodiscard]] std::string_view JointTypeName(kb::scene::JointType type) {
     switch (type) {
     case kb::scene::JointType::Fixed:
-        return "Fixed";
+        return EditorText("inspector.joint.fixed", "Fixed");
     case kb::scene::JointType::Hinge:
-        return "Hinge";
+        return EditorText("inspector.joint.hinge", "Hinge");
     case kb::scene::JointType::Distance:
-        return "Distance";
+        return EditorText("inspector.joint.distance", "Distance");
     case kb::scene::JointType::Point:
-        return "Point";
+        return EditorText("inspector.joint.point", "Point");
     }
-    return "Fixed";
+    return EditorText("inspector.joint.fixed", "Fixed");
 }
 
 } // namespace
@@ -84,18 +86,20 @@ namespace {
 // ---------------------------------------------------------------------------
 std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::RigidbodyComponent& c) {
     return {
-        EnumField("Body Type", BodyTypeName(c.bodyType)),
-        FloatField("Mass", c.mass),
-        FloatField("Gravity Scale", c.gravityScale),
-        BoolField("Use Gravity", c.useGravity),
-        BoolField("Lock Rotation", c.lockRotation),
-        BoolField("Continuous CD", c.useContinuousCollision),
-        FloatField("Lin Velocity X", c.linearVelocity.x),
-        FloatField("Lin Velocity Y", c.linearVelocity.y),
-        FloatField("Lin Velocity Z", c.linearVelocity.z),
-        FloatField("Ang Velocity X", c.angularVelocity.x),
-        FloatField("Ang Velocity Y", c.angularVelocity.y),
-        FloatField("Ang Velocity Z", c.angularVelocity.z),
+        EnumField(EditorText("inspector.rigidbody.bodyType", "Body Type"), BodyTypeName(c.bodyType)),
+        FloatField(EditorText("inspector.rigidbody.mass", "Mass"), c.mass),
+        FloatField(EditorText("inspector.rigidbody.gravityScale", "Gravity Scale"), c.gravityScale),
+        BoolField(EditorText("inspector.rigidbody.useGravity", "Use Gravity"), c.useGravity),
+        BoolField(EditorText("inspector.rigidbody.lockRotation", "Lock Rotation"), c.lockRotation),
+        BoolField(EditorText("inspector.rigidbody.continuousCD", "Continuous CD"), c.useContinuousCollision),
+        FloatField(EditorText("inspector.rigidbody.linVelocityX", "Lin Velocity X"), c.linearVelocity.x),
+        FloatField(EditorText("inspector.rigidbody.linVelocityY", "Lin Velocity Y"), c.linearVelocity.y),
+        FloatField(EditorText("inspector.rigidbody.linVelocityZ", "Lin Velocity Z"), c.linearVelocity.z),
+        FloatField(EditorText("inspector.rigidbody.angVelocityX", "Ang Velocity X"), c.angularVelocity.x),
+        FloatField(EditorText("inspector.rigidbody.angVelocityY", "Ang Velocity Y"), c.angularVelocity.y),
+        FloatField(EditorText("inspector.rigidbody.angVelocityZ", "Ang Velocity Z"), c.angularVelocity.z),
+        FloatField(EditorText("inspector.rigidbody.linearDamping", "Linear Damping"), c.linearDamping),
+        FloatField(EditorText("inspector.rigidbody.angularDamping", "Angular Damping"), c.angularDamping),
     };
 }
 
@@ -109,6 +113,8 @@ bool InspectorPhysicsModel::ReadFloat(const kb::scene::RigidbodyComponent& c, in
     case 9: out = c.angularVelocity.x; return true;
     case 10: out = c.angularVelocity.y; return true;
     case 11: out = c.angularVelocity.z; return true;
+    case 12: out = c.linearDamping; return true;
+    case 13: out = c.angularDamping; return true;
     default: return false;
     }
 }
@@ -123,6 +129,8 @@ bool InspectorPhysicsModel::ApplyFloat(kb::scene::RigidbodyComponent& c, int ind
     case 9: c.angularVelocity.x = v; return true;
     case 10: c.angularVelocity.y = v; return true;
     case 11: c.angularVelocity.z = v; return true;
+    case 12: c.linearDamping = v < 0.0F ? 0.0F : v; return true;
+    case 13: c.angularDamping = v < 0.0F ? 0.0F : v; return true;
     default: return false;
     }
 }
@@ -153,20 +161,20 @@ bool InspectorPhysicsModel::CycleEnum(kb::scene::RigidbodyComponent& c, int inde
 // ---------------------------------------------------------------------------
 std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::ColliderComponent& c) {
     return {
-        EnumField("Shape", ColliderShapeName(c.shape)),
-        FloatField("Center X", c.center.x),
-        FloatField("Center Y", c.center.y),
-        FloatField("Center Z", c.center.z),
-        FloatField("Box Size X", c.boxSize.x),
-        FloatField("Box Size Y", c.boxSize.y),
-        FloatField("Box Size Z", c.boxSize.z),
-        FloatField("Radius", c.radius),
-        FloatField("Height", c.height),
-        BoolField("Is Trigger", c.trigger),
-        FloatField("Friction", c.friction),
-        FloatField("Restitution", c.restitution),
-        ReadOnlyField("Layer Mask", std::to_string(c.layer)),
-        ReadOnlyField("Collision Mesh Asset", std::to_string(c.meshAssetId)),
+        EnumField(EditorText("inspector.collider.shape", "Shape"), ColliderShapeName(c.shape)),
+        FloatField(EditorText("inspector.collider.centerX", "Center X"), c.center.x),
+        FloatField(EditorText("inspector.collider.centerY", "Center Y"), c.center.y),
+        FloatField(EditorText("inspector.collider.centerZ", "Center Z"), c.center.z),
+        FloatField(EditorText("inspector.collider.boxSizeX", "Box Size X"), c.boxSize.x),
+        FloatField(EditorText("inspector.collider.boxSizeY", "Box Size Y"), c.boxSize.y),
+        FloatField(EditorText("inspector.collider.boxSizeZ", "Box Size Z"), c.boxSize.z),
+        FloatField(EditorText("inspector.collider.radius", "Radius"), c.radius),
+        FloatField(EditorText("inspector.collider.height", "Height"), c.height),
+        BoolField(EditorText("inspector.collider.isTrigger", "Is Trigger"), c.trigger),
+        FloatField(EditorText("inspector.collider.friction", "Friction"), c.friction),
+        FloatField(EditorText("inspector.collider.restitution", "Restitution"), c.restitution),
+        ReadOnlyField(EditorText("inspector.collider.layerMask", "Layer Mask"), std::to_string(c.layer)),
+        ReadOnlyField(EditorText("inspector.collider.collisionMeshAsset", "Collision Mesh Asset"), std::to_string(c.meshAssetId)),
     };
 }
 
@@ -228,15 +236,15 @@ bool InspectorPhysicsModel::CycleEnum(kb::scene::ColliderComponent& c, int index
 // ---------------------------------------------------------------------------
 std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::CharacterControllerComponent& c) {
     return {
-        FloatField("Center X", c.center.x),
-        FloatField("Center Y", c.center.y),
-        FloatField("Center Z", c.center.z),
-        FloatField("Radius", c.radius),
-        FloatField("Height", c.height),
-        FloatField("Slope Limit", c.slopeLimitDegrees),
-        FloatField("Step Offset", c.stepOffset),
-        FloatField("Gravity Scale", c.gravityScale),
-        BoolField("Use Gravity", c.useGravity),
+        FloatField(EditorText("inspector.characterController.centerX", "Center X"), c.center.x),
+        FloatField(EditorText("inspector.characterController.centerY", "Center Y"), c.center.y),
+        FloatField(EditorText("inspector.characterController.centerZ", "Center Z"), c.center.z),
+        FloatField(EditorText("inspector.characterController.radius", "Radius"), c.radius),
+        FloatField(EditorText("inspector.characterController.height", "Height"), c.height),
+        FloatField(EditorText("inspector.characterController.slopeLimit", "Slope Limit"), c.slopeLimitDegrees),
+        FloatField(EditorText("inspector.characterController.stepOffset", "Step Offset"), c.stepOffset),
+        FloatField(EditorText("inspector.characterController.gravityScale", "Gravity Scale"), c.gravityScale),
+        BoolField(EditorText("inspector.characterController.useGravity", "Use Gravity"), c.useGravity),
     };
 }
 
@@ -285,19 +293,19 @@ bool InspectorPhysicsModel::CycleEnum(kb::scene::CharacterControllerComponent&, 
 // ---------------------------------------------------------------------------
 std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::JointComponent& c) {
     return {
-        EnumField("Type", JointTypeName(c.type)),
-        FloatField("Anchor X", c.anchor.x),
-        FloatField("Anchor Y", c.anchor.y),
-        FloatField("Anchor Z", c.anchor.z),
-        FloatField("Conn Anchor X", c.connectedAnchor.x),
-        FloatField("Conn Anchor Y", c.connectedAnchor.y),
-        FloatField("Conn Anchor Z", c.connectedAnchor.z),
-        FloatField("Axis X", c.axis.x),
-        FloatField("Axis Y", c.axis.y),
-        FloatField("Axis Z", c.axis.z),
-        FloatField("Min Limit", c.minLimit),
-        FloatField("Max Limit", c.maxLimit),
-        BoolField("Enable Limit", c.enableLimit),
+        EnumField(EditorText("inspector.joint.type", "Type"), JointTypeName(c.type)),
+        FloatField(EditorText("inspector.joint.anchorX", "Anchor X"), c.anchor.x),
+        FloatField(EditorText("inspector.joint.anchorY", "Anchor Y"), c.anchor.y),
+        FloatField(EditorText("inspector.joint.anchorZ", "Anchor Z"), c.anchor.z),
+        FloatField(EditorText("inspector.joint.connAnchorX", "Conn Anchor X"), c.connectedAnchor.x),
+        FloatField(EditorText("inspector.joint.connAnchorY", "Conn Anchor Y"), c.connectedAnchor.y),
+        FloatField(EditorText("inspector.joint.connAnchorZ", "Conn Anchor Z"), c.connectedAnchor.z),
+        FloatField(EditorText("inspector.joint.axisX", "Axis X"), c.axis.x),
+        FloatField(EditorText("inspector.joint.axisY", "Axis Y"), c.axis.y),
+        FloatField(EditorText("inspector.joint.axisZ", "Axis Z"), c.axis.z),
+        FloatField(EditorText("inspector.joint.minLimit", "Min Limit"), c.minLimit),
+        FloatField(EditorText("inspector.joint.maxLimit", "Max Limit"), c.maxLimit),
+        BoolField(EditorText("inspector.joint.enableLimit", "Enable Limit"), c.enableLimit),
     };
 }
 

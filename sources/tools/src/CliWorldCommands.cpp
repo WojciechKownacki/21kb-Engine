@@ -44,10 +44,19 @@ namespace {
         }
         cellSize = *parsed;
     }
-    const std::filesystem::path scene = ResolveInputPath(*sceneOption, projectRoot);
+    std::string pathError;
+    const std::filesystem::path scene = ResolveProjectFile(*sceneOption, projectRoot, pathError);
+    if (scene.empty()) {
+        io.err << "error: " << pathError << '\n';
+        return 1;
+    }
     std::filesystem::path out{ *outOption };
     if (out.is_relative() && !projectRoot.empty()) {
         out = projectRoot / out;
+    }
+    if (!projectRoot.empty() && ResolveProjectFile(out, projectRoot, pathError).empty()) {
+        io.err << "error: --out: " << pathError << '\n';
+        return 1;
     }
     const kb::world::WorldMigrationResult migrated = kb::world::WorldMigration::ConvertScene(scene, out, cellSize);
     if (!migrated.succeeded) {
@@ -59,18 +68,11 @@ namespace {
     return 0;
 }
 
-// The project file of a project directory: Project.21kbproject, else the only .21kbproject in it.
 [[nodiscard]] std::optional<std::filesystem::path> ProjectFileIn(const std::filesystem::path& directory) {
-    std::error_code code;
-    if (std::filesystem::is_regular_file(directory / "Project.21kbproject", code)) {
-        return directory / "Project.21kbproject";
-    }
-    std::vector<std::filesystem::path> candidates;
-    for (std::filesystem::directory_iterator it{ directory, code }, end; !code && it != end; it.increment(code)) {
-        if (it->is_regular_file(code) && it->path().extension() == ".21kbproject") candidates.push_back(it->path());
-    }
-    if (candidates.size() != 1U) return std::nullopt;
-    return candidates.front();
+    std::string error;
+    std::filesystem::path found = kb::project::ProjectManager::FindProjectFile(directory, error);
+    if (found.empty()) return std::nullopt;
+    return found;
 }
 
 // The directory the cooker and the editor mount as /Game: the project's content root. Without
@@ -106,7 +108,12 @@ namespace {
         return 1;
     }
     const std::optional<std::string> project = arguments.Option("--project");
-    const std::filesystem::path world = ResolveInputPath(*worldOption, project.value_or(""));
+    std::string pathError;
+    const std::filesystem::path world = ResolveProjectFile(*worldOption, project.value_or(""), pathError);
+    if (world.empty()) {
+        io.err << "error: " << pathError << '\n';
+        return 1;
+    }
 #if defined(KB_CLI_WORLD_HLOD)
     std::string error;
     const std::optional<std::filesystem::path> contentRoot = ContentRoot(project, world, error);

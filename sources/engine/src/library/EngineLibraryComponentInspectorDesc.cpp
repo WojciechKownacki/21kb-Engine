@@ -1,4 +1,5 @@
 #include "engine/library/EngineLibraryComponentInspectorDesc.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
 
@@ -66,8 +67,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
-            .componentName = "3D Radiance Emitter",
-            .displayName = "3D Radiance Emitter",
+            .componentName = "Light",
+            .displayName = "Light",
             .category = "Rendering",
             .fields = {
                 LibraryComponentInspectorFieldDesc{ "kind", "Kind", "Directional, point, spot, rectangular, disk, or tube emitter type." },
@@ -126,6 +127,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "useGravity", "Use Gravity", "Whether world gravity affects this body." },
                 LibraryComponentInspectorFieldDesc{ "lockRotation", "Lock Rotation", "Whether physics simulation is prevented from rotating this body." },
                 LibraryComponentInspectorFieldDesc{ "useContinuousCollision", "Continuous Collision", "Sweeps this body's shape along its path each step so it cannot tunnel through thin colliders at high speed." },
+                LibraryComponentInspectorFieldDesc{ "linearDamping", "Linear Damping", "Fraction of linear velocity removed per second (0 keeps it)." },
+                LibraryComponentInspectorFieldDesc{ "angularDamping", "Angular Damping", "Fraction of angular velocity removed per second." },
             },
         },
         LibraryComponentInspectorDesc{
@@ -316,6 +319,17 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "gradientExponent", "Gradient Exponent", "Vertical blend curve for gradient and procedural sky modes." },
                 LibraryComponentInspectorFieldDesc{ "priority", "Priority", "Deterministic selection when more than one backdrop is enabled." },
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this backdrop participates in rendering." },
+                LibraryComponentInspectorFieldDesc{ "sunDisk", "Sun Disk", "Procedural sky sun disc: 0 none, 1 simple, 2 high quality." },
+                LibraryComponentInspectorFieldDesc{ "sunSize", "Sun Size", "Procedural sky sun disc size, 0 to 1." },
+                LibraryComponentInspectorFieldDesc{ "sunSizeConvergence", "Sun Size Convergence", "High quality sun disc falloff, 1 to 10." },
+                LibraryComponentInspectorFieldDesc{ "atmosphereThickness", "Atmosphere Thickness", "Rayleigh scattering density, 0 to 5." },
+                LibraryComponentInspectorFieldDesc{ "skyTint.x", "Sky Tint Red", "Procedural sky tint red channel." },
+                LibraryComponentInspectorFieldDesc{ "skyTint.y", "Sky Tint Green", "Procedural sky tint green channel." },
+                LibraryComponentInspectorFieldDesc{ "skyTint.z", "Sky Tint Blue", "Procedural sky tint blue channel." },
+                LibraryComponentInspectorFieldDesc{ "groundColor.x", "Ground Red", "Procedural sky ground red channel." },
+                LibraryComponentInspectorFieldDesc{ "groundColor.y", "Ground Green", "Procedural sky ground green channel." },
+                LibraryComponentInspectorFieldDesc{ "groundColor.z", "Ground Blue", "Procedural sky ground blue channel." },
+                LibraryComponentInspectorFieldDesc{ "exposure", "Exposure", "Procedural sky brightness, 0 to 8." },
             },
         },
         LibraryComponentInspectorDesc{
@@ -458,8 +472,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
-            .componentName = "Kreska przestrzenna",
-            .displayName = "Kreska przestrzenna",
+            .componentName = "Line Renderer",
+            .displayName = "Line Renderer",
             .category = "Rendering",
             .fields = {
                 LibraryComponentInspectorFieldDesc{ "meshAssetId", "Mesh Asset", "Mesh expanded along the attached Guide Curve." },
@@ -475,8 +489,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
-            .componentName = "Wst\xC4\x99" "ga historii",
-            .displayName = "Wst\xC4\x99" "ga historii",
+            .componentName = "Trail Renderer",
+            .displayName = "Trail Renderer",
             .category = "Rendering",
             .fields = {
                 LibraryComponentInspectorFieldDesc{ "meshAssetId", "Mesh Asset", "Mesh used for generated ribbon segments." },
@@ -507,8 +521,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
-            .componentName = "Echo soczewki",
-            .displayName = "Echo soczewki",
+            .componentName = "Lens Flare",
+            .displayName = "Lens Flare",
             .category = "Rendering",
             .fields = {
                 LibraryComponentInspectorFieldDesc{ "sourceEntityId", "Source Entity", "Entity that defines the optical source position." },
@@ -543,9 +557,7 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
 }
 
 const LibraryComponentInspectorDesc* EngineLibraryComponentInspectorRegistry::Find(std::string_view componentName) noexcept {
-    if (componentName == "Light") {
-        componentName = "3D Radiance Emitter";
-    }
+    componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
     const std::vector<LibraryComponentInspectorDesc>& catalog = Catalog();
     const auto iterator = std::ranges::find_if(catalog, [componentName](const LibraryComponentInspectorDesc& desc) { return desc.componentName == componentName; });
     return iterator == catalog.end() ? nullptr : &*iterator;

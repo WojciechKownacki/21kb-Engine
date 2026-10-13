@@ -20,6 +20,20 @@
 
 namespace kb::render {
 
+// What the motion vector pass draws with besides the meshes (Unreal's velocity pass).
+struct SceneMotionVectorFrame {
+    // The jitter-free view-projections of the previous frame and of this one; the pass rasterizes with this
+    // frame's jittered view (the prepass depth) and writes motion between these.
+    std::array<float, 16> previousViewProjection{};
+    std::array<float, 16> currentViewProjection{};
+    // u_time of the previous frame: graphs evaluate their previous vertex positions at it.
+    std::array<float, 4> previousFrameTime{};
+    // RenderScene::MotionFrame of the submitted scene: which instances recorded a previous model this frame.
+    std::uint64_t motionFrame = 0U;
+    // Per-frame rows the previous models of moved instances are uploaded to, indexed by instance.
+    RenderSkinningPaletteAllocator* previousModels = nullptr;
+};
+
 struct SceneMeshPassBindDesc {
     const MeshDrawCommand& command;
     const RenderResourceRegistry& resources;
@@ -35,10 +49,31 @@ struct SceneMeshPassBindDesc {
     bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE;
     // MAT-31: the opaque scene-color snapshot for graph fragment shaders that sample SceneColor/SceneTexture.
     bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE;
-    std::array<float, 16> motionVectorPreviousViewProjection{};
+    const SceneMotionVectorFrame* motionVectors = nullptr;
+    // The previous models of this draw's instances (SceneMotionVectorFrame::previousModels); invalid when
+    // none of them moved this frame.
+    RenderSkinningPaletteHandle motionPreviousModels{};
     const RenderSkinningPaletteAllocator* skinningPaletteAllocator = nullptr;
     // What material graphs add to render-space positions to read world positions (SceneMeshSubmitter).
     std::array<float, 4> renderOriginOffset{};
+};
+
+// One post-process material over the view (Unreal's post-process blendable, before the tonemap): its PostProcess
+// program reads `input` as Scene Color and `depth` as Scene Depth. With `uiVertices` it is a User Interface material
+// drawing those screen UI triangles with its UserInterface program, alpha blended.
+struct SceneMeshScreenMaterialDesc {
+    bgfx::ViewId viewId = 0U;
+    const RenderMaterialResource& material;
+    const RenderResourceRegistry& resources;
+    const SceneRenderResourceMap& resourceMap;
+    bgfx::TextureHandle input = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle depth = BGFX_INVALID_HANDLE;
+    std::array<float, 4> frameTime{};
+    std::array<float, 4> dynamicParameter{};
+    const bgfx::TransientVertexBuffer* uiVertices = nullptr;
+    const bgfx::TransientIndexBuffer* uiIndices = nullptr;
+    std::uint32_t firstIndex = 0U;
+    std::uint32_t indexCount = 0U;
 };
 
 struct SceneMeshProgramBindStats {
@@ -77,6 +112,8 @@ public:
     void Shutdown();
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] bgfx::ProgramHandle Bind(const SceneMeshPassBindDesc& desc) const noexcept;
+    // False when the material's PostProcess / UserInterface program is not available (not cooked, or failed to load).
+    [[nodiscard]] bool SubmitScreenMaterial(const SceneMeshScreenMaterialDesc& desc) const;
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return programRegistry_.Stats(); }
     void EndFrame(std::uint64_t frameIndex) const;
     [[nodiscard]] SceneLightGridResources& LightGrid() const noexcept { return lightGrid_; }
@@ -94,12 +131,20 @@ public:
     [[nodiscard]] SceneMeshGraphMaterialDrawStats GraphMaterialDrawStats() const noexcept;
 
 private:
+    // The sky reflection of the forward lighting at this sampler stage (the fallback cube when none).
+    void BindSkyReflection(const PackedSceneLighting& lighting, std::uint8_t stage) const;
+    // The motion vector pass inputs (motion_vectors.sh); false when the draw's previous models are gone.
+    [[nodiscard]] bool BindMotionVectors(const SceneMeshPassBindDesc& desc, bool skinned) const;
+
     struct RetiredGraphUniform {
         bgfx::UniformHandle handle = BGFX_INVALID_HANDLE;
         std::uint64_t destroyFrame = 0U;
     };
 
     [[nodiscard]] bgfx::ProgramHandle LoadProgramForKey(const MaterialProgramKey& key) const;
+    // The graph material's own uniforms and textures (its parameters, collections and texture slots).
+    void BindGraphMaterialValues(const RenderMaterialResource& material, const RenderResourceRegistry& resources,
+        const SceneRenderResourceMap& resourceMap) const;
     [[nodiscard]] bgfx::TextureHandle GraphFallbackTexture(
         RenderTextureDimension dimension,
         bool normal) const noexcept;
@@ -142,7 +187,10 @@ private:
     bgfx::UniformHandle previousSkinningPaletteInfoUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle motionDepthSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle motionPreviousViewProjectionUniform_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle motionVectorParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionCurrentViewProjectionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionPreviousModelInfoUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionPreviousModelsSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionPreviousTimeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle metallicRoughnessSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle occlusionSampler_ = BGFX_INVALID_HANDLE;
@@ -167,6 +215,9 @@ private:
     bgfx::UniformHandle environmentZenithUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle environmentGroundUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle environmentParamsUniform_ = BGFX_INVALID_HANDLE;
+    // The sky light's prefiltered cube (sky_reflection.sh) of the forward lighting.
+    bgfx::UniformHandle skyReflectionSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle skyReflectionParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
     ShadowCascadeUniforms shadowCascades_{};

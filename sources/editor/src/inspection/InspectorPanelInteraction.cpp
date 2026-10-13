@@ -2,6 +2,8 @@
 #include "app/EditorKeyState.hpp"
 #include "rendering/EditorPanelStyle.hpp"
 #include "inspection/InspectorAudioMixerAssetInteraction.hpp"
+#include "inspection/InspectorPostProcessProfileModel.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 
@@ -300,7 +302,7 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::RotationX:
     case InspectorPropertyId::RotationY:
     case InspectorPropertyId::RotationZ:
-        return 0.05F;
+        return 1.0F; // degrees
     case InspectorPropertyId::ScaleX:
     case InspectorPropertyId::ScaleY:
     case InspectorPropertyId::ScaleZ:
@@ -348,9 +350,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool IsLightFloatProperty(InspectorPropertyId property) noexcept {
     switch (property) {
-    case InspectorPropertyId::LightColorR:
-    case InspectorPropertyId::LightColorG:
-    case InspectorPropertyId::LightColorB:
     case InspectorPropertyId::LightIntensity:
     case InspectorPropertyId::LightRange:
     case InspectorPropertyId::LightInnerCone:
@@ -372,9 +371,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::CameraOrthographicHeight:
     case InspectorPropertyId::CameraNearClip:
     case InspectorPropertyId::CameraFarClip:
-    case InspectorPropertyId::CameraClearColorR:
-    case InspectorPropertyId::CameraClearColorG:
-    case InspectorPropertyId::CameraClearColorB:
         return true;
     default:
         return false;
@@ -397,15 +393,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
         return true;
     case InspectorPropertyId::CameraFarClip:
         value = camera.farClip;
-        return true;
-    case InspectorPropertyId::CameraClearColorR:
-        value = camera.clearColor.x;
-        return true;
-    case InspectorPropertyId::CameraClearColorG:
-        value = camera.clearColor.y;
-        return true;
-    case InspectorPropertyId::CameraClearColorB:
-        value = camera.clearColor.z;
         return true;
     default:
         return false;
@@ -445,15 +432,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
         }
         destination = &camera.farClip;
         break;
-    case InspectorPropertyId::CameraClearColorR:
-        destination = &camera.clearColor.x;
-        break;
-    case InspectorPropertyId::CameraClearColorG:
-        destination = &camera.clearColor.y;
-        break;
-    case InspectorPropertyId::CameraClearColorB:
-        destination = &camera.clearColor.z;
-        break;
     default:
         return false;
     }
@@ -466,15 +444,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool ReadLightFloat(const kb::scene::LightComponent& light, InspectorPropertyId property, float& value) noexcept {
     switch (property) {
-    case InspectorPropertyId::LightColorR:
-        value = light.color.x;
-        return true;
-    case InspectorPropertyId::LightColorG:
-        value = light.color.y;
-        return true;
-    case InspectorPropertyId::LightColorB:
-        value = light.color.z;
-        return true;
     case InspectorPropertyId::LightIntensity:
         value = light.intensity;
         return true;
@@ -513,15 +482,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
 
 [[nodiscard]] bool WriteLightFloat(kb::scene::LightComponent& light, InspectorPropertyId property, float value) noexcept {
     switch (property) {
-    case InspectorPropertyId::LightColorR:
-        light.color.x = std::clamp(value, 0.0F, 1.0F);
-        return true;
-    case InspectorPropertyId::LightColorG:
-        light.color.y = std::clamp(value, 0.0F, 1.0F);
-        return true;
-    case InspectorPropertyId::LightColorB:
-        light.color.z = std::clamp(value, 0.0F, 1.0F);
-        return true;
     case InspectorPropertyId::LightIntensity:
         light.intensity = std::max(0.0F, value);
         return true;
@@ -1940,18 +1900,13 @@ template <typename Mutator>
 [[nodiscard]] std::string WorldBackdropFieldText(const kb::scene::WorldBackdropComponent& value, InspectorPropertyId property) {
     switch (property) {
     case InspectorPropertyId::WorldBackdropMode: return std::to_string(static_cast<int>(value.mode));
-    case InspectorPropertyId::WorldBackdropColorR: return FormatCompactFloat(value.color.x);
-    case InspectorPropertyId::WorldBackdropColorG: return FormatCompactFloat(value.color.y);
-    case InspectorPropertyId::WorldBackdropColorB: return FormatCompactFloat(value.color.z);
-    case InspectorPropertyId::WorldBackdropHorizonColorR: return FormatCompactFloat(value.horizonColor.x);
-    case InspectorPropertyId::WorldBackdropHorizonColorG: return FormatCompactFloat(value.horizonColor.y);
-    case InspectorPropertyId::WorldBackdropHorizonColorB: return FormatCompactFloat(value.horizonColor.z);
-    case InspectorPropertyId::WorldBackdropZenithColorR: return FormatCompactFloat(value.zenithColor.x);
-    case InspectorPropertyId::WorldBackdropZenithColorG: return FormatCompactFloat(value.zenithColor.y);
-    case InspectorPropertyId::WorldBackdropZenithColorB: return FormatCompactFloat(value.zenithColor.z);
     case InspectorPropertyId::WorldBackdropEnvironmentAssetId: return std::to_string(value.environmentAssetId);
     case InspectorPropertyId::WorldBackdropHorizonHeight: return FormatCompactFloat(value.horizonHeight);
     case InspectorPropertyId::WorldBackdropGradientExponent: return FormatCompactFloat(value.gradientExponent);
+    case InspectorPropertyId::WorldBackdropSunSize: return FormatCompactFloat(value.sunSize);
+    case InspectorPropertyId::WorldBackdropSunSizeConvergence: return FormatCompactFloat(value.sunSizeConvergence);
+    case InspectorPropertyId::WorldBackdropAtmosphereThickness: return FormatCompactFloat(value.atmosphereThickness);
+    case InspectorPropertyId::WorldBackdropExposure: return FormatCompactFloat(value.exposure);
     case InspectorPropertyId::WorldBackdropPriority: return std::to_string(value.priority);
     default: return {};
     }
@@ -1967,6 +1922,15 @@ template <typename Mutator>
     return kb::scene::WorldBackdropMode::SolidColor;
 }
 
+[[nodiscard]] kb::scene::WorldBackdropSunDisk NextWorldBackdropSunDisk(kb::scene::WorldBackdropSunDisk sunDisk) noexcept {
+    switch (sunDisk) {
+    case kb::scene::WorldBackdropSunDisk::None: return kb::scene::WorldBackdropSunDisk::Simple;
+    case kb::scene::WorldBackdropSunDisk::Simple: return kb::scene::WorldBackdropSunDisk::HighQuality;
+    case kb::scene::WorldBackdropSunDisk::HighQuality: return kb::scene::WorldBackdropSunDisk::None;
+    }
+    return kb::scene::WorldBackdropSunDisk::HighQuality;
+}
+
 [[nodiscard]] bool HandleWorldBackdropClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     const kb::scene::WorldBackdropComponent* backdrop = sceneContext.Scene().Components().WorldBackdrops().TryGet(entity);
     if (backdrop == nullptr) return false;
@@ -1979,6 +1943,12 @@ template <typename Mutator>
             return true;
         });
     }
+    if (hit.property == InspectorPropertyId::WorldBackdropSunDisk) {
+        return EditWorldBackdrop(sceneContext, entity, "Set World Backdrop Sun Disk", [](kb::scene::WorldBackdropComponent& value) {
+            value.sunDisk = NextWorldBackdropSunDisk(value.sunDisk);
+            return true;
+        });
+    }
     if (IsWorldBackdropProperty(hit.property)) {
         sceneContext.Inspector().BeginTextEdit(hit.property, WorldBackdropFieldText(*backdrop, hit.property));
     }
@@ -1988,15 +1958,6 @@ template <typename Mutator>
 [[nodiscard]] std::string AmbientRadianceFieldText(const kb::scene::AmbientRadianceComponent& value, InspectorPropertyId property) {
     switch (property) {
     case InspectorPropertyId::AmbientRadianceMode: return std::to_string(static_cast<int>(value.mode));
-    case InspectorPropertyId::AmbientRadianceColorR: return FormatCompactFloat(value.color.x);
-    case InspectorPropertyId::AmbientRadianceColorG: return FormatCompactFloat(value.color.y);
-    case InspectorPropertyId::AmbientRadianceColorB: return FormatCompactFloat(value.color.z);
-    case InspectorPropertyId::AmbientRadianceHorizonColorR: return FormatCompactFloat(value.horizonColor.x);
-    case InspectorPropertyId::AmbientRadianceHorizonColorG: return FormatCompactFloat(value.horizonColor.y);
-    case InspectorPropertyId::AmbientRadianceHorizonColorB: return FormatCompactFloat(value.horizonColor.z);
-    case InspectorPropertyId::AmbientRadianceZenithColorR: return FormatCompactFloat(value.zenithColor.x);
-    case InspectorPropertyId::AmbientRadianceZenithColorG: return FormatCompactFloat(value.zenithColor.y);
-    case InspectorPropertyId::AmbientRadianceZenithColorB: return FormatCompactFloat(value.zenithColor.z);
     case InspectorPropertyId::AmbientRadianceEnvironmentAssetId: return std::to_string(value.environmentAssetId);
     case InspectorPropertyId::AmbientRadianceIntensity: return FormatCompactFloat(value.intensity);
     case InspectorPropertyId::AmbientRadianceDiffuseIntensity: return FormatCompactFloat(value.diffuseIntensity);
@@ -2201,10 +2162,10 @@ template <typename Mutator>
 [[nodiscard]] bool HandleSpaceStrokeClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     const kb::scene::SpaceStrokeComponent* stroke = sceneContext.Scene().Components().SpaceStrokes().TryGet(entity);
     if (stroke == nullptr) return false;
-    if (hit.property == InspectorPropertyId::SpaceStrokeCastsShadow) return EditSpaceStroke(sceneContext, entity, "Toggle Kreska przestrzenna Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
-    if (hit.property == InspectorPropertyId::SpaceStrokeReceivesShadow) return EditSpaceStroke(sceneContext, entity, "Toggle Kreska przestrzenna Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
-    if (hit.property == InspectorPropertyId::SpaceStrokeEnabled) return EditSpaceStroke(sceneContext, entity, "Toggle Kreska przestrzenna", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsSpaceStrokeComponentPersistable(value); });
-    if (hit.property == InspectorPropertyId::SpaceStrokeMode) return EditSpaceStroke(sceneContext, entity, "Change Kreska przestrzenna Mode", [](auto& value) { value.mode = static_cast<kb::scene::SpaceStrokeMode>((static_cast<std::uint32_t>(value.mode) + 1U) % 4U); return true; });
+    if (hit.property == InspectorPropertyId::SpaceStrokeCastsShadow) return EditSpaceStroke(sceneContext, entity, "Toggle Line Renderer Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
+    if (hit.property == InspectorPropertyId::SpaceStrokeReceivesShadow) return EditSpaceStroke(sceneContext, entity, "Toggle Line Renderer Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
+    if (hit.property == InspectorPropertyId::SpaceStrokeEnabled) return EditSpaceStroke(sceneContext, entity, "Toggle Line Renderer", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsSpaceStrokeComponentPersistable(value); });
+    if (hit.property == InspectorPropertyId::SpaceStrokeMode) return EditSpaceStroke(sceneContext, entity, "Change Line Renderer Mode", [](auto& value) { value.mode = static_cast<kb::scene::SpaceStrokeMode>((static_cast<std::uint32_t>(value.mode) + 1U) % 4U); return true; });
     if (!IsSpaceStrokeProperty(hit.property)) return false;
     switch (hit.property) {
     case InspectorPropertyId::SpaceStrokeMeshAssetId: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(stroke->meshAssetId)); break;
@@ -2220,9 +2181,9 @@ template <typename Mutator>
 [[nodiscard]] bool HandleHistoryRibbonClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     const kb::scene::HistoryRibbonComponent* ribbon = sceneContext.Scene().Components().HistoryRibbons().TryGet(entity);
     if (ribbon == nullptr) return false;
-    if (hit.property == InspectorPropertyId::HistoryRibbonCastsShadow) return EditHistoryRibbon(sceneContext, entity, "Toggle Wst\xC4\x99" "ga historii Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
-    if (hit.property == InspectorPropertyId::HistoryRibbonReceivesShadow) return EditHistoryRibbon(sceneContext, entity, "Toggle Wst\xC4\x99" "ga historii Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
-    if (hit.property == InspectorPropertyId::HistoryRibbonEnabled) return EditHistoryRibbon(sceneContext, entity, "Toggle Wst\xC4\x99" "ga historii", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsHistoryRibbonComponentPersistable(value); });
+    if (hit.property == InspectorPropertyId::HistoryRibbonCastsShadow) return EditHistoryRibbon(sceneContext, entity, "Toggle Trail Renderer Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
+    if (hit.property == InspectorPropertyId::HistoryRibbonReceivesShadow) return EditHistoryRibbon(sceneContext, entity, "Toggle Trail Renderer Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
+    if (hit.property == InspectorPropertyId::HistoryRibbonEnabled) return EditHistoryRibbon(sceneContext, entity, "Toggle Trail Renderer", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsHistoryRibbonComponentPersistable(value); });
     if (!IsHistoryRibbonProperty(hit.property)) return false;
     switch (hit.property) {
     case InspectorPropertyId::HistoryRibbonMeshAssetId: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(ribbon->meshAssetId)); break;
@@ -2384,17 +2345,12 @@ template <typename Mutator>
     return EditWorldBackdrop(sceneContext, entity, "Edit World Backdrop", [property, number](kb::scene::WorldBackdropComponent& value) {
         kb::scene::WorldBackdropComponent candidate = value;
         switch (property) {
-        case InspectorPropertyId::WorldBackdropColorR: candidate.color.x = number; break;
-        case InspectorPropertyId::WorldBackdropColorG: candidate.color.y = number; break;
-        case InspectorPropertyId::WorldBackdropColorB: candidate.color.z = number; break;
-        case InspectorPropertyId::WorldBackdropHorizonColorR: candidate.horizonColor.x = number; break;
-        case InspectorPropertyId::WorldBackdropHorizonColorG: candidate.horizonColor.y = number; break;
-        case InspectorPropertyId::WorldBackdropHorizonColorB: candidate.horizonColor.z = number; break;
-        case InspectorPropertyId::WorldBackdropZenithColorR: candidate.zenithColor.x = number; break;
-        case InspectorPropertyId::WorldBackdropZenithColorG: candidate.zenithColor.y = number; break;
-        case InspectorPropertyId::WorldBackdropZenithColorB: candidate.zenithColor.z = number; break;
         case InspectorPropertyId::WorldBackdropHorizonHeight: candidate.horizonHeight = number; break;
         case InspectorPropertyId::WorldBackdropGradientExponent: candidate.gradientExponent = number; break;
+        case InspectorPropertyId::WorldBackdropSunSize: candidate.sunSize = number; break;
+        case InspectorPropertyId::WorldBackdropSunSizeConvergence: candidate.sunSizeConvergence = number; break;
+        case InspectorPropertyId::WorldBackdropAtmosphereThickness: candidate.atmosphereThickness = number; break;
+        case InspectorPropertyId::WorldBackdropExposure: candidate.exposure = number; break;
         default: return false;
         }
         if (!kb::scene::IsWorldBackdropComponentValid(candidate)) return false;
@@ -2424,15 +2380,6 @@ template <typename Mutator>
     return EditAmbientRadiance(sceneContext, entity, "Edit Ambient Radiance", [property, number](kb::scene::AmbientRadianceComponent& value) {
         auto candidate = value;
         switch (property) {
-        case InspectorPropertyId::AmbientRadianceColorR: candidate.color.x = number; break;
-        case InspectorPropertyId::AmbientRadianceColorG: candidate.color.y = number; break;
-        case InspectorPropertyId::AmbientRadianceColorB: candidate.color.z = number; break;
-        case InspectorPropertyId::AmbientRadianceHorizonColorR: candidate.horizonColor.x = number; break;
-        case InspectorPropertyId::AmbientRadianceHorizonColorG: candidate.horizonColor.y = number; break;
-        case InspectorPropertyId::AmbientRadianceHorizonColorB: candidate.horizonColor.z = number; break;
-        case InspectorPropertyId::AmbientRadianceZenithColorR: candidate.zenithColor.x = number; break;
-        case InspectorPropertyId::AmbientRadianceZenithColorG: candidate.zenithColor.y = number; break;
-        case InspectorPropertyId::AmbientRadianceZenithColorB: candidate.zenithColor.z = number; break;
         case InspectorPropertyId::AmbientRadianceIntensity: candidate.intensity = number; break;
         case InspectorPropertyId::AmbientRadianceDiffuseIntensity: candidate.diffuseIntensity = number; break;
         case InspectorPropertyId::AmbientRadianceSpecularIntensity: candidate.specularIntensity = number; break;
@@ -2623,7 +2570,7 @@ template <typename Mutator>
     });
 }
 [[nodiscard]] bool ApplySpaceStrokeText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
-    return EditSpaceStroke(sceneContext, entity, "Edit Kreska przestrzenna", [property, text](kb::scene::SpaceStrokeComponent& value) {
+    return EditSpaceStroke(sceneContext, entity, "Edit Line Renderer", [property, text](kb::scene::SpaceStrokeComponent& value) {
         kb::scene::SpaceStrokeComponent candidate = value;
         switch (property) {
         case InspectorPropertyId::SpaceStrokeMeshAssetId: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.meshAssetId); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
@@ -2640,7 +2587,7 @@ template <typename Mutator>
     });
 }
 [[nodiscard]] bool ApplyHistoryRibbonText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
-    return EditHistoryRibbon(sceneContext, entity, "Edit Wst\xC4\x99" "ga historii", [property, text](kb::scene::HistoryRibbonComponent& value) {
+    return EditHistoryRibbon(sceneContext, entity, "Edit Trail Renderer", [property, text](kb::scene::HistoryRibbonComponent& value) {
         kb::scene::HistoryRibbonComponent candidate = value;
         switch (property) {
         case InspectorPropertyId::HistoryRibbonMeshAssetId: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.meshAssetId); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
@@ -3217,12 +3164,12 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
             } else if (hit.section == InspectorSectionId::SpaceStroke && sceneContext.Scene().Components().SpaceStrokes().Has(entity)) {
-                if (sceneContext.BeginSceneEditTransaction("Remove Kreska przestrzenna")) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Line Renderer")) {
                     sceneContext.Scene().Components().SpaceStrokes().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
             } else if (hit.section == InspectorSectionId::HistoryRibbon && sceneContext.Scene().Components().HistoryRibbons().Has(entity)) {
-                if (sceneContext.BeginSceneEditTransaction("Remove Wst\xC4\x99" "ga historii")) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Trail Renderer")) {
                     sceneContext.Scene().Components().HistoryRibbons().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
@@ -3250,6 +3197,38 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
     const bool assetSelected = sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset;
+    if (assetSelected && hit.property == InspectorPropertyId::PostProcessProfileField &&
+        InspectorPostProcessProfileModel::IsSection(hit.section)) {
+        // A checkbox toggles and a choice steps to the next value at once; a number opens its
+        // field, and Enter writes it (HandleKeyDown).
+        const kb::assets::AssetId profile = sceneContext.AssetBrowser().InspectorAsset();
+        const std::optional<kb::render::ScenePostProcessSettings> settings = sceneContext.ReadPostProcessProfile(profile);
+        if (!settings.has_value()) {
+            sceneContext.Inspector().EndTextEdit();
+            return true;
+        }
+        const std::span<const InspectorPostProcessProfileRow> rows = InspectorPostProcessProfileModel::Rows();
+        if (hit.index < 0 || static_cast<std::size_t>(hit.index) >= rows.size()) {
+            return true;
+        }
+        const InspectorPostProcessProfileRow& row = rows[static_cast<std::size_t>(hit.index)];
+        if (row.kind == InspectorPostProcessProfileRowKind::Number) {
+            if (hit.kind == InspectorHitKind::TextField) {
+                sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::PostProcessProfileField,
+                    InspectorPostProcessProfileModel::ValueText(*settings, hit.index));
+                sceneContext.Inspector().SetEditIndex(hit.index);
+            }
+            return true;
+        }
+        sceneContext.Inspector().EndTextEdit();
+        if ((row.kind == InspectorPostProcessProfileRowKind::Bool && hit.kind == InspectorHitKind::BoolField) ||
+            (row.kind == InspectorPostProcessProfileRowKind::Choice && hit.kind == InspectorHitKind::TextField)) {
+            if (const std::optional<kb::render::ScenePostProcessSettings> changed = InspectorPostProcessProfileModel::Clicked(*settings, hit.index)) {
+                static_cast<void>(sceneContext.SetPostProcessProfile(profile, *changed));
+            }
+        }
+        return true;
+    }
     if (assetSelected && hit.section == InspectorSectionId::InputAction) {
         return InspectorInputInteraction::HandleActionAssetClick(sceneContext, hit);
     }
@@ -3461,6 +3440,20 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::WorldBackdrop) {
         return HandleWorldBackdropClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::ScenePostProcess) {
+        // The profile field opens the asset picker (EditorLeftButtonDownRouter); here Clear and,
+        // on the field itself, selecting the profile in Project Files.
+        sceneContext.Inspector().EndTextEdit();
+        if (hit.property == InspectorPropertyId::ScenePostProcessProfileClear) {
+            static_cast<void>(sceneContext.SetScenePostProcessProfile(kb::assets::AssetId{}));
+        } else if (hit.property == InspectorPropertyId::ScenePostProcessProfile) {
+            const kb::assets::AssetId profile{ kb::scene::ScenePostProcessAccess::ActiveProfile(sceneContext.Scene()) };
+            if (profile.IsValid()) {
+                SelectAssetInProjectFiles(sceneContext, profile);
+            }
+        }
+        return true;
     }
     if (hit.section == InspectorSectionId::AmbientRadiance) {
         return HandleAmbientRadianceClick(sceneContext, entity, hit);
@@ -3768,6 +3761,21 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         }
         if (inspector.EditedProperty() == InspectorPropertyId::InputActionName) {
             static_cast<void>(sceneContext.SetInputActionName(sceneContext.AssetBrowser().InspectorAsset(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (inspector.EditedProperty() == InspectorPropertyId::PostProcessProfileField) {
+            const kb::assets::AssetId profile = sceneContext.AssetBrowser().InspectorAsset();
+            const std::optional<kb::render::ScenePostProcessSettings> settings = sceneContext.ReadPostProcessProfile(profile);
+            const std::optional<kb::render::ScenePostProcessSettings> edited = settings.has_value()
+                ? InspectorPostProcessProfileModel::Edited(*settings, inspector.EditIndex(), inspector.EditBuffer())
+                : std::nullopt;
+            if (edited.has_value()) {
+                static_cast<void>(sceneContext.SetPostProcessProfile(profile, *edited));
+            } else {
+                sceneContext.Console().Warning("Post Processing", "'" + std::string{ inspector.EditBuffer() } + "' is not a value of " +
+                    std::string{ InspectorPostProcessProfileModel::RowLabel(inspector.EditIndex()) } + ".");
+            }
             inspector.EndTextEdit();
             return true;
         }

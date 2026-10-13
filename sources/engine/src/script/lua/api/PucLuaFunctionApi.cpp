@@ -1334,6 +1334,9 @@ int LuaWorldDestroy(lua_State* state) {
     }
     const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
     std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }) };
+    if (!lua_isnoneornil(state, 2)) {
+        arguments.push_back(Arg("deferred", ScriptValue{ lua_toboolean(state, 2) != 0 }));
+    }
     const ScriptFunctionCallResult result = context->CallFunction("World.Destroy", arguments);
     lua_pushboolean(state, result.Output("destroyed").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
     return 1;
@@ -1414,6 +1417,25 @@ int LuaWorldTagCount(lua_State* state) {
     const ScriptFunctionCallResult result = context->CallFunction("World.TagCount", {});
     lua_pushinteger(state, static_cast<lua_Integer>(result.Output("count").value_or(ScriptValue{ 0 }).AsInt()));
     return 1;
+}
+
+int LuaWorldIndex(lua_State* state, const char* function, const char* output) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, {});
+    lua_pushinteger(state, static_cast<lua_Integer>(result.Output(output).value_or(ScriptValue{ 0 }).AsInt64()));
+    return 1;
+}
+
+int LuaWorldFrameIndex(lua_State* state) {
+    return LuaWorldIndex(state, "World.FrameIndex", "frame");
+}
+
+int LuaWorldFixedStepIndex(lua_State* state) {
+    return LuaWorldIndex(state, "World.FixedStepIndex", "step");
 }
 
 int LuaWorldTagAt(lua_State* state) {
@@ -2398,6 +2420,7 @@ int LuaPhysicsOverlapSphere(lua_State* state) {
             Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
             Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 4, 0.5)) }),
             Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 5, PushShapeQueryLayerMaskDefault())) }),
+            Arg("skip", ScriptValue{ static_cast<int>(luaL_optinteger(state, 6, 0)) }),
         };
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.OverlapSphere", arguments);
@@ -3386,6 +3409,8 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaWorldTagCount,
     &LuaWorldTagAt,
     &LuaWorldSetParent,
+    &LuaWorldFrameIndex,
+    &LuaWorldFixedStepIndex,
     &LuaWorldInstantiatePrefab,
     &LuaWorldSpawnGeometrySwarm,
     &LuaSceneLoad,

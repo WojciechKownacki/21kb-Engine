@@ -12,6 +12,8 @@
 
 namespace kb::render {
 
+class SceneRenderer;
+
 struct ScreenUIResolvedTexture {
     ScreenUITextureKey key{};
     bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
@@ -28,6 +30,8 @@ struct ScreenUICompositeDesc {
     FullscreenTextureOutputTransform outputTransform{};
     const ScreenUIDrawList* drawList = nullptr;
     std::span<const ScreenUIResolvedTexture> textures;
+    // Draws the Material batches (User Interface materials).
+    const SceneRenderer* sceneRenderer = nullptr;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

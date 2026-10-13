@@ -15,6 +15,13 @@ namespace kb::render {
 
 inline constexpr std::uint64_t kRenderMaterialGraphShaderWrapperVersion = 9ULL;
 
+// The scene pass that writes motion vectors with the graph's own program (Unreal's velocity pass).
+inline constexpr std::string_view kRenderMaterialGraphMotionVectorsPass = "MotionVectors";
+// A Post Process material's fullscreen pass (the post-process chain, before the tonemap).
+inline constexpr std::string_view kRenderMaterialGraphPostProcessPass = "PostProcess";
+// A User Interface material's pass (a widget's rectangle in the screen UI).
+inline constexpr std::string_view kRenderMaterialGraphUserInterfacePass = "UserInterface";
+
 enum class RenderMaterialGraphShaderBackend : std::uint8_t {
     Dxbc,
     Dxil,
@@ -125,6 +132,22 @@ struct RenderMaterialGraphShaderManifest {
 [[nodiscard]] std::string BuildGraphFragmentWrapperSource(
     const RenderMaterialGraphShaderSource& shader,
     std::string_view pass);
+// The generated vertex stage of `pass`: the instanced mesh transform with the graph's vertex-domain outputs.
+[[nodiscard]] std::string BuildGraphVertexWrapperSource(
+    const RenderMaterialGraphShaderSource& shader,
+    std::string_view pass);
+
+// Whether the motion vector pass must run the graph's own program: the graph moves its surface beyond the
+// rigid mesh (world position offset, displacement), moves its depth (pixel depth offset) or clips it
+// (Masked). Any other opaque graph moves exactly like its mesh and draws with the builtin program; a
+// translucent graph writes no motion vectors. Unreal's velocity pass uses the material's shaders in the
+// same cases.
+[[nodiscard]] bool RenderMaterialGraphDrawsOwnMotionVectors(const RenderMaterialGraphReflection& reflection) noexcept;
+// Whether a scene cook produces `pass` (one of kRenderMaterialGraphScenePasses) for a graph.
+[[nodiscard]] bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& reflection, std::string_view pass) noexcept;
+// Whether the graph's scene passes draw with its generated vertex shader instead of the builtin mesh one:
+// vertex-domain outputs move or re-map the surface, and a Deferred Decal carries its box's inverse transform.
+[[nodiscard]] bool RenderMaterialGraphRequiresGeneratedVertexShader(const RenderMaterialGraphReflection& reflection) noexcept;
 
 [[nodiscard]] std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraphReflection& reflection) noexcept;
 [[nodiscard]] std::uint64_t ComputeRenderMaterialGraphVariantKey(const RenderMaterialGraphShaderSource& shader) noexcept;

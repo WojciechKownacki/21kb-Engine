@@ -97,7 +97,8 @@ vec3 KbVoxelDirect(vec3 position, vec3 normal)
         if (facing > 0.0 && attenuation > 0.0 && u_voxelLightFlags[i].w > 0.5) {
             attenuation *= 1.0 - KbVoxelBlocked(position + normal * (0.9 * u_voxelGrid.w), lightVector, lightDistance);
         }
-        sum += colorIntensity.rgb * (colorIntensity.a * attenuation * facing);
+        // Same light intensity convention as direct lighting (as in Unity: intensity 1 = albedo).
+        sum += colorIntensity.rgb * (colorIntensity.a * attenuation * facing * 3.14159265);
     }
     return sum * 0.31830989;
 }

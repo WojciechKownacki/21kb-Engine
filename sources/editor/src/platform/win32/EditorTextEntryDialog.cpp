@@ -1,4 +1,5 @@
 #include "platform/win32/EditorTextEntryDialog.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "platform/win32/EditorModalMessageLoop.hpp"
@@ -185,7 +186,7 @@ private:
         const RECT footer = Rect(client.left + 1, client.bottom - 42, client.right - 1, client.bottom - 1);
         EditorDialogStyle::PaintFooter(dc, footer, theme);
         EditorDialogStyle::PaintButton(
-            dc, CancelRect(), theme, "Cancel", EditorDialogButtonTone::Neutral,
+            dc, CancelRect(), theme, EditorText("common.cancel", "Cancel"), EditorDialogButtonTone::Neutral,
             hovered_ == HoverTarget::Cancel);
         EditorDialogStyle::PaintButton(
             dc, AcceptRect(), theme, descriptor_.acceptLabel, EditorDialogButtonTone::Primary,

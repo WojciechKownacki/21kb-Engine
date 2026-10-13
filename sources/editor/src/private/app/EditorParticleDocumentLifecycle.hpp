@@ -8,7 +8,6 @@
 #include <Windows.h>
 #endif
 
-#include <string_view>
 
 namespace kb::editor {
 
@@ -20,8 +19,7 @@ public:
     [[nodiscard]] static bool Resolve(
         HWND owner,
         EditorSceneContext& sceneContext,
-        kb::particle_editor::ParticleDocumentTransition transition,
-        std::wstring_view action);
+        kb::particle_editor::ParticleDocumentTransition transition);
 #endif
 };
 

@@ -30,6 +30,9 @@ struct SceneDeferredLightingPassDesc {
     const SceneRenderWorldBackdrop* worldBackdrop = nullptr;
     bgfx::TextureHandle worldBackdropEnvironment = BGFX_INVALID_HANDLE;
     const SceneGiBinding* gi = nullptr;
+    // The G-buffer custom data of this frame (SceneGBuffer::CustomDataTexture); invalid = the frame
+    // drew no material that writes it and lighting derives every model colour.
+    bgfx::TextureHandle customData = BGFX_INVALID_HANDLE;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
@@ -76,9 +79,16 @@ private:
     ShadowCascadeUniforms shadowCascades_{};
     PointShadowUniforms pointShadows_{};
     SceneGiUniforms giUniforms_{};
+    bgfx::UniformHandle skyReflectionSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle customDataSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle customDataUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle skyReflectionParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackSkyReflection_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropHorizonUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropZenithUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle backdropSunUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle backdropSunColorUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle backdropEnvironmentSampler_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackShadowTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackBackdropEnvironmentTexture_ = BGFX_INVALID_HANDLE;

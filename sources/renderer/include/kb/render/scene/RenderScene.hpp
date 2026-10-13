@@ -216,6 +216,12 @@ struct MeshRenderProxy {
     mutable std::uint64_t instanceLocationVersion = 0;
     // The entity's world transform version the transform pull last applied (EcsRenderSceneSynchronizer::PullTransforms).
     mutable std::uint64_t pulledWorldVersion = 0;
+    // Renderer-derived motion history (Unreal's previous LocalToWorld): the model at the start of the motion
+    // frame `previousModelFrame`, recorded by the first transform change in that frame. `spawnMotionFrame` is
+    // the frame the proxy was created in, which has no previous model.
+    std::array<float, 16> previousModel{};
+    std::uint64_t previousModelFrame = 0U;
+    std::uint64_t spawnMotionFrame = 0U;
 };
 
 struct CameraRenderProxy {
@@ -244,6 +250,10 @@ struct GeometrySwarmRenderProxy {
     GeometrySwarmRenderProxyDesc desc{};
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
     mutable std::uint64_t pulledWorldVersion = 0;
+    // The swarm's model at the start of the motion frame `previousModelFrame` (see MeshRenderProxy).
+    std::array<float, 16> previousModel{};
+    std::uint64_t previousModelFrame = 0U;
+    std::uint64_t spawnMotionFrame = 0U;
 };
 struct SurfaceCastRenderProxy { RenderProxyId id{}; SurfaceCastRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; mutable std::uint64_t pulledWorldVersion = 0; };
 struct SpaceStrokeRenderProxy { RenderProxyId id{}; SpaceStrokeRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; mutable std::uint64_t pulledWorldVersion = 0; };
@@ -329,6 +339,14 @@ public:
     bool SetRenderOrigin(const kb::math::DVec3& origin);
     [[nodiscard]] std::uint64_t AddRenderOriginListener(RenderOriginListener listener);
     void RemoveRenderOriginListener(std::uint64_t listenerId) noexcept;
+    // Motion frames give every mesh its previous-frame model for the motion vector pass (Unreal's velocity
+    // pass). The renderer begins one per rendered frame, before the scene's transforms are synchronized; a
+    // proxy that changes its transform within the frame records the model it had when the frame began, a
+    // proxy that does not keeps its current model as the previous one. Frames are identified by the
+    // renderer's frame index; beginning the current frame again (another viewport) changes nothing.
+    void BeginMotionFrame(std::uint64_t rendererFrame) noexcept;
+    // The current motion frame (never 0): what SceneRenderPreviousModel compares instance records against.
+    [[nodiscard]] std::uint64_t MotionFrame() const noexcept { return motionFrame_; }
     void SetWorldBackdrop(std::optional<SceneRenderWorldBackdrop> backdrop) noexcept;
     [[nodiscard]] const std::optional<SceneRenderWorldBackdrop>& WorldBackdrop() const noexcept;
     void SetAmbientRadiance(std::optional<SceneRenderAmbientRadiance> ambientRadiance) noexcept;
@@ -368,6 +386,9 @@ private:
     [[nodiscard]] bool ApplySurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool ApplySpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     void InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome) noexcept;
+    // Records the model the proxy had when the current motion frame began, before its first change in it.
+    void RecordPreviousModel(MeshRenderProxy& proxy, const std::array<float, 16>& model) const noexcept;
+    void RecordPreviousSwarmModel(GeometrySwarmRenderProxy& proxy, const std::array<float, 16>& model) const noexcept;
     void AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t fallback) noexcept;
 
 public:
@@ -482,6 +503,9 @@ private:
     void InvalidateDrawGroups() noexcept;
     [[nodiscard]] bool RemoveMeshInstance(const MeshRenderProxy& proxy) noexcept;
     void AppendMeshInstance(MeshRenderProxy& proxy);
+    [[nodiscard]] SceneRenderMeshInstance BuildMeshInstance(const MeshRenderProxy& proxy) const;
+    [[nodiscard]] SceneRenderMeshInstance BuildGeometrySwarmInstance(
+        std::uint64_t entityId, const GeometrySwarmRenderProxy& proxy, std::uint32_t index) const;
     void RebuildDrawGroupsIfNeeded() const;
     void ApplySurfaceCasts(SceneRenderMeshInstance& instance) const;
 
@@ -509,6 +533,8 @@ private:
     std::uint64_t transformFallbackUpdateCount_ = 0;
     kb::math::DVec3 renderOrigin_{};
     std::uint64_t renderOriginRevision_ = 0U;
+    std::uint64_t motionFrame_ = 1U;
+    std::uint64_t motionRendererFrame_ = 0U;
     std::vector<std::pair<std::uint64_t, RenderOriginListener>> renderOriginListeners_;
     std::uint64_t nextRenderOriginListenerId_ = 1U;
 };

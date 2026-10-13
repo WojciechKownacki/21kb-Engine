@@ -625,7 +625,9 @@ private:
     [[nodiscard]] static std::array<float, 2U> TextureCoordinateTiling(const kb::render::RenderMaterialGraphNode& node);
 
     [[nodiscard]] static std::string TextureCoordinateHint(float uTile, float vTile, std::string_view uvSetValue) {
-        return FloatText(uTile) + " " + FloatText(vTile) + " " + (uvSetValue == "1" ? "1" : "0");
+        // Unreal's Coordinate Index: UV0..UV7.
+        const bool known = uvSetValue.size() == 1U && uvSetValue[0] >= '0' && uvSetValue[0] <= '7';
+        return FloatText(uTile) + " " + FloatText(vTile) + " " + (known ? std::string{ uvSetValue } : std::string{ "0" });
     }
 
     [[nodiscard]] static std::string GraphNodeViewPropertyValue(const kb::render::RenderMaterialGraphNode& node);

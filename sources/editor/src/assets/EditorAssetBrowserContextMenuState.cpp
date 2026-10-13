@@ -1,4 +1,5 @@
 #include "assets/EditorAssetBrowserContextMenuState.hpp"
+#include "localization/EditorLocalization.hpp"
 
 namespace kb::editor {
 
@@ -39,48 +40,52 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
     switch (targetKind_) {
     case EditorAssetContextTargetKind::Asset:
         if (targetAssetExists) {
-            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Rename, .label = "Rename" });
-            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Delete, .label = "Delete", .separatorAfter = true });
+            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Rename, .label = std::string{ EditorText("common.rename", "Rename") } });
+            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Delete, .label = std::string{ EditorText("common.delete", "Delete") }, .separatorAfter = true });
         }
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = std::string{ EditorText("projectFiles.menu.refresh", "Refresh") } });
         break;
     case EditorAssetContextTargetKind::Folder:
         if (targetFolderCanMutate) {
-            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Rename, .label = "Rename" });
-            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Delete, .label = "Delete", .separatorAfter = true });
-            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = "Import...", .separatorAfter = true });
+            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Rename, .label = std::string{ EditorText("common.rename", "Rename") } });
+            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Delete, .label = std::string{ EditorText("common.delete", "Delete") }, .separatorAfter = true });
+            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = std::string{ EditorText("projectFiles.menu.import", "Import...") }, .separatorAfter = true });
         } else {
-            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = "Import..." });
-            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewFolder, .label = "New Folder", .separatorAfter = true });
+            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = std::string{ EditorText("projectFiles.menu.import", "Import...") } });
+            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewFolder, .label = std::string{ EditorText("projectFiles.menu.newFolder", "New Folder") }, .separatorAfter = true });
         }
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewNativeScript, .label = "New Script (C++)" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewLuaScript, .label = "New Lua Script" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterial, .label = "New Material" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialFunction, .label = "New Material Function" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialType, .label = "New Material Type" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = "New Input Action" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAxis, .label = "New Input Axis" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = "New Input Mapping Context" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewAudioMixer, .label = "New Audio Mixer" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewParticleEffect, .label = "New Particle Effect", .separatorAfter = true });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::AddLighting, .label = "Add", .separatorAfter = true });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewNativeScript, .label = std::string{ EditorText("projectFiles.menu.newNativeScript", "New Script (C++)") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewLuaScript, .label = std::string{ EditorText("projectFiles.menu.newLuaScript", "New Lua Script") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterial, .label = std::string{ EditorText("projectFiles.menu.newMaterial", "New Material") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialFunction, .label = std::string{ EditorText("projectFiles.menu.newMaterialFunction", "New Material Function") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialType, .label = std::string{ EditorText("projectFiles.menu.newMaterialType", "New Material Type") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = std::string{ EditorText("projectFiles.menu.newInputAction", "New Input Action") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAxis, .label = std::string{ EditorText("projectFiles.menu.newInputAxis", "New Input Axis") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = std::string{ EditorText("projectFiles.menu.newInputMappingContext", "New Input Mapping Context") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewAudioMixer, .label = std::string{ EditorText("projectFiles.menu.newAudioMixer", "New Audio Mixer") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewPostProcessProfile, .label = std::string{ EditorText("projectFiles.menu.newPostProcessProfile", "New Post-Process Profile") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewImportPreset, .label = std::string{ EditorText("projectFiles.menu.newImportPreset", "New Import Preset") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewParticleEffect, .label = std::string{ EditorText("projectFiles.menu.newParticleEffect", "New Particle Effect") }, .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::AddLighting, .label = std::string{ EditorText("projectFiles.menu.add", "Add") }, .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = std::string{ EditorText("projectFiles.menu.refresh", "Refresh") } });
         break;
     case EditorAssetContextTargetKind::Background:
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = "Import..." });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewFolder, .label = "New Folder", .separatorAfter = true });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewNativeScript, .label = "New Script (C++)" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewLuaScript, .label = "New Lua Script" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterial, .label = "New Material" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialFunction, .label = "New Material Function" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialType, .label = "New Material Type" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = "New Input Action" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAxis, .label = "New Input Axis" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = "New Input Mapping Context" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewAudioMixer, .label = "New Audio Mixer" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewParticleEffect, .label = "New Particle Effect", .separatorAfter = true });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::AddLighting, .label = "Add", .separatorAfter = true });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = std::string{ EditorText("projectFiles.menu.import", "Import...") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewFolder, .label = std::string{ EditorText("projectFiles.menu.newFolder", "New Folder") }, .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewNativeScript, .label = std::string{ EditorText("projectFiles.menu.newNativeScript", "New Script (C++)") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewLuaScript, .label = std::string{ EditorText("projectFiles.menu.newLuaScript", "New Lua Script") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterial, .label = std::string{ EditorText("projectFiles.menu.newMaterial", "New Material") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialFunction, .label = std::string{ EditorText("projectFiles.menu.newMaterialFunction", "New Material Function") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialType, .label = std::string{ EditorText("projectFiles.menu.newMaterialType", "New Material Type") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = std::string{ EditorText("projectFiles.menu.newInputAction", "New Input Action") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAxis, .label = std::string{ EditorText("projectFiles.menu.newInputAxis", "New Input Axis") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = std::string{ EditorText("projectFiles.menu.newInputMappingContext", "New Input Mapping Context") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewAudioMixer, .label = std::string{ EditorText("projectFiles.menu.newAudioMixer", "New Audio Mixer") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewPostProcessProfile, .label = std::string{ EditorText("projectFiles.menu.newPostProcessProfile", "New Post-Process Profile") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewImportPreset, .label = std::string{ EditorText("projectFiles.menu.newImportPreset", "New Import Preset") } });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewParticleEffect, .label = std::string{ EditorText("projectFiles.menu.newParticleEffect", "New Particle Effect") }, .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::AddLighting, .label = std::string{ EditorText("projectFiles.menu.add", "Add") }, .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = std::string{ EditorText("projectFiles.menu.refresh", "Refresh") } });
         break;
     case EditorAssetContextTargetKind::None:
     default:

@@ -1,4 +1,5 @@
 #include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -29,11 +30,12 @@ std::uint32_t InspectorMeshRendererMaterialSlotModel::SlotRowCount(
 namespace {
 
 [[nodiscard]] std::string SlotLabel(const std::optional<kb::render::RenderMeshAssetData>& mesh, std::uint32_t slotIndex) {
-    std::string label = "Slot " + std::to_string(slotIndex + 1U) + " Override";
+    const std::string slot = std::to_string(slotIndex + 1U);
     if (mesh.has_value() && slotIndex < mesh->materialNames.size() && !mesh->materialNames[slotIndex].empty()) {
-        label += " (" + mesh->materialNames[slotIndex] + ")";
+        return EditorLocalization::Format("inspector.meshRenderer.slotOverrideNamed", "Slot {slot} Override ({source})",
+            { { "slot", slot }, { "source", mesh->materialNames[slotIndex] } });
     }
-    return label;
+    return EditorLocalization::Format("inspector.meshRenderer.slotOverride", "Slot {slot} Override", { { "slot", slot } });
 }
 
 [[nodiscard]] std::string ImportedSourceName(const std::optional<kb::render::RenderMeshAssetData>& mesh, std::uint32_t slotIndex) {
@@ -48,7 +50,7 @@ namespace {
     if (importedName != "-") {
         return importedName;
     }
-    return "Slot " + std::to_string(slotIndex + 1U);
+    return EditorLocalization::Format("inspector.meshRenderer.slot", "Slot {slot}", { { "slot", std::to_string(slotIndex + 1U) } });
 }
 
 [[nodiscard]] std::vector<std::uint32_t> SectionsUsingSlot(
@@ -68,7 +70,7 @@ namespace {
 
 [[nodiscard]] std::string SectionsSummary(const std::vector<std::uint32_t>& sections) {
     if (sections.empty()) {
-        return "None";
+        return std::string{ EditorText("inspector.meshRenderer.noSections", "None") };
     }
     std::string text;
     for (std::uint32_t section : sections) {
@@ -119,10 +121,11 @@ std::vector<InspectorMeshRendererMaterialSlotRow> InspectorMeshRendererMaterialS
             .hasOverride = hasOverride,
             .slotName = SlotName(mesh, slotIndex),
             .importedSourceName = ImportedSourceName(mesh, slotIndex),
-            .defaultMaterialName = defaultMaterial != 0U ? materialName(defaultMaterial) : "None",
-            .overrideMaterialName = hasOverride ? materialName(overrideMaterial) : "None",
-            .activeMaterialName = activeMaterial != 0U ? materialName(activeMaterial) : "None",
-            .activeMaterialStatus = activeMaterial != 0U && materialStatus ? materialStatus(activeMaterial) : "None",
+            .defaultMaterialName = defaultMaterial != 0U ? materialName(defaultMaterial) : std::string{ EditorText("inspector.noMaterial", "None") },
+            .overrideMaterialName = hasOverride ? materialName(overrideMaterial) : std::string{ EditorText("inspector.noMaterial", "None") },
+            .activeMaterialName = activeMaterial != 0U ? materialName(activeMaterial) : std::string{ EditorText("inspector.noMaterial", "None") },
+            .activeMaterialStatus = activeMaterial != 0U && materialStatus ? materialStatus(activeMaterial)
+                                                                         : std::string{ EditorText("inspector.noMaterial", "None") },
             .sectionsUsingSlot = SectionsSummary(sectionIndices),
             .sectionIndices = std::move(sectionIndices),
             .label = SlotLabel(mesh, slotIndex),

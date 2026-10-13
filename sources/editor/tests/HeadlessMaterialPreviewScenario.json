@@ -1,0 +1,21 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "description": "Material Editor as a person uses it: a graph material (Fresnel -> Emissive) and a material instance open in the Material Editor; its panel and preview draw, the preview shows the cooked graph, and the editor closes cleanly. Fixture: HeadlessMaterialPreview/ (the instance's parent is referenced by its /Game/Galeria path id).",
+  "steps": [
+    { "op": "copy_fixture", "source": "HeadlessMaterialPreview/Assets/Galeria/M08_Fresnel.kbmat", "destination": "Assets/Galeria/M08_Fresnel.kbmat" },
+    { "op": "copy_fixture", "source": "HeadlessMaterialPreview/Assets/Galeria/M21_Baza.kbmat", "destination": "Assets/Galeria/M21_Baza.kbmat" },
+    { "op": "copy_fixture", "source": "HeadlessMaterialPreview/Assets/Galeria/M21_Instancja.kbmatinst", "destination": "Assets/Galeria/M21_Instancja.kbmatinst" },
+    { "op": "discover_assets" },
+    { "op": "open_asset", "asset": "/Game/Galeria/M08_Fresnel.kbmat" },
+    { "op": "capture_material_preview", "checkpoint": "fresnel-first-frame", "width": 256, "height": 256 },
+    { "op": "wait_material_cook", "timeout_ms": 120000 },
+    { "op": "capture_material_preview", "checkpoint": "fresnel-cooked", "width": 256, "height": 256 },
+    { "op": "capture", "panel": "material_editor", "checkpoint": "fresnel-panel", "width": 1280, "height": 720 },
+    { "op": "open_asset", "asset": "/Game/Galeria/M21_Instancja.kbmatinst" },
+    { "op": "capture_material_preview", "checkpoint": "instance-first-frame", "width": 256, "height": 256 },
+    { "op": "capture", "panel": "material_editor", "checkpoint": "instance-panel", "width": 1280, "height": 720 },
+    { "op": "open_asset", "asset": "/Game/Galeria/M08_Fresnel.kbmat" },
+    { "op": "capture_material_preview", "checkpoint": "fresnel-reopened", "width": 256, "height": 256 },
+    { "op": "assert_no_errors" }
+  ]
+}

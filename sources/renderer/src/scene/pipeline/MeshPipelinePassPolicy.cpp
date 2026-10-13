@@ -1,5 +1,6 @@
 #include "scene/pipeline/MeshPipelinePassPolicy.hpp"
 
+#include "kb/render/SceneColorAlphaPolicy.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 
 #include <algorithm>
@@ -111,24 +112,25 @@ bool MeshPipelinePassPolicy::UsesDisabledAlphaBlend(const RenderMaterialResource
 namespace {
 
 // Maps a material's translucent blend mode to bgfx blend bits (MAT-79). Used only for the transparent
-// pass; opaque/masked materials never reach it.
+// pass; opaque/masked materials never reach it. The alpha channel follows SceneColorAlphaPolicy: a layer
+// that covers the surface behind it lowers the share of it still visible, a Modulate layer only tints it.
 [[nodiscard]] std::uint64_t TranslucencyBlendState(const RenderMaterialResource* material) noexcept {
     const RenderMaterialTranslucencyBlend mode =
         material != nullptr ? material->translucencyBlend : RenderMaterialTranslucencyBlend::Alpha;
     switch (mode) {
     case RenderMaterialTranslucencyBlend::Alpha:
-        return BGFX_STATE_BLEND_ALPHA;
+        return SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
     case RenderMaterialTranslucencyBlend::Additive:
-        return BGFX_STATE_BLEND_ADD;
+        return SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE);
     case RenderMaterialTranslucencyBlend::Modulate:
-        return BGFX_STATE_BLEND_MULTIPLY;
+        return SceneColorAlphaPolicy::KeepingBlend(BGFX_STATE_BLEND_DST_COLOR, BGFX_STATE_BLEND_ZERO);
     case RenderMaterialTranslucencyBlend::PreMultipliedAlpha:
-        return BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+        return SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
     case RenderMaterialTranslucencyBlend::AlphaHoldout:
         // The source removes destination coverage by its alpha (dst *= 1 - srcAlpha) without adding color.
-        return BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+        return SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA);
     }
-    return BGFX_STATE_BLEND_ALPHA;
+    return SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
 }
 
 } // namespace
@@ -148,7 +150,10 @@ std::uint64_t MeshPipelinePassPolicy::State(
         section->terrainLayerIndex != UINT8_MAX && section->terrainLayerIndex > 0U;
 
     if (pass == MeshPassType::BaseTransparent && terrainOverlay) {
-        return SceneDepthPolicy::SceneDepthReadState() | BGFX_STATE_BLEND_ALPHA |
+        // A terrain material layer is opaque ground blended over the base layer by its weight: the surface
+        // stays fully visible.
+        return SceneDepthPolicy::SceneDepthReadState() |
+            SceneColorAlphaPolicy::KeepingBlend(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA) |
             cullState | rasterStateExtra;
     }
 
@@ -161,6 +166,12 @@ std::uint64_t MeshPipelinePassPolicy::State(
     case MeshPassType::MotionVectors:
         return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | cullState | rasterStateExtra;
     case MeshPassType::BaseTransparent:
+        if (material != nullptr && material->graphProgram.decalDomain) {
+            // A decal draws its box's back faces, so each pixel is drawn once, also with the camera inside the box.
+            // No depth test: the shader keeps only the scene surface that lies inside the box.
+            return (SceneDepthPolicy::SceneDepthReadState() & ~BGFX_STATE_DEPTH_TEST_MASK) |
+                TranslucencyBlendState(material) | BGFX_STATE_CULL_CW | rasterStateExtra;
+        }
         return SceneDepthPolicy::SceneDepthReadState() | TranslucencyBlendState(material) | cullState | rasterStateExtra;
     case MeshPassType::SelectionId:
         return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | cullState | rasterStateExtra;

@@ -45,6 +45,9 @@ inline constexpr float kSceneGBufferShadingModelNormalization = 1.0F / 255.0F;
     return static_cast<float>(static_cast<std::uint8_t>(model)) * kSceneGBufferShadingModelNormalization;
 }
 
+// The custom data target's clear (alpha 0: no model colour given).
+inline constexpr SceneGBufferClearColor kSceneGBufferCustomDataClearColor{ 0.0F, 0.0F, 0.0F, 0.0F };
+
 inline constexpr std::array<SceneGBufferClearColor, kSceneGBufferColorAttachmentCount> kSceneGBufferClearColors{
     SceneGBufferClearColor{ 0.0F, 0.0F, 0.0F, 0.0F },
     SceneGBufferClearColor{ 0.5F, 0.5F, 1.0F, 0.0F },

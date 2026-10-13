@@ -2,9 +2,25 @@
 
 #include "renderer/RendererDebugLog.hpp"
 
+#include <algorithm>
 #include <sstream>
 
 namespace kb::render {
+
+SceneDisplayOutputTransform RendererFinalCompositeSubmitter::DisplayTransform(const PostProcessOutput& postProcessOutput) noexcept {
+    SceneDisplayOutputTransform outputTransform = postProcessOutput.outputTransform;
+    if (!postProcessOutput.tonemapEnabled) {
+        // Exposure and the display encoding still apply, or linear scene light would reach the
+        // screen as display values.
+        outputTransform.tonemap = SceneDisplayTonemapOperator::None;
+    }
+    return outputTransform;
+}
+
+float RendererFinalCompositeSubmitter::VignetteIntensity(const PostProcessOutput& postProcessOutput) noexcept {
+    const ScenePostProcessSettings& settings = postProcessOutput.postProcessSettings;
+    return settings.vignetteEnabled ? std::clamp(settings.vignetteIntensity, 0.0F, 1.0F) : 0.0F;
+}
 
 bool RendererFinalCompositeSubmitter::Submit(
     const FinalCompositePass& finalCompositePass,
@@ -12,15 +28,7 @@ bool RendererFinalCompositeSubmitter::Submit(
     const RenderSceneSubmitDesc& desc,
     const PostProcessOutput& postProcessOutput,
     bgfx::TextureHandle scenePostProcessOutput) {
-    SceneDisplayOutputTransform outputTransform = postProcessOutput.outputTransform;
-    if (!postProcessOutput.tonemapEnabled) {
-        outputTransform = SceneDisplayOutputTransform{
-            .exposureStops = 0.0F,
-            .gamma = 1.0F,
-            .tonemap = SceneDisplayTonemapOperator::None,
-            .colorGradingLutStrength = 0.0F,
-        };
-    }
+    const SceneDisplayOutputTransform outputTransform = DisplayTransform(postProcessOutput);
 
     {
         std::ostringstream message;
@@ -49,6 +57,11 @@ bool RendererFinalCompositeSubmitter::Submit(
         .outputTransform = outputTransform,
         .clearRgba = desc.clearRgba,
         .clearTarget = desc.finalComposite.clearTarget,
+        .vignetteIntensity = VignetteIntensity(postProcessOutput),
+        // FXAA is the post-tonemap anti-aliasing: it runs when selected and TAA (which resolves before the
+        // tonemap) is not.
+        .antiAliasing = postProcessOutput.fxaaEnabled && !postProcessOutput.temporalAntiAliasingEnabled,
+        .postProcessExtent = postProcessOutput.extent,
     });
 }
 

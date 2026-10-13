@@ -1,10 +1,11 @@
 #include "scene/asset/io/components/SceneAssetPhysicsComponentCodec.hpp"
 
+#include "engine/scene/SceneDocument.hpp"
 #include "scene/asset/io/SceneAssetPrimitiveCodec.hpp"
 
 namespace kb::scene {
 
-bool SceneAssetPhysicsComponentCodec::ReadRigidbody(SceneAssetBinaryIO::ByteReader& input, RigidbodyComponent& output) {
+bool SceneAssetPhysicsComponentCodec::ReadRigidbody(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, RigidbodyComponent& output) {
     std::uint32_t bodyType = 0;
     bool useGravity = true;
     bool lockRotation = false;
@@ -24,6 +25,10 @@ bool SceneAssetPhysicsComponentCodec::ReadRigidbody(SceneAssetBinaryIO::ByteRead
     output.useGravity = useGravity;
     output.lockRotation = lockRotation;
     output.useContinuousCollision = useContinuousCollision;
+    if (fileVersion >= SceneDocument::RigidbodyDampingFileVersion &&
+        (!input.ReadFloat(output.linearDamping) || !input.ReadFloat(output.angularDamping))) {
+        return false;
+    }
     return true;
 }
 
@@ -36,6 +41,8 @@ void SceneAssetPhysicsComponentCodec::WriteRigidbody(std::vector<std::uint8_t>& 
     SceneAssetBinaryIO::WriteUInt8(output, rigidbody.useGravity ? 1U : 0U);
     SceneAssetBinaryIO::WriteUInt8(output, rigidbody.lockRotation ? 1U : 0U);
     SceneAssetBinaryIO::WriteUInt8(output, rigidbody.useContinuousCollision ? 1U : 0U);
+    SceneAssetBinaryIO::WriteFloat(output, rigidbody.linearDamping);
+    SceneAssetBinaryIO::WriteFloat(output, rigidbody.angularDamping);
 }
 
 bool SceneAssetPhysicsComponentCodec::ReadCollider(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, ColliderComponent& output) {

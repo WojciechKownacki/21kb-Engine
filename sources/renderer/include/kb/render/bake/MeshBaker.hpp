@@ -28,7 +28,7 @@ namespace kb::render::bake {
 // Identity of this baker inside a bake key. `bakerId` scopes `bakerVersion`, so bumping the
 // version below re-bakes every mesh and leaves every other baker's cache untouched.
 inline constexpr std::string_view kMeshBakerId = "Mesh";
-inline constexpr std::string_view kMeshBakerVersion = "3";
+inline constexpr std::string_view kMeshBakerVersion = "4";
 
 // Runtime type of the artifact this baker publishes; a path component of the bake store, and
 // what a package announces about itself so discovery can ask instead of guessing from .kbpack.
@@ -36,7 +36,7 @@ inline constexpr std::string_view kMeshBakedAssetTypeId = "StaticMesh";
 
 // Magic and version of the baked mesh payload itself, in the primary block.
 inline constexpr std::string_view kBakedMeshMagic = "21KBMESH";
-inline constexpr std::uint32_t kBakedMeshFormatVersion = 3U;
+inline constexpr std::uint32_t kBakedMeshFormatVersion = 4U;
 
 // Cluster shape. These are the algorithm's parameters, not user settings: they are folded into
 // the bake key's settings hash, so editing one of them re-bakes every mesh by itself, without

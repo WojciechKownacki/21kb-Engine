@@ -82,6 +82,10 @@ void RendererViewConfigurator::ConfigureGBufferClear(
         const std::array<float, 4U> clear = kSceneGBufferClearColors[index].ToArray();
         bgfx::setPaletteColor(paletteIndices[index], clear.data());
     }
+    // The fifth target of frames that carry the custom data.
+    constexpr std::uint8_t customDataPaletteIndex = 11U;
+    const std::array<float, 4U> customDataClear = kSceneGBufferCustomDataClearColor.ToArray();
+    bgfx::setPaletteColor(customDataPaletteIndex, customDataClear.data());
 
     bgfx::setViewName(viewId, "KB GBuffer Geometry");
     bgfx::setViewFrameBuffer(viewId, frameBuffer);
@@ -94,7 +98,8 @@ void RendererViewConfigurator::ConfigureGBufferClear(
         paletteIndices[0],
         paletteIndices[1],
         paletteIndices[2],
-        paletteIndices[3]);
+        paletteIndices[3],
+        customDataPaletteIndex);
     bgfx::setViewRect(viewId, 0, 0, width, height);
     bgfx::touch(viewId);
 }

@@ -60,6 +60,8 @@ struct RenderStaticMeshVertexP3N3T4UV2 {
     float g = 1.0F;
     float b = 1.0F;
     float a = 1.0F;
+    // UV2..UV7 (u2, v2, u3, v3, ...) as half floats, Unreal's default UV precision; 0 when the source has none.
+    std::uint16_t uv2to7[12]{};
 };
 
 struct RenderStaticMeshVertexSkinned {
@@ -425,6 +427,9 @@ struct RenderMaterialGraphProgramBinding {
     std::vector<RenderMaterialGraphTextureBinding> textures;
     std::vector<std::string> requiredVaryings;
     bool requiresGeneratedVertexShader = false;
+    // The motion vector pass runs the graph's cooked MotionVectors program, because the graph moves, offsets
+    // the depth of or clips its surface (RenderMaterialGraphDrawsOwnMotionVectors).
+    bool drawsOwnMotionVectors = false;
     // MAT-38/#25d: scene render state resolved from the graph blend mode, so a translucent graph material
     // is submitted in the transparent pass with the correct blend equation (not just previewed).
     RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque;
@@ -433,6 +438,17 @@ struct RenderMaterialGraphProgramBinding {
     // to the graph fragment shader in the transparent pass.
     bool usesSceneDepth = false;
     bool usesSceneColor = false;
+    // The G-buffer program writes the model colour (fifth target, SceneGBuffer::CustomDataTexture).
+    bool writesShadingModelColor = false;
+    // The material's Max World Position Offset Displacement: the bounds margin of its objects.
+    float boundsMargin = 0.0F;
+    // Unreal's Post Process domain: the material draws in the post-process chain, not in the scene passes.
+    bool postProcessDomain = false;
+    // Unreal's Deferred Decal domain: the material decorates the opaque surfaces inside its box, drawn with the box's
+    // back faces behind them in the transparent pass.
+    bool decalDomain = false;
+    // Unreal's User Interface domain: the material draws a UI image's rectangle (ScreenUIComposite).
+    bool userInterfaceDomain = false;
 };
 
 struct RenderMaterialResource {

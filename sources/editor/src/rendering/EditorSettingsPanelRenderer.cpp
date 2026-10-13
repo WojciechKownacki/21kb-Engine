@@ -1,12 +1,16 @@
 #include "rendering/EditorSettingsPanelRenderer.hpp"
 
 #if defined(_WIN32)
+#include "localization/EditorLocalization.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
+#include <algorithm>
 #include <array>
+#include <string>
 
 namespace kb::editor {
 namespace {
@@ -23,6 +27,9 @@ constexpr int kLabelWidth = 150;
 constexpr int kCheckboxSize = 18;
 constexpr int kIntervalButtonWidth = 72;
 constexpr int kIntervalButtonGap = 6;
+constexpr int kLanguageFieldWidth = 240;
+
+EditorSettingsCategory g_category = EditorSettingsCategory::General;
 
 [[nodiscard]] COLORREF Color(EditorColor color) noexcept {
     return GdiDrawing::ToColorRef(color);
@@ -46,6 +53,9 @@ struct EditorSettingsLayout {
     RECT autosaveCheckbox{};
     RECT intervalLabel{};
     std::array<RECT, 5> intervalButtons{};
+    RECT languageLabel{};
+    RECT languageField{};
+    RECT languageHint{};
 };
 
 [[nodiscard]] EditorSettingsLayout Resolve(const RECT& content) noexcept {
@@ -82,11 +92,17 @@ struct EditorSettingsLayout {
         };
         optionLeft = button.right + kIntervalButtonGap;
     }
+
+    // General: the Language row sits where Autosave sits on the Saving page.
+    rects.languageLabel = {left, autosaveTop, left + kLabelWidth, autosaveTop + kRowHeight};
+    rects.languageField = {left + kLabelWidth, autosaveTop + 4, std::min(right, left + kLabelWidth + kLanguageFieldWidth),
+        autosaveTop + kRowHeight - 4};
+    rects.languageHint = {left + kLabelWidth, rects.languageLabel.bottom, right, rects.languageLabel.bottom + 22};
     return rects;
 }
 
-[[nodiscard]] RECT CategoryRow(const RECT& sidebar) noexcept {
-    const int top = sidebar.top + kCategoryTopInset;
+[[nodiscard]] RECT CategoryRow(const RECT& sidebar, int index) noexcept {
+    const int top = sidebar.top + kCategoryTopInset + index * (kCategoryRowHeight + 2);
     return {sidebar.left + 6, top, sidebar.right - 6, top + kCategoryRowHeight};
 }
 
@@ -106,7 +122,7 @@ void DrawText(
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+    kb::editor::DrawTextUtf8(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 void DrawOptionButton(
@@ -182,27 +198,34 @@ void EditorSettingsPanelRenderer::Paint(
     DrawText(
         dc,
         {rects.header.left + kPadding, rects.header.top, rects.header.right - kPadding, rects.header.bottom},
-        "Editor Settings",
+        std::string{ EditorText("editorSettings.title", "Editor Settings") }.c_str(),
         Color(theme.textPrimary),
         14,
         FW_SEMIBOLD);
 
     GdiDrawing::FillRectColor(dc, rects.sidebar, Color(theme.chrome));
     GdiDrawing::FillRectColor(dc, rects.divider, Color(theme.borderChrome));
-    const RECT category = CategoryRow(rects.sidebar);
-    GdiDrawing::FillRectColor(dc, category, Blend(Color(theme.panel), Color(theme.accent), 18));
-    GdiDrawing::FillRectColor(
-        dc,
-        {category.left, category.top, category.left + 2, category.bottom},
-        Color(theme.accent));
-    DrawText(
-        dc,
-        {category.left + 12, category.top, category.right - 8, category.bottom},
-        "Saving",
-        Color(theme.textPrimary),
-        12,
-        FW_SEMIBOLD);
+    const std::array<std::string, 2> categories{
+        std::string{ EditorText("editorSettings.category.general", "General") },
+        std::string{ EditorText("editorSettings.category.saving", "Saving") },
+    };
+    for (int index = 0; index < static_cast<int>(categories.size()); ++index) {
+        const RECT category = CategoryRow(rects.sidebar, index);
+        const bool selected = static_cast<int>(g_category) == index;
+        if (selected) {
+            GdiDrawing::FillRectColor(dc, category, Blend(Color(theme.panel), Color(theme.accent), 18));
+            GdiDrawing::FillRectColor(dc, {category.left, category.top, category.left + 2, category.bottom}, Color(theme.accent));
+        }
+        DrawText(
+            dc,
+            {category.left + 12, category.top, category.right - 8, category.bottom},
+            categories[static_cast<std::size_t>(index)].c_str(),
+            Color(selected ? theme.textPrimary : theme.textSecondary),
+            12,
+            selected ? FW_SEMIBOLD : FW_NORMAL);
+    }
 
+    const bool general = g_category == EditorSettingsCategory::General;
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
     DrawText(
         dc,
@@ -212,10 +235,27 @@ void EditorSettingsPanelRenderer::Paint(
             rects.sectionHeader.right - 8,
             rects.sectionHeader.bottom,
         },
-        "SAVING",
+        std::string{ general ? EditorText("editorSettings.section.language", "LANGUAGE")
+                             : EditorText("editorSettings.section.saving", "SAVING") }.c_str(),
         Color(theme.textSecondary),
         11,
         FW_SEMIBOLD);
+
+    if (general) {
+        DrawText(dc, {rects.languageLabel.left, rects.languageLabel.top, rects.languageLabel.right - 8, rects.languageLabel.bottom},
+            std::string{ EditorText("editorSettings.language", "Language") }.c_str(), Color(theme.textSecondary), 12);
+        const EditorLanguage* current = EditorLocalization::Find(EditorLocalization::Current());
+        GdiDrawing::DrawSharpFrame(dc, rects.languageField, Color(theme.background), Color(theme.borderPanel));
+        DrawText(dc, {rects.languageField.left + 8, rects.languageField.top, rects.languageField.right - 24, rects.languageField.bottom},
+            std::string{ current != nullptr ? current->nativeName : std::string_view{ "English" } }.c_str(), Color(theme.textPrimary), 12);
+        DrawText(dc, {rects.languageField.right - 22, rects.languageField.top, rects.languageField.right - 6, rects.languageField.bottom},
+            "v", Color(theme.textSecondary), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, rects.languageHint,
+            EditorLocalization::Format("editorSettings.languageHint", "{count} languages - applies at once",
+                { { "count", std::to_string(EditorLocalization::Languages().size()) } }).c_str(),
+            Color(theme.textDisabled), 11);
+        return;
+    }
 
     DrawText(
         dc,
@@ -225,7 +265,7 @@ void EditorSettingsPanelRenderer::Paint(
             rects.autosaveLabel.right - 8,
             rects.autosaveLabel.bottom,
         },
-        "Autosave",
+        std::string{ EditorText("editorSettings.autosave", "Autosave") }.c_str(),
         Color(theme.textSecondary),
         12);
     DrawCheckbox(dc, rects.autosaveCheckbox, theme, preferences.autosaveEnabled);
@@ -238,18 +278,23 @@ void EditorSettingsPanelRenderer::Paint(
             rects.intervalLabel.right - 8,
             rects.intervalLabel.bottom,
         },
-        "Interval",
+        std::string{ EditorText("editorSettings.interval", "Interval") }.c_str(),
         Color(preferences.autosaveEnabled ? theme.textSecondary : theme.textDisabled),
         12);
 
-    constexpr std::array<const char*, 5> labels{{"5 min", "10 min", "15 min", "30 min", "60 min"}};
+    std::array<std::string, 5> labels;
+    constexpr std::array<int, 5> minutes{{5, 10, 15, 30, 60}};
+    for (std::size_t index = 0; index < labels.size(); ++index) {
+        labels[index] = EditorLocalization::Format("editorSettings.minutes", "{minutes} min",
+            { { "minutes", std::to_string(minutes[index]) } });
+    }
     const int selectedInterval = AutosaveIntervalIndex(preferences.autosaveIntervalMinutes);
     for (int index = 0; index < static_cast<int>(labels.size()); ++index) {
         DrawOptionButton(
             dc,
             rects.intervalButtons[static_cast<std::size_t>(index)],
             theme,
-            labels[static_cast<std::size_t>(index)],
+            labels[static_cast<std::size_t>(index)].c_str(),
             preferences.autosaveEnabled && selectedInterval == index,
             preferences.autosaveEnabled);
     }
@@ -260,6 +305,17 @@ EditorSettingsHit EditorSettingsPanelRenderer::HitTest(
     int x,
     int y) noexcept {
     const EditorSettingsLayout rects = Resolve(content);
+    for (int index = 0; index < 2; ++index) {
+        if (Contains(CategoryRow(rects.sidebar, index), x, y)) {
+            return {EditorSettingsHitKind::Category, -1, index};
+        }
+    }
+    if (g_category == EditorSettingsCategory::General) {
+        if (Contains(rects.languageField, x, y) || Contains(rects.languageLabel, x, y)) {
+            return {EditorSettingsHitKind::Language, 0, -1};
+        }
+        return {};
+    }
     if (Contains(rects.autosaveLabel, x, y) ||
         Contains(rects.autosaveCheckbox, x, y)) {
         return {EditorSettingsHitKind::Toggle, 0, -1};
@@ -270,6 +326,18 @@ EditorSettingsHit EditorSettingsPanelRenderer::HitTest(
         }
     }
     return {};
+}
+
+RECT EditorSettingsPanelRenderer::LanguageField(const RECT& content) noexcept {
+    return Resolve(content).languageField;
+}
+
+EditorSettingsCategory EditorSettingsPanelRenderer::SelectedCategory() noexcept {
+    return g_category;
+}
+
+void EditorSettingsPanelRenderer::SelectCategory(EditorSettingsCategory category) noexcept {
+    g_category = category;
 }
 
 } // namespace kb::editor

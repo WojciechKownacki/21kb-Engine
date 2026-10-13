@@ -62,6 +62,9 @@ inline constexpr std::size_t kWindowsLegacyMaxPathLength = 260U;
 // wants it. The caller owns the directory and deletes it; `error` says why nothing came back.
 [[nodiscard]] std::filesystem::path ToolScratchPath(std::string_view prefix, std::error_code& error);
 
+// The executable of the running process, or an empty path when the system does not say.
+[[nodiscard]] std::filesystem::path RunningExecutablePath();
+
 // The portable form of the same path: what a manifest stores, what a comparison uses and what a
 // message shows. ExtendedLengthPath produces a path for handing to the operating system, not a
 // path to keep, so anything that outlives the call comes back through here.

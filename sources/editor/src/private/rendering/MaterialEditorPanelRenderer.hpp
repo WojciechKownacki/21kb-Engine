@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
@@ -603,23 +604,10 @@ inline bool MaterialEditorPanelIsTexturePreviewNode(kb::render::RenderMaterialGr
         MaterialEditorPanelIsTextureObjectPreviewNode(kind);
 }
 
-inline SIZE MaterialEditorPanelGraphNodeSize(const kb::render::RenderMaterialGraphNode& node) noexcept {
+inline SIZE MaterialEditorPanelGraphNodeSize(const kb::render::RenderMaterialGraphNode& node) {
     SIZE size = MaterialEditorPanelGraphNodeSize(node.kind);
-    if (node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode ||
-        node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
-        const std::size_t inputCount = node.customCode.inputs.size();
-        const std::size_t outputCount = node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode && node.customCode.outputs.empty()
-            ? 1U
-            : node.customCode.outputs.size();
-        const std::size_t rowCount = std::max(inputCount, outputCount);
-        if (rowCount > 0U) {
-            const LONG requiredHeight = static_cast<LONG>(MaterialEditorPanelMetrics::GraphNodeHeaderHeight +
-                MaterialEditorPanelMetrics::GraphNodeBodyTopPadding +
-                static_cast<int>(rowCount) * MaterialEditorPanelMetrics::GraphNodePinRowHeight +
-                MaterialEditorPanelMetrics::GraphNodeBodyTopPadding);
-            size.cy = std::max(size.cy, requiredHeight);
-        }
-    }
+    // The node grows with its pin rows (Unreal): the canvas that places and hit-tests the pins owns the rule.
+    size.cy = std::max(size.cy, static_cast<LONG>(std::lround(MaterialGraphCanvasPinRowsHeight(BuildMaterialGraphCanvasNode(node)))));
     return size;
 }
 #endif
@@ -637,6 +625,11 @@ public:
     [[nodiscard]] static std::uint64_t DebugGraphContentRenderCount() noexcept;
 
     [[nodiscard]] static MaterialEditorPanelLayout ResolveLayout(const RECT& content) noexcept;
+    // The header buttons' labels in the editor's language; the layout sizes each button for the
+    // widest label it can show.
+    [[nodiscard]] static std::string_view PreviewPrimitiveLabel(EditorMaterialPreviewPrimitiveKind kind);
+    [[nodiscard]] static std::string_view PreviewSceneLabel(EditorMaterialPreviewLightingPreset preset);
+    [[nodiscard]] static std::string_view PreviewQualityLabel(kb::render::RenderMaterialGraphQualityLevel level);
 
     /// Live material preview target rect (sphere) inside this panel's content area, or
     /// std::nullopt when no material document is selected. Consumed by the editor frame
@@ -866,25 +859,25 @@ inline std::string MaterialEditorPanelColorSpaceName(kb::render::RenderMaterialT
     case kb::render::RenderMaterialTextureColorSpace::Srgb:
         return "sRGB";
     case kb::render::RenderMaterialTextureColorSpace::Linear:
-        return "Linear";
+        return std::string{ EditorText("materialEditor.colorSpace.linear", "Linear") };
     case kb::render::RenderMaterialTextureColorSpace::Unknown:
-        return "Any";
+        return std::string{ EditorText("materialEditor.colorSpace.any", "Any") };
     }
-    return "Any";
+    return std::string{ EditorText("materialEditor.colorSpace.any", "Any") };
 }
 
 inline std::string MaterialEditorPanelParameterGroupName(MaterialEditorParameterGroup group) {
     switch (group) {
     case MaterialEditorParameterGroup::Core:
-        return "Core";
+        return std::string{ EditorText("materialEditor.parameterGroup.core", "Core") };
     case MaterialEditorParameterGroup::Surface:
-        return "Surface";
+        return std::string{ EditorText("materialEditor.parameterGroup.surface", "Surface") };
     case MaterialEditorParameterGroup::Texture:
-        return "Texture";
+        return std::string{ EditorText("materialEditor.parameterGroup.texture", "Texture") };
     case MaterialEditorParameterGroup::Advanced:
-        return "Advanced";
+        return std::string{ EditorText("materialEditor.parameterGroup.advanced", "Advanced") };
     }
-    return "Advanced";
+    return std::string{ EditorText("materialEditor.parameterGroup.advanced", "Advanced") };
 }
 
 inline std::string MaterialEditorPanelFloat(float value) {
@@ -937,7 +930,9 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(
     std::uint32_t selectedNodeId,
     const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties) {
     MaterialEditorPanelDetailsRows rows;
-    rows.title = selectedNodeId == 0U ? "PBR Parameters" : "Selected Node #" + std::to_string(selectedNodeId);
+    rows.title = selectedNodeId == 0U
+        ? std::string{ EditorText("materialEditor.details.pbrParameters", "PBR Parameters") }
+        : EditorLocalization::Format("materialEditor.details.selectedNode", "Selected Node #{id}", { { "id", std::to_string(selectedNodeId) } });
     rows.nodePropertyRows = nodeProperties;
     for (const MaterialEditorParameter& parameter : parameters) {
         if (parameter.type == kb::render::RenderMaterialParameterType::Texture) {
@@ -955,10 +950,10 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(
             row += value;
         }
         if (parameter.overrideActive) {
-            row += "  (overridden)";
+            row += "  " + std::string{ EditorText("materialEditor.details.overridden", "(overridden)") };
         }
         if (!parameter.enabled) {
-            row += "  (disabled)";
+            row += "  " + std::string{ EditorText("materialEditor.details.disabled", "(disabled)") };
         }
         rows.parameterRows.push_back(std::move(row));
     }
@@ -979,10 +974,10 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(
         row += " = ";
         row += MaterialEditorPanelParameterValueText(parameter.value);
         if (parameter.overrideActive) {
-            row += "  (overridden)";
+            row += "  " + std::string{ EditorText("materialEditor.details.overridden", "(overridden)") };
         }
         if (!parameter.enabled) {
-            row += "  (disabled)";
+            row += "  " + std::string{ EditorText("materialEditor.details.disabled", "(disabled)") };
         }
         rows.textureSlotRows.push_back(std::move(row));
     }
@@ -1037,7 +1032,7 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRowsFo
             sceneContext.MaterialEditor().OpenAssetId().value);
     }
     if (materialInstance) {
-        rows.title = "Material Instance Overrides";
+        rows.title = std::string{ EditorText("materialEditor.details.instanceOverrides", "Material Instance Overrides") };
     }
     return rows;
 }
@@ -2045,7 +2040,8 @@ inline std::optional<MaterialEditorGraphColorWatcherHit> MaterialEditorPanelRend
                         .target = MaterialEditorGraphColorWatcherTarget::ColorRampStop,
                         .nodeId = node.id,
                         .propertyId = "colorRamp.stop" + std::to_string(stopIndex) + ".color",
-                        .displayName = "Color Ramp Stop " + std::to_string(stopIndex),
+                        .displayName = EditorLocalization::Format("materialEditor.colorRampStop", "Color Ramp Stop {index}",
+                            { { "index", std::to_string(stopIndex) } }),
                         .value = MaterialEditorPanelColorValue(stops[stopIndex].r, stops[stopIndex].g, stops[stopIndex].b),
                     };
                 }
@@ -2056,7 +2052,7 @@ inline std::optional<MaterialEditorGraphColorWatcherHit> MaterialEditorPanelRend
                     .target = MaterialEditorGraphColorWatcherTarget::ColorRampStop,
                     .nodeId = node.id,
                     .propertyId = "colorRamp.stop0.color",
-                    .displayName = "Color Ramp Stop 0",
+                    .displayName = EditorLocalization::Format("materialEditor.colorRampStop", "Color Ramp Stop {index}", { { "index", "0" } }),
                     .value = MaterialEditorPanelColorValue(stop.r, stop.g, stop.b),
                 };
             }
@@ -2087,7 +2083,7 @@ inline std::optional<MaterialEditorGraphColorWatcherHit> MaterialEditorPanelRend
                 .target = target,
                 .nodeId = node.id,
                 .stableId = stableId,
-                .displayName = node.parameter.displayName.empty() ? std::string{ "Color" } : node.parameter.displayName,
+                .displayName = node.parameter.displayName.empty() ? std::string{ EditorText("materialEditor.colorDefaultName", "Color") } : node.parameter.displayName,
                 .value = value,
             };
         }
@@ -2134,7 +2130,8 @@ inline std::optional<MaterialEditorGraphColorWatcherHit> MaterialEditorPanelRend
                         .target = MaterialEditorGraphColorWatcherTarget::ColorRampStop,
                         .nodeId = node.id,
                         .propertyId = "colorRamp.stop" + std::to_string(stopIndex) + ".color",
-                        .displayName = "Color Ramp Stop " + std::to_string(stopIndex),
+                        .displayName = EditorLocalization::Format("materialEditor.colorRampStop", "Color Ramp Stop {index}",
+                            { { "index", std::to_string(stopIndex) } }),
                         .value = MaterialEditorPanelColorValue(stops[stopIndex].r, stops[stopIndex].g, stops[stopIndex].b),
                     };
                 }
@@ -2145,7 +2142,7 @@ inline std::optional<MaterialEditorGraphColorWatcherHit> MaterialEditorPanelRend
                     .target = MaterialEditorGraphColorWatcherTarget::ColorRampStop,
                     .nodeId = node.id,
                     .propertyId = "colorRamp.stop0.color",
-                    .displayName = "Color Ramp Stop 0",
+                    .displayName = EditorLocalization::Format("materialEditor.colorRampStop", "Color Ramp Stop {index}", { { "index", "0" } }),
                     .value = MaterialEditorPanelColorValue(stop.r, stop.g, stop.b),
                 };
             }
@@ -2176,7 +2173,7 @@ inline std::optional<MaterialEditorGraphColorWatcherHit> MaterialEditorPanelRend
                 .target = target,
                 .nodeId = node.id,
                 .stableId = stableId,
-                .displayName = node.parameter.displayName.empty() ? std::string{ "Color" } : node.parameter.displayName,
+                .displayName = node.parameter.displayName.empty() ? std::string{ EditorText("materialEditor.colorDefaultName", "Color") } : node.parameter.displayName,
                 .value = value,
             };
         }
@@ -2238,7 +2235,7 @@ inline std::optional<MaterialEditorGraphConstantValueHit> MaterialEditorPanelRen
             return MaterialEditorGraphConstantValueHit{
                 .nodeId = node.id,
                 .componentIndex = componentIndex,
-                .displayName = node.parameter.displayName.empty() ? std::string{ "Constant" } : node.parameter.displayName,
+                .displayName = node.parameter.displayName.empty() ? std::string{ EditorText("materialEditor.constantDefaultName", "Constant") } : node.parameter.displayName,
                 .type = MaterialEditorPanelConstantParameterType(node.kind),
                 .value = MaterialEditorPanelConstantParameterValue(node.kind, node.parameter.defaultValueHint),
             };
@@ -2892,28 +2889,28 @@ inline constexpr std::size_t MaterialEditorGraphContextMenuFavoritesCategoryInde
     return 11U;
 }
 
-inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t index) noexcept {
+inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t index) {
     switch (index) {
-    case 0U: return "Textures";
-    case 1U: return "Inputs";
-    case 2U: return "Parameter Inputs";
-    case 3U: return "Constants";
-    case 4U: return "Parameters";
-    case 5U: return "Math";
-    case 6U: return "Utility";
-    case 7U: return "Material";
-    case 8U: return "Static";
-    case 9U: return "Organization";
-    case 10U: return "Actions";
-    case 11U: return "Favorites";
-    default: return "";
+    case 0U: return EditorText("materialEditor.paletteCategory.textures", "Textures");
+    case 1U: return EditorText("materialEditor.paletteCategory.inputs", "Inputs");
+    case 2U: return EditorText("materialEditor.paletteCategory.parameterInputs", "Parameter Inputs");
+    case 3U: return EditorText("materialEditor.paletteCategory.constants", "Constants");
+    case 4U: return EditorText("materialEditor.paletteCategory.parameters", "Parameters");
+    case 5U: return EditorText("materialEditor.paletteCategory.math", "Math");
+    case 6U: return EditorText("materialEditor.paletteCategory.utility", "Utility");
+    case 7U: return EditorText("materialEditor.paletteCategory.material", "Material");
+    case 8U: return EditorText("materialEditor.paletteCategory.static", "Static");
+    case 9U: return EditorText("materialEditor.paletteCategory.organization", "Organization");
+    case 10U: return EditorText("materialEditor.paletteCategory.actions", "Actions");
+    case 11U: return EditorText("materialEditor.paletteCategory.favorites", "Favorites");
+    default: return {};
     }
 }
 
 inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMenuCommands(std::size_t index) {
     switch (index) {
     case 0U:
-        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject, MaterialEditorGraphMenuCommand::CreateTextureSampleCube, MaterialEditorGraphMenuCommand::CreateTextureObjectCube, MaterialEditorGraphMenuCommand::CreateTextureSampleVolume, MaterialEditorGraphMenuCommand::CreateTextureObjectVolume, MaterialEditorGraphMenuCommand::CreateTextureSample2DArray, MaterialEditorGraphMenuCommand::CreateTextureObject2DArray };
+        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject, MaterialEditorGraphMenuCommand::CreateTextureSampleCube, MaterialEditorGraphMenuCommand::CreateTextureObjectCube, MaterialEditorGraphMenuCommand::CreateTextureSampleVolume, MaterialEditorGraphMenuCommand::CreateTextureObjectVolume, MaterialEditorGraphMenuCommand::CreateTextureSample2DArray, MaterialEditorGraphMenuCommand::CreateTextureObject2DArray, MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture, MaterialEditorGraphMenuCommand::CreateParallaxOcclusionMapping, MaterialEditorGraphMenuCommand::CreateFlipBook };
     case 1U:
         return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateDeltaTime, MaterialEditorGraphMenuCommand::CreateDynamicParameter, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreatePixelPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount, MaterialEditorGraphMenuCommand::CreateDistanceCullFade, MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition, MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateTwoSidedSign, MaterialEditorGraphMenuCommand::CreateSceneColor, MaterialEditorGraphMenuCommand::CreateSceneTexture, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreatePixelDepth, MaterialEditorGraphMenuCommand::CreateCameraDepthFade, MaterialEditorGraphMenuCommand::CreateDepthFade };
     case 2U:
@@ -2946,6 +2943,7 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateFresnel,
             MaterialEditorGraphMenuCommand::CreateClamp,
             MaterialEditorGraphMenuCommand::CreateLerp,
+            MaterialEditorGraphMenuCommand::CreateRemapValueRange,
         };
     case 6U:
         return {
@@ -2997,6 +2995,25 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateNormalize,
             MaterialEditorGraphMenuCommand::CreateNormalUnpack,
             MaterialEditorGraphMenuCommand::CreateCustomCode,
+            MaterialEditorGraphMenuCommand::CreateCheckerboard,
+            MaterialEditorGraphMenuCommand::CreatePolarCoordinates,
+            MaterialEditorGraphMenuCommand::CreateTwirl,
+            MaterialEditorGraphMenuCommand::CreateEllipse,
+            MaterialEditorGraphMenuCommand::CreateRectangle,
+            MaterialEditorGraphMenuCommand::CreateRoundedRectangle,
+            MaterialEditorGraphMenuCommand::CreateBlendOverlay,
+            MaterialEditorGraphMenuCommand::CreateBlendScreen,
+            MaterialEditorGraphMenuCommand::CreateBlendSoftLight,
+            MaterialEditorGraphMenuCommand::CreateBlendHardLight,
+            MaterialEditorGraphMenuCommand::CreateBlendLinearLight,
+            MaterialEditorGraphMenuCommand::CreateBlendColorBurn,
+            MaterialEditorGraphMenuCommand::CreateBlendColorDodge,
+            MaterialEditorGraphMenuCommand::CreateBlendDarken,
+            MaterialEditorGraphMenuCommand::CreateBlendLighten,
+            MaterialEditorGraphMenuCommand::CreateBlendDifference,
+            MaterialEditorGraphMenuCommand::CreateContrast,
+            MaterialEditorGraphMenuCommand::CreateHueShift,
+            MaterialEditorGraphMenuCommand::CreateChannelMixer,
         };
     case 7U:
         return {
@@ -3061,175 +3078,198 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
     return MaterialEditorGraphContextMenuCommands(index);
 }
 
-inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditorGraphMenuCommand command) noexcept {
+inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditorGraphMenuCommand command) {
     switch (command) {
-    case MaterialEditorGraphMenuCommand::CreateTextureSample: return "Texture Sample";
-    case MaterialEditorGraphMenuCommand::CreateTextureParameter: return "Texture Parameter";
-    case MaterialEditorGraphMenuCommand::CreateTextureObject: return "Texture Object";
-    case MaterialEditorGraphMenuCommand::CreateTextureSampleCube: return "Texture Sample Cube";
-    case MaterialEditorGraphMenuCommand::CreateTextureObjectCube: return "Texture Object Cube";
-    case MaterialEditorGraphMenuCommand::CreateTextureSampleVolume: return "Texture Sample Volume";
-    case MaterialEditorGraphMenuCommand::CreateTextureObjectVolume: return "Texture Object Volume";
-    case MaterialEditorGraphMenuCommand::CreateTextureSample2DArray: return "Texture Sample 2D Array";
-    case MaterialEditorGraphMenuCommand::CreateTextureObject2DArray: return "Texture Object 2D Array";
-    case MaterialEditorGraphMenuCommand::CreateUv: return "UV";
-    case MaterialEditorGraphMenuCommand::CreateScalar: return "Constant Scalar";
-    case MaterialEditorGraphMenuCommand::CreateBool: return "Constant Bool";
-    case MaterialEditorGraphMenuCommand::CreateVector2: return "Constant2Vector (XY)";
-    case MaterialEditorGraphMenuCommand::CreateVector: return "Constant3Vector (RGB)";
-    case MaterialEditorGraphMenuCommand::CreateColor: return "Constant4Vector (RGBA)";
-    case MaterialEditorGraphMenuCommand::CreateScalarParameter: return "Scalar Parameter";
-    case MaterialEditorGraphMenuCommand::CreateVectorParameter: return "Vector Parameter";
-    case MaterialEditorGraphMenuCommand::CreateColorParameter: return "Color Parameter";
-    case MaterialEditorGraphMenuCommand::CreateCollectionParameter: return "Collection Parameter";
-    case MaterialEditorGraphMenuCommand::CreateAdd: return "Add";
-    case MaterialEditorGraphMenuCommand::CreateSubtract: return "Subtract";
-    case MaterialEditorGraphMenuCommand::CreateMultiply: return "Multiply";
-    case MaterialEditorGraphMenuCommand::CreateDivide: return "Divide";
-    case MaterialEditorGraphMenuCommand::CreatePower: return "Power";
-    case MaterialEditorGraphMenuCommand::CreateOneMinus: return "One Minus";
-    case MaterialEditorGraphMenuCommand::CreateAbsolute: return "Abs";
-    case MaterialEditorGraphMenuCommand::CreateMinimum: return "Min";
-    case MaterialEditorGraphMenuCommand::CreateMaximum: return "Max";
-    case MaterialEditorGraphMenuCommand::CreateSaturate: return "Saturate";
-    case MaterialEditorGraphMenuCommand::CreateFloor: return "Floor";
-    case MaterialEditorGraphMenuCommand::CreateCeil: return "Ceil";
-    case MaterialEditorGraphMenuCommand::CreateFraction: return "Frac";
-    case MaterialEditorGraphMenuCommand::CreateSquareRoot: return "Sqrt";
-    case MaterialEditorGraphMenuCommand::CreateSine: return "Sin";
-    case MaterialEditorGraphMenuCommand::CreateCosine: return "Cos";
-    case MaterialEditorGraphMenuCommand::CreateExponential: return "Exp";
-    case MaterialEditorGraphMenuCommand::CreateExponential2: return "Exp2";
-    case MaterialEditorGraphMenuCommand::CreateLogarithm: return "Log";
-    case MaterialEditorGraphMenuCommand::CreateLogarithm2: return "Log2";
-    case MaterialEditorGraphMenuCommand::CreateSrgbToLinear: return "sRGB to Linear";
-    case MaterialEditorGraphMenuCommand::CreateLinearToSrgb: return "Linear to sRGB";
-    case MaterialEditorGraphMenuCommand::CreateLogarithm10: return "Log10";
-    case MaterialEditorGraphMenuCommand::CreateHsvToRgb: return "HSV to RGB";
-    case MaterialEditorGraphMenuCommand::CreateRgbToHsv: return "RGB to HSV";
-    case MaterialEditorGraphMenuCommand::CreateDeriveNormalZ: return "Derive Normal Z";
-    case MaterialEditorGraphMenuCommand::CreateFmod: return "Fmod";
-    case MaterialEditorGraphMenuCommand::CreateInverseLerp: return "Inverse Lerp";
-    case MaterialEditorGraphMenuCommand::CreatePartialDerivativeX: return "DDX";
-    case MaterialEditorGraphMenuCommand::CreatePartialDerivativeY: return "DDY";
-    case MaterialEditorGraphMenuCommand::CreateSphereMask: return "Sphere Mask";
-    case MaterialEditorGraphMenuCommand::CreateBlackBody: return "Black Body";
-    case MaterialEditorGraphMenuCommand::CreateNoise: return "Noise";
-    case MaterialEditorGraphMenuCommand::CreateVectorNoise: return "Vector Noise";
-    case MaterialEditorGraphMenuCommand::CreateSobol: return "Sobol";
-    case MaterialEditorGraphMenuCommand::CreateAppendVector: return "Append Vector";
-    case MaterialEditorGraphMenuCommand::CreateColorRamp: return "Color Ramp";
-    case MaterialEditorGraphMenuCommand::CreateAntialiasedTextureMask: return "Antialiased Mask";
-    case MaterialEditorGraphMenuCommand::CreateTransform: return "Transform";
-    case MaterialEditorGraphMenuCommand::CreateTransformPosition: return "Transform Position";
-    case MaterialEditorGraphMenuCommand::CreateDotProduct: return "Dot Product";
-    case MaterialEditorGraphMenuCommand::CreateCrossProduct: return "Cross Product";
-    case MaterialEditorGraphMenuCommand::CreateNormalize: return "Normalize";
-    case MaterialEditorGraphMenuCommand::CreateLength: return "Length";
-    case MaterialEditorGraphMenuCommand::CreateDistance: return "Distance";
-    case MaterialEditorGraphMenuCommand::CreateBreakVector: return "Break Vector";
-    case MaterialEditorGraphMenuCommand::CreateMakeVector: return "Make Vector";
-    case MaterialEditorGraphMenuCommand::CreateStep: return "Step";
-    case MaterialEditorGraphMenuCommand::CreateSmoothStep: return "Smooth Step";
-    case MaterialEditorGraphMenuCommand::CreateIf: return "If";
-    case MaterialEditorGraphMenuCommand::CreateSwitch: return "Switch";
-    case MaterialEditorGraphMenuCommand::CreateDesaturate: return "Desaturate";
-    case MaterialEditorGraphMenuCommand::CreateFresnel: return "Fresnel";
-    case MaterialEditorGraphMenuCommand::CreateNegate: return "Negate";
-    case MaterialEditorGraphMenuCommand::CreateSign: return "Sign";
-    case MaterialEditorGraphMenuCommand::CreateRound: return "Round";
-    case MaterialEditorGraphMenuCommand::CreateTruncate: return "Truncate";
-    case MaterialEditorGraphMenuCommand::CreateTangent: return "Tan";
-    case MaterialEditorGraphMenuCommand::CreateArcSine: return "Asin";
-    case MaterialEditorGraphMenuCommand::CreateArcCosine: return "Acos";
-    case MaterialEditorGraphMenuCommand::CreateArcTangent: return "Atan";
-    case MaterialEditorGraphMenuCommand::CreateArcTangent2: return "Atan2";
-    case MaterialEditorGraphMenuCommand::CreateArcSineFast: return "Asin Fast";
-    case MaterialEditorGraphMenuCommand::CreateArcCosineFast: return "Acos Fast";
-    case MaterialEditorGraphMenuCommand::CreateArcTangentFast: return "Atan Fast";
-    case MaterialEditorGraphMenuCommand::CreateArcTangent2Fast: return "Atan2 Fast";
-    case MaterialEditorGraphMenuCommand::CreateClamp: return "Clamp";
-    case MaterialEditorGraphMenuCommand::CreateLerp: return "Lerp";
-    case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return "Normal Unpack";
-    case MaterialEditorGraphMenuCommand::CreateTime: return "Time";
-    case MaterialEditorGraphMenuCommand::CreateDeltaTime: return "Delta Time";
-    case MaterialEditorGraphMenuCommand::CreateDynamicParameter: return "Dynamic Parameter";
-    case MaterialEditorGraphMenuCommand::CreateVertexColor: return "Vertex Color";
-    case MaterialEditorGraphMenuCommand::CreateScreenPosition: return "Screen Position";
-    case MaterialEditorGraphMenuCommand::CreatePixelPosition: return "Pixel Position";
-    case MaterialEditorGraphMenuCommand::CreateLocalPosition: return "Local Position";
-    case MaterialEditorGraphMenuCommand::CreateObjectPosition: return "Object Position";
-    case MaterialEditorGraphMenuCommand::CreateWorldPosition: return "World Position";
-    case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return "Per Instance Random";
-    case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount: return "Per Instance Fade Amount";
-    case MaterialEditorGraphMenuCommand::CreateDistanceCullFade: return "Distance Cull Fade";
-    case MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData: return "Per Instance Custom Data";
-    case MaterialEditorGraphMenuCommand::CreateObjectRadius: return "Object Radius";
-    case MaterialEditorGraphMenuCommand::CreateObjectBounds: return "Object Bounds";
-    case MaterialEditorGraphMenuCommand::CreateObjectOrientation: return "Object Orientation";
-    case MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition: return "Pre-Skinned Position";
-    case MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal: return "Pre-Skinned Normal";
-    case MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes: return "Make Material Attributes";
-    case MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes: return "Break Material Attributes";
-    case MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes: return "Blend Material Attributes";
-    case MaterialEditorGraphMenuCommand::CreateGetMaterialAttributes: return "Get Material Attributes";
-    case MaterialEditorGraphMenuCommand::CreateSetMaterialAttributes: return "Set Material Attributes";
-    case MaterialEditorGraphMenuCommand::CreateStaticBoolParameter: return "Static Bool Parameter";
-    case MaterialEditorGraphMenuCommand::CreateStaticSwitch: return "Static Switch";
-    case MaterialEditorGraphMenuCommand::CreateStaticComponentMask: return "Static Component Mask";
-    case MaterialEditorGraphMenuCommand::CreateQualitySwitch: return "Quality Switch";
-    case MaterialEditorGraphMenuCommand::CreateFeatureLevelSwitch: return "Feature Level Switch";
-    case MaterialEditorGraphMenuCommand::CreateShadingPathSwitch: return "Shading Path Switch";
-    case MaterialEditorGraphMenuCommand::CreateShaderStageSwitch: return "Shader Stage Switch";
-    case MaterialEditorGraphMenuCommand::CreateTextureCoordinate: return "Texture Coordinate";
-    case MaterialEditorGraphMenuCommand::CreatePanner: return "Panner";
-    case MaterialEditorGraphMenuCommand::CreateRotator: return "Rotator";
-    case MaterialEditorGraphMenuCommand::CreateBumpOffset: return "Bump Offset";
-    case MaterialEditorGraphMenuCommand::CreateConstantBiasScale: return "Constant Bias Scale";
-    case MaterialEditorGraphMenuCommand::CreateRotateAboutAxis: return "Rotate About Axis";
-    case MaterialEditorGraphMenuCommand::CreateViewportUV: return "Viewport UV";
-    case MaterialEditorGraphMenuCommand::CreateCameraPosition: return "Camera Position";
-    case MaterialEditorGraphMenuCommand::CreateCameraVector: return "Camera Vector";
-    case MaterialEditorGraphMenuCommand::CreateReflectionVector: return "Reflection Vector";
-    case MaterialEditorGraphMenuCommand::CreateLightVector: return "Light Vector";
-    case MaterialEditorGraphMenuCommand::CreatePixelNormalWS: return "Pixel Normal WS";
-    case MaterialEditorGraphMenuCommand::CreateVertexNormalWS: return "Vertex Normal WS";
-    case MaterialEditorGraphMenuCommand::CreateVertexTangentWS: return "Vertex Tangent WS";
-    case MaterialEditorGraphMenuCommand::CreateViewProperty: return "View Property";
-    case MaterialEditorGraphMenuCommand::CreateViewSize: return "View Size";
-    case MaterialEditorGraphMenuCommand::CreateTwoSidedSign: return "Two Sided Sign";
-    case MaterialEditorGraphMenuCommand::CreateSceneColor: return "Scene Color";
-    case MaterialEditorGraphMenuCommand::CreateSceneTexture: return "Scene Texture";
-    case MaterialEditorGraphMenuCommand::CreateSceneDepth: return "Scene Depth";
-    case MaterialEditorGraphMenuCommand::CreatePixelDepth: return "Pixel Depth";
-    case MaterialEditorGraphMenuCommand::CreateCameraDepthFade: return "Camera Depth Fade";
-    case MaterialEditorGraphMenuCommand::CreateDepthFade: return "Depth Fade";
-    case MaterialEditorGraphMenuCommand::CreateCustomCode: return "Custom Code";
-    case MaterialEditorGraphMenuCommand::CreateReroute: return "Reroute";
-    case MaterialEditorGraphMenuCommand::CreateNamedRerouteDeclaration: return "Named Reroute Declaration";
-    case MaterialEditorGraphMenuCommand::CreateNamedRerouteUsage: return "Named Reroute Usage";
-    case MaterialEditorGraphMenuCommand::CreateCompositeInput: return "Composite Input";
-    case MaterialEditorGraphMenuCommand::CreateCompositeOutput: return "Composite Output";
-    case MaterialEditorGraphMenuCommand::CreateFunctionInput: return "Function Input";
-    case MaterialEditorGraphMenuCommand::CreateFunctionOutput: return "Function Output";
-    case MaterialEditorGraphMenuCommand::CreateMaterialFunctionCall: return "Material Function Call";
-    case MaterialEditorGraphMenuCommand::CreateLayerStack: return "Layer Stack";
-    case MaterialEditorGraphMenuCommand::CreateComposite: return "Composite";
-    case MaterialEditorGraphMenuCommand::CreateComment: return "Comment Box";
-    case MaterialEditorGraphMenuCommand::FrameSelected: return "Frame Selected";
-    case MaterialEditorGraphMenuCommand::SelectUpstream: return "Select Upstream";
-    case MaterialEditorGraphMenuCommand::SelectDownstream: return "Select Downstream";
-    case MaterialEditorGraphMenuCommand::AlignLeft: return "Align Left";
-    case MaterialEditorGraphMenuCommand::AlignCenter: return "Align Center";
-    case MaterialEditorGraphMenuCommand::AlignRight: return "Align Right";
-    case MaterialEditorGraphMenuCommand::AlignTop: return "Align Top";
-    case MaterialEditorGraphMenuCommand::AlignMiddle: return "Align Middle";
-    case MaterialEditorGraphMenuCommand::AlignBottom: return "Align Bottom";
-    case MaterialEditorGraphMenuCommand::DistributeHorizontal: return "Distribute Horizontal";
-    case MaterialEditorGraphMenuCommand::DistributeVertical: return "Distribute Vertical";
-    case MaterialEditorGraphMenuCommand::PromoteToParameter: return "Promote to Parameter";
-    case MaterialEditorGraphMenuCommand::DisconnectSelected: return "Disconnect Selected Links";
-    case MaterialEditorGraphMenuCommand::DeleteSelected: return "Delete Selected";
+    case MaterialEditorGraphMenuCommand::CreateTextureSample: return EditorText("materialEditor.palette.createTextureSample", "Texture Sample");
+    case MaterialEditorGraphMenuCommand::CreateTextureParameter: return EditorText("materialEditor.palette.createTextureParameter", "Texture Parameter");
+    case MaterialEditorGraphMenuCommand::CreateTextureObject: return EditorText("materialEditor.palette.createTextureObject", "Texture Object");
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleCube: return EditorText("materialEditor.palette.createTextureSampleCube", "Texture Sample Cube");
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectCube: return EditorText("materialEditor.palette.createTextureObjectCube", "Texture Object Cube");
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleVolume: return EditorText("materialEditor.palette.createTextureSampleVolume", "Texture Sample Volume");
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectVolume: return EditorText("materialEditor.palette.createTextureObjectVolume", "Texture Object Volume");
+    case MaterialEditorGraphMenuCommand::CreateTextureSample2DArray: return EditorText("materialEditor.palette.createTextureSample2DArray", "Texture Sample 2D Array");
+    case MaterialEditorGraphMenuCommand::CreateTextureObject2DArray: return EditorText("materialEditor.palette.createTextureObject2DArray", "Texture Object 2D Array");
+    case MaterialEditorGraphMenuCommand::CreateUv: return EditorText("materialEditor.palette.createUv", "UV");
+    case MaterialEditorGraphMenuCommand::CreateScalar: return EditorText("materialEditor.palette.createScalar", "Constant Scalar");
+    case MaterialEditorGraphMenuCommand::CreateBool: return EditorText("materialEditor.palette.createBool", "Constant Bool");
+    case MaterialEditorGraphMenuCommand::CreateVector2: return EditorText("materialEditor.palette.createVector2", "Constant2Vector (XY)");
+    case MaterialEditorGraphMenuCommand::CreateVector: return EditorText("materialEditor.palette.createVector", "Constant3Vector (RGB)");
+    case MaterialEditorGraphMenuCommand::CreateColor: return EditorText("materialEditor.palette.createColor", "Constant4Vector (RGBA)");
+    case MaterialEditorGraphMenuCommand::CreateScalarParameter: return EditorText("materialEditor.palette.createScalarParameter", "Scalar Parameter");
+    case MaterialEditorGraphMenuCommand::CreateVectorParameter: return EditorText("materialEditor.palette.createVectorParameter", "Vector Parameter");
+    case MaterialEditorGraphMenuCommand::CreateColorParameter: return EditorText("materialEditor.palette.createColorParameter", "Color Parameter");
+    case MaterialEditorGraphMenuCommand::CreateCollectionParameter: return EditorText("materialEditor.palette.createCollectionParameter", "Collection Parameter");
+    case MaterialEditorGraphMenuCommand::CreateAdd: return EditorText("materialEditor.palette.createAdd", "Add");
+    case MaterialEditorGraphMenuCommand::CreateSubtract: return EditorText("materialEditor.palette.createSubtract", "Subtract");
+    case MaterialEditorGraphMenuCommand::CreateMultiply: return EditorText("materialEditor.palette.createMultiply", "Multiply");
+    case MaterialEditorGraphMenuCommand::CreateDivide: return EditorText("materialEditor.palette.createDivide", "Divide");
+    case MaterialEditorGraphMenuCommand::CreatePower: return EditorText("materialEditor.palette.createPower", "Power");
+    case MaterialEditorGraphMenuCommand::CreateOneMinus: return EditorText("materialEditor.palette.createOneMinus", "One Minus");
+    case MaterialEditorGraphMenuCommand::CreateAbsolute: return EditorText("materialEditor.palette.createAbsolute", "Abs");
+    case MaterialEditorGraphMenuCommand::CreateMinimum: return EditorText("materialEditor.palette.createMinimum", "Min");
+    case MaterialEditorGraphMenuCommand::CreateMaximum: return EditorText("materialEditor.palette.createMaximum", "Max");
+    case MaterialEditorGraphMenuCommand::CreateSaturate: return EditorText("materialEditor.palette.createSaturate", "Saturate");
+    case MaterialEditorGraphMenuCommand::CreateFloor: return EditorText("materialEditor.palette.createFloor", "Floor");
+    case MaterialEditorGraphMenuCommand::CreateCeil: return EditorText("materialEditor.palette.createCeil", "Ceil");
+    case MaterialEditorGraphMenuCommand::CreateFraction: return EditorText("materialEditor.palette.createFraction", "Frac");
+    case MaterialEditorGraphMenuCommand::CreateSquareRoot: return EditorText("materialEditor.palette.createSquareRoot", "Sqrt");
+    case MaterialEditorGraphMenuCommand::CreateSine: return EditorText("materialEditor.palette.createSine", "Sin");
+    case MaterialEditorGraphMenuCommand::CreateCosine: return EditorText("materialEditor.palette.createCosine", "Cos");
+    case MaterialEditorGraphMenuCommand::CreateExponential: return EditorText("materialEditor.palette.createExponential", "Exp");
+    case MaterialEditorGraphMenuCommand::CreateExponential2: return EditorText("materialEditor.palette.createExponential2", "Exp2");
+    case MaterialEditorGraphMenuCommand::CreateLogarithm: return EditorText("materialEditor.palette.createLogarithm", "Log");
+    case MaterialEditorGraphMenuCommand::CreateLogarithm2: return EditorText("materialEditor.palette.createLogarithm2", "Log2");
+    case MaterialEditorGraphMenuCommand::CreateSrgbToLinear: return EditorText("materialEditor.palette.createSrgbToLinear", "sRGB to Linear");
+    case MaterialEditorGraphMenuCommand::CreateLinearToSrgb: return EditorText("materialEditor.palette.createLinearToSrgb", "Linear to sRGB");
+    case MaterialEditorGraphMenuCommand::CreateLogarithm10: return EditorText("materialEditor.palette.createLogarithm10", "Log10");
+    case MaterialEditorGraphMenuCommand::CreateHsvToRgb: return EditorText("materialEditor.palette.createHsvToRgb", "HSV to RGB");
+    case MaterialEditorGraphMenuCommand::CreateRgbToHsv: return EditorText("materialEditor.palette.createRgbToHsv", "RGB to HSV");
+    case MaterialEditorGraphMenuCommand::CreateDeriveNormalZ: return EditorText("materialEditor.palette.createDeriveNormalZ", "Derive Normal Z");
+    case MaterialEditorGraphMenuCommand::CreateFmod: return EditorText("materialEditor.palette.createFmod", "Fmod");
+    case MaterialEditorGraphMenuCommand::CreateInverseLerp: return EditorText("materialEditor.palette.createInverseLerp", "Inverse Lerp");
+    case MaterialEditorGraphMenuCommand::CreatePartialDerivativeX: return EditorText("materialEditor.palette.createPartialDerivativeX", "DDX");
+    case MaterialEditorGraphMenuCommand::CreatePartialDerivativeY: return EditorText("materialEditor.palette.createPartialDerivativeY", "DDY");
+    case MaterialEditorGraphMenuCommand::CreateSphereMask: return EditorText("materialEditor.palette.createSphereMask", "Sphere Mask");
+    case MaterialEditorGraphMenuCommand::CreateBlackBody: return EditorText("materialEditor.palette.createBlackBody", "Black Body");
+    case MaterialEditorGraphMenuCommand::CreateNoise: return EditorText("materialEditor.palette.createNoise", "Noise");
+    case MaterialEditorGraphMenuCommand::CreateVectorNoise: return EditorText("materialEditor.palette.createVectorNoise", "Vector Noise");
+    case MaterialEditorGraphMenuCommand::CreateSobol: return EditorText("materialEditor.palette.createSobol", "Sobol");
+    case MaterialEditorGraphMenuCommand::CreateAppendVector: return EditorText("materialEditor.palette.createAppendVector", "Append Vector");
+    case MaterialEditorGraphMenuCommand::CreateColorRamp: return EditorText("materialEditor.palette.createColorRamp", "Color Ramp");
+    case MaterialEditorGraphMenuCommand::CreateAntialiasedTextureMask: return EditorText("materialEditor.palette.createAntialiasedTextureMask", "Antialiased Mask");
+    case MaterialEditorGraphMenuCommand::CreateTransform: return EditorText("materialEditor.palette.createTransform", "Transform");
+    case MaterialEditorGraphMenuCommand::CreateTransformPosition: return EditorText("materialEditor.palette.createTransformPosition", "Transform Position");
+    case MaterialEditorGraphMenuCommand::CreateDotProduct: return EditorText("materialEditor.palette.createDotProduct", "Dot Product");
+    case MaterialEditorGraphMenuCommand::CreateCrossProduct: return EditorText("materialEditor.palette.createCrossProduct", "Cross Product");
+    case MaterialEditorGraphMenuCommand::CreateNormalize: return EditorText("materialEditor.palette.createNormalize", "Normalize");
+    case MaterialEditorGraphMenuCommand::CreateLength: return EditorText("materialEditor.palette.createLength", "Length");
+    case MaterialEditorGraphMenuCommand::CreateDistance: return EditorText("materialEditor.palette.createDistance", "Distance");
+    case MaterialEditorGraphMenuCommand::CreateBreakVector: return EditorText("materialEditor.palette.createBreakVector", "Break Vector");
+    case MaterialEditorGraphMenuCommand::CreateMakeVector: return EditorText("materialEditor.palette.createMakeVector", "Make Vector");
+    case MaterialEditorGraphMenuCommand::CreateStep: return EditorText("materialEditor.palette.createStep", "Step");
+    case MaterialEditorGraphMenuCommand::CreateSmoothStep: return EditorText("materialEditor.palette.createSmoothStep", "Smooth Step");
+    case MaterialEditorGraphMenuCommand::CreateIf: return EditorText("materialEditor.palette.createIf", "If");
+    case MaterialEditorGraphMenuCommand::CreateSwitch: return EditorText("materialEditor.palette.createSwitch", "Switch");
+    case MaterialEditorGraphMenuCommand::CreateDesaturate: return EditorText("materialEditor.palette.createDesaturate", "Desaturate");
+    case MaterialEditorGraphMenuCommand::CreateFresnel: return EditorText("materialEditor.palette.createFresnel", "Fresnel");
+    case MaterialEditorGraphMenuCommand::CreateNegate: return EditorText("materialEditor.palette.createNegate", "Negate");
+    case MaterialEditorGraphMenuCommand::CreateSign: return EditorText("materialEditor.palette.createSign", "Sign");
+    case MaterialEditorGraphMenuCommand::CreateRound: return EditorText("materialEditor.palette.createRound", "Round");
+    case MaterialEditorGraphMenuCommand::CreateTruncate: return EditorText("materialEditor.palette.createTruncate", "Truncate");
+    case MaterialEditorGraphMenuCommand::CreateTangent: return EditorText("materialEditor.palette.createTangent", "Tan");
+    case MaterialEditorGraphMenuCommand::CreateArcSine: return EditorText("materialEditor.palette.createArcSine", "Asin");
+    case MaterialEditorGraphMenuCommand::CreateArcCosine: return EditorText("materialEditor.palette.createArcCosine", "Acos");
+    case MaterialEditorGraphMenuCommand::CreateArcTangent: return EditorText("materialEditor.palette.createArcTangent", "Atan");
+    case MaterialEditorGraphMenuCommand::CreateArcTangent2: return EditorText("materialEditor.palette.createArcTangent2", "Atan2");
+    case MaterialEditorGraphMenuCommand::CreateArcSineFast: return EditorText("materialEditor.palette.createArcSineFast", "Asin Fast");
+    case MaterialEditorGraphMenuCommand::CreateArcCosineFast: return EditorText("materialEditor.palette.createArcCosineFast", "Acos Fast");
+    case MaterialEditorGraphMenuCommand::CreateArcTangentFast: return EditorText("materialEditor.palette.createArcTangentFast", "Atan Fast");
+    case MaterialEditorGraphMenuCommand::CreateArcTangent2Fast: return EditorText("materialEditor.palette.createArcTangent2Fast", "Atan2 Fast");
+    case MaterialEditorGraphMenuCommand::CreateClamp: return EditorText("materialEditor.palette.createClamp", "Clamp");
+    case MaterialEditorGraphMenuCommand::CreateLerp: return EditorText("materialEditor.palette.createLerp", "Lerp");
+    case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return EditorText("materialEditor.palette.createNormalUnpack", "Normal Unpack");
+    case MaterialEditorGraphMenuCommand::CreateTime: return EditorText("materialEditor.palette.createTime", "Time");
+    case MaterialEditorGraphMenuCommand::CreateDeltaTime: return EditorText("materialEditor.palette.createDeltaTime", "Delta Time");
+    case MaterialEditorGraphMenuCommand::CreateDynamicParameter: return EditorText("materialEditor.palette.createDynamicParameter", "Dynamic Parameter");
+    case MaterialEditorGraphMenuCommand::CreateVertexColor: return EditorText("materialEditor.palette.createVertexColor", "Vertex Color");
+    case MaterialEditorGraphMenuCommand::CreateScreenPosition: return EditorText("materialEditor.palette.createScreenPosition", "Screen Position");
+    case MaterialEditorGraphMenuCommand::CreatePixelPosition: return EditorText("materialEditor.palette.createPixelPosition", "Pixel Position");
+    case MaterialEditorGraphMenuCommand::CreateLocalPosition: return EditorText("materialEditor.palette.createLocalPosition", "Local Position");
+    case MaterialEditorGraphMenuCommand::CreateObjectPosition: return EditorText("materialEditor.palette.createObjectPosition", "Object Position");
+    case MaterialEditorGraphMenuCommand::CreateWorldPosition: return EditorText("materialEditor.palette.createWorldPosition", "World Position");
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return EditorText("materialEditor.palette.createPerInstanceRandom", "Per Instance Random");
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount: return EditorText("materialEditor.palette.createPerInstanceFadeAmount", "Per Instance Fade Amount");
+    case MaterialEditorGraphMenuCommand::CreateDistanceCullFade: return EditorText("materialEditor.palette.createDistanceCullFade", "Distance Cull Fade");
+    case MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture: return EditorText("materialEditor.palette.createWorldAlignedTexture", "World Aligned Texture");
+    case MaterialEditorGraphMenuCommand::CreateParallaxOcclusionMapping: return EditorText("materialEditor.palette.createParallaxOcclusionMapping", "Parallax Occlusion Mapping");
+    case MaterialEditorGraphMenuCommand::CreateFlipBook: return EditorText("materialEditor.palette.createFlipBook", "FlipBook");
+    case MaterialEditorGraphMenuCommand::CreateCheckerboard: return EditorText("materialEditor.palette.createCheckerboard", "Checkerboard");
+    case MaterialEditorGraphMenuCommand::CreatePolarCoordinates: return EditorText("materialEditor.palette.createPolarCoordinates", "Polar Coordinates");
+    case MaterialEditorGraphMenuCommand::CreateTwirl: return EditorText("materialEditor.palette.createTwirl", "Twirl");
+    case MaterialEditorGraphMenuCommand::CreateEllipse: return EditorText("materialEditor.palette.createEllipse", "Ellipse");
+    case MaterialEditorGraphMenuCommand::CreateRectangle: return EditorText("materialEditor.palette.createRectangle", "Rectangle");
+    case MaterialEditorGraphMenuCommand::CreateRoundedRectangle: return EditorText("materialEditor.palette.createRoundedRectangle", "Rounded Rectangle");
+    case MaterialEditorGraphMenuCommand::CreateBlendOverlay: return EditorText("materialEditor.palette.createBlendOverlay", "Blend Overlay");
+    case MaterialEditorGraphMenuCommand::CreateBlendScreen: return EditorText("materialEditor.palette.createBlendScreen", "Blend Screen");
+    case MaterialEditorGraphMenuCommand::CreateBlendSoftLight: return EditorText("materialEditor.palette.createBlendSoftLight", "Blend Soft Light");
+    case MaterialEditorGraphMenuCommand::CreateBlendHardLight: return EditorText("materialEditor.palette.createBlendHardLight", "Blend Hard Light");
+    case MaterialEditorGraphMenuCommand::CreateBlendLinearLight: return EditorText("materialEditor.palette.createBlendLinearLight", "Blend Linear Light");
+    case MaterialEditorGraphMenuCommand::CreateBlendColorBurn: return EditorText("materialEditor.palette.createBlendColorBurn", "Blend Color Burn");
+    case MaterialEditorGraphMenuCommand::CreateBlendColorDodge: return EditorText("materialEditor.palette.createBlendColorDodge", "Blend Color Dodge");
+    case MaterialEditorGraphMenuCommand::CreateBlendDarken: return EditorText("materialEditor.palette.createBlendDarken", "Blend Darken");
+    case MaterialEditorGraphMenuCommand::CreateBlendLighten: return EditorText("materialEditor.palette.createBlendLighten", "Blend Lighten");
+    case MaterialEditorGraphMenuCommand::CreateBlendDifference: return EditorText("materialEditor.palette.createBlendDifference", "Blend Difference");
+    case MaterialEditorGraphMenuCommand::CreateContrast: return EditorText("materialEditor.palette.createContrast", "Contrast");
+    case MaterialEditorGraphMenuCommand::CreateHueShift: return EditorText("materialEditor.palette.createHueShift", "Hue Shift");
+    case MaterialEditorGraphMenuCommand::CreateChannelMixer: return EditorText("materialEditor.palette.createChannelMixer", "Channel Mixer");
+    case MaterialEditorGraphMenuCommand::CreateRemapValueRange: return EditorText("materialEditor.palette.createRemapValueRange", "Remap Value Range");
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData: return EditorText("materialEditor.palette.createPerInstanceCustomData", "Per Instance Custom Data");
+    case MaterialEditorGraphMenuCommand::CreateObjectRadius: return EditorText("materialEditor.palette.createObjectRadius", "Object Radius");
+    case MaterialEditorGraphMenuCommand::CreateObjectBounds: return EditorText("materialEditor.palette.createObjectBounds", "Object Bounds");
+    case MaterialEditorGraphMenuCommand::CreateObjectOrientation: return EditorText("materialEditor.palette.createObjectOrientation", "Object Orientation");
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition: return EditorText("materialEditor.palette.createPreSkinnedPosition", "Pre-Skinned Position");
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal: return EditorText("materialEditor.palette.createPreSkinnedNormal", "Pre-Skinned Normal");
+    case MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes: return EditorText("materialEditor.palette.createMakeMaterialAttributes", "Make Material Attributes");
+    case MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes: return EditorText("materialEditor.palette.createBreakMaterialAttributes", "Break Material Attributes");
+    case MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes: return EditorText("materialEditor.palette.createBlendMaterialAttributes", "Blend Material Attributes");
+    case MaterialEditorGraphMenuCommand::CreateGetMaterialAttributes: return EditorText("materialEditor.palette.createGetMaterialAttributes", "Get Material Attributes");
+    case MaterialEditorGraphMenuCommand::CreateSetMaterialAttributes: return EditorText("materialEditor.palette.createSetMaterialAttributes", "Set Material Attributes");
+    case MaterialEditorGraphMenuCommand::CreateStaticBoolParameter: return EditorText("materialEditor.palette.createStaticBoolParameter", "Static Bool Parameter");
+    case MaterialEditorGraphMenuCommand::CreateStaticSwitch: return EditorText("materialEditor.palette.createStaticSwitch", "Static Switch");
+    case MaterialEditorGraphMenuCommand::CreateStaticComponentMask: return EditorText("materialEditor.palette.createStaticComponentMask", "Static Component Mask");
+    case MaterialEditorGraphMenuCommand::CreateQualitySwitch: return EditorText("materialEditor.palette.createQualitySwitch", "Quality Switch");
+    case MaterialEditorGraphMenuCommand::CreateFeatureLevelSwitch: return EditorText("materialEditor.palette.createFeatureLevelSwitch", "Feature Level Switch");
+    case MaterialEditorGraphMenuCommand::CreateShadingPathSwitch: return EditorText("materialEditor.palette.createShadingPathSwitch", "Shading Path Switch");
+    case MaterialEditorGraphMenuCommand::CreateShaderStageSwitch: return EditorText("materialEditor.palette.createShaderStageSwitch", "Shader Stage Switch");
+    case MaterialEditorGraphMenuCommand::CreateTextureCoordinate: return EditorText("materialEditor.palette.createTextureCoordinate", "Texture Coordinate");
+    case MaterialEditorGraphMenuCommand::CreatePanner: return EditorText("materialEditor.palette.createPanner", "Panner");
+    case MaterialEditorGraphMenuCommand::CreateRotator: return EditorText("materialEditor.palette.createRotator", "Rotator");
+    case MaterialEditorGraphMenuCommand::CreateBumpOffset: return EditorText("materialEditor.palette.createBumpOffset", "Bump Offset");
+    case MaterialEditorGraphMenuCommand::CreateConstantBiasScale: return EditorText("materialEditor.palette.createConstantBiasScale", "Constant Bias Scale");
+    case MaterialEditorGraphMenuCommand::CreateRotateAboutAxis: return EditorText("materialEditor.palette.createRotateAboutAxis", "Rotate About Axis");
+    case MaterialEditorGraphMenuCommand::CreateViewportUV: return EditorText("materialEditor.palette.createViewportUV", "Viewport UV");
+    case MaterialEditorGraphMenuCommand::CreateCameraPosition: return EditorText("materialEditor.palette.createCameraPosition", "Camera Position");
+    case MaterialEditorGraphMenuCommand::CreateCameraVector: return EditorText("materialEditor.palette.createCameraVector", "Camera Vector");
+    case MaterialEditorGraphMenuCommand::CreateReflectionVector: return EditorText("materialEditor.palette.createReflectionVector", "Reflection Vector");
+    case MaterialEditorGraphMenuCommand::CreateLightVector: return EditorText("materialEditor.palette.createLightVector", "Light Vector");
+    case MaterialEditorGraphMenuCommand::CreatePixelNormalWS: return EditorText("materialEditor.palette.createPixelNormalWS", "Pixel Normal WS");
+    case MaterialEditorGraphMenuCommand::CreateVertexNormalWS: return EditorText("materialEditor.palette.createVertexNormalWS", "Vertex Normal WS");
+    case MaterialEditorGraphMenuCommand::CreateVertexTangentWS: return EditorText("materialEditor.palette.createVertexTangentWS", "Vertex Tangent WS");
+    case MaterialEditorGraphMenuCommand::CreateViewProperty: return EditorText("materialEditor.palette.createViewProperty", "View Property");
+    case MaterialEditorGraphMenuCommand::CreateViewSize: return EditorText("materialEditor.palette.createViewSize", "View Size");
+    case MaterialEditorGraphMenuCommand::CreateTwoSidedSign: return EditorText("materialEditor.palette.createTwoSidedSign", "Two Sided Sign");
+    case MaterialEditorGraphMenuCommand::CreateSceneColor: return EditorText("materialEditor.palette.createSceneColor", "Scene Color");
+    case MaterialEditorGraphMenuCommand::CreateSceneTexture: return EditorText("materialEditor.palette.createSceneTexture", "Scene Texture");
+    case MaterialEditorGraphMenuCommand::CreateSceneDepth: return EditorText("materialEditor.palette.createSceneDepth", "Scene Depth");
+    case MaterialEditorGraphMenuCommand::CreatePixelDepth: return EditorText("materialEditor.palette.createPixelDepth", "Pixel Depth");
+    case MaterialEditorGraphMenuCommand::CreateCameraDepthFade: return EditorText("materialEditor.palette.createCameraDepthFade", "Camera Depth Fade");
+    case MaterialEditorGraphMenuCommand::CreateDepthFade: return EditorText("materialEditor.palette.createDepthFade", "Depth Fade");
+    case MaterialEditorGraphMenuCommand::CreateCustomCode: return EditorText("materialEditor.palette.createCustomCode", "Custom Code");
+    case MaterialEditorGraphMenuCommand::CreateReroute: return EditorText("materialEditor.palette.createReroute", "Reroute");
+    case MaterialEditorGraphMenuCommand::CreateNamedRerouteDeclaration: return EditorText("materialEditor.palette.createNamedRerouteDeclaration", "Named Reroute Declaration");
+    case MaterialEditorGraphMenuCommand::CreateNamedRerouteUsage: return EditorText("materialEditor.palette.createNamedRerouteUsage", "Named Reroute Usage");
+    case MaterialEditorGraphMenuCommand::CreateCompositeInput: return EditorText("materialEditor.palette.createCompositeInput", "Composite Input");
+    case MaterialEditorGraphMenuCommand::CreateCompositeOutput: return EditorText("materialEditor.palette.createCompositeOutput", "Composite Output");
+    case MaterialEditorGraphMenuCommand::CreateFunctionInput: return EditorText("materialEditor.palette.createFunctionInput", "Function Input");
+    case MaterialEditorGraphMenuCommand::CreateFunctionOutput: return EditorText("materialEditor.palette.createFunctionOutput", "Function Output");
+    case MaterialEditorGraphMenuCommand::CreateMaterialFunctionCall: return EditorText("materialEditor.palette.createMaterialFunctionCall", "Material Function Call");
+    case MaterialEditorGraphMenuCommand::CreateLayerStack: return EditorText("materialEditor.palette.createLayerStack", "Layer Stack");
+    case MaterialEditorGraphMenuCommand::CreateComposite: return EditorText("materialEditor.palette.createComposite", "Composite");
+    case MaterialEditorGraphMenuCommand::CreateComment: return EditorText("materialEditor.palette.createComment", "Comment Box");
+    case MaterialEditorGraphMenuCommand::FrameSelected: return EditorText("materialEditor.palette.frameSelected", "Frame Selected");
+    case MaterialEditorGraphMenuCommand::SelectUpstream: return EditorText("materialEditor.palette.selectUpstream", "Select Upstream");
+    case MaterialEditorGraphMenuCommand::SelectDownstream: return EditorText("materialEditor.palette.selectDownstream", "Select Downstream");
+    case MaterialEditorGraphMenuCommand::AlignLeft: return EditorText("materialEditor.palette.alignLeft", "Align Left");
+    case MaterialEditorGraphMenuCommand::AlignCenter: return EditorText("materialEditor.palette.alignCenter", "Align Center");
+    case MaterialEditorGraphMenuCommand::AlignRight: return EditorText("materialEditor.palette.alignRight", "Align Right");
+    case MaterialEditorGraphMenuCommand::AlignTop: return EditorText("materialEditor.palette.alignTop", "Align Top");
+    case MaterialEditorGraphMenuCommand::AlignMiddle: return EditorText("materialEditor.palette.alignMiddle", "Align Middle");
+    case MaterialEditorGraphMenuCommand::AlignBottom: return EditorText("materialEditor.palette.alignBottom", "Align Bottom");
+    case MaterialEditorGraphMenuCommand::DistributeHorizontal: return EditorText("materialEditor.palette.distributeHorizontal", "Distribute Horizontal");
+    case MaterialEditorGraphMenuCommand::DistributeVertical: return EditorText("materialEditor.palette.distributeVertical", "Distribute Vertical");
+    case MaterialEditorGraphMenuCommand::PromoteToParameter: return EditorText("materialEditor.palette.promoteToParameter", "Promote to Parameter");
+    case MaterialEditorGraphMenuCommand::DisconnectSelected: return EditorText("materialEditor.palette.disconnectSelected", "Disconnect Selected Links");
+    case MaterialEditorGraphMenuCommand::DeleteSelected: return EditorText("materialEditor.palette.deleteSelected", "Delete Selected");
     case MaterialEditorGraphMenuCommand::None: return "";
     }
     return "";
@@ -3403,6 +3443,29 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return kb::render::RenderMaterialGraphNodeKind::PerInstanceRandom;
     case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount: return kb::render::RenderMaterialGraphNodeKind::PerInstanceFadeAmount;
     case MaterialEditorGraphMenuCommand::CreateDistanceCullFade: return kb::render::RenderMaterialGraphNodeKind::DistanceCullFade;
+    case MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture: return kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture;
+    case MaterialEditorGraphMenuCommand::CreateParallaxOcclusionMapping: return kb::render::RenderMaterialGraphNodeKind::ParallaxOcclusionMapping;
+    case MaterialEditorGraphMenuCommand::CreateFlipBook: return kb::render::RenderMaterialGraphNodeKind::FlipBook;
+    case MaterialEditorGraphMenuCommand::CreateCheckerboard: return kb::render::RenderMaterialGraphNodeKind::Checkerboard;
+    case MaterialEditorGraphMenuCommand::CreatePolarCoordinates: return kb::render::RenderMaterialGraphNodeKind::PolarCoordinates;
+    case MaterialEditorGraphMenuCommand::CreateTwirl: return kb::render::RenderMaterialGraphNodeKind::Twirl;
+    case MaterialEditorGraphMenuCommand::CreateEllipse: return kb::render::RenderMaterialGraphNodeKind::Ellipse;
+    case MaterialEditorGraphMenuCommand::CreateRectangle: return kb::render::RenderMaterialGraphNodeKind::Rectangle;
+    case MaterialEditorGraphMenuCommand::CreateRoundedRectangle: return kb::render::RenderMaterialGraphNodeKind::RoundedRectangle;
+    case MaterialEditorGraphMenuCommand::CreateBlendOverlay: return kb::render::RenderMaterialGraphNodeKind::BlendOverlay;
+    case MaterialEditorGraphMenuCommand::CreateBlendScreen: return kb::render::RenderMaterialGraphNodeKind::BlendScreen;
+    case MaterialEditorGraphMenuCommand::CreateBlendSoftLight: return kb::render::RenderMaterialGraphNodeKind::BlendSoftLight;
+    case MaterialEditorGraphMenuCommand::CreateBlendHardLight: return kb::render::RenderMaterialGraphNodeKind::BlendHardLight;
+    case MaterialEditorGraphMenuCommand::CreateBlendLinearLight: return kb::render::RenderMaterialGraphNodeKind::BlendLinearLight;
+    case MaterialEditorGraphMenuCommand::CreateBlendColorBurn: return kb::render::RenderMaterialGraphNodeKind::BlendColorBurn;
+    case MaterialEditorGraphMenuCommand::CreateBlendColorDodge: return kb::render::RenderMaterialGraphNodeKind::BlendColorDodge;
+    case MaterialEditorGraphMenuCommand::CreateBlendDarken: return kb::render::RenderMaterialGraphNodeKind::BlendDarken;
+    case MaterialEditorGraphMenuCommand::CreateBlendLighten: return kb::render::RenderMaterialGraphNodeKind::BlendLighten;
+    case MaterialEditorGraphMenuCommand::CreateBlendDifference: return kb::render::RenderMaterialGraphNodeKind::BlendDifference;
+    case MaterialEditorGraphMenuCommand::CreateContrast: return kb::render::RenderMaterialGraphNodeKind::Contrast;
+    case MaterialEditorGraphMenuCommand::CreateHueShift: return kb::render::RenderMaterialGraphNodeKind::HueShift;
+    case MaterialEditorGraphMenuCommand::CreateChannelMixer: return kb::render::RenderMaterialGraphNodeKind::ChannelMixer;
+    case MaterialEditorGraphMenuCommand::CreateRemapValueRange: return kb::render::RenderMaterialGraphNodeKind::RemapValueRange;
     case MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData: return kb::render::RenderMaterialGraphNodeKind::PerInstanceCustomData;
     case MaterialEditorGraphMenuCommand::CreateObjectRadius: return kb::render::RenderMaterialGraphNodeKind::ObjectRadius;
     case MaterialEditorGraphMenuCommand::CreateObjectBounds: return kb::render::RenderMaterialGraphNodeKind::ObjectBounds;
@@ -3550,6 +3613,37 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
     }
     if (command == MaterialEditorGraphMenuCommand::CreatePixelPosition) {
         haystack += " pixel position viewport pixel screen pixel absolute coordinate coordinates fragcoord";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateNoise) {
+        // Unreal's Noise functions, so typing Voronoi or Simplex finds the node that has them.
+        haystack += " simplex gradient perlin value voronoi cellular worley turbulence fractal levels octaves";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture) {
+        haystack += " triplanar tri planar world aligned box projection worldalignedtexture";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateParallaxOcclusionMapping) {
+        haystack += " pom parallax occlusion height map relief bump offset";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateFlipBook) {
+        haystack += " flipbook flip book sprite sheet subuv animation frames";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateRemapValueRange) {
+        haystack += " remap range map range remapvaluerange fit";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateHueShift) {
+        haystack += " hue shift rotate hue color adjustment hueshift";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateBlendOverlay ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendScreen ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendSoftLight ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendHardLight ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendLinearLight ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendColorBurn ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendColorDodge ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendDarken ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendLighten ||
+        command == MaterialEditorGraphMenuCommand::CreateBlendDifference) {
+        haystack += " blend mode blend_ blendfunctions layer photoshop";
     }
     if (command == MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount) {
         haystack += " per instance fade amount perinstancefade lod fade instance fade";

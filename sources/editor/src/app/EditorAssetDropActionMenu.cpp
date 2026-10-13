@@ -1,4 +1,6 @@
 #include "app/EditorAssetDropActionMenu.hpp"
+#include "localization/EditorLocalization.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #if defined(_WIN32)
 
@@ -16,8 +18,8 @@ EditorAssetDropAction EditorAssetDropActionMenu::Show(HWND window, int x, int y)
         return EditorAssetDropAction::None;
     }
 
-    AppendMenuA(menu, MF_STRING, kDropActionMoveHere, "Move Here");
-    AppendMenuA(menu, MF_STRING, kDropActionCopyHere, "Copy Here");
+    kb::editor::AppendMenuUtf8(menu, MF_STRING, kDropActionMoveHere, std::string{ EditorText("projectFiles.moveHere", "Move Here") }.c_str());
+    kb::editor::AppendMenuUtf8(menu, MF_STRING, kDropActionCopyHere, std::string{ EditorText("projectFiles.copyHere", "Copy Here") }.c_str());
 
     POINT screenPoint{ x, y };
     ClientToScreen(window, &screenPoint);

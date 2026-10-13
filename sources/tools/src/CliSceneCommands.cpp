@@ -1,12 +1,19 @@
 #include "CliCommands.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/project/ProjectManager.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneTemplates.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
+#if KB_CLI_RENDERER
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
+#endif
 
 #include <optional>
 #include <string>
@@ -75,32 +82,14 @@ namespace {
         }
         summary += name;
     };
-    if (node.components.camera.has_value()) {
-        append("Camera");
-    }
-    if (node.components.meshRenderer.has_value()) {
-        append("MeshRenderer");
-    }
-    if (node.components.light.has_value()) {
-        append("Light");
+    // The same component table the Inspector and `kb_cli component` use.
+    for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
+        if (kb::scene::SceneComponentAuthoring::InPrefabNode(node.components, kind.id)) {
+            append(kind.id);
+        }
     }
     if (node.components.input.has_value()) {
         append("Input");
-    }
-    if (node.components.rigidbody.has_value()) {
-        append("Rigidbody");
-    }
-    if (node.components.collider.has_value()) {
-        append("Collider");
-    }
-    if (node.components.tags.has_value()) {
-        append("Tags");
-    }
-    if (node.components.audioSource.has_value()) {
-        append("AudioSource");
-    }
-    if (node.components.audioListener.has_value()) {
-        append("AudioListener");
     }
     for (const auto& descriptor : kb::scene::UIComponentCatalog()) {
         if (kb::scene::HasUIComponent(node.components.ui, descriptor.type)) {
@@ -122,8 +111,13 @@ struct SceneFileResolution {
     const ArgumentList& arguments,
     kb::scene::Scene* mountedScene) {
     SceneFileResolution resolution;
-    const std::optional<std::string> sceneOption = arguments.Option("--scene");
-    if (!sceneOption.has_value()) {
+    std::optional<std::string> sceneOption = arguments.Option("--scene");
+    if (!sceneOption.has_value() && arguments.Option("--project").has_value()) {
+        // Like entity/component: without --scene, the scene the game starts in.
+        sceneOption = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(*arguments.Option("--project"))).settings.defaultMap;
+    }
+    if (!sceneOption.has_value() || sceneOption->empty()) {
         resolution.error = "missing required option --scene <path>";
         return resolution;
     }
@@ -142,7 +136,10 @@ struct SceneFileResolution {
         }
         resolution.path = metadata->physicalPath;
     } else {
-        resolution.path = ResolveInputPath(*sceneOption, projectRoot);
+        resolution.path = ResolveProjectFile(*sceneOption, projectRoot, resolution.error);
+        if (resolution.path.empty()) {
+            return resolution;
+        }
     }
 
     resolution.succeeded = true;
@@ -171,7 +168,7 @@ int RunSceneListCommand(const ArgumentList& arguments, CommandIo io) {
 
     const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(resolved.path);
     if (!loaded.succeeded) {
-        io.err << "error: could not load scene: " << loaded.error << '\n';
+        io.err << "error: could not load scene " << resolved.path.generic_string() << ": " << loaded.error << '\n';
         return 1;
     }
 
@@ -265,7 +262,7 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
 
     kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(resolved.path);
     if (!loaded.succeeded) {
-        io.err << "error: could not load scene: " << loaded.error << '\n';
+        io.err << "error: could not load scene " << resolved.path.generic_string() << ": " << loaded.error << '\n';
         return 1;
     }
 
@@ -296,6 +293,125 @@ int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io) {
     io.out << "attached " << metadata->virtualPath.generic_string()
            << " (" << BackendName(component->backend) << ") to node '" << *nodeName
            << "' in " << resolved.path.generic_string() << '\n';
+    return 0;
+}
+
+#if KB_CLI_RENDERER
+// The scene's image settings: the post-process profile the renderer applies to it (as a Unity
+// global Volume's profile or a Godot WorldEnvironment's Environment), or none for the defaults.
+int RunScenePostProcessCommand(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> project = arguments.Option("--project");
+    const std::optional<std::string> profile = arguments.Option("--profile");
+    if (!project.has_value() || !profile.has_value()) {
+        io.err << "error: scene-post-process requires --project <dir> [--scene <path>] --profile /Game/<path>.kbppfx|none\n";
+        return 1;
+    }
+
+    kb::scene::Scene scene;
+    std::string error;
+    if (!MountProjectAssets(scene, *project, error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    const SceneFileResolution resolved = ResolveSceneFile(arguments, &scene);
+    if (!resolved.succeeded) {
+        io.err << "error: " << resolved.error << '\n';
+        return 1;
+    }
+
+    std::uint64_t profileAssetId = 0U;
+    std::string profileName = "none";
+    if (*profile != "none") {
+        const kb::assets::AssetMetadata* metadata =
+            FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), ResolveInputPath(*profile, *project));
+        if (metadata == nullptr) {
+            metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), *profile);
+        }
+        if (metadata == nullptr || metadata->type != kb::render::kPostProcessProfileAssetType) {
+            io.err << "error: the project has no post-process profile '" << *profile
+                   << "' (create one with kb_cli post-process-new)\n";
+            return 1;
+        }
+        profileAssetId = metadata->id.value;
+        profileName = metadata->virtualPath.generic_string();
+    }
+
+    kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(resolved.path);
+    if (!loaded.succeeded) {
+        io.err << "error: could not load scene " << resolved.path.generic_string() << ": " << loaded.error << '\n';
+        return 1;
+    }
+    loaded.document.postProcessProfileAssetId = profileAssetId;
+    if (!kb::scene::SceneDocumentService::Save(loaded.document, resolved.path)) {
+        io.err << "error: could not save scene: " << resolved.path.generic_string() << '\n';
+        return 1;
+    }
+    io.out << "Post-process profile of " << resolved.path.generic_string() << ": " << profileName << '\n';
+    return 0;
+}
+#endif
+
+// File > New Scene without the editor: a scene file made from a template, optionally the scene the
+// game starts in.
+int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> project = arguments.Option("--project");
+    const std::optional<std::string> name = arguments.Option("--name");
+    if (!project.has_value() || !name.has_value()) {
+        io.err << "error: scene-new requires --project <dir> --name <Name>\n";
+        return 1;
+    }
+    std::string error;
+    const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(*project, error);
+    if (projectFile.empty()) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    const kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(projectFile);
+    if (!loaded.succeeded) {
+        io.err << "error: the project could not be loaded: " << loaded.error << '\n';
+        return 1;
+    }
+    const std::string templateName = arguments.Option("--template").value_or("Basic");
+    const std::optional<kb::scene::SceneTemplate> sceneTemplate = kb::scene::SceneTemplates::Parse(templateName);
+    if (!sceneTemplate.has_value()) {
+        io.err << "error: unknown template '" << templateName << "'. Templates:";
+        for (const kb::scene::SceneTemplateInfo& info : kb::scene::SceneTemplates::All()) {
+            io.err << ' ' << info.name;
+        }
+        io.err << '\n';
+        return 1;
+    }
+    const std::string defaultOption = arguments.Option("--default").value_or("no");
+    if (defaultOption != "yes" && defaultOption != "no") {
+        io.err << "error: --default takes yes or no\n";
+        return 1;
+    }
+
+    const std::filesystem::path projectRoot = projectFile.parent_path();
+    const kb::scene::NewScenePath target = kb::scene::SceneTemplates::ResolveNewScene(
+        projectRoot, arguments.Option("--folder").value_or("Assets/Scenes"), *name);
+    if (!target.error.empty()) {
+        io.err << "error: " << target.error << '\n';
+        return 1;
+    }
+    if (std::string created = kb::scene::SceneTemplates::WriteSceneFile(target.file, *sceneTemplate, loaded.descriptor);
+        !created.empty()) {
+        io.err << "error: " << created << '\n';
+        return 1;
+    }
+    io.out << "Scene created: " << target.virtualPath << " (template " << kb::scene::SceneTemplates::Name(*sceneTemplate)
+           << ").\n";
+
+    if (defaultOption == "yes") {
+        const std::filesystem::path settingsFile = kb::project::ProjectSettingsStore::FilePath(projectRoot);
+        kb::project::ProjectSettingsLoadResult settings = kb::project::ProjectSettingsStore::Load(settingsFile);
+        settings.settings.defaultMap = target.virtualPath;
+        if (!kb::project::ProjectSettingsStore::Save(settingsFile, settings.settings, error)) {
+            io.err << "error: the scene was created, but the startup scene could not be set: " << error << '\n';
+            return 1;
+        }
+        io.out << "Startup scene: " << target.virtualPath << '\n';
+    }
     return 0;
 }
 

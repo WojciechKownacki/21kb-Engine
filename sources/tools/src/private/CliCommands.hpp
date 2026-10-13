@@ -11,11 +11,29 @@ namespace kb::cli {
 
 [[nodiscard]] int RunApiCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunApiCheckCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunEntityCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunComponentCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSchemaCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunInitAgentCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunImportCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunImportPresetNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunValidateCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneListCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSceneAttachCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSceneNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunScriptNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMaterialNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMaterialSetCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMaterialShowCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMaterialGraphCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMaterialInstanceNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMaterialInstanceSetCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMaterialInstanceShowCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPostProcessNewCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPostProcessSetCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunScenePostProcessCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunScriptBuildCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunRunCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
 [[nodiscard]] int RunKeysCommand(const ArgumentList& arguments, CommandIo io);
@@ -30,6 +48,7 @@ namespace kb::cli {
 [[nodiscard]] int RunReleaseCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunWorldCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunNavMeshCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunPhysicsLayersCommand(const ArgumentList& arguments, CommandIo io);
 // The directory the cooker and the editor mount as /Game: the content root of the project in
 // `project`, else of the nearest folder above `path` that holds a project file.
 [[nodiscard]] std::optional<std::filesystem::path> FindProjectContentRoot(

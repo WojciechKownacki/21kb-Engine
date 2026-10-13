@@ -109,6 +109,8 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "World", "TagCount", "World.TagCount", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "TagAt", "World.TagAt", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "SetParent", "World.SetParent", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "World", "FrameIndex", "World.FrameIndex", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "World", "FixedStepIndex", "World.FixedStepIndex", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "InstantiatePrefab", "World.InstantiatePrefab", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
     { "World", "SpawnGeometrySwarm", "World.SpawnGeometrySwarm", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
     { "Scene", "Load", "Scene.Load", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },

@@ -30,6 +30,7 @@ add_library(kb_engine STATIC
     include/engine/assets/TerrainAsset.hpp
     include/engine/assets/CollisionMeshAsset.hpp
     include/engine/assets/TerrainAssetIO.hpp
+    include/engine/assets/AssetImportPreset.hpp
     include/engine/assets/AssetImportService.hpp
     include/engine/assets/AssetImportTypes.hpp
     include/engine/assets/AssetManager.hpp
@@ -414,6 +415,7 @@ add_library(kb_engine STATIC
     include/engine/script/NativeScriptPlugin.hpp
     include/engine/script/NativeScriptPluginManager.hpp
     include/engine/script/NativeScriptPluginRegistrar.hpp
+    include/engine/script/ScriptProjectFiles.hpp
     include/engine/script/PucLuaSafeCall.hpp
     include/engine/script/PucLuaScriptRuntime.hpp
     include/engine/script/ScriptAgentProjectFiles.hpp
@@ -552,9 +554,11 @@ add_library(kb_engine STATIC
     src/audio/AudioMixerAssetLoader.cpp
     src/audio/AudioPlayback.cpp
     src/assets/AssetId.cpp
+    src/assets/BuiltInShapes.cpp
     src/assets/AssetKind.cpp
     src/assets/AssetCompatibility.cpp
     src/assets/AssetDiscoveryService.cpp
+    src/assets/AssetFileName.cpp
     src/assets/AssetFileOperations.cpp
     src/assets/AssetFileSystem.cpp
     src/assets/AssetFolderOperations.cpp
@@ -562,6 +566,7 @@ add_library(kb_engine STATIC
     src/assets/TerrainAsset.cpp
     src/assets/CollisionMeshAsset.cpp
     src/assets/TerrainAssetIO.cpp
+    src/assets/AssetImportPreset.cpp
     src/assets/AssetImportService.cpp
     src/assets/AssetLoadRequest.cpp
     src/assets/AssetImportTypes.cpp
@@ -601,6 +606,7 @@ add_library(kb_engine STATIC
     src/project/ProjectDescriptorReader.cpp
     src/project/ProjectSettingsStore.cpp
     src/project/ProjectDescriptorWriter.cpp
+    src/project/ProjectCreator.cpp
     src/project/ProjectManager.cpp
     src/packaging/PackagingTargetCatalog.cpp
     src/ecs/ComponentRegistry.cpp
@@ -689,9 +695,13 @@ add_library(kb_engine STATIC
     src/ecs/SerializedWorldRestoreMap.cpp
     src/ecs/SerializedWorldWriter.cpp
     src/scene/Scene.cpp
+    src/scene/SceneComponentAuthoring.cpp
+    src/scene/SceneCreateMenu.cpp
+    src/scene/SceneTemplates.cpp
     src/gameplay/GameInstance.cpp
     src/network/NetworkObject.cpp
     src/platform/FileSystemPath.cpp
+    src/platform/Trash.cpp
     src/platform/UserStorage.cpp
     src/platform/CrashReportConsent.cpp
     src/security/Crypto.cpp
@@ -1110,6 +1120,7 @@ add_library(kb_engine STATIC
     src/script/NativeScriptBackend.cpp
     src/script/NativeScriptPluginManager.cpp
     src/script/NativeScriptPluginRegistrar.cpp
+    src/script/ScriptProjectFiles.cpp
     src/script/lua/api/PucLuaEventApi.cpp
     src/script/lua/api/PucLuaEventsApi.cpp
     src/script/lua/api/PucLuaFunctionApi.cpp
@@ -1606,7 +1617,7 @@ if(WIN32)
         src/platform/win32/Win32InputKeyMap.cpp
         src/platform/win32/Win32XInputHapticsBackend.cpp
     )
-    target_link_libraries(kb_engine PRIVATE user32 xinput bcrypt)
+    target_link_libraries(kb_engine PRIVATE user32 xinput bcrypt shell32)
 
     # Crash capture shared by the game and the editor. dbghelp and version are
     # loaded from System32 by the reporter's own thread, and WinHTTP is delay-loaded,

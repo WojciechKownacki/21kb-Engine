@@ -99,6 +99,11 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
     return value == nullptr ? kb::scene::kPhysicsAllLayers : static_cast<std::uint32_t>(std::max(0, value->AsInt(static_cast<int>(kb::scene::kPhysicsAllLayers))));
 }
 
+[[nodiscard]] int IntArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, int fallback) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? fallback : value->AsInt(fallback);
+}
+
 ScriptFunctionCallResult Error(std::string message) {
     return ScriptFunctionCallResult{ .executed = false, .outputs = {}, .errors = { std::move(message) } };
 }
@@ -231,12 +236,20 @@ ScriptFunctionCallResult OverlapShapeResult(const ScriptFunctionCallContext& con
     if (!IsFinite(center) || !IsValidQueryShape(shape)) {
         return Error("overlap center or shape is invalid");
     }
-    const kb::scene::PhysicsOverlapResult overlap = kb::scene::PhysicsBackend::OverlapShape(*context.scene, shape, center, LayerMaskArg(arguments));
+    // Every overlapping collider (Unity's OverlapSphere returns them all): `count` of them and
+    // the one at `skip` (0 = first), as World.FindAllByTag pages through tagged entities.
+    std::array<kb::scene::PhysicsOverlapResult, 256U> storage{};
+    kb::library::ArrayNonAlloc<kb::scene::PhysicsOverlapResult> overlaps(storage);
+    kb::scene::PhysicsBackend::OverlapShapeAll(*context.scene, shape, center, LayerMaskArg(arguments), overlaps);
+    const int skip = IntArg(arguments, "skip", 0);
+    const bool found = skip >= 0 && static_cast<std::size_t>(skip) < overlaps.Count();
+    const kb::scene::SceneEntity entity = found ? overlaps.GetAt(static_cast<std::size_t>(skip))->entity : kb::scene::SceneEntity{};
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {
-            ScriptFunctionArgument{ "overlapping", ScriptValue{ overlap.overlapping } },
-            ScriptFunctionArgument{ "entity", ScriptValue{ overlap.entity.Id(), ScriptValueType::Entity } },
+            ScriptFunctionArgument{ "overlapping", ScriptValue{ found } },
+            ScriptFunctionArgument{ "entity", ScriptValue{ entity.Id(), ScriptValueType::Entity } },
+            ScriptFunctionArgument{ "count", ScriptValue{ static_cast<int>(overlaps.Count()) } },
         },
         .errors = {},
     };
@@ -566,9 +579,11 @@ ScriptFunctionCallResult LayerBit(const ScriptFunctionCallContext& context, std:
     };
     desc.signature.inputs.insert(desc.signature.inputs.end(), shapePins.begin(), shapePins.end());
     desc.signature.inputs.push_back(ScriptFunctionPin{ "layerMask", ScriptValueType::Int, false });
+    desc.signature.inputs.push_back(ScriptFunctionPin{ "skip", ScriptValueType::Int, false });
     desc.signature.outputs = {
         ScriptFunctionPin{ "overlapping", ScriptValueType::Bool, true },
         ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ "count", ScriptValueType::Int, true },
     };
     desc.callback = callback;
     return host.RegisterFunction(std::move(desc));

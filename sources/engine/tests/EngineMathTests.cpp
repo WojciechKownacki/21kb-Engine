@@ -408,6 +408,18 @@ void RunRotationFunctionsTest() {
     kb::tests::Require(std::abs(reachedTarget.w - rotated90Y.w) < 0.0001F, "RotateTowards must snap to the target when maxDelta exceeds the angle between the two rotations");
     const Quat partialStep = kb::math::RotateTowards(identity, rotated90Y, kb::math::Radians{ 0.1F });
     kb::tests::Require(std::abs(partialStep.w - rotated90Y.w) > 0.0001F, "RotateTowards must not overshoot to the target when maxDelta is smaller than the angle between the two rotations");
+
+    // Euler degrees: the convention people type in the Inspector and kb_cli.
+    const auto near = [](Vec3 a, Vec3 b) { return std::abs(a.x - b.x) < 0.001F && std::abs(a.y - b.y) < 0.001F && std::abs(a.z - b.z) < 0.001F; };
+    const Vec3 forward{ 0.0F, 0.0F, 1.0F };
+    kb::tests::Require(near(kb::math::Rotate(kb::math::FromEulerDegrees(Vec3{ 0.0F, 90.0F, 0.0F }), forward), Vec3{ 1.0F, 0.0F, 0.0F }), "Euler y=90 must turn +Z toward +X");
+    kb::tests::Require(near(kb::math::Rotate(kb::math::FromEulerDegrees(Vec3{ 90.0F, 0.0F, 0.0F }), forward), Vec3{ 0.0F, -1.0F, 0.0F }), "Euler x=90 must tip +Z down");
+    kb::tests::Require(near(kb::math::Rotate(kb::math::FromEulerDegrees(Vec3{ 0.0F, 0.0F, 90.0F }), Vec3{ 1.0F, 0.0F, 0.0F }), Vec3{ 0.0F, 1.0F, 0.0F }), "Euler z=90 must roll +X toward +Y");
+    for (const Vec3 angles : { Vec3{ 35.0F, 30.0F, 0.0F }, Vec3{ -20.0F, 170.0F, 45.0F }, Vec3{ 10.0F, -120.0F, -75.0F }, Vec3{ 0.0F, 0.0F, 0.0F } }) {
+        kb::tests::Require(near(kb::math::ToEulerDegrees(kb::math::FromEulerDegrees(angles)), angles), "ToEulerDegrees must return the angles FromEulerDegrees was built from");
+    }
+    const Quat straightDown = kb::math::FromEulerDegrees(Vec3{ 90.0F, 40.0F, 0.0F });
+    kb::tests::Require(near(kb::math::Rotate(kb::math::FromEulerDegrees(kb::math::ToEulerDegrees(straightDown)), forward), kb::math::Rotate(straightDown, forward)), "Euler round trip at x=90 must keep the rotation");
 }
 
 // LIB-050: Random01/Noise1D/Noise2D/Noise3D must be pure, deterministic

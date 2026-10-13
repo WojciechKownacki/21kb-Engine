@@ -237,6 +237,15 @@ void SceneGBuffer::Shutdown() {
                 << " depthTex=" << HandleValue(depthTexture_);
         WriteRendererDebugLog("gbuffer", message.str());
     }
+    // The custom data framebuffer shares the targets of the main one and owns only its own texture.
+    if (bgfx::isValid(customDataFrameBuffer_)) {
+        bgfx::destroy(customDataFrameBuffer_);
+    }
+    if (bgfx::isValid(customDataTexture_)) {
+        bgfx::destroy(customDataTexture_);
+    }
+    customDataFrameBuffer_ = BGFX_INVALID_HANDLE;
+    customDataTexture_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(frameBuffer_)) {
         bgfx::destroy(frameBuffer_);
     } else {
@@ -270,6 +279,45 @@ void SceneGBuffer::Shutdown() {
 
 bgfx::FrameBufferHandle SceneGBuffer::FrameBuffer() const noexcept {
     return frameBuffer_;
+}
+
+bool SceneGBuffer::EnsureCustomData() {
+    if (!IsValid()) {
+        return false;
+    }
+    if (bgfx::isValid(customDataFrameBuffer_)) {
+        return true;
+    }
+    customDataTexture_ = bgfx::createTexture2D(static_cast<std::uint16_t>(width_), static_cast<std::uint16_t>(height_), false, 1,
+        bgfx::TextureFormat::RGBA8, kGBufferColorTextureFlags);
+    if (!bgfx::isValid(customDataTexture_)) {
+        WriteRendererDebugLog("gbuffer", "EnsureCustomData failed create custom data texture");
+        return false;
+    }
+    bgfx::setName(customDataTexture_, "KB GBuffer Custom Data");
+    bgfx::Attachment attachments[kSceneGBufferColorAttachmentCount + 2U]{};
+    attachments[0].init(albedoTexture_);
+    attachments[1].init(normalTexture_);
+    attachments[2].init(materialTexture_);
+    attachments[3].init(surfaceTexture_);
+    attachments[4].init(customDataTexture_);
+    attachments[5].init(depthTexture_);
+    customDataFrameBuffer_ = bgfx::createFrameBuffer(static_cast<std::uint8_t>(kSceneGBufferColorAttachmentCount + 2U), attachments, false);
+    if (!bgfx::isValid(customDataFrameBuffer_)) {
+        WriteRendererDebugLog("gbuffer", "EnsureCustomData failed create framebuffer");
+        bgfx::destroy(customDataTexture_);
+        customDataTexture_ = BGFX_INVALID_HANDLE;
+        return false;
+    }
+    return true;
+}
+
+bgfx::FrameBufferHandle SceneGBuffer::CustomDataFrameBuffer() const noexcept {
+    return customDataFrameBuffer_;
+}
+
+bgfx::TextureHandle SceneGBuffer::CustomDataTexture() const noexcept {
+    return customDataTexture_;
 }
 
 bgfx::TextureHandle SceneGBuffer::AlbedoTexture() const noexcept {

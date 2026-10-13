@@ -21,6 +21,10 @@ struct SceneDisplayCompositeDesc {
     SceneDisplayOutputTransform outputTransform{};
     std::uint32_t clearRgba = 0x000000FFU;
     bool clearTarget = false;
+    float vignetteIntensity = 0.0F;
+    // FXAA on the display image (FullscreenTexturePassDesc::antiAliasing); `hdrExtent` is the size of hdrColor.
+    bool antiAliasing = false;
+    RenderExtent hdrExtent{};
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

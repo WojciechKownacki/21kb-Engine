@@ -1,5 +1,7 @@
 #include "assets/AssetPathUtilities.hpp"
 
+#include "engine/assets/AssetFileName.hpp"
+
 #include <algorithm>
 #include <cctype>
 
@@ -13,11 +15,8 @@ std::string AssetPathUtilities::LowerExtension(const std::filesystem::path& exte
     return text;
 }
 
-bool AssetPathUtilities::IsValidEntryName(std::string_view name) noexcept {
-    if (name.empty() || name == "." || name == "..") {
-        return false;
-    }
-    return name.find('/') == std::string_view::npos && name.find('\\') == std::string_view::npos;
+bool AssetPathUtilities::IsValidEntryName(std::string_view name) {
+    return AssetFileNameError(name).empty();
 }
 
 std::filesystem::path AssetPathUtilities::ParentVirtualPath(const std::filesystem::path& virtualPath) {

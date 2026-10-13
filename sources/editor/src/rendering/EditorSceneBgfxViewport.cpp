@@ -1,4 +1,5 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "engine/scene/Scene.hpp"
@@ -7,6 +8,7 @@
 #include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/EditorSceneViewportGeometry.hpp"
 #include "rendering/EditorSceneViewportRegionBuilder.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
@@ -923,7 +925,9 @@ void EditorSceneBgfxViewport::FailRender(const char* reason) noexcept {
     if (errorReporter_) {
         errorReporter_(message);
     }
-    MessageBoxA(nullptr, message.c_str(), "21kb Editor - Scene Render Failed", MB_OK | MB_ICONERROR);
+    // The technical reason stays as it is logged; the dialog's title is in the editor language.
+    const std::string title{ EditorText("viewport.renderFailedTitle", "21kb Editor - Scene Render Failed") };
+    kb::editor::MessageBoxUtf8(nullptr, message.c_str(), title.c_str(), MB_OK | MB_ICONERROR);
 }
 
 void EditorSceneBgfxViewport::SetFailureDetail(std::string detail) {

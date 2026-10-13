@@ -17,7 +17,7 @@ class EditorBuildGameFileDialog final {
 public:
     EditorBuildGameFileDialog() = delete;
     [[nodiscard]] static std::optional<std::filesystem::path> SelectFolder(
-        HWND owner, const std::filesystem::path& initialDirectory, std::wstring_view title);
+        HWND owner, const std::filesystem::path& initialDirectory, std::string_view title);
     [[nodiscard]] static std::optional<std::filesystem::path> SelectPng(HWND owner);
     [[nodiscard]] static std::optional<std::filesystem::path> SelectKeystore(HWND owner);
     [[nodiscard]] static std::optional<std::filesystem::path> SelectIdentity(HWND owner);

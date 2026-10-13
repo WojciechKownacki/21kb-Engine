@@ -1,4 +1,5 @@
 #include "rendering/EditorMeshPreviewService.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/IAssetLoader.hpp"
@@ -203,19 +204,19 @@ void AddIssue(EditorMeshValidationResult& result, EditorMeshValidationSeverity s
     const EditorMeshThumbnailStats& stats = geometry.stats;
 
     if (geometry.positions.empty()) {
-        AddIssue(result, EditorMeshValidationSeverity::Error, "No vertex geometry");
+        AddIssue(result, EditorMeshValidationSeverity::Error, std::string{ EditorText("meshValidation.noVertexGeometry", "No vertex geometry") });
     } else if (geometry.positions.size() < 3U) {
-        AddIssue(result, EditorMeshValidationSeverity::Error, "Not enough vertices");
+        AddIssue(result, EditorMeshValidationSeverity::Error, std::string{ EditorText("meshValidation.notEnoughVertices", "Not enough vertices") });
     }
 
     if (stats.triangleCount == 0U) {
-        AddIssue(result, EditorMeshValidationSeverity::Error, "No triangles");
+        AddIssue(result, EditorMeshValidationSeverity::Error, std::string{ EditorText("meshValidation.noTriangles", "No triangles") });
     }
     if (geometry.indices.empty()) {
-        AddIssue(result, EditorMeshValidationSeverity::Warning, "No index buffer");
+        AddIssue(result, EditorMeshValidationSeverity::Warning, std::string{ EditorText("meshValidation.noIndexBuffer", "No index buffer") });
     }
     if (stats.indexCount % 3U != 0U) {
-        AddIssue(result, EditorMeshValidationSeverity::Warning, "Index count is not divisible by 3");
+        AddIssue(result, EditorMeshValidationSeverity::Warning, std::string{ EditorText("meshValidation.indexCountNotTriangles", "Index count is not divisible by 3") });
     }
 
     if (!geometry.indices.empty()) {
@@ -223,26 +224,27 @@ void AddIssue(EditorMeshValidationResult& result, EditorMeshValidationSeverity s
             return index >= geometry.positions.size();
         });
         if (invalid != geometry.indices.end()) {
-            AddIssue(result, EditorMeshValidationSeverity::Error, "Index buffer references missing vertices");
+            AddIssue(result, EditorMeshValidationSeverity::Error, std::string{ EditorText("meshValidation.indexOutOfRange", "Index buffer references missing vertices") });
         }
     }
 
     const std::uint32_t degenerateTriangles = CountDegenerateTriangles(geometry);
     if (degenerateTriangles > 0U) {
-        AddIssue(result, EditorMeshValidationSeverity::Warning, "Degenerate triangles: " + std::to_string(degenerateTriangles));
+        AddIssue(result, EditorMeshValidationSeverity::Warning, EditorLocalization::Format("meshValidation.degenerateTriangles",
+            "Degenerate triangles: {count}", { { "count", std::to_string(degenerateTriangles) } }));
     }
 
     if (geometry.normals.empty()) {
-        AddIssue(result, EditorMeshValidationSeverity::Warning, "No normals");
+        AddIssue(result, EditorMeshValidationSeverity::Warning, std::string{ EditorText("meshValidation.noNormals", "No normals") });
     } else if (geometry.normals.size() != geometry.positions.size()) {
-        AddIssue(result, EditorMeshValidationSeverity::Warning, "Normal count does not match vertices");
+        AddIssue(result, EditorMeshValidationSeverity::Warning, std::string{ EditorText("meshValidation.normalCountMismatch", "Normal count does not match vertices") });
     } else {
         const auto zeroNormal = std::ranges::find_if(geometry.normals, [](const EditorMeshPreviewVector3& normal) {
             const float lengthSquared = normal.x * normal.x + normal.y * normal.y + normal.z * normal.z;
             return lengthSquared <= 0.0001F;
         });
         if (zeroNormal != geometry.normals.end()) {
-            AddIssue(result, EditorMeshValidationSeverity::Warning, "Some normals are zero length");
+            AddIssue(result, EditorMeshValidationSeverity::Warning, std::string{ EditorText("meshValidation.zeroNormals", "Some normals are zero length") });
         }
     }
 
@@ -250,24 +252,24 @@ void AddIssue(EditorMeshValidationResult& result, EditorMeshValidationSeverity s
         && std::isfinite(stats.boundsCenter[1])
         && std::isfinite(stats.boundsCenter[2]);
     if (!validBoundsCenter || !std::isfinite(stats.boundsRadius) || stats.boundsRadius <= 0.0F) {
-        AddIssue(result, EditorMeshValidationSeverity::Error, "Invalid bounds");
+        AddIssue(result, EditorMeshValidationSeverity::Error, std::string{ EditorText("meshValidation.invalidBounds", "Invalid bounds") });
     } else if (stats.boundsRadius > 10000.0F) {
-        AddIssue(result, EditorMeshValidationSeverity::Warning, "Bounds are unusually large");
+        AddIssue(result, EditorMeshValidationSeverity::Warning, std::string{ EditorText("meshValidation.largeBounds", "Bounds are unusually large") });
     } else if (stats.boundsRadius > 1000.0F) {
-        AddIssue(result, EditorMeshValidationSeverity::Warning, "Mesh is very large");
+        AddIssue(result, EditorMeshValidationSeverity::Warning, std::string{ EditorText("meshValidation.veryLargeMesh", "Mesh is very large") });
     }
 
     if (stats.materialSlotCount == 0U) {
-        AddIssue(result, EditorMeshValidationSeverity::Warning, "No material slots");
+        AddIssue(result, EditorMeshValidationSeverity::Warning, std::string{ EditorText("meshValidation.noMaterialSlots", "No material slots") });
     }
     if (stats.vertexCount > 500000U || stats.triangleCount > 500000U) {
-        AddIssue(result, EditorMeshValidationSeverity::Warning, "Mesh is too large for editor preview");
+        AddIssue(result, EditorMeshValidationSeverity::Warning, std::string{ EditorText("meshValidation.tooLargeForPreview", "Mesh is too large for editor preview") });
     } else if (stats.triangleCount > 250000U) {
-        AddIssue(result, EditorMeshValidationSeverity::Warning, "High triangle count");
+        AddIssue(result, EditorMeshValidationSeverity::Warning, std::string{ EditorText("meshValidation.highTriangleCount", "High triangle count") });
     }
 
     if (result.issues.empty()) {
-        AddIssue(result, EditorMeshValidationSeverity::Info, "Mesh OK");
+        AddIssue(result, EditorMeshValidationSeverity::Info, std::string{ EditorText("meshValidation.meshOk", "Mesh OK") });
     }
     return result;
 }

@@ -22,6 +22,10 @@ public:
     EditorFontCache() = delete;
 
     [[nodiscard]] static HFONT Acquire(int pointSize, int weight);
+
+    // The editor's text font (Segoe UI, which Windows links to fonts for every script the
+    // editor languages use). A painter that picks no font of its own draws in it.
+    static constexpr int UiPointSize = 12;
 };
 
 #endif

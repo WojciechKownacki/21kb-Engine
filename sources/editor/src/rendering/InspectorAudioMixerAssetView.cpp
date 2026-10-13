@@ -1,8 +1,11 @@
 #include "rendering/InspectorAudioMixerAssetView.hpp"
+#include "localization/EditorLocalization.hpp"
 
+#include "rendering/EditorPanelStyle.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <array>
@@ -87,18 +90,18 @@ void Text(HDC dc, RECT rect, std::string_view value, COLORREF color, UINT format
     }
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextW(dc, wide.data(), length, &rect, format | DT_NOPREFIX);
+    kb::editor::DrawTextWide(dc, wide.data(), length, &rect, format | DT_NOPREFIX);
 }
 
 [[nodiscard]] RECT ValueRect(RECT row) noexcept {
-    const int labelRight = row.left + ((row.right - row.left) * 36 / 100);
+    const int labelRight = panel_style::InspectorLabelColumnRight(row);
     const int rowHeight = static_cast<int>(row.bottom - row.top);
     const int top = row.top + std::max(0, (rowHeight - kValueHeight) / 2);
     return Rect(labelRight, top, row.right - kRowPadX, top + kValueHeight);
 }
 
 [[nodiscard]] RECT CheckboxRect(RECT row) noexcept {
-    const int left = row.left + ((row.right - row.left) * 36 / 100);
+    const int left = panel_style::InspectorLabelColumnRight(row);
     const int rowHeight = static_cast<int>(row.bottom - row.top);
     const int top = row.top + std::max(0, (rowHeight - kCheckboxSize) / 2);
     return Rect(left, top, left + kCheckboxSize, top + kCheckboxSize);
@@ -148,7 +151,7 @@ void PaintHeader(
         const ScopedGdiObject selected(dc, font.handle);
         Text(dc, Rect(icon.right + 10, header.top + 7, header.right - 12, header.top + 33), title, Color(theme.textPrimary));
     }
-    Text(dc, Rect(icon.right + 10, header.top + 31, header.right - 12, header.bottom - 7), "Audio Mixer", Color(theme.textDisabled));
+    Text(dc, Rect(icon.right + 10, header.top + 31, header.right - 12, header.bottom - 7), EditorText("inspector.audioMixer.subtitle", "Audio Mixer"), Color(theme.textDisabled));
 }
 
 void PaintRow(
@@ -299,11 +302,11 @@ void InspectorAudioMixerAssetView::Paint(
     Fill(dc, content, Color(theme.background));
     PaintHeader(dc, content, theme, metadata);
     const int busesTop = content.top + kHeaderHeight + kPanelPadTop;
-    PaintSection(dc, content, busesTop, theme, state, metadata.id, InspectorSectionId::AudioMixerBuses, "Buses", model.Rows(InspectorSectionId::AudioMixerBuses));
+    PaintSection(dc, content, busesTop, theme, state, metadata.id, InspectorSectionId::AudioMixerBuses, EditorText("inspector.audioMixer.buses", "Buses"), model.Rows(InspectorSectionId::AudioMixerBuses));
     const int snapshotsTop = busesTop
         + SectionHeight(state, InspectorSectionId::AudioMixerBuses, model.Rows(InspectorSectionId::AudioMixerBuses))
         + kSectionGap;
-    PaintSection(dc, content, snapshotsTop, theme, state, metadata.id, InspectorSectionId::AudioMixerSnapshots, "Snapshots", model.Rows(InspectorSectionId::AudioMixerSnapshots));
+    PaintSection(dc, content, snapshotsTop, theme, state, metadata.id, InspectorSectionId::AudioMixerSnapshots, EditorText("inspector.audioMixer.snapshots", "Snapshots"), model.Rows(InspectorSectionId::AudioMixerSnapshots));
 }
 
 InspectorAudioMixerAssetHit InspectorAudioMixerAssetView::HitTest(

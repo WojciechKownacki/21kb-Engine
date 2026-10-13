@@ -1,4 +1,5 @@
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
 
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
@@ -283,6 +284,13 @@ std::size_t AssetManager::DiscoverMountedAssets() {
     }
     asyncLoads_.clear();
     const std::size_t count = AssetDiscoveryService::DiscoverMountedAssets(mounts_, registry_, loaders_, cache_);
+    // The engine's basic shapes exist in every loose project, like Unreal's /Engine content:
+    // /Engine is never a mounted root, so discovery above never removes them.
+    for (const BuiltInShapeDesc& shape : BuiltInShapes()) {
+        if (registry_.Find(BuiltInShapeId(shape.shape)) == nullptr) {
+            static_cast<void>(registry_.Upsert(BuiltInShapeMetadata(shape)));
+        }
+    }
     std::unordered_set<std::uint64_t> invalidatedAssets;
     invalidatedAssets.reserve(previousContentHashes.size());
     for (const auto& [assetId, previousContentHash] : previousContentHashes) {
@@ -549,7 +557,7 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
         return true;
     }
     const std::filesystem::path resolvedPath = ResolvePhysicalPath(*registered);
-    if (resolvedPath.empty() && runtimePack_ == nullptr) {
+    if (resolvedPath.empty() && runtimePack_ == nullptr && FindBuiltInShape(*registered) == nullptr) {
         lastError_ = "Asset path could not be resolved: " + NormalizeAssetPath(registered->virtualPath);
         asyncLoadErrors_[id.value] = lastError_;
         return true;
@@ -633,7 +641,7 @@ void AssetManager::RestartAsyncLoads() {
         }
 
         const std::filesystem::path resolvedPath = ResolvePhysicalPath(*metadata);
-        if (resolvedPath.empty() && runtimePack_ == nullptr) {
+        if (resolvedPath.empty() && runtimePack_ == nullptr && FindBuiltInShape(*metadata) == nullptr) {
             asyncLoadErrors_[assetValue] = "Asset path is not mounted";
             continue;
         }

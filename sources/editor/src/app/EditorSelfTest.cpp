@@ -28,6 +28,7 @@
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
+#include "inspection/InspectorSceneColor.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
@@ -1207,7 +1208,7 @@ void RunCameraInspectorSuite(Report& report) {
         actorRow != cameraRows.end() && actorRow->hasCamera,
         "LIB-135 Camera entity exposes the camera icon in Hierarchy");
 
-    const std::array<InspectorPropertyId, 13> properties{
+    const std::array<InspectorPropertyId, 11> properties{
         InspectorPropertyId::CameraProjection,
         InspectorPropertyId::CameraVerticalFov,
         InspectorPropertyId::CameraOrthographicHeight,
@@ -1218,9 +1219,7 @@ void RunCameraInspectorSuite(Report& report) {
         InspectorPropertyId::CameraPriority,
         InspectorPropertyId::CameraCullingMask,
         InspectorPropertyId::CameraClearMode,
-        InspectorPropertyId::CameraClearColorR,
-        InspectorPropertyId::CameraClearColorG,
-        InspectorPropertyId::CameraClearColorB,
+        InspectorPropertyId::CameraClearColor,
     };
     std::array<InspectorPanelRenderer::Hit, properties.size()> hits{};
     const auto expectedKind = [](InspectorPropertyId property) {
@@ -1229,10 +1228,9 @@ void RunCameraInspectorSuite(Report& report) {
         case InspectorPropertyId::CameraOrthographicHeight:
         case InspectorPropertyId::CameraNearClip:
         case InspectorPropertyId::CameraFarClip:
-        case InspectorPropertyId::CameraClearColorR:
-        case InspectorPropertyId::CameraClearColorG:
-        case InspectorPropertyId::CameraClearColorB:
             return InspectorHitKind::FloatField;
+        case InspectorPropertyId::CameraClearColor:
+            return InspectorHitKind::ColorField;
         case InspectorPropertyId::CameraPrimary:
             return InspectorHitKind::BoolField;
         default:
@@ -1368,10 +1366,11 @@ void RunCameraInspectorSuite(Report& report) {
         camera() != nullptr &&
             camera()->clearMode == kb::scene::CameraClearMode::DepthOnly,
         "LIB-136 Camera clear mode reaches the live component");
+    // The clear colour is one swatch; the picker hands its choice to InspectorSceneColor.
     report.Check(
-        editText(
-            hitFor(InspectorPropertyId::CameraClearColorG), "0.25", true),
-        "LIB-136 Camera clear-color edit is committed");
+        hitFor(InspectorPropertyId::CameraClearColor).kind == InspectorHitKind::ColorField &&
+            InspectorSceneColor::Apply(context, actor, InspectorPropertyId::CameraClearColor, { 0.1F, 0.25F, 0.5F }),
+        "LIB-136 Camera clear-color swatch edit is committed");
     report.Check(
         camera() != nullptr && std::abs(camera()->clearColor.y - 0.25F) < 0.001F,
         "LIB-136 Camera clear color reaches the live component");
@@ -4841,7 +4840,7 @@ void RunRenderSceneReleaseLifecycleSuite(Report& report) {
 
     const std::uint64_t originalSceneId = context.Scene().Id();
     report.Check(
-        context.NewScene(EditorDirtySceneResolution::Discard),
+        context.NewScene(EditorDirtySceneResolution::Discard, kb::scene::SceneTemplate::Empty),
         "LIB-146 creating a new document succeeds");
     report.Check(
         releasedSceneIds.size() == 1U &&
@@ -5394,13 +5393,13 @@ void RunInspectorLightComponentSuite(Report& report) {
         report.Check(light != nullptr && light->kind == kb::scene::LightKind::Spot, "Point Light cycles to Spot Light through the Inspector");
         report.Check(InspectorPanelInteraction::HandlePointerDown(context, typeHit, point.x, point.y) &&
                 context.Scene().Components().Lights().TryGet(lightEntity)->kind == kb::scene::LightKind::AreaRect,
-            "3D Radiance Emitter cycles to rectangular area light through the Inspector");
+            "Light cycles to rectangular area light through the Inspector");
         report.Check(InspectorPanelInteraction::HandlePointerDown(context, typeHit, point.x, point.y) &&
                 context.Scene().Components().Lights().TryGet(lightEntity)->kind == kb::scene::LightKind::AreaDisk,
-            "3D Radiance Emitter cycles to disk area light through the Inspector");
+            "Light cycles to disk area light through the Inspector");
         report.Check(InspectorPanelInteraction::HandlePointerDown(context, typeHit, point.x, point.y) &&
                 context.Scene().Components().Lights().TryGet(lightEntity)->kind == kb::scene::LightKind::Tube,
-            "3D Radiance Emitter cycles to tube area light through the Inspector");
+            "Light cycles to tube area light through the Inspector");
     }
 }
 
@@ -5722,7 +5721,12 @@ void RunLegacyPrefabSceneSuite(Report& report) {
     report.Check(fixture.succeeded && fixture.document.fileVersion == 40U && fixture.document.LinksPrefabInstancesByName(),
         "The fixture is a version 40 scene that links its prefab instances by name");
 
-    // Main.21kbscene has no .meta yet, so it cannot be read: the editor must start without writing over it.
+    // Main.21kbscene's .meta is damaged, so it cannot be read: the editor must start without writing over it.
+    // (A .meta that is missing is written anew from the scene; one that does not match refuses it.)
+    {
+        std::ofstream damaged{ startupPath.parent_path() / "Main.meta", std::ios::binary | std::ios::trunc };
+        damaged << "not a scene meta";
+    }
     const auto readBytes = [](const std::filesystem::path& path) {
         std::ifstream input{ path, std::ios::binary };
         return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
@@ -5741,6 +5745,16 @@ void RunLegacyPrefabSceneSuite(Report& report) {
     report.Check(!startupBytes.empty() && readBytes(startupPath) == startupBytes, "The scene that could not be read is left byte for byte as it was");
     copied = std::filesystem::copy_file(fixtures / "LegacyPrefabs.meta", startupPath.parent_path() / "Main.meta", std::filesystem::copy_options::overwrite_existing, error);
     report.Check(copied, "Give the startup scene its .meta");
+    // The session above saved a scene of its own, which the editor would reopen as the last one; the user
+    // goes back to Main.
+    {
+        const std::filesystem::path settingsFile = kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot());
+        kb::project::ProjectSettingsLoadResult stored = kb::project::ProjectSettingsStore::Load(settingsFile);
+        stored.settings.lastOpenMap = "/Game/Scenes/Main.21kbscene";
+        std::string settingsError;
+        report.Check(kb::project::ProjectSettingsStore::Save(settingsFile, stored.settings, settingsError),
+            "Main is the scene that was open last");
+    }
     EditorSceneContext context;
 
     const auto childNamed = [&context](kb::scene::SceneEntity parent, std::string_view name) {

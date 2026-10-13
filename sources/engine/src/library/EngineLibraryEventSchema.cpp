@@ -136,6 +136,11 @@ const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
             .arguments = CollisionArguments(),
         },
         LibraryEventDesc{
+            .name = "OnControllerColliderHit",
+            .id = kb::script::ComputeEventId("OnControllerColliderHit"),
+            .arguments = CollisionArguments(),
+        },
+        LibraryEventDesc{
             .name = "OnAudioMarker",
             .id = kb::script::ComputeEventId("OnAudioMarker"),
             .arguments = {

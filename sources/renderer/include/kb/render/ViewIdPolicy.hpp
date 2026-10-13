@@ -54,6 +54,19 @@ constexpr std::uint16_t GiResolveStart = 320;
 constexpr std::uint16_t GiResolveMaxViewports = 8;
 static_assert(GiResolveStart >= PointShadowStart + PointShadowViewCount, "GI resolve views overlap the shadow views");
 static_assert(GiResolveStart + GiResolveMaxViewports <= ScreenCapture, "GI resolve views overlap the capture view");
+// The sky light capture (SceneSkyReflection): one view per cube face; the lighting reads the result
+// from the next frame on, so it may run after the scene views.
+constexpr std::uint16_t SkyReflectionStart = 330;
+constexpr std::uint16_t SkyReflectionViewCount = 6;
+static_assert(SkyReflectionStart >= GiResolveStart + GiResolveMaxViewports, "Sky reflection views overlap the GI resolve views");
+static_assert(SkyReflectionStart + SkyReflectionViewCount <= ScreenCapture, "Sky reflection views overlap the capture view");
+// The Post Process materials of a viewport (Unreal's post-process blendables): four views per viewport index, ordered
+// after the HDR finalize by the pass graph.
+constexpr std::uint16_t PostProcessMaterialStart = 340;
+constexpr std::uint16_t PostProcessMaterialViewsPerViewport = 4;
+static_assert(PostProcessMaterialStart >= SkyReflectionStart + SkyReflectionViewCount, "Post process material views overlap the sky reflection views");
+static_assert(PostProcessMaterialStart + PostProcessMaterialViewsPerViewport * GiResolveMaxViewports <= ScreenCapture,
+    "Post process material views overlap the capture view");
 
 [[nodiscard]] constexpr bool IsValid(std::uint16_t viewId) noexcept {
     return viewId < Max;

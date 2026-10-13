@@ -1,8 +1,11 @@
 #include "resources/RenderMeshAssetFinalizer.hpp"
 
+#include "engine/math/EngineMath.hpp"
+
 #include <meshoptimizer/src/meshoptimizer.h>
 
 #include <algorithm>
+#include <utility>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -498,8 +501,61 @@ void OptimizeMeshAssetVertexFetch(std::vector<Vertex>& vertices, std::vector<std
     if (Dot(tangent, tangent) <= 0.0001F) {
         return FallbackTangentForNormal(vertex.nx, vertex.ny, vertex.nz);
     }
-    const float handedness = Dot(Cross(normal, tangent), accum.bitangent) < 0.0F ? -1.0F : 1.0F;
+    // The bitangent cross(normal, tangent) * w points up the image (toward smaller V), where a
+    // normal map's +Y points (OpenGL convention: glTF, Unity, Godot); accum.bitangent follows
+    // growing V, which runs down the image. With w taken along accum.bitangent bumps came out as dimples.
+    const float handedness = Dot(Cross(normal, tangent), accum.bitangent) > 0.0F ? -1.0F : 1.0F;
     return { tangent.x, tangent.y, tangent.z, handedness };
+}
+
+void RenderMeshAssetFinalizer::ConvertRightHandedSource(RenderMeshAssetData& asset) noexcept {
+    for (RenderStaticMeshVertexP3N3UV2& vertex : asset.vertices) {
+        vertex.x = -vertex.x;
+        vertex.nx = -vertex.nx;
+    }
+    for (RenderStaticMeshVertexP3N3T4UV2& vertex : asset.tangentVertices) {
+        vertex.x = -vertex.x;
+        vertex.nx = -vertex.nx;
+        vertex.tx = -vertex.tx;
+        vertex.tw = -vertex.tw;
+    }
+    for (std::size_t index = 0U; index + 2U < asset.indices32.size(); index += 3U) {
+        std::swap(asset.indices32[index + 1U], asset.indices32[index + 2U]);
+    }
+    for (std::size_t index = 0U; index + 2U < asset.indices16.size(); index += 3U) {
+        std::swap(asset.indices16[index + 1U], asset.indices16[index + 2U]);
+    }
+}
+
+void RenderMeshAssetFinalizer::ApplyImportTransform(
+    RenderMeshAssetData& asset, const kb::assets::AssetMeshImportTransform& transform) noexcept {
+    if (transform.IsIdentity()) {
+        return;
+    }
+    const kb::math::Quat rotation = kb::math::FromEulerDegrees(kb::math::Vec3{
+        transform.rotationDegrees[0], transform.rotationDegrees[1], transform.rotationDegrees[2] });
+    const float scale = transform.scale;
+    const auto place = [&](float& x, float& y, float& z) noexcept {
+        const kb::math::Vec3 moved = kb::math::Rotate(rotation, kb::math::Vec3{ x, y, z });
+        x = moved.x * scale;
+        y = moved.y * scale;
+        z = moved.z * scale;
+    };
+    const auto turn = [&](float& x, float& y, float& z) noexcept {
+        const kb::math::Vec3 turned = kb::math::Rotate(rotation, kb::math::Vec3{ x, y, z });
+        x = turned.x;
+        y = turned.y;
+        z = turned.z;
+    };
+    for (RenderStaticMeshVertexP3N3UV2& vertex : asset.vertices) {
+        place(vertex.x, vertex.y, vertex.z);
+        turn(vertex.nx, vertex.ny, vertex.nz);
+    }
+    for (RenderStaticMeshVertexP3N3T4UV2& vertex : asset.tangentVertices) {
+        place(vertex.x, vertex.y, vertex.z);
+        turn(vertex.nx, vertex.ny, vertex.nz);
+        turn(vertex.tx, vertex.ty, vertex.tz);
+    }
 }
 
 void RenderMeshAssetFinalizer::EnsureTangentVertexStorage(RenderMeshAssetData& asset) {

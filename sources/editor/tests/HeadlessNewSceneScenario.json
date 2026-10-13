@@ -1,0 +1,160 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "create_scene",
+      "name": "Level1"
+    },
+    {
+      "op": "assert_current_scene",
+      "path": "Assets/Scenes/Level1.21kbscene",
+      "roots": "Main Camera,Sun,Environment,Plane",
+      "dirty": false
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Scenes/Level1.21kbscene"
+    },
+    {
+      "op": "create_scene",
+      "name": "Level1",
+      "refused_with": "already exists"
+    },
+    {
+      "op": "create_scene",
+      "name": "Le:vel",
+      "refused_with": "can't contain the character ':'"
+    },
+    {
+      "op": "create_scene",
+      "name": "CON",
+      "refused_with": "reserves for devices"
+    },
+    {
+      "op": "create_scene",
+      "name": "Outside",
+      "folder": "Saved",
+      "refused_with": "must be inside Assets"
+    },
+    {
+      "op": "create_scene",
+      "name": "Arena",
+      "folder": "/Game/Levels",
+      "template": "Empty",
+      "startup": true
+    },
+    {
+      "op": "assert_current_scene",
+      "path": "Assets/Levels/Arena.21kbscene",
+      "roots": "",
+      "startup": "/Game/Levels/Arena.21kbscene"
+    },
+    {
+      "op": "assert_reopened_scene",
+      "path": "Assets/Levels/Arena.21kbscene",
+      "roots": ""
+    },
+    {
+      "op": "open_scene",
+      "path": "Assets/Scenes/Level1.21kbscene"
+    },
+    {
+      "op": "create_entity",
+      "id": "crate",
+      "name": "Crate"
+    },
+    {
+      "op": "assert_current_scene",
+      "path": "Assets/Scenes/Level1.21kbscene",
+      "dirty": true
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "assert_current_scene",
+      "path": "Assets/Scenes/Level1.21kbscene",
+      "roots": "Main Camera,Sun,Environment,Plane,Crate",
+      "dirty": true
+    },
+    {
+      "op": "assert_reopened_scene",
+      "path": "Assets/Scenes/Level1.21kbscene",
+      "roots": "Main Camera,Sun,Environment,Plane"
+    },
+    {
+      "op": "delete_asset",
+      "asset": "/Game/Scenes/Level1.21kbscene",
+      "refused_with": "scene open in the editor"
+    },
+    {
+      "op": "move_asset",
+      "asset": "/Game/Scenes/Level1.21kbscene",
+      "destination": "/Game/Levels",
+      "refused_with": "scene open in the editor"
+    },
+    {
+      "op": "delete_asset",
+      "asset": "/Game/Levels/Arena.21kbscene",
+      "refused_with": "startup scene"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/Scripts/Mover.lua",
+      "content": "function Tick(self, dt)\nend\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "assign_asset",
+      "entity": "crate",
+      "asset": "/Game/Scripts/Mover.lua",
+      "role": "script"
+    },
+    {
+      "op": "save_scene"
+    },
+    {
+      "op": "create_asset",
+      "id": "freshFolderScript",
+      "type": "lua_script",
+      "folder": "/Game/Gameplay/Scripts"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Gameplay/Scripts/NewScript.lua"
+    },
+    {
+      "op": "set_startup_scene",
+      "path": "/Game/Scenes/Level1.21kbscene"
+    },
+    {
+      "op": "set_startup_scene",
+      "path": "/Game/Scenes/Missing.21kbscene",
+      "refused_with": "is not one"
+    },
+    {
+      "op": "save_scene",
+      "outside_project": "../Outside.21kbscene",
+      "refused_with": "inside the project's Assets folder"
+    },
+    {
+      "op": "save_scene",
+      "outside_project": "Saved/NotAssets.21kbscene",
+      "refused_with": "inside the project's Assets folder"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "move_asset",
+      "asset": "/Game/Scripts/Mover.lua",
+      "destination": "/Game/Levels",
+      "refused_with": "uses it"
+    }
+  ]
+}

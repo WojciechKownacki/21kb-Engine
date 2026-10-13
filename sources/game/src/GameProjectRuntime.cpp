@@ -509,12 +509,10 @@ bool ReadGameProjectRuntime(
         return false;
     }
 
-    std::filesystem::path projectFile = absoluteInput;
-    if (std::filesystem::is_directory(absoluteInput, pathError) && !pathError) {
-        projectFile /= "Project.21kbproject";
-    }
-    if (pathError || !std::filesystem::is_regular_file(projectFile, pathError) || pathError) {
-        err << "project descriptor was not found: " << NarrowForDiagnostics(projectFile) << '\n';
+    std::string projectError;
+    const std::filesystem::path projectFile = kb::project::ProjectManager::FindProjectFile(absoluteInput, projectError);
+    if (projectFile.empty()) {
+        err << "project descriptor was not found: " << projectError << '\n';
         return false;
     }
 

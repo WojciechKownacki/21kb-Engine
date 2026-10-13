@@ -1,4 +1,6 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
+#include "kb/render/resources/ShapeMeshes.hpp"
 
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
@@ -46,7 +48,7 @@ namespace {
     });
 
     std::istringstream input{ text };
-    return RenderMeshAssetBuilder::LoadObj(input);
+    return RenderMeshAssetBuilder::LoadObj(input, RenderMeshObjImportDesc{ .transform = imported.meshTransform });
 }
 
 [[nodiscard]] std::optional<RenderMeshAssetData> LoadGltfPayload(const kb::assets::AssetLoadRequest& request, const kb::assets::ImportedAsset& imported) {
@@ -60,6 +62,7 @@ namespace {
     std::optional<RenderMeshAssetData> mesh = RenderMeshAssetBuilder::LoadGltf(payload, {}, RenderMeshGltfImportDesc{
         .externalResources = resources,
         .externalResourceCount = resourceCount,
+        .transform = imported.meshTransform,
     });
     if (mesh.has_value() &&
         (imported.importOptions & kb::assets::kAssetImportOptionMeshImportMaterials) != 0U) {
@@ -79,6 +82,7 @@ namespace {
             .materialBindingCount = static_cast<std::uint32_t>(bindings.size()),
             .externalResources = resources,
             .externalResourceCount = resourceCount,
+            .transform = imported.meshTransform,
         });
     }
     return mesh;
@@ -109,6 +113,7 @@ namespace {
             payload,
             RenderMeshFbxImportDesc{
                 .importMaterialSlots = (imported->importOptions & kb::assets::kAssetImportOptionMeshDisableMaterialSlots) == 0U,
+                .transform = imported->meshTransform,
             });
         if (!mesh.has_value() ||
             (imported->importOptions & kb::assets::kAssetImportOptionMeshImportMaterials) == 0U) return mesh;
@@ -127,6 +132,7 @@ namespace {
             .materialBindings = bindings.data(),
             .materialBindingCount = static_cast<std::uint32_t>(bindings.size()),
             .importMaterialSlots = (imported->importOptions & kb::assets::kAssetImportOptionMeshDisableMaterialSlots) == 0U,
+            .transform = imported->meshTransform,
         });
     }
     return std::nullopt;
@@ -521,7 +527,7 @@ std::type_index RenderMeshAssetLoader::PayloadType() const noexcept {
 }
 
 std::vector<std::string> RenderMeshAssetLoader::Extensions() const {
-    return { ".obj", ".gltf", ".glb", ".fbx", ".kbterrain",
+    return { ".obj", ".gltf", ".glb", ".fbx", ".kbterrain", std::string{ kb::assets::kBuiltInShapeExtension },
         std::string{ kb::assets::bake::kAssetPackFileExtension } };
 }
 
@@ -561,6 +567,10 @@ namespace {
         if (terrain) mesh = RenderTerrainMeshBuilder::Build(*terrain);
     } else if (request.IsPackaged()) {
         mesh = LoadBakedMeshPayload(request, packagedError);
+    } else if (const kb::assets::BuiltInShapeDesc* shape = kb::assets::FindBuiltInShape(request.metadata);
+               shape != nullptr && extension == kb::assets::kBuiltInShapeExtension) {
+        // The engine's basic shapes have no file: the generator is their source (/Engine/Shapes).
+        mesh = ShapeMeshes::BuiltIn(shape->shape);
     } else if (extension == kb::assets::bake::kAssetPackFileExtension) {
         mesh = LoadBakedMeshPack(request.resolvedPath);
     } else if (extension == ".21kb") {

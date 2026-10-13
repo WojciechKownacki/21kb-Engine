@@ -1,4 +1,5 @@
 #include "project/EditorProjectBootstrap.hpp"
+#include "engine/project/ProjectCreator.hpp"
 
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
@@ -11,55 +12,8 @@
 namespace kb::editor {
 namespace {
 
-#if !defined(KB_PHYSICS_JOLT_PLUGIN_PATH)
-#if defined(_WIN32)
-#define KB_PHYSICS_JOLT_PLUGIN_PATH "kb_physics_jolt_plugin.dll"
-#else
-#define KB_PHYSICS_JOLT_PLUGIN_PATH "libkb_physics_jolt_plugin.so"
-#endif
-#endif
-
-#if !defined(KB_AUDIO_MINIAUDIO_PLUGIN_PATH)
-#if defined(_WIN32)
-#define KB_AUDIO_MINIAUDIO_PLUGIN_PATH "kb_audio_miniaudio_plugin.dll"
-#else
-#define KB_AUDIO_MINIAUDIO_PLUGIN_PATH "libkb_audio_miniaudio_plugin.so"
-#endif
-#endif
-
-#if !defined(KB_BASIC_LIGHTING_PLUGIN_PATH)
-#if defined(_WIN32)
-#define KB_BASIC_LIGHTING_PLUGIN_PATH "kb_basic_lighting_plugin.dll"
-#else
-#define KB_BASIC_LIGHTING_PLUGIN_PATH "libkb_basic_lighting_plugin.so"
-#endif
-#endif
-
 [[nodiscard]] kb::project::ProjectDescriptor DefaultDescriptor() {
-    kb::project::ProjectDescriptor descriptor;
-    descriptor.contentRoot = "Assets";
-    descriptor.targetPlatforms = { "Windows" };
-    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
-        .name = "Physics.Jolt",
-        .binaryPath = EditorPluginCatalog::PersistentBinaryPath("Physics.Jolt"),
-        .enabled = true,
-    });
-    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
-        .name = "Audio.Miniaudio",
-        .binaryPath = EditorPluginCatalog::PersistentBinaryPath("Audio.Miniaudio"),
-        .enabled = true,
-    });
-    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
-        .name = "Rendering.BasicLighting",
-        .binaryPath = EditorPluginCatalog::PersistentBinaryPath("Rendering.BasicLighting"),
-        .enabled = true,
-    });
-    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
-        .name = "Rendering.21kbParticle",
-        .binaryPath = EditorPluginCatalog::PersistentBinaryPath("Rendering.21kbParticle"),
-        .enabled = true,
-    });
-    return descriptor;
+    return kb::project::ProjectCreator::DefaultDescriptor();
 }
 
 [[nodiscard]] bool NormalizeBuiltInPluginPaths(kb::project::ProjectDescriptor& descriptor) {

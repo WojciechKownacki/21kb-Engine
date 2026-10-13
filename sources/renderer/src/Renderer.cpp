@@ -361,6 +361,8 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     }
     // Optional: without its shader screen-space GI simply contributes nothing.
     static_cast<void>(giResolvePass_.Initialize());
+    // Without it (no shader variant or renderable cube map) reflections keep the environment colour.
+    static_cast<void>(skyReflection_.Initialize());
     static_cast<void>(giVoxelGrid_.Initialize());
     if (displayConfig_.enableEditorRendering && !editorPassSubmitter_.Initialize()) {
         Shutdown();
@@ -440,6 +442,7 @@ void Renderer::Shutdown() {
     }
     giVoxelGrid_.Shutdown();
     giResolvePass_.Shutdown();
+    skyReflection_.Shutdown();
     if (deferredLightingPass_ != nullptr) {
         deferredLightingPass_->Shutdown();
         deferredLightingPass_.reset();
@@ -471,7 +474,7 @@ bool Renderer::BeginFrame() {
         skinningSynchronizedSceneIds_.clear();
         frameState_.Begin(static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL);
         if (sceneRenderer_ != nullptr) {
-            static_cast<void>(sceneRenderer_->BeginSkinningFrame(
+            static_cast<void>(sceneRenderer_->BeginFrameMatrixRows(
                 static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
                 static_cast<std::uint64_t>(lastCompletedFrame_)));
         }
@@ -489,6 +492,7 @@ void Renderer::EndFrame() {
 
     lastCompletedFrame_ = context_->EndFrame();
     if (deferredLightingPass_ != nullptr) deferredLightingPass_->EndFrame();
+    skyReflection_.EndFrame();
     if (screenCapture_ != nullptr) {
         screenCapture_->Poll(
             static_cast<std::uint32_t>(lastCompletedFrame_));
@@ -1006,6 +1010,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor begin");
     RenderScene& renderScene = RenderSceneFor(scene);
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor end");
+    // Transform changes synchronized below record the models this frame's motion vectors start from.
+    renderScene.BeginMotionFrame(static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL);
     const bool skinningAlreadySynchronized = std::ranges::find(
         skinningSynchronizedSceneIds_, scene.Id()) != skinningSynchronizedSceneIds_.end();
     const std::uint64_t renderProxyUpdateRevision = scene.Runtime().RenderProxyUpdateRevision();
@@ -1113,6 +1119,13 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     }
     SceneRenderLightingConfig effectiveLightingConfig = ApplyAmbientRadiance(
         RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_), renderScene.AmbientRadiance());
+    // The resolved profile (or a default the application set with ambient occlusion on) decides
+    // the screen-space ambient occlusion; without either, the lighting config keeps its own.
+    if (resolvedPostProcessSettings.has_value()) {
+        RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, *resolvedPostProcessSettings);
+    } else if (defaultPostProcessSettings_.ambientOcclusionEnabled) {
+        RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, defaultPostProcessSettings_);
+    }
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;
     }
@@ -1192,6 +1205,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         .materialReloadCount = lastMaterialReloadCount_,
         .materialResolverDiagnosticCount = lastMaterialResolverDiagnosticCount_,
         .currentFrame = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
+        .uiFrame = &screenUIFrame,
     });
     if (RendererDebugLogEnabled("renderer")) {
         std::ostringstream message;
@@ -1294,6 +1308,16 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             texture != nullptr && texture->dimension == RenderTextureDimension::Texture2D) {
             worldBackdropEnvironment = texture->texture;
         }
+    }
+    {
+        // Reflections of the sky the camera sees (Unreal's SkyLight, Unity's skybox reflections): the
+        // backdrop is captured over a few frames; until then the lighting uses the environment colour.
+        const SceneBackdropUniformValues backdropUniforms = BuildSceneBackdropUniforms(
+            worldBackdrop.has_value() ? &*worldBackdrop : nullptr, bgfx::isValid(worldBackdropEnvironment), renderScene);
+        const bgfx::Caps* caps = bgfx::getCaps();
+        skyReflection_.Update(backdropUniforms, worldBackdropEnvironment, caps != nullptr && caps->originBottomLeft);
+        effectiveLightingConfig.skyReflection = skyReflection_.ReflectionFor(backdropUniforms, worldBackdropEnvironment);
+        effectiveLightingConfig.skyReflectionMaxMip = SceneSkyReflection::MaxMip();
     }
     if (deferredLighting) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");
@@ -1491,6 +1515,22 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         const SceneRenderPassSubmitStats* gbufferPassStats = lastScenePassSubmitStats_.empty()
             ? nullptr
             : &lastScenePassSubmitStats_.back();
+        // Unreal's custom data (Subsurface Color / Fuzz Color) only in frames drawing a material that
+        // writes it: the G-buffer view then renders into the framebuffer with the fifth target.
+        bgfx::TextureHandle customDataTexture = BGFX_INVALID_HANDLE;
+        if (gbufferPassStats != nullptr && gbufferPassStats->stats.shadingModelColorDrawCallCount > 0U) {
+            if (sceneGBuffer.EnsureCustomData()) {
+                bgfx::setViewFrameBuffer(viewportPlan.viewIds.gbufferGeometry, sceneGBuffer.CustomDataFrameBuffer());
+                customDataTexture = sceneGBuffer.CustomDataTexture();
+            } else {
+                lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+                    .severity = SceneRenderDiagnosticSeverity::Error,
+                    .kind = SceneRenderDiagnosticKind::DeferredRendererUnavailable,
+                    .instanceCount = gbufferPassStats->stats.shadingModelColorDrawCallCount,
+                });
+                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport GBuffer custom data target unavailable");
+            }
+        }
         if (gbufferPassStats != nullptr) {
             const SceneRenderSubmitStats& stats = gbufferPassStats->stats;
             if (RendererDebugLogEnabled("renderer")) {
@@ -1546,6 +1586,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 .worldBackdrop = worldBackdrop.has_value() ? &*worldBackdrop : nullptr,
                 .worldBackdropEnvironment = worldBackdropEnvironment,
                 .gi = giEnabled ? &giBinding : nullptr,
+                .customData = customDataTexture,
             }, deferredStats)) {
             lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
                 .severity = SceneRenderDiagnosticSeverity::Error,
@@ -1835,16 +1876,28 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcess Submit invalid output");
                 return false;
             }
+            // Unreal's post-process materials (Before Tonemapping): the scene's Post Process materials over the HDR image.
+            scenePostProcessOutput = sceneRenderer_->SubmitPostProcessMaterials(renderScene, ScenePostProcessMaterialChainDesc{
+                .views = viewportPlan.viewIds.postProcessMaterialViews,
+                .frameBuffers = { sampledSceneDesc.postProcess.finalFrameBuffer, sampledSceneDesc.postProcess.combineFrameBuffer },
+                .textures = { sampledSceneDesc.postProcess.finalTexture, sampledSceneDesc.postProcess.combineTexture },
+                .width = static_cast<std::uint16_t>(sampledSceneDesc.target.viewport.extent.width),
+                .height = static_cast<std::uint16_t>(sampledSceneDesc.target.viewport.extent.height),
+                .input = scenePostProcessOutput,
+                .depth = sampledSceneDesc.SceneOverlayDepthTexture(),
+            });
             if (postProcessOutput.temporalAntiAliasingEnabled && overlayCamera != nullptr &&
                 bgfx::isValid(sampledSceneDesc.postProcess.motionVectorFrameBuffer) &&
                 bgfx::isValid(sampledSceneDesc.SceneOverlayDepthTexture())) {
-                sceneRenderer_->SetMotionVectorPreviousViewProjection(previousMotionViewProjection);
+                sceneRenderer_->SetMotionVectorViewProjections(currentUnjitteredViewProjection, previousMotionViewProjection);
+                // Rasterized with the jittered camera the depth prepass used, so each fragment meets the depth
+                // it wrote; the motion itself is written between the jitter-free view-projections above.
                 const RendererMeshPassSubmitDesc motionVectorSubmitDesc{
                     .sceneRenderer = *sceneRenderer_,
                     .renderScene = renderScene,
                     .sceneDesc = sampledSceneDesc,
                     .viewportPlan = viewportPlan,
-                    .sceneCamera = overlayCamera,
+                    .sceneCamera = sceneCamera,
                     .lightingConfig = effectiveLightingConfig,
                     .width = width,
                     .height = height,
@@ -1893,15 +1946,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite submit end");
 
         if (!screenUIFrame.elements.empty()) {
-            SceneDisplayOutputTransform uiOutputTransform = postProcessOutput.outputTransform;
-            if (!postProcessOutput.tonemapEnabled) {
-                uiOutputTransform = SceneDisplayOutputTransform{
-                    .exposureStops = 0.0F,
-                    .gamma = 1.0F,
-                    .tonemap = SceneDisplayTonemapOperator::None,
-                    .colorGradingLutStrength = 0.0F,
-                };
-            }
+            const SceneDisplayOutputTransform uiOutputTransform = RendererFinalCompositeSubmitter::DisplayTransform(postProcessOutput);
             if (screenUIRenderer_ == nullptr || !screenUIRenderer_->Submit(ScreenUISubmitDesc{
                     .sceneId = scene.Id(),
                     .viewportIndex = desc.target.viewport.viewportIndex,
@@ -1916,6 +1961,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                     .outputExtent = desc.finalComposite.extent,
                     .outputRect = desc.finalComposite.outputRect,
                     .outputTransform = uiOutputTransform,
+                    .sceneRenderer = sceneRenderer_.get(),
                 })) {
                 WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport screen UI submit failed");
                 return false;
@@ -1962,6 +2008,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                  .tonemap = SceneDisplayTonemapOperator::None,
                  .colorGradingLutStrength = 0.0F,
              },
+             .sceneRenderer = sceneRenderer_.get(),
          }))) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport screen UI submit failed noFinalComposite");
         return false;
@@ -2210,6 +2257,19 @@ void Renderer::SetGraphShaderCacheRoot(std::string root) {
     if (sceneRenderer_ != nullptr) {
         sceneRenderer_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
     }
+    SetGraphShaderCookToolchain(graphShaderCookToolchain_);
+}
+
+void Renderer::SetGraphShaderCookToolchain(std::optional<RenderMaterialGraphShaderToolchain> toolchain) {
+    graphShaderCookToolchain_ = std::move(toolchain);
+    if (graphShaderCookToolchain_.has_value() && !graphShaderCacheRoot_.empty()) {
+        runtimeMaterialResolver_.SetGraphShaderCook(RuntimeMaterialResolver::GraphShaderCook{
+            .toolchain = *graphShaderCookToolchain_,
+            .cacheRoot = graphShaderCacheRoot_,
+        });
+    } else {
+        runtimeMaterialResolver_.SetGraphShaderCook(std::nullopt);
+    }
 }
 
 const std::string& Renderer::GraphShaderCacheRoot() const noexcept {
@@ -2261,11 +2321,19 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
     settings.outputTransform.autoExposure.middleGray = std::max(settings.outputTransform.autoExposure.middleGray, 0.0001F);
     settings.outputTransform.autoExposure.brightAdaptationRate = std::max(settings.outputTransform.autoExposure.brightAdaptationRate, 0.0F);
     settings.outputTransform.autoExposure.darkAdaptationRate = std::max(settings.outputTransform.autoExposure.darkAdaptationRate, 0.0F);
+    settings.vignetteIntensity = std::clamp(settings.vignetteIntensity, 0.0F, 1.0F);
+    settings.ambientOcclusionIntensity = std::max(settings.ambientOcclusionIntensity, 0.0F);
+    settings.ambientOcclusionRadius = std::max(settings.ambientOcclusionRadius, 0.01F);
     defaultPostProcessSettings_ = settings;
     if (std::optional<PostProcessPass> antiAliasing = postProcessChain_.FindPass(PostProcessPassKind::AntiAliasing); antiAliasing.has_value()) {
-        antiAliasing->enabled = settings.temporalAntiAliasingEnabled || settings.fxaaEnabled;
+        antiAliasing->enabled = settings.temporalAntiAliasingEnabled;
         antiAliasing->postProcessSettings = settings;
         static_cast<void>(postProcessChain_.SetPass(*antiAliasing));
+    }
+    if (std::optional<PostProcessPass> fxaa = postProcessChain_.FindPass(PostProcessPassKind::Fxaa); fxaa.has_value()) {
+        fxaa->enabled = settings.fxaaEnabled;
+        fxaa->postProcessSettings = settings;
+        static_cast<void>(postProcessChain_.SetPass(*fxaa));
     }
     if (std::optional<PostProcessPass> bloom = postProcessChain_.FindPass(PostProcessPassKind::Bloom); bloom.has_value()) {
         bloom->enabled = settings.bloomEnabled;

@@ -1,12 +1,14 @@
 #include "app/EditorWindowToolbarPointerHandler.hpp"
 
 #include "app/EditorEditCommandPolicy.hpp"
+#include "app/EditorSceneFileCommands.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorSceneLifecycleGuard.hpp"
 #include "app/EditorWorkspaceSession.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
 #include "docking/EditorFloatingWindowSync.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "platform/win32/EditorChoiceDialog.hpp"
 #include "platform/win32/EditorSceneFileDialog.hpp"
 #include "platform/win32/EditorTextEntryDialog.hpp"
@@ -14,12 +16,15 @@
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <shellapi.h>
 
 namespace kb::editor {
 namespace {
@@ -118,11 +123,11 @@ void SaveCurrentLayout(
     EditorDockModel& dockModel,
     EditorSceneContext& sceneContext) {
     const std::optional<std::string> name = EditorTextEntryDialog::Show(mainWindow, {
-        .title = "Save Layout",
-        .label = "Layout name",
+        .title = std::string{ EditorText("layout.saveTitle", "Save Layout") },
+        .label = std::string{ EditorText("layout.nameLabel", "Layout name") },
         .value = sceneContext.EditorConfig().layoutName,
-        .hint = "Letters, digits, spaces, dashes and underscores.",
-        .acceptLabel = "Save",
+        .hint = std::string{ EditorText("layout.nameHint", "Letters, digits, spaces, dashes and underscores.") },
+        .acceptLabel = std::string{ EditorText("common.save", "Save") },
         .icon = HeroIconKind::RectangleGroup,
     });
     if (!name.has_value()) {
@@ -136,11 +141,11 @@ void SaveCurrentLayout(
     const bool overwriting =
         EditorLayoutLibrary::Load(EditorProjectPaths::ProjectRoot(), *name).has_value();
     if (overwriting && EditorChoiceDialog::Show(mainWindow, {
-            .title = "Save Layout",
-            .message = "Replace the layout " + *name + "?",
-            .supportingText = "Its saved arrangement is overwritten with the one on screen.",
-            .primaryLabel = "Replace",
-            .cancelLabel = "Cancel",
+            .title = std::string{ EditorText("layout.saveTitle", "Save Layout") },
+            .message = EditorLocalization::Format("layout.replaceQuestion", "Replace the layout {layout}?", { { "layout", *name } }),
+            .supportingText = std::string{ EditorText("layout.replaceSupporting", "Its saved arrangement is overwritten with the one on screen.") },
+            .primaryLabel = std::string{ EditorText("common.replace", "Replace") },
+            .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
             .icon = HeroIconKind::RectangleGroup,
         }) != EditorChoiceDialogResult::Primary) {
         return;
@@ -164,11 +169,11 @@ void DeleteSavedLayout(
     EditorSceneContext& sceneContext,
     const std::string& name) {
     if (EditorChoiceDialog::Show(mainWindow, {
-            .title = "Delete Layout",
-            .message = "Delete the layout " + name + "?",
-            .supportingText = "The arrangement on screen stays as it is; only the saved layout goes.",
-            .primaryLabel = "Delete",
-            .cancelLabel = "Cancel",
+            .title = std::string{ EditorText("layout.deleteTitle", "Delete Layout") },
+            .message = EditorLocalization::Format("layout.deleteQuestion", "Delete the layout {layout}?", { { "layout", name } }),
+            .supportingText = std::string{ EditorText("layout.deleteSupporting", "The arrangement on screen stays as it is; only the saved layout goes.") },
+            .primaryLabel = std::string{ EditorText("common.delete", "Delete") },
+            .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
             .icon = HeroIconKind::RectangleGroup,
             .primaryTone = EditorDialogButtonTone::Destructive,
         }) != EditorChoiceDialogResult::Primary) {
@@ -264,18 +269,11 @@ void ActivatePanel(
     if (const std::optional<int> row = EditorToolbarRenderer::HitTestMenuRow(menu, x, y); row.has_value()) {
         if (shellInteraction.OpenMenu() == EditorMenuCommand::File) {
             if (*row == 0) {
-                const std::optional<EditorDirtySceneResolution> resolution =
-                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, L"creating a new scene");
-                if (resolution.has_value() && sceneContext.NewScene(*resolution)) {
+                if (EditorSceneFileCommands::NewScene(mainWindow, sceneContext)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 1) {
-                const std::optional<EditorDirtySceneResolution> resolution =
-                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, L"opening another scene");
-                const std::optional<std::filesystem::path> path = resolution.has_value()
-                    ? EditorSceneFileDialog::Open(mainWindow, EditorProjectPaths::ScenesRoot())
-                    : std::nullopt;
-                if (path.has_value() && sceneContext.OpenScene(*path, *resolution)) {
+                if (EditorSceneFileCommands::OpenScene(mainWindow, sceneContext)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 2) {
@@ -285,8 +283,7 @@ void ActivatePanel(
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 3) {
-                const std::optional<std::filesystem::path> path = EditorSceneFileDialog::SaveAs(mainWindow, sceneContext.CurrentScenePath(), EditorProjectPaths::ScenesRoot());
-                if (path.has_value() && sceneContext.SaveCurrentSceneAs(*path)) {
+                if (EditorSceneFileCommands::SaveSceneAs(mainWindow, sceneContext)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 4) {
@@ -364,6 +361,27 @@ void ActivatePanel(
             } else if (*row == 2) {
                 ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::EditorSettings, DockArea::Right);
             }
+        } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Help) {
+            // Like Unity's and Unreal's Help menu: the engine's pages in the browser, and About.
+            constexpr const wchar_t* kHelpPages[] = {
+                L"https://github.com/WojciechKownacki/21kb-Engine/tree/1.0/docs",
+                L"https://github.com/WojciechKownacki/21kb-Engine/issues/new",
+                L"https://github.com/WojciechKownacki/21kb-Engine/releases",
+            };
+            if (*row >= 0 && *row < 3) {
+                const auto opened = reinterpret_cast<INT_PTR>(
+                    ShellExecuteW(mainWindow, L"open", kHelpPages[*row], nullptr, nullptr, SW_SHOWNORMAL));
+                if (opened <= 32) {
+                    sceneContext.Console().Error("Editor", "The help page could not be opened in the browser (error " +
+                        std::to_string(static_cast<long long>(opened)) + ").");
+                }
+            } else if (*row == 3) {
+                const std::string about = EditorLocalization::Format("help.aboutText",
+                    "21kb Engine editor\nBuilt {date}\n\nMIT License, Copyright (c) 2026 WojciechKownacki.\n{url}",
+                    { { "date", __DATE__ }, { "url", "https://github.com/WojciechKownacki/21kb-Engine" } });
+                kb::editor::MessageBoxUtf8(mainWindow, about.c_str(),
+                    std::string{ EditorText("help.aboutTitle", "About 21kb Engine") }.c_str(), MB_OK | MB_ICONINFORMATION);
+            }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::World) {
             bool changed = false;
             switch (*row) {
@@ -386,17 +404,17 @@ void ActivatePanel(
                 break;
             case 5: {
                 const std::optional<EditorDirtySceneResolution> resolution =
-                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, L"converting the scene to a world");
+                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, EditorSceneTransition::ConvertSceneToWorld);
                 changed = resolution.has_value() && sceneContext.ConvertCurrentSceneToWorld(128.0, *resolution);
                 break;
             }
             case 6: {
                 const std::optional<std::string> name = EditorTextEntryDialog::Show(mainWindow, {
-                    .title = "Add Data Layer",
-                    .label = "Layer name",
+                    .title = std::string{ EditorText("world.addDataLayerTitle", "Add Data Layer") },
+                    .label = std::string{ EditorText("world.dataLayerNameLabel", "Layer name") },
                     .value = {},
-                    .hint = "Letters, digits, '_', '-' or '.'. New layers start active.",
-                    .acceptLabel = "Add",
+                    .hint = std::string{ EditorText("world.dataLayerNameHint", "Letters, digits, '_', '-' or '.'. New layers start active.") },
+                    .acceptLabel = std::string{ EditorText("common.add", "Add") },
                 });
                 changed = name.has_value() && sceneContext.DeclareWorldDataLayer(*name);
                 break;

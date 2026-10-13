@@ -4051,19 +4051,21 @@ void RunScriptHostDisablesFailingBehaviourTest() {
             }
         }
         const kb::scene::BehaviourComponent* failingBehaviour = scene.Components().Behaviours().TryGet(failing);
-        const std::string identity = "entity #" + std::to_string(failing.Id()) + ", script asset #" + std::to_string(kFailing.value);
+        const std::string entity = "entity #" + std::to_string(failing.Id());
+        const std::string script = kb::assets::ToString(kFailing);
         const auto reported = [&](std::string_view text) {
             return std::ranges::any_of(diagnostics, [&](const std::string& line) {
-                return line.find(text) != std::string::npos && line.find(identity) != std::string::npos;
+                return line.find(text) != std::string::npos && line.find(entity) != std::string::npos &&
+                    line.find(script) != std::string::npos;
             });
         };
         kb::tests::Require(healthyTicks >= 3 && reported("deliberate behaviour failure"),
             "A failing behaviour must be reported with its entity and asset while the other behaviours keep ticking");
         if (disableFailing) {
-            kb::tests::Require(failingTicks == 1 && failingBehaviour != nullptr && !failingBehaviour->enabled && reported("behaviour disabled"),
+            kb::tests::Require(failingTicks == 1 && failingBehaviour != nullptr && !failingBehaviour->enabled && reported("was disabled"),
                 "A host that disables failing behaviours must stop only the failing instance after its first error");
         } else {
-            kb::tests::Require(failingTicks >= 3 && failingBehaviour != nullptr && failingBehaviour->enabled && !reported("behaviour disabled"),
+            kb::tests::Require(failingTicks >= 3 && failingBehaviour != nullptr && failingBehaviour->enabled && !reported("was disabled"),
                 "A host that keeps failing behaviours must leave them enabled");
         }
     }
@@ -6724,6 +6726,8 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
     backend.castHitMask = 0x1U;
     backend.overlapHitMask = 0x4U;
     backend.closestPointHitMask = 0x8U;
+    const kb::scene::SceneEntity secondOverlap{ object.Entity().Id() + 1U };
+    backend.overlapAllEntities = { object.Entity(), secondOverlap };
     kb::scene::PhysicsBackend::RegisterBackend(scene, backend);
 
     // SphereCast: default layerMask (kPhysicsAllLayers) intersects
@@ -6806,6 +6810,12 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
     const kb::script::ScriptFunctionCallResult overlapSphere = host.Functions().Call("Physics.OverlapSphere", matchedOverlapSphereArgs, context);
     kb::tests::Require(overlapSphere.Output("overlapping")->AsBool() && overlapSphere.Output("entity")->AsUInt64() == object.Entity().Id(),
         "Physics.OverlapSphere with a matching layerMask must overlap the known entity");
+    kb::tests::Require(overlapSphere.Output("count")->AsInt() == 2,
+        "Physics.OverlapSphere must count every overlapping collider (Unity returns them all)");
+    std::vector<kb::script::ScriptFunctionArgument> secondOverlapArgs = matchedOverlapSphereArgs;
+    secondOverlapArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "skip", .value = kb::script::ScriptValue{ 1 } });
+    kb::tests::Require(host.Functions().Call("Physics.OverlapSphere", secondOverlapArgs, context).Output("entity")->AsUInt64() == secondOverlap.Id(),
+        "Physics.OverlapSphere skip=1 must return the second overlapping collider");
 
     const std::vector<kb::script::ScriptFunctionArgument> overlapBoxArgs{
         kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 0.0F } },
@@ -12525,6 +12535,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                     validValue = kb::script::ScriptValue{ 0.8F };
                 } else if (componentName == "Detail Switch" && property.name == "demoteCoverage") {
                     validValue = kb::script::ScriptValue{ 0.4F };
+                } else if (componentName == "WorldBackdrop" && property.name == "sunSize") {
+                    validValue = kb::script::ScriptValue{ 0.5F }; // Unity's Sun Size range is 0..1
                 } else {
                     validValue = kb::script::ScriptValue{ 2.5F };
                 }
@@ -12546,9 +12558,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                 kb::tests::Require(get.value == validValue,
                     ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::Float) {
-                const float expectedValue = componentName == "Detail Switch" && property.name == "promoteCoverage" ? 0.8F
-                    : componentName == "Detail Switch" && property.name == "demoteCoverage" ? 0.4F : 2.5F;
-                kb::tests::Require(kb::tests::NearlyEqual(get.value.AsFloat(), expectedValue), ("Script component API did not round-trip " + fieldLabel).c_str());
+                kb::tests::Require(kb::tests::NearlyEqual(get.value.AsFloat(), validValue.AsFloat()), ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::Int) {
                 kb::tests::Require(get.value.AsInt() == 1, ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::UInt32) {
@@ -12577,7 +12587,9 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // Light is a public compatibility alias for 3D Radiance Emitter and
     // deliberately exercises the same 16 generated accessors.
     // NavLink adds eleven fields.
-    kb::tests::Require(fieldsChecked == 628U, "Script component API generated accessor coverage test did not exercise the expected total field count (628, including collision mesh assets and the Light compatibility alias)");
+    // WorldBackdrop grew eleven procedural sky fields, and the older names of Line Renderer
+    // (10), Trail Renderer (9) and Lens Flare (7) are accepted aliases: 628 -> 665.
+    kb::tests::Require(fieldsChecked == 668U, "Script component API generated accessor coverage test did not exercise the expected total field count (668, including collision mesh assets and the compatibility aliases)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12659,7 +12671,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 628U, "LIB-082 raw-pointer audit did not exercise the expected total field count (628, including collision mesh assets and the Light compatibility alias)");
+    kb::tests::Require(propertiesChecked == 668U, "LIB-082 raw-pointer audit did not exercise the expected total field count (668, including collision mesh assets and the compatibility aliases)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

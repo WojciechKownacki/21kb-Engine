@@ -1,4 +1,5 @@
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
@@ -14,6 +15,7 @@
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <array>
@@ -34,12 +36,12 @@ void PaintPanel(HDC dc, const RECT& rect, const char* title, const char* subtitl
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(207, 214, 222));
     RECT titleRect{ rect.left + 10, rect.top + 8, rect.right - 8, rect.top + 28 };
-    DrawTextA(dc, title, -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, title, -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     const ScopedFont subtitleFont{ 11, FW_NORMAL };
     const ScopedGdiObject selectedSubtitleFont(dc, subtitleFont.handle);
     SetTextColor(dc, RGB(139, 149, 161));
     RECT subtitleRect{ rect.left + 10, rect.top + 34, rect.right - 8, rect.bottom - 8 };
-    DrawTextA(dc, subtitle, -1, &subtitleRect, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, subtitle, -1, &subtitleRect, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
 constexpr int kTreeHeaderHeight = 56;
@@ -146,14 +148,18 @@ void DrawDisclosure(HDC dc, const RECT& rect, bool expanded) {
     return height;
 }
 
+void DrawTextView(HDC dc, std::string_view text, RECT& rect, UINT format) {
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, format);
+}
+
 [[nodiscard]] std::string AssetLabel(
     const EditorSceneContext& sceneContext,
     kb::assets::AssetId id,
-    const char* missing) {
-    if (!id.IsValid()) return missing;
+    std::string_view missing) {
+    if (!id.IsValid()) return std::string{ missing };
     const kb::assets::AssetMetadata* metadata =
         sceneContext.Scene().Assets().Manager().Registry().Find(id);
-    if (metadata == nullptr) return missing;
+    if (metadata == nullptr) return std::string{ missing };
     const std::string filename = metadata->virtualPath.filename().string();
     return filename.empty() ? metadata->name : filename;
 }
@@ -170,7 +176,7 @@ void PaintLinkedDocuments(
     const ScopedGdiObject selectedLabelFont(dc, labelFont.handle);
     SetTextColor(dc, RGB(139, 149, 161));
     RECT familyLabel{ rect.left + 10, rect.top, std::min(rect.right, rect.left + 106), rect.bottom };
-    DrawTextA(dc, "RELATED ASSETS", -1, &familyLabel,
+    DrawTextView(dc, EditorText("skeletalMeshEditor.relatedAssets", "RELATED ASSETS"), familyLabel,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
     const std::array<RECT, 2U> buttons{ layout.meshDocument, layout.skeletonDocument };
@@ -179,10 +185,10 @@ void PaintLinkedDocuments(
     const std::array<bool, 2U> active{ !skeletonActive, skeletonActive };
     const std::array<bool, 2U> enabled{ meshAvailable, true };
     const std::array<std::string, 2U> labels{
-        "Skeletal Mesh  |  " + AssetLabel(
-            sceneContext, sceneContext.SkeletalMeshEditorAssetId(), "No compatible mesh"),
-        "Skeleton  |  " + AssetLabel(
-            sceneContext, sceneContext.SkeletalMeshEditorSkeletonAssetId(), "Unavailable"),
+        EditorLocalization::Format("skeletalMeshEditor.meshDocument", "Skeletal Mesh  |  {asset}", { { "asset", AssetLabel(
+            sceneContext, sceneContext.SkeletalMeshEditorAssetId(), EditorText("skeletalMeshEditor.noCompatibleMesh", "No compatible mesh")) } }),
+        EditorLocalization::Format("skeletalMeshEditor.skeletonDocument", "Skeleton  |  {asset}", { { "asset", AssetLabel(
+            sceneContext, sceneContext.SkeletalMeshEditorSkeletonAssetId(), EditorText("skeletalMeshEditor.unavailable", "Unavailable")) } }),
     };
     const ScopedFont buttonFont{ 11, FW_NORMAL };
     const ScopedGdiObject selectedButtonFont(dc, buttonFont.handle);
@@ -195,7 +201,7 @@ void PaintLinkedDocuments(
         SetTextColor(dc, !enabled[index] ? RGB(92, 99, 109) : RGB(211, 217, 225));
         RECT text{ buttons[index].left + 10, buttons[index].top,
             buttons[index].right - 8, buttons[index].bottom };
-        DrawTextA(dc, labels[index].c_str(), -1, &text,
+        kb::editor::DrawTextUtf8(dc, labels[index].c_str(), -1, &text,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
 }
@@ -211,28 +217,29 @@ struct CommandDescriptor {
 [[nodiscard]] std::vector<CommandDescriptor> BuildCommands(const EditorSceneContext& sceneContext) {
     const bool skeleton = sceneContext.IsSkeletalMeshEditorSkeletonDocument();
     std::vector<CommandDescriptor> commands{
-        { SkeletalAssetCommand::Save, "Save", 62, sceneContext.HasDirtySkeletalMeshEditorAssetEdit(), false },
-        { SkeletalAssetCommand::Undo, "Undo", 62, sceneContext.CanUndoSkeletalMeshEditorAssetEdit() },
-        { SkeletalAssetCommand::Redo, "Redo", 62, sceneContext.CanRedoSkeletalMeshEditorAssetEdit() },
-        { SkeletalAssetCommand::Reload, "Reload", 70, sceneContext.CanReloadSkeletalMeshEditorAsset() },
+        { SkeletalAssetCommand::Save, std::string{ EditorText("common.save", "Save") }, 62, sceneContext.HasDirtySkeletalMeshEditorAssetEdit(), false },
+        { SkeletalAssetCommand::Undo, std::string{ EditorText("menu.edit.undo", "Undo") }, 62, sceneContext.CanUndoSkeletalMeshEditorAssetEdit() },
+        { SkeletalAssetCommand::Redo, std::string{ EditorText("menu.edit.redo", "Redo") }, 62, sceneContext.CanRedoSkeletalMeshEditorAssetEdit() },
+        { SkeletalAssetCommand::Reload, std::string{ EditorText("skeletalMeshEditor.reload", "Reload") }, 70, sceneContext.CanReloadSkeletalMeshEditorAsset() },
     };
     if (skeleton) {
-        commands.push_back({ SkeletalAssetCommand::PreviewMesh, "Preview Mesh...", 104, true });
-        commands.push_back({ SkeletalAssetCommand::AddSocket, "Add Socket", 86,
+        commands.push_back({ SkeletalAssetCommand::PreviewMesh, std::string{ EditorText("skeletalMeshEditor.previewMesh", "Preview Mesh...") }, 104, true });
+        commands.push_back({ SkeletalAssetCommand::AddSocket, std::string{ EditorText("skeletalMeshEditor.menu.addSocket", "Add Socket") }, 86,
             sceneContext.CanAddSkeletonEditorSocket() });
-        commands.push_back({ SkeletalAssetCommand::DuplicateSocket, "Duplicate", 78,
+        commands.push_back({ SkeletalAssetCommand::DuplicateSocket, std::string{ EditorText("skeletalMeshEditor.duplicateSocket", "Duplicate") }, 78,
             sceneContext.CanDuplicateSkeletonEditorSocket() });
-        commands.push_back({ SkeletalAssetCommand::DeleteSocket, "Delete", 66,
+        commands.push_back({ SkeletalAssetCommand::DeleteSocket, std::string{ EditorText("common.delete", "Delete") }, 66,
             sceneContext.CanDeleteSkeletonEditorSocket() });
     } else {
         const bool fixedBounds = sceneContext.SkeletalMeshEditorBoundsMode() ==
             kb::scene::SkeletalMeshBoundsMode::Fixed;
         commands.push_back({ SkeletalAssetCommand::BoundsMode,
-            fixedBounds ? "Bounds: Fixed" : "Bounds: Imported", 118, true, fixedBounds });
+            std::string{ fixedBounds ? EditorText("skeletalMeshEditor.boundsFixed", "Bounds: Fixed")
+                                     : EditorText("skeletalMeshEditor.boundsImported", "Bounds: Imported") }, 118, true, fixedBounds });
     }
-    commands.push_back({ SkeletalAssetCommand::ReferencePose, "Reference Pose", 100, true,
+    commands.push_back({ SkeletalAssetCommand::ReferencePose, std::string{ EditorText("skeletalMeshEditor.referencePose", "Reference Pose") }, 100, true,
         sceneContext.IsSkeletalMeshEditorReferencePose() });
-    commands.push_back({ SkeletalAssetCommand::Focus, "Focus", 64, true });
+    commands.push_back({ SkeletalAssetCommand::Focus, std::string{ EditorText("skeletalMeshEditor.focus", "Focus") }, 64, true });
     return commands;
 }
 
@@ -262,7 +269,7 @@ void PaintCommands(HDC dc, const SkeletalMeshEditorPanelLayout& layout, const Ed
         GdiDrawing::DrawSharpFrame(dc, clipped, fill, border);
         SetTextColor(dc, commands[index].enabled ? RGB(211, 217, 225) : RGB(92, 99, 109));
         RECT text{ clipped.left + 7, clipped.top, clipped.right - 7, clipped.bottom };
-        DrawTextA(dc, commands[index].label.c_str(), -1, &text,
+        kb::editor::DrawTextUtf8(dc, commands[index].label.c_str(), -1, &text,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
 }
@@ -291,13 +298,13 @@ void PaintCommands(HDC dc, const SkeletalMeshEditorPanelLayout& layout, const Ed
     return output;
 }
 
-void DrawAdvancedPreviewRow(HDC dc, int left, int right, int& y, const char* label, bool enabled) {
+void DrawAdvancedPreviewRow(HDC dc, int left, int right, int& y, std::string_view label, bool enabled) {
     RECT row{ left + 10, y, right - 8, y + 20 };
     GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top + 3, row.left + 10, row.top + 13 },
         enabled ? RGB(74, 150, 106) : RGB(68, 72, 79));
     SetTextColor(dc, RGB(211, 217, 225));
     RECT text{ row.left + 16, row.top, row.right, row.bottom };
-    DrawTextA(dc, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    DrawTextView(dc, label, text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     y += 20;
 }
 
@@ -309,17 +316,17 @@ void PaintAdvancedPreview(HDC dc, const RECT& rect, const EditorSceneContext& sc
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(207, 214, 222));
     RECT title{ rect.left + 10, rect.top + 8, rect.right - 8, rect.top + 28 };
-    DrawTextA(dc, "Advanced Preview", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    DrawTextView(dc, EditorText("skeletalMeshEditor.advancedPreview", "Advanced Preview"), title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     const ScopedFont bodyFont{ 11, FW_NORMAL };
     const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
     const AnimationPreviewOverlayState& overlays = sceneContext.AnimationPreview().Overlays();
     int y = rect.top + 32;
-    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "Bones", overlays.BonesVisible());
-    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "Bone Names", overlays.BoneNamesVisible());
-    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "Sockets", overlays.SocketsVisible());
-    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "Bounds", overlays.BoundsVisible());
-    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "LOD", overlays.LodVisible());
-    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "Normals", overlays.NormalsVisible());
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, EditorText("skeletalMeshEditor.overlay.bones", "Bones"), overlays.BonesVisible());
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, EditorText("skeletalMeshEditor.overlay.boneNames", "Bone Names"), overlays.BoneNamesVisible());
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, EditorText("skeletalMeshEditor.overlay.sockets", "Sockets"), overlays.SocketsVisible());
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, EditorText("skeletalMeshEditor.overlay.bounds", "Bounds"), overlays.BoundsVisible());
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, EditorText("skeletalMeshEditor.overlay.lod", "LOD"), overlays.LodVisible());
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, EditorText("skeletalMeshEditor.overlay.normals", "Normals"), overlays.NormalsVisible());
 }
 
 void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext) {
@@ -330,7 +337,7 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(207, 214, 222));
     RECT title{ rect.left + 10, rect.top + 8, rect.right - 8, rect.top + 26 };
-    DrawTextA(dc, "Skeleton Tree", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    DrawTextView(dc, EditorText("skeletalMeshEditor.skeletonTree", "Skeleton Tree"), title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     GdiDrawing::DrawSharpFrame(dc, RECT{ rect.left + 8, rect.top + 30, rect.right - 8, rect.top + 50 }, RGB(23, 25, 28),
         sceneContext.IsSkeletalMeshEditorTreeSearchFocused() ? RGB(77, 143, 204) : RGB(63, 68, 76));
     const ScopedFont bodyFont{ 10, FW_NORMAL };
@@ -340,8 +347,8 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
     HeroIconPainter::Draw(dc, searchIcon, HeroIconKind::MagnifyingGlass, RGB(125, 135, 147), 1);
     RECT filter{ rect.left + 29, rect.top + 31, rect.right - 12, rect.top + 49 };
     const std::string filterText = sceneContext.SkeletalMeshEditorTreeFilter().empty()
-        ? "Search Skeleton Tree..." : sceneContext.SkeletalMeshEditorTreeFilter();
-    DrawTextA(dc, filterText.c_str(), -1, &filter, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        ? std::string{ EditorText("skeletalMeshEditor.searchTree", "Search Skeleton Tree...") } : sceneContext.SkeletalMeshEditorTreeFilter();
+    kb::editor::DrawTextUtf8(dc, filterText.c_str(), -1, &filter, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
     const std::vector<SkeletalMeshEditorTreeRow> rows = sceneContext.SkeletalMeshEditorTreeRows();
     const RECT list = TreeListRectForTree(rect);
@@ -387,7 +394,7 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
             dc, itemIcon, socket ? HeroIconKind::Bolt : HeroIconKind::Skeleton, itemColor, 1);
         RECT label{ itemIcon.right + 4, row.top, row.right - 6, row.bottom };
         SetTextColor(dc, socket ? RGB(120, 196, 176) : RGB(211, 217, 225));
-        DrawTextA(dc, rows[index].label.c_str(), -1, &label,
+        kb::editor::DrawTextUtf8(dc, rows[index].label.c_str(), -1, &label,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
     RestoreDC(dc, savedDc);
@@ -420,13 +427,13 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(207, 214, 222));
     RECT tabText{ detailsTab.left + 9, detailsTab.top, detailsTab.right - 6, detailsTab.bottom };
-    DrawTextA(dc, "Details", -1, &tabText,
+    DrawTextView(dc, EditorText("skeletalMeshEditor.details", "Details"), tabText,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     RECT title{ rect.left + 10, tabWell.bottom, rect.right - 8,
         std::min(rect.bottom, tabWell.bottom + kDetailsObjectHeaderHeight) };
     const std::string titleText = (sceneContext.HasDirtySkeletalMeshEditorAssetEdit() ? "* " : "") +
-        (model.title.empty() ? std::string{ "Asset Details" } : model.title);
-    DrawTextA(dc, titleText.c_str(), -1, &title,
+        (model.title.empty() ? std::string{ EditorText("skeletalMeshEditor.assetDetails", "Asset Details") } : model.title);
+    kb::editor::DrawTextUtf8(dc, titleText.c_str(), -1, &title,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     const ScopedFont bodyFont{ 11, FW_NORMAL };
     const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
@@ -447,7 +454,7 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
             sectionRect.left + 18, sectionRect.bottom - 3 }, section.expanded);
         SetTextColor(dc, RGB(211, 217, 225));
         RECT sectionText{ sectionRect.left + 22, sectionRect.top, sectionRect.right - 7, sectionRect.bottom };
-        DrawTextA(dc, section.title.c_str(), -1, &sectionText,
+        kb::editor::DrawTextUtf8(dc, section.title.c_str(), -1, &sectionText,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         y += kDetailsCategoryHeight;
         if (!section.expanded) continue;
@@ -461,7 +468,7 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
             RECT label{ row.left + 10, row.top, split - 7, row.bottom };
             RECT value{ split + 6, row.top + 2, row.right - 6, row.bottom - 2 };
             SetTextColor(dc, RGB(154, 164, 176));
-            DrawTextA(dc, field.label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            kb::editor::DrawTextUtf8(dc, field.label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             const bool editable = field.action != SkeletalMeshEditorDetailsAction::None;
             if (editable) {
                 GdiDrawing::DrawSharpFrame(dc, value, RGB(20, 22, 25), RGB(67, 73, 82));
@@ -469,12 +476,12 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
                 value.right -= 16;
             }
             SetTextColor(dc, editable ? RGB(225, 230, 236) : RGB(182, 190, 201));
-            DrawTextA(dc, field.value.c_str(), -1, &value,
+            kb::editor::DrawTextUtf8(dc, field.value.c_str(), -1, &value,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             if (editable) {
                 SetTextColor(dc, RGB(132, 143, 156));
                 RECT affordance{ value.right + 3, row.top, row.right - 5, row.bottom };
-                DrawTextA(dc,
+                kb::editor::DrawTextUtf8(dc,
                     field.action == SkeletalMeshEditorDetailsAction::SectionMaterial ||
                     field.action == SkeletalMeshEditorDetailsAction::PreviewLod ? "v" : "...",
                     -1, &affordance, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -605,10 +612,12 @@ void SkeletalMeshEditorPanelRenderer::Paint(
         SetTextColor(dc, GdiDrawing::ToColorRef(theme.textSecondary));
         RECT text = content;
         const bool skeletonDocument = sceneContext.IsSkeletalMeshEditorSkeletonDocument();
-        const char* message = sceneContext.HasPendingSkeletalMeshEditorOpen()
-            ? (skeletonDocument ? "Loading Skeleton preview..." : "Loading Skeletal Mesh...")
-            : (skeletonDocument ? "Open a Skeleton asset to begin editing." : "Open a Skeletal Mesh asset to begin editing.");
-        DrawTextA(dc, message, -1, &text,
+        const std::string_view message = sceneContext.HasPendingSkeletalMeshEditorOpen()
+            ? (skeletonDocument ? EditorText("skeletalMeshEditor.loadingSkeleton", "Loading Skeleton preview...")
+                                : EditorText("skeletalMeshEditor.loadingMesh", "Loading Skeletal Mesh..."))
+            : (skeletonDocument ? EditorText("skeletalMeshEditor.emptySkeleton", "Open a Skeleton asset to begin editing.")
+                                : EditorText("skeletalMeshEditor.emptyMesh", "Open a Skeletal Mesh asset to begin editing."));
+        DrawTextView(dc, message, text,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }

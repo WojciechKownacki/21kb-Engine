@@ -1,4 +1,5 @@
 #include "scene/EditorSceneContext.hpp"
+#include "kb/render/resources/RenderMaterialAuthoring.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "engine/audio/AudioPlayback.hpp"
@@ -96,7 +97,6 @@
 #include "scene/audio/EditorAudioMixerAuthoring.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
-#include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
@@ -320,7 +320,7 @@ struct MaterialGraphContextMenuKeyboardRow {
 }
 
 [[nodiscard]] bool IsMaterialGraphTextureAssetNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
-    return IsMaterialGraphTextureSampleNode(kind) || IsMaterialGraphTextureObjectNode(kind);
+    return kb::render::IsRenderMaterialGraphTextureAssetNode(kind);
 }
 
 [[nodiscard]] std::filesystem::path ResolveAssetPath(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
@@ -686,86 +686,6 @@ void AppendMaterialTypeReferenceValidationDiagnostics(
         : std::nullopt;
 }
 
-[[nodiscard]] std::optional<kb::render::RenderMaterialGraphParameterValue> ParseMaterialGraphParameterValue(
-    std::string_view stableId,
-    kb::render::RenderMaterialParameterType type,
-    std::string_view text) {
-    kb::render::RenderMaterialGraphParameterValue value{};
-    value.stableId = std::string{ stableId };
-    value.type = type;
-
-    std::vector<float> numbers;
-    switch (type) {
-    case kb::render::RenderMaterialParameterType::Scalar:
-        if (kb::render::ParseFiniteMaterialFloatSequence(text, numbers, 1U, 1U)) {
-            value.numbers[0] = numbers[0];
-            return value;
-        }
-        return std::nullopt;
-    case kb::render::RenderMaterialParameterType::Vec3:
-        if (kb::render::ParseFiniteMaterialFloatSequence(text, numbers, 3U, 3U)) {
-            std::copy_n(numbers.begin(), 3U, value.numbers.begin());
-            return value;
-        }
-        return std::nullopt;
-    case kb::render::RenderMaterialParameterType::Vec4:
-    case kb::render::RenderMaterialParameterType::Color:
-        if (kb::render::ParseFiniteMaterialFloatSequence(text, numbers, 3U, 4U)) {
-            std::copy(numbers.begin(), numbers.end(), value.numbers.begin());
-            value.numbers[3] = numbers.size() == 4U ? numbers[3] : 1.0F;
-            return value;
-        }
-        return std::nullopt;
-    case kb::render::RenderMaterialParameterType::Bool: {
-        std::istringstream input{ std::string{ text } };
-        std::string boolText;
-        std::string trailing;
-        if (!(input >> boolText) || (input >> trailing)) {
-            return std::nullopt;
-        }
-        std::ranges::transform(boolText, boolText.begin(), [](unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
-        if (boolText == "true" || boolText == "1" || boolText == "yes" || boolText == "on") {
-            value.boolValue = true;
-            return value;
-        }
-        if (boolText == "false" || boolText == "0" || boolText == "no" || boolText == "off") {
-            value.boolValue = false;
-            return value;
-        }
-        return std::nullopt;
-    }
-    case kb::render::RenderMaterialParameterType::Enum:
-        value.text = std::string{ text };
-        return value.text.empty() ? std::nullopt : std::optional<kb::render::RenderMaterialGraphParameterValue>{ value };
-    case kb::render::RenderMaterialParameterType::Texture:
-        return std::nullopt;
-    }
-    return std::nullopt;
-}
-
-void UpsertGraphParameterValue(
-    kb::render::RenderMaterialAssetData& material,
-    kb::render::RenderMaterialGraphParameterValue value) {
-    for (kb::render::RenderMaterialGraphParameterValue& existing : material.graphParameterValues) {
-        if (existing.stableId == value.stableId) {
-            existing = std::move(value);
-            return;
-        }
-    }
-    material.graphParameterValues.push_back(std::move(value));
-}
-
-void RemoveGraphParameterValue(
-    kb::render::RenderMaterialAssetData& material,
-    std::string_view stableId) {
-    const auto oldEnd = std::remove_if(material.graphParameterValues.begin(), material.graphParameterValues.end(), [stableId](const kb::render::RenderMaterialGraphParameterValue& value) {
-        return value.stableId == stableId;
-    });
-    material.graphParameterValues.erase(oldEnd, material.graphParameterValues.end());
-}
-
 [[nodiscard]] bool MaterialGraphNodeFeedsSurfaceNormal(
     const kb::render::RenderMaterialGraphDocument& graph,
     std::uint32_t sourceNodeId) noexcept {
@@ -830,31 +750,6 @@ void SanitizeMaterialGraphTextureMetadata(kb::render::RenderMaterialAssetData& m
                 !liveTextureStableIds.contains(value.stableId);
         });
     material.graphParameterValues.erase(oldEnd, material.graphParameterValues.end());
-}
-
-void EnsureMaterialInstanceOverrideDocument(
-    kb::render::RenderMaterialInstanceAssetData& instance,
-    const kb::render::RenderMaterialAssetData& parentMaterial) {
-    if (!instance.hasOverrides) {
-        instance.hasOverrides = true;
-        instance.overrides = kb::render::RenderMaterialAssetData{};
-    }
-    instance.overrides.materialType = parentMaterial.materialType;
-    instance.overrides.materialTypeVersion = parentMaterial.materialTypeVersion;
-    instance.overrides.hasExplicitMaterialType = true;
-    instance.overrides.hasExplicitMaterialTypeVersion = true;
-    if (instance.overrides.materialTypeAssetId == 0U) {
-        instance.overrides.materialTypeAssetId = parentMaterial.materialTypeAssetId;
-    }
-    if (instance.overrides.materialTypeAssetPath.empty()) {
-        instance.overrides.materialTypeAssetPath = parentMaterial.materialTypeAssetPath;
-    }
-    if (instance.overrides.graphSourceAssetId == 0U) {
-        instance.overrides.graphSourceAssetId = parentMaterial.graphSourceAssetId;
-    }
-    if (instance.overrides.graphSourceAssetPath.empty()) {
-        instance.overrides.graphSourceAssetPath = parentMaterial.graphSourceAssetPath;
-    }
 }
 
 std::vector<std::string> MaterialInstanceValidationDiagnosticLines(
@@ -1631,6 +1526,7 @@ bool EditorSceneContext::CycleMaterialPreviewPrimitive() {
 const kb::scene::Scene& EditorSceneContext::MaterialThumbnailScene(kb::assets::AssetId id) {
     if (materialThumbnailScene_ == nullptr) {
         materialThumbnailScene_ = std::make_unique<EditorMaterialPreviewScene>();
+        materialThumbnailScene_->SetReleaseHandler(renderSceneReleaseHandler_);
         static_cast<void>(materialThumbnailScene_->SetSceneSettings(materialPreviewScene_->SceneSettings()));
         static_cast<void>(materialThumbnailScene_->SetPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy::Sphere()));
     }
@@ -1680,6 +1576,29 @@ kb::scene::SceneScreenCaptureStatus EditorSceneContext::MaterialThumbnailCapture
         return kb::scene::SceneScreenCaptureStatus::Unknown;
     }
     return kb::scene::SceneRenderFeedback::ScreenCaptureStatus(*thumbnailScene, captureId);
+}
+
+std::uint64_t EditorSceneContext::RequestMaterialPreviewCapture(EditorMaterialPreviewSurface surface, const std::filesystem::path& path) {
+    EditorMaterialPreviewScene* previewScene = surface == EditorMaterialPreviewSurface::Inspector
+        ? inspectorMaterialPreviewScene_.get()
+        : materialPreviewScene_.get();
+    kb::scene::Scene* scene = previewScene == nullptr ? nullptr : previewScene->MutableScene();
+    if (scene == nullptr || path.empty()) {
+        return 0U;
+    }
+    return kb::scene::SceneRenderFeedback::RequestScreenCapture(*scene, path.generic_string());
+}
+
+kb::scene::SceneScreenCaptureStatus EditorSceneContext::MaterialPreviewCaptureStatus(
+    EditorMaterialPreviewSurface surface, std::uint64_t captureId) const noexcept {
+    EditorMaterialPreviewScene* previewScene = surface == EditorMaterialPreviewSurface::Inspector
+        ? inspectorMaterialPreviewScene_.get()
+        : materialPreviewScene_.get();
+    const kb::scene::Scene* scene = previewScene == nullptr ? nullptr : previewScene->MutableScene();
+    if (scene == nullptr || captureId == 0U) {
+        return kb::scene::SceneScreenCaptureStatus::Unknown;
+    }
+    return kb::scene::SceneRenderFeedback::ScreenCaptureStatus(*scene, captureId);
 }
 
 const EditorMaterialPreviewSceneSettings& EditorSceneContext::MaterialPreviewSceneSettings() const noexcept {
@@ -3377,54 +3296,9 @@ bool EditorSceneContext::SetMaterialGraphTextureSampleAsset(kb::assets::AssetId 
 
     kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
     kb::render::RenderMaterialAssetData working = *materialEditor_.WorkingCopy();
-    kb::render::RenderMaterialGraphNode* node = nullptr;
-    for (kb::render::RenderMaterialGraphNode& candidate : working.graph.nodes) {
-        if (candidate.id == nodeId) {
-            node = &candidate;
-            break;
-        }
-    }
-    if (node == nullptr || !IsMaterialGraphTextureAssetNode(node->kind)) {
+    if (!kb::render::SetRenderMaterialGraphTextureNodeAsset(working, nodeId, textureId.value)) {
         LogMaterialGraphDebug(console_, "set-texture-rejected node missing/not texture node=" + std::to_string(nodeId));
         return false;
-    }
-    if (node->parameter.stableId.empty()) {
-        if (node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
-            node->parameter.stableId = "texture" + std::to_string(node->id);
-        } else if (IsMaterialGraphTextureObjectNode(node->kind)) {
-            node->parameter.stableId = "textureObject" + std::to_string(node->id);
-        } else {
-            node->parameter.stableId = "textureSample" + std::to_string(node->id);
-        }
-    }
-    if (node->parameter.displayName.empty()) {
-        if (node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
-            node->parameter.displayName = "Texture " + std::to_string(node->id);
-        } else if (IsMaterialGraphTextureObjectNode(node->kind)) {
-            node->parameter.displayName = "Texture Object " + std::to_string(node->id);
-        } else {
-            node->parameter.displayName = "Texture Sample " + std::to_string(node->id);
-        }
-    }
-    if (node->parameter.textureRole.empty()) {
-        node->parameter.textureRole = "baseColor";
-    }
-    if (node->parameter.expectedTextureColorSpace == kb::render::RenderMaterialTextureColorSpace::Unknown) {
-        node->parameter.expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb;
-    }
-    node->parameter.overrideSupported = true;
-
-    auto existing = std::ranges::find_if(working.graphParameterValues, [stableId = node->parameter.stableId](const kb::render::RenderMaterialGraphParameterValue& value) {
-        return value.stableId == stableId && value.type == kb::render::RenderMaterialParameterType::Texture;
-    });
-    if (existing != working.graphParameterValues.end()) {
-        existing->assetId = textureId.value;
-    } else {
-        working.graphParameterValues.push_back(kb::render::RenderMaterialGraphParameterValue{
-            .stableId = node->parameter.stableId,
-            .type = kb::render::RenderMaterialParameterType::Texture,
-            .assetId = textureId.value,
-        });
     }
 
     materialEditor_.SetWorkingCopy(std::move(working));
@@ -4897,6 +4771,40 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
     return false;
 }
 
+namespace {
+
+// "<texture stableId>@uv" names the UV channel a graph texture slot samples: the texture value's numbers[0].
+[[nodiscard]] std::optional<std::string_view> TextureUvChannelSlot(std::string_view stableId) noexcept {
+    return stableId.ends_with("@uv") ? std::optional{ stableId.substr(0U, stableId.size() - 3U) } : std::nullopt;
+}
+
+[[nodiscard]] std::optional<float> ParseTextureUvChannel(std::string_view text) noexcept {
+    if (text == "0" || text == "UV0" || text == "uv0") return 0.0F;
+    if (text == "1" || text == "UV1" || text == "uv1") return 1.0F;
+    return std::nullopt;
+}
+
+// The texture value of `slot` in `values`, copied from `fallback` (the effective document) when absent.
+[[nodiscard]] kb::render::RenderMaterialGraphParameterValue* TextureSlotValue(
+    std::vector<kb::render::RenderMaterialGraphParameterValue>& values,
+    std::string_view slot,
+    const std::vector<kb::render::RenderMaterialGraphParameterValue>& fallback) {
+    const auto matches = [slot](const kb::render::RenderMaterialGraphParameterValue& value) {
+        return value.type == kb::render::RenderMaterialParameterType::Texture && value.stableId == slot;
+    };
+    if (const auto found = std::ranges::find_if(values, matches); found != values.end()) {
+        return &*found;
+    }
+    const auto inherited = std::ranges::find_if(fallback, matches);
+    if (inherited == fallback.end()) {
+        return nullptr;
+    }
+    values.push_back(*inherited);
+    return &values.back();
+}
+
+} // namespace
+
 bool EditorSceneContext::SetMaterialEditorGraphParameterValue(
     kb::assets::AssetId id,
     std::string_view stableId,
@@ -4906,12 +4814,26 @@ bool EditorSceneContext::SetMaterialEditorGraphParameterValue(
         console_.Error("Materials", "Open the material in Material Editor before editing graph parameters.");
         return false;
     }
+    if (const std::optional<std::string_view> slot = TextureUvChannelSlot(stableId)) {
+        const std::optional<float> channel = ParseTextureUvChannel(valueText);
+        kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+        kb::render::RenderMaterialAssetData after = before;
+        kb::render::RenderMaterialGraphParameterValue* value = TextureSlotValue(after.graphParameterValues, *slot, before.graphParameterValues);
+        if (!channel.has_value() || value == nullptr) {
+            console_.Error("Materials", "TextureUvChannelRefused: '" + std::string{ valueText } + "' for slot '" + std::string{ *slot } + "' (UV0 or UV1 of a graph texture slot).");
+            return false;
+        }
+        value->numbers[0] = *channel;
+        const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+        materialEditor_.SetWorkingCopy(std::move(after));
+        return RecordMaterialGraphWorkingCopyEdit(id, "Edit Texture UV Channel", std::move(before), beforeSelectedNodeId);
+    }
     if (stableId.empty() || type == kb::render::RenderMaterialParameterType::Texture) {
         console_.Error("Materials", "Material graph parameter cannot be edited as a numeric value.");
         return false;
     }
     std::optional<kb::render::RenderMaterialGraphParameterValue> value =
-        ParseMaterialGraphParameterValue(stableId, type, valueText);
+        kb::render::ParseRenderMaterialGraphParameterValue(stableId, type, valueText);
     if (!value.has_value()) {
         console_.Error("Materials", "Material graph parameter value is invalid.");
         return false;
@@ -4920,7 +4842,7 @@ bool EditorSceneContext::SetMaterialEditorGraphParameterValue(
     kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
     const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
     kb::render::RenderMaterialAssetData after = before;
-    UpsertGraphParameterValue(after, std::move(*value));
+    kb::render::UpsertRenderMaterialGraphParameterValue(after, std::move(*value));
     materialEditor_.SetWorkingCopy(std::move(after));
     if (!RecordMaterialGraphWorkingCopyEdit(id, "Edit Material Graph Parameter", std::move(before), beforeSelectedNodeId)) {
         return false;
@@ -4952,18 +4874,30 @@ bool EditorSceneContext::SetMaterialInstanceEditorGraphParameterValue(
         return false;
     }
 
-    std::optional<kb::render::RenderMaterialGraphParameterValue> value =
-        ParseMaterialGraphParameterValue(stableId, type, valueText);
-    if (!value.has_value()) {
-        console_.Error("Materials", "Material instance parameter override value is invalid.");
-        return false;
-    }
-
     kb::render::RenderMaterialInstanceAssetData instance = *materialEditor_.InstanceWorkingCopy();
     const kb::render::RenderMaterialAssetData& parent = *materialEditor_.InstanceParentSnapshot();
-    EnsureMaterialInstanceOverrideDocument(instance, parent);
-    RemoveGraphParameterValue(instance.overrides, stableId);
-    UpsertGraphParameterValue(instance.overrides, std::move(*value));
+    kb::render::EnsureRenderMaterialInstanceOverrideDocument(instance, parent);
+    if (const std::optional<std::string_view> slot = TextureUvChannelSlot(stableId)) {
+        // The slot's texture override carries the channel; the texture is the effective one when not overridden.
+        const std::optional<float> channel = ParseTextureUvChannel(valueText);
+        const kb::render::RenderMaterialAssetData effective = kb::render::BuildEffectiveRenderMaterialInstanceAsset(parent, instance);
+        kb::render::RenderMaterialGraphParameterValue* value =
+            TextureSlotValue(instance.overrides.graphParameterValues, *slot, effective.graphParameterValues);
+        if (!channel.has_value() || value == nullptr) {
+            console_.Error("Materials", "TextureUvChannelRefused: '" + std::string{ valueText } + "' for slot '" + std::string{ *slot } + "' (UV0 or UV1 of a graph texture slot).");
+            return false;
+        }
+        value->numbers[0] = *channel;
+    } else {
+        std::optional<kb::render::RenderMaterialGraphParameterValue> value =
+            kb::render::ParseRenderMaterialGraphParameterValue(stableId, type, valueText);
+        if (!value.has_value()) {
+            console_.Error("Materials", "Material instance parameter override value is invalid.");
+            return false;
+        }
+        kb::render::RemoveRenderMaterialGraphParameterValue(instance.overrides, stableId);
+        kb::render::UpsertRenderMaterialGraphParameterValue(instance.overrides, std::move(*value));
+    }
 
     const kb::render::RenderMaterialInstanceValidationResult validation =
         kb::render::RenderMaterialInstanceAssetLoader::ValidateAgainstParent(instance, parent);
@@ -5060,9 +4994,9 @@ bool EditorSceneContext::SetMaterialInstanceEditorTextureParameterValue(
 
     kb::render::RenderMaterialInstanceAssetData instance = *materialEditor_.InstanceWorkingCopy();
     const kb::render::RenderMaterialAssetData& parent = *materialEditor_.InstanceParentSnapshot();
-    EnsureMaterialInstanceOverrideDocument(instance, parent);
-    RemoveGraphParameterValue(instance.overrides, stableId);
-    UpsertGraphParameterValue(instance.overrides, kb::render::RenderMaterialGraphParameterValue{
+    kb::render::EnsureRenderMaterialInstanceOverrideDocument(instance, parent);
+    kb::render::RemoveRenderMaterialGraphParameterValue(instance.overrides, stableId);
+    kb::render::UpsertRenderMaterialGraphParameterValue(instance.overrides, kb::render::RenderMaterialGraphParameterValue{
         .stableId = std::string{ stableId },
         .type = kb::render::RenderMaterialParameterType::Texture,
         .assetId = textureId.value,

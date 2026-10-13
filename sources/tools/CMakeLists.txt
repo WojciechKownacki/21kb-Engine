@@ -1,12 +1,15 @@
 add_library(kb_cli_core STATIC
     src/CliApiCommands.cpp
     src/CliCommon.cpp
+    src/CliEntityCommands.cpp
     src/CliImportCommand.cpp
     src/CliMcpCommand.cpp
     src/CliNavMeshCommands.cpp
     src/CliPackSetCommands.cpp
+    src/CliPhysicsCommands.cpp
     src/CliRunCommand.cpp
     src/CliSceneCommands.cpp
+    src/CliScriptCommands.cpp
     src/CliSecurityCommands.cpp
     src/CliValidateCommand.cpp
     src/CliWorldCommands.cpp
@@ -18,9 +21,15 @@ target_include_directories(kb_cli_core PUBLIC src/private)
 
 target_link_libraries(kb_cli_core PUBLIC kb_engine)
 # world build resolves meshes for HLOD proxies with the same loaders kb_cooker uses.
+# Materials (.kbmat) are renderer assets: material-new/set/show and MeshRenderer material=.
 if(KB_BUILD_RENDERER)
     target_link_libraries(kb_cli_core PUBLIC kb_renderer)
-    target_compile_definitions(kb_cli_core PUBLIC KB_CLI_WORLD_HLOD=1)
+    target_compile_definitions(kb_cli_core PUBLIC KB_CLI_WORLD_HLOD=1 KB_CLI_RENDERER=1)
+    target_sources(kb_cli_core PRIVATE
+        src/CliMaterialCommands.cpp
+        src/CliMaterialGraphCommands.cpp
+        src/CliPostProcessCommands.cpp
+        src/private/CliMaterialShared.hpp)
 endif()
 
 kb_apply_quality_gates(kb_cli_core)
@@ -39,6 +48,10 @@ if(WIN32)
 endif()
 
 set_target_properties(kb_cli PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+if(WIN32)
+    # UTF-8 process code page: Polish (any) letters in arguments and file names.
+    target_sources(kb_cli PRIVATE kb_cli.manifest)
+endif()
 
 target_link_libraries(kb_cli PRIVATE kb_cli_core)
 
@@ -67,6 +80,10 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)
+    if(WIN32)
+        # The commands run in-process here, under the same code page as kb_cli.
+        target_sources(kb_cli_tests PRIVATE kb_cli.manifest)
+    endif()
 
     add_test(NAME kb_cli_tests COMMAND $<TARGET_FILE:kb_cli_tests>)
     set_tests_properties(kb_cli_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS tools)

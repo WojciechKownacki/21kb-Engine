@@ -14,6 +14,8 @@ struct ScriptSceneComponentPropertyDesc {
     std::string_view name;
     ScriptValueType type = ScriptValueType::Void;
     bool writable = true;
+    // An Int enum's value names in value order; tools accept a name in place of the number.
+    std::span<const std::string_view> enumNames{};
 };
 
 struct ScriptSceneComponentPropertyResult {

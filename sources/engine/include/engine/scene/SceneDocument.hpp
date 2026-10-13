@@ -51,7 +51,17 @@ struct SceneDocument {
     //      target and refer to.
     // v42: node local translations persist as float64 (large world coordinates); older files store float32
     //      and load unchanged.
-    static constexpr std::uint32_t CurrentFileVersion = 42U;
+    // v43: WorldBackdropComponent persists the procedural sky settings (sun disc and size,
+    //      convergence, atmosphere thickness, sky tint, ground colour, exposure); older files load
+    //      Unity's Skybox/Procedural defaults.
+    // v44: the scene's post-process profile (tonemapping, exposure, bloom, anti-aliasing) persists
+    //      with the scene, as a Unity global Volume or a Godot WorldEnvironment does; older files
+    //      load with no profile (renderer defaults).
+    static constexpr std::uint32_t CurrentFileVersion = 46U;
+    static constexpr std::uint32_t RigidbodyDampingFileVersion = 46U;
+    static constexpr std::uint32_t ProceduralSkySettingsFileVersion = 43U;
+    static constexpr std::uint32_t PostProcessProfileFileVersion = 44U;
+    static constexpr std::uint32_t UIImageMaterialFileVersion = 45U;
     static constexpr std::uint32_t PrefabNodeIdentityFileVersion = 41U;
     static constexpr std::uint32_t DoubleTranslationFileVersion = 42U;
 
@@ -63,6 +73,8 @@ struct SceneDocument {
     std::uint64_t audioMixerAssetId = 0U;
     std::string audioMixerSnapshot;
     AudioOcclusionSettings audioOcclusionSettings{};
+    // The scene's post-process profile asset (.kbppfx); 0 = none, the renderer's defaults.
+    std::uint64_t postProcessProfileAssetId = 0U;
     ScenePrefab worldPrefab;
 
     // A document saved before PrefabNodeIdentityFileVersion links its prefab instances to their prefabs by

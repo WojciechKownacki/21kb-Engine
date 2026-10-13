@@ -1,4 +1,5 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "rendering/material_graph/EditorMaterialGraphPinPresentation.hpp"
 
 #if defined(_WIN32)
@@ -22,6 +23,7 @@
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 #include "scene/material_preview/EditorMaterialPreviewTelemetry.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #pragma warning(push, 0)
 #include <objidl.h>
@@ -92,12 +94,12 @@ constexpr COLORREF GridLineMinor = RGB(25, 26, 30);
 constexpr COLORREF GridLineMajor = RGB(35, 36, 40);
 } // namespace MaterialGraphTheme
 
-void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
     ScopedFont font{ pointSize, weight };
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 void EnsureMaterialGraphFontRegistered() {
@@ -167,51 +169,20 @@ struct GraphTextFontStats {
     return font;
 }
 
-void DrawGraphText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+void DrawGraphText(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
     EnsureMaterialGraphFontRegistered();
     HFONT font = GraphTextFont(dc, pointSize, weight);
     const ScopedGdiObject selectedFont(dc, font);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
-void DrawCommandButton(HDC dc, const RECT& rect, const EditorTheme& theme, const char* label, bool emphasized) {
+void DrawCommandButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view label, bool emphasized) {
     const COLORREF fill = GdiDrawing::ToColorRef(emphasized ? theme.accent : theme.chrome);
     const COLORREF border = GdiDrawing::ToColorRef(emphasized ? theme.accent : theme.borderPanel);
     GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
     DrawText(dc, RECT{ rect.left + 8, rect.top, rect.right - 8, rect.bottom }, label, GdiDrawing::ToColorRef(emphasized ? theme.textPrimary : theme.textSecondary), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-}
-
-[[nodiscard]] const char* PreviewPrimitiveButtonLabel(EditorMaterialPreviewPrimitiveKind kind) noexcept {
-    switch (kind) {
-    case EditorMaterialPreviewPrimitiveKind::Sphere: return "Sphere";
-    case EditorMaterialPreviewPrimitiveKind::Cylinder: return "Cylinder";
-    case EditorMaterialPreviewPrimitiveKind::Cube: return "Cube";
-    case EditorMaterialPreviewPrimitiveKind::Plane: return "Plane";
-    case EditorMaterialPreviewPrimitiveKind::CustomMesh: return "Custom";
-    case EditorMaterialPreviewPrimitiveKind::Fallback: return "Fallback";
-    }
-    return "Preview";
-}
-
-[[nodiscard]] const char* PreviewSceneButtonLabel(EditorMaterialPreviewLightingPreset preset) noexcept {
-    switch (preset) {
-    case EditorMaterialPreviewLightingPreset::Studio: return "Studio";
-    case EditorMaterialPreviewLightingPreset::Neutral: return "Neutral";
-    case EditorMaterialPreviewLightingPreset::HighContrast: return "High";
-    }
-    return "Scene";
-}
-
-[[nodiscard]] const char* PreviewQualityButtonLabel(kb::render::RenderMaterialGraphQualityLevel qualityLevel) noexcept {
-    switch (qualityLevel) {
-    case kb::render::RenderMaterialGraphQualityLevel::Low: return "Low";
-    case kb::render::RenderMaterialGraphQualityLevel::Medium: return "Med";
-    case kb::render::RenderMaterialGraphQualityLevel::High: return "High";
-    case kb::render::RenderMaterialGraphQualityLevel::Epic: return "Epic";
-    }
-    return "Quality";
 }
 
 void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext, bool dirty, bool infoVisible) {
@@ -223,18 +194,19 @@ void DrawHeader(HDC dc, const RECT& content, const EditorTheme& theme, const Edi
         const int dividerY = layout.compactToolbar ? content.top + 70 : content.top + 40;
         GdiDrawing::FillRectColor(dc, RECT{ layout.header.left + 8, dividerY, layout.header.right - 8, dividerY + 1 }, GdiDrawing::ToColorRef(theme.borderChrome));
     }
-    const std::string title = dirty ? "Material Editor  *" : "Material Editor";
-    DrawText(dc, layout.title, title.c_str(), dirty ? RGB(242, 193, 103) : GdiDrawing::ToColorRef(theme.textPrimary), 14, FW_SEMIBOLD);
-    DrawCommandButton(dc, layout.infoButton, theme, "Info", infoVisible);
-    DrawCommandButton(dc, layout.previewPrimitiveButton, theme, PreviewPrimitiveButtonLabel(sceneContext.MaterialPreviewPrimitivePolicy().kind), false);
-    DrawCommandButton(dc, layout.previewSceneButton, theme, PreviewSceneButtonLabel(sceneContext.MaterialPreviewSceneSettings().lightingPreset), false);
-    DrawCommandButton(dc, layout.previewQualityButton, theme, PreviewQualityButtonLabel(sceneContext.MaterialPreviewSceneSettings().qualityLevel), false);
-    DrawCommandButton(dc, layout.previewNormalButton, theme, "Normal", sceneContext.MaterialPreviewNormalDebugViewEnabled());
-    DrawCommandButton(dc, layout.previewNodeButton, theme, "Node", sceneContext.MaterialPreviewNodePreviewEnabled());
-    DrawCommandButton(dc, layout.applyButton, theme, layout.compactToolbar ? "Apply" : "Apply To Selection", false);
-    DrawCommandButton(dc, layout.saveButton, theme, "Save", dirty);
-    DrawCommandButton(dc, layout.revertButton, theme, "Revert", false);
-    DrawCommandButton(dc, layout.validateButton, theme, "Validate", false);
+    const std::string title = std::string{ EditorText("panel.materialEditor", "Material Editor") } + (dirty ? "  *" : "");
+    DrawText(dc, layout.title, title, dirty ? RGB(242, 193, 103) : GdiDrawing::ToColorRef(theme.textPrimary), 14, FW_SEMIBOLD);
+    DrawCommandButton(dc, layout.infoButton, theme, EditorText("materialEditor.info", "Info"), infoVisible);
+    DrawCommandButton(dc, layout.previewPrimitiveButton, theme, MaterialEditorPanelRenderer::PreviewPrimitiveLabel(sceneContext.MaterialPreviewPrimitivePolicy().kind), false);
+    DrawCommandButton(dc, layout.previewSceneButton, theme, MaterialEditorPanelRenderer::PreviewSceneLabel(sceneContext.MaterialPreviewSceneSettings().lightingPreset), false);
+    DrawCommandButton(dc, layout.previewQualityButton, theme, MaterialEditorPanelRenderer::PreviewQualityLabel(sceneContext.MaterialPreviewSceneSettings().qualityLevel), false);
+    DrawCommandButton(dc, layout.previewNormalButton, theme, EditorText("materialEditor.normalDebug", "Normal"), sceneContext.MaterialPreviewNormalDebugViewEnabled());
+    DrawCommandButton(dc, layout.previewNodeButton, theme, EditorText("materialEditor.nodePreview", "Node"), sceneContext.MaterialPreviewNodePreviewEnabled());
+    DrawCommandButton(dc, layout.applyButton, theme, layout.compactToolbar ? EditorText("common.apply", "Apply")
+                                                                           : EditorText("materialEditor.applyToSelection", "Apply To Selection"), false);
+    DrawCommandButton(dc, layout.saveButton, theme, EditorText("common.save", "Save"), dirty);
+    DrawCommandButton(dc, layout.revertButton, theme, EditorText("materialEditor.revert", "Revert"), false);
+    DrawCommandButton(dc, layout.validateButton, theme, EditorText("materialEditor.validate", "Validate"), false);
 }
 
 [[nodiscard]] RECT PreviewFrameRect(const RECT& content) noexcept {
@@ -473,213 +445,259 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
 [[nodiscard]] std::string GraphNodeTitle(kb::render::RenderMaterialGraphNodeKind kind) {
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
-        return "Material Output";
+        return std::string{ EditorText("materialEditor.node.materialOutput", "Material Output") };
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-        return "Scalar";
+        return std::string{ EditorText("materialEditor.node.constantScalar", "Scalar") };
     case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
-        return "Bool";
+        return std::string{ EditorText("materialEditor.node.constantBool", "Bool") };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
-        return "XY";
+        return std::string{ EditorText("materialEditor.node.constantVector2", "XY") };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return "RGB Node";
+        return std::string{ EditorText("materialEditor.node.constantVector", "RGB Node") };
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        return "RGBA Node";
+        return std::string{ EditorText("materialEditor.node.constantColor", "RGBA Node") };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
-        return "Image Texture";
+        return std::string{ EditorText("materialEditor.node.textureSample", "Image Texture") };
     case kb::render::RenderMaterialGraphNodeKind::TextureSampleCube:
-        return "Cube Texture";
+        return std::string{ EditorText("materialEditor.node.textureSampleCube", "Cube Texture") };
     case kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume:
-        return "Volume Texture";
+        return std::string{ EditorText("materialEditor.node.textureSampleVolume", "Volume Texture") };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray:
-        return "Texture Array";
+        return std::string{ EditorText("materialEditor.node.textureSample2DArray", "Texture Array") };
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
-        return "Value Parameter";
+        return std::string{ EditorText("materialEditor.node.parameterScalar", "Value Parameter") };
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
-        return "Vector Parameter";
+        return std::string{ EditorText("materialEditor.node.parameterVector", "Vector Parameter") };
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return "RGB Parameter";
+        return std::string{ EditorText("materialEditor.node.parameterColor", "RGB Parameter") };
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
-        return "Image Parameter";
+        return std::string{ EditorText("materialEditor.node.parameterTexture", "Image Parameter") };
     case kb::render::RenderMaterialGraphNodeKind::TextureObject:
-        return "Texture Object";
+        return std::string{ EditorText("materialEditor.node.textureObject", "Texture Object") };
     case kb::render::RenderMaterialGraphNodeKind::TextureObjectCube:
-        return "Texture Cube Object";
+        return std::string{ EditorText("materialEditor.node.textureObjectCube", "Texture Cube Object") };
     case kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume:
-        return "Texture Volume Object";
+        return std::string{ EditorText("materialEditor.node.textureObjectVolume", "Texture Volume Object") };
     case kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray:
-        return "Texture Array Object";
+        return std::string{ EditorText("materialEditor.node.textureObject2DArray", "Texture Array Object") };
     case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
-        return "Collection Parameter";
+        return std::string{ EditorText("materialEditor.node.collectionParameter", "Collection Parameter") };
     case kb::render::RenderMaterialGraphNodeKind::CustomCode:
-        return "Custom Code";
+        return std::string{ EditorText("materialEditor.node.customCode", "Custom Code") };
     case kb::render::RenderMaterialGraphNodeKind::QualitySwitch:
-        return "Quality Switch";
+        return std::string{ EditorText("materialEditor.node.qualitySwitch", "Quality Switch") };
     case kb::render::RenderMaterialGraphNodeKind::FeatureLevelSwitch:
-        return "Feature Level Switch";
+        return std::string{ EditorText("materialEditor.node.featureLevelSwitch", "Feature Level Switch") };
     case kb::render::RenderMaterialGraphNodeKind::ShadingPathSwitch:
-        return "Shading Path Switch";
+        return std::string{ EditorText("materialEditor.node.shadingPathSwitch", "Shading Path Switch") };
     case kb::render::RenderMaterialGraphNodeKind::ShaderStageSwitch:
-        return "Shader Stage Switch";
+        return std::string{ EditorText("materialEditor.node.shaderStageSwitch", "Shader Stage Switch") };
     case kb::render::RenderMaterialGraphNodeKind::Reroute:
-        return "Reroute";
+        return std::string{ EditorText("materialEditor.node.reroute", "Reroute") };
     case kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
-        return "Named In";
+        return std::string{ EditorText("materialEditor.node.namedRerouteDeclaration", "Named In") };
     case kb::render::RenderMaterialGraphNodeKind::NamedRerouteUsage:
-        return "Named Out";
+        return std::string{ EditorText("materialEditor.node.namedRerouteUsage", "Named Out") };
     case kb::render::RenderMaterialGraphNodeKind::CompositeInput:
-        return "Composite In";
+        return std::string{ EditorText("materialEditor.node.compositeInput", "Composite In") };
     case kb::render::RenderMaterialGraphNodeKind::CompositeOutput:
-        return "Composite Out";
+        return std::string{ EditorText("materialEditor.node.compositeOutput", "Composite Out") };
     case kb::render::RenderMaterialGraphNodeKind::FunctionInput:
-        return "Function In";
+        return std::string{ EditorText("materialEditor.node.functionInput", "Function In") };
     case kb::render::RenderMaterialGraphNodeKind::FunctionOutput:
-        return "Function Out";
+        return std::string{ EditorText("materialEditor.node.functionOutput", "Function Out") };
     case kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall:
-        return "Function Call";
+        return std::string{ EditorText("materialEditor.node.materialFunctionCall", "Function Call") };
     case kb::render::RenderMaterialGraphNodeKind::LayerStack:
-        return "Layer Stack";
+        return std::string{ EditorText("materialEditor.node.layerStack", "Layer Stack") };
     case kb::render::RenderMaterialGraphNodeKind::Add:
-        return "Add";
+        return std::string{ EditorText("materialEditor.node.add", "Add") };
     case kb::render::RenderMaterialGraphNodeKind::Subtract:
-        return "Subtract";
+        return std::string{ EditorText("materialEditor.node.subtract", "Subtract") };
     case kb::render::RenderMaterialGraphNodeKind::Multiply:
-        return "Multiply";
+        return std::string{ EditorText("materialEditor.node.multiply", "Multiply") };
     case kb::render::RenderMaterialGraphNodeKind::Divide:
-        return "Divide";
+        return std::string{ EditorText("materialEditor.node.divide", "Divide") };
     case kb::render::RenderMaterialGraphNodeKind::Power:
-        return "Power";
+        return std::string{ EditorText("materialEditor.node.power", "Power") };
     case kb::render::RenderMaterialGraphNodeKind::OneMinus:
-        return "One Minus";
+        return std::string{ EditorText("materialEditor.node.oneMinus", "One Minus") };
     case kb::render::RenderMaterialGraphNodeKind::Absolute:
-        return "Abs";
+        return std::string{ EditorText("materialEditor.node.absolute", "Abs") };
     case kb::render::RenderMaterialGraphNodeKind::Minimum:
-        return "Min";
+        return std::string{ EditorText("materialEditor.node.minimum", "Min") };
     case kb::render::RenderMaterialGraphNodeKind::Maximum:
-        return "Max";
+        return std::string{ EditorText("materialEditor.node.maximum", "Max") };
     case kb::render::RenderMaterialGraphNodeKind::Saturate:
-        return "Saturate";
+        return std::string{ EditorText("materialEditor.node.saturate", "Saturate") };
     case kb::render::RenderMaterialGraphNodeKind::Floor:
-        return "Floor";
+        return std::string{ EditorText("materialEditor.node.floor", "Floor") };
     case kb::render::RenderMaterialGraphNodeKind::Ceil:
-        return "Ceil";
+        return std::string{ EditorText("materialEditor.node.ceil", "Ceil") };
     case kb::render::RenderMaterialGraphNodeKind::Fraction:
-        return "Frac";
+        return std::string{ EditorText("materialEditor.node.fraction", "Frac") };
     case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
-        return "Sqrt";
+        return std::string{ EditorText("materialEditor.node.squareRoot", "Sqrt") };
     case kb::render::RenderMaterialGraphNodeKind::Sine:
-        return "Sin";
+        return std::string{ EditorText("materialEditor.node.sine", "Sin") };
     case kb::render::RenderMaterialGraphNodeKind::Cosine:
-        return "Cos";
+        return std::string{ EditorText("materialEditor.node.cosine", "Cos") };
     case kb::render::RenderMaterialGraphNodeKind::Exponential:
-        return "Exp";
+        return std::string{ EditorText("materialEditor.node.exponential", "Exp") };
     case kb::render::RenderMaterialGraphNodeKind::Exponential2:
-        return "Exp2";
+        return std::string{ EditorText("materialEditor.node.exponential2", "Exp2") };
     case kb::render::RenderMaterialGraphNodeKind::Logarithm:
-        return "Log";
+        return std::string{ EditorText("materialEditor.node.logarithm", "Log") };
     case kb::render::RenderMaterialGraphNodeKind::Logarithm2:
-        return "Log2";
+        return std::string{ EditorText("materialEditor.node.logarithm2", "Log2") };
     case kb::render::RenderMaterialGraphNodeKind::SrgbToLinear:
-        return "sRGB to Linear";
+        return std::string{ EditorText("materialEditor.node.srgbToLinear", "sRGB to Linear") };
     case kb::render::RenderMaterialGraphNodeKind::LinearToSrgb:
-        return "Linear to sRGB";
+        return std::string{ EditorText("materialEditor.node.linearToSrgb", "Linear to sRGB") };
     case kb::render::RenderMaterialGraphNodeKind::Logarithm10:
-        return "Log10";
+        return std::string{ EditorText("materialEditor.node.logarithm10", "Log10") };
     case kb::render::RenderMaterialGraphNodeKind::HsvToRgb:
-        return "HSV to RGB";
+        return std::string{ EditorText("materialEditor.node.hsvToRgb", "HSV to RGB") };
     case kb::render::RenderMaterialGraphNodeKind::RgbToHsv:
-        return "RGB to HSV";
+        return std::string{ EditorText("materialEditor.node.rgbToHsv", "RGB to HSV") };
     case kb::render::RenderMaterialGraphNodeKind::DeriveNormalZ:
-        return "Derive Normal Z";
+        return std::string{ EditorText("materialEditor.node.deriveNormalZ", "Derive Normal Z") };
     case kb::render::RenderMaterialGraphNodeKind::Fmod:
-        return "Fmod";
+        return std::string{ EditorText("materialEditor.node.fmod", "Fmod") };
     case kb::render::RenderMaterialGraphNodeKind::InverseLerp:
-        return "Inverse Lerp";
+        return std::string{ EditorText("materialEditor.node.inverseLerp", "Inverse Lerp") };
     case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeX:
-        return "DDX";
+        return std::string{ EditorText("materialEditor.node.partialDerivativeX", "DDX") };
     case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeY:
-        return "DDY";
+        return std::string{ EditorText("materialEditor.node.partialDerivativeY", "DDY") };
     case kb::render::RenderMaterialGraphNodeKind::SphereMask:
-        return "Sphere Mask";
+        return std::string{ EditorText("materialEditor.node.sphereMask", "Sphere Mask") };
     case kb::render::RenderMaterialGraphNodeKind::BlackBody:
-        return "Black Body";
+        return std::string{ EditorText("materialEditor.node.blackBody", "Black Body") };
     case kb::render::RenderMaterialGraphNodeKind::Noise:
-        return "Noise";
+        return std::string{ EditorText("materialEditor.node.noise", "Noise") };
     case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
-        return "Vector Noise";
+        return std::string{ EditorText("materialEditor.node.vectorNoise", "Vector Noise") };
     case kb::render::RenderMaterialGraphNodeKind::Sobol:
-        return "Sobol";
+        return std::string{ EditorText("materialEditor.node.sobol", "Sobol") };
     case kb::render::RenderMaterialGraphNodeKind::AppendVector:
-        return "Append Vector";
+        return std::string{ EditorText("materialEditor.node.appendVector", "Append Vector") };
     case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
-        return "Color Ramp";
+        return std::string{ EditorText("materialEditor.node.colorRamp", "Color Ramp") };
     case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
-        return "Antialiased Mask";
+        return std::string{ EditorText("materialEditor.node.antialiasedTextureMask", "Antialiased Mask") };
     case kb::render::RenderMaterialGraphNodeKind::Transform:
-        return "Transform";
+        return std::string{ EditorText("materialEditor.node.transform", "Transform") };
     case kb::render::RenderMaterialGraphNodeKind::TransformPosition:
-        return "Transform Position";
+        return std::string{ EditorText("materialEditor.node.transformPosition", "Transform Position") };
     case kb::render::RenderMaterialGraphNodeKind::DotProduct:
-        return "Dot Product";
+        return std::string{ EditorText("materialEditor.node.dotProduct", "Dot Product") };
     case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
-        return "Cross Product";
+        return std::string{ EditorText("materialEditor.node.crossProduct", "Cross Product") };
     case kb::render::RenderMaterialGraphNodeKind::Normalize:
-        return "Normalize";
+        return std::string{ EditorText("materialEditor.node.normalize", "Normalize") };
     case kb::render::RenderMaterialGraphNodeKind::Length:
-        return "Length";
+        return std::string{ EditorText("materialEditor.node.length", "Length") };
     case kb::render::RenderMaterialGraphNodeKind::Distance:
-        return "Distance";
+        return std::string{ EditorText("materialEditor.node.distance", "Distance") };
     case kb::render::RenderMaterialGraphNodeKind::BreakVector:
-        return "Break Vector";
+        return std::string{ EditorText("materialEditor.node.breakVector", "Break Vector") };
     case kb::render::RenderMaterialGraphNodeKind::MakeVector:
-        return "Make Vector";
+        return std::string{ EditorText("materialEditor.node.makeVector", "Make Vector") };
     case kb::render::RenderMaterialGraphNodeKind::Step:
-        return "Step";
+        return std::string{ EditorText("materialEditor.node.step", "Step") };
     case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
-        return "Smooth Step";
+        return std::string{ EditorText("materialEditor.node.smoothStep", "Smooth Step") };
     case kb::render::RenderMaterialGraphNodeKind::If:
-        return "If";
+        return std::string{ EditorText("materialEditor.node.if", "If") };
     case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
-        return "Switch";
+        return std::string{ EditorText("materialEditor.node.runtimeSwitch", "Switch") };
     case kb::render::RenderMaterialGraphNodeKind::Desaturate:
-        return "Desaturate";
+        return std::string{ EditorText("materialEditor.node.desaturate", "Desaturate") };
     case kb::render::RenderMaterialGraphNodeKind::Fresnel:
-        return "Fresnel";
+        return std::string{ EditorText("materialEditor.node.fresnel", "Fresnel") };
     case kb::render::RenderMaterialGraphNodeKind::Negate:
-        return "Negate";
+        return std::string{ EditorText("materialEditor.node.negate", "Negate") };
     case kb::render::RenderMaterialGraphNodeKind::Sign:
-        return "Sign";
+        return std::string{ EditorText("materialEditor.node.sign", "Sign") };
     case kb::render::RenderMaterialGraphNodeKind::Round:
-        return "Round";
+        return std::string{ EditorText("materialEditor.node.round", "Round") };
     case kb::render::RenderMaterialGraphNodeKind::Truncate:
-        return "Truncate";
+        return std::string{ EditorText("materialEditor.node.truncate", "Truncate") };
     case kb::render::RenderMaterialGraphNodeKind::Tangent:
-        return "Tan";
+        return std::string{ EditorText("materialEditor.node.tangent", "Tan") };
     case kb::render::RenderMaterialGraphNodeKind::ArcSine:
-        return "Asin";
+        return std::string{ EditorText("materialEditor.node.arcSine", "Asin") };
     case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
-        return "Acos";
+        return std::string{ EditorText("materialEditor.node.arcCosine", "Acos") };
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
-        return "Atan";
+        return std::string{ EditorText("materialEditor.node.arcTangent", "Atan") };
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
-        return "Atan2";
+        return std::string{ EditorText("materialEditor.node.arcTangent2", "Atan2") };
     case kb::render::RenderMaterialGraphNodeKind::ArcSineFast:
-        return "Asin Fast";
+        return std::string{ EditorText("materialEditor.node.arcSineFast", "Asin Fast") };
     case kb::render::RenderMaterialGraphNodeKind::ArcCosineFast:
-        return "Acos Fast";
+        return std::string{ EditorText("materialEditor.node.arcCosineFast", "Acos Fast") };
     case kb::render::RenderMaterialGraphNodeKind::ArcTangentFast:
-        return "Atan Fast";
+        return std::string{ EditorText("materialEditor.node.arcTangentFast", "Atan Fast") };
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast:
-        return "Atan2 Fast";
+        return std::string{ EditorText("materialEditor.node.arcTangent2Fast", "Atan2 Fast") };
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
-        return "Clamp";
+        return std::string{ EditorText("materialEditor.node.clamp", "Clamp") };
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
-        return "Mix";
+        return std::string{ EditorText("materialEditor.node.lerp", "Mix") };
     case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
-        return "Normal Map";
+        return std::string{ EditorText("materialEditor.node.normalUnpack", "Normal Map") };
     case kb::render::RenderMaterialGraphNodeKind::Uv:
-        return "Texture Coordinate";
+        return std::string{ EditorText("materialEditor.node.uv", "Texture Coordinate") };
     case kb::render::RenderMaterialGraphNodeKind::TwoSidedSign:
-        return "Two Sided Sign";
+        return std::string{ EditorText("materialEditor.node.twoSidedSign", "Two Sided Sign") };
+    case kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture:
+        return std::string{ EditorText("materialEditor.node.worldAlignedTexture", "World Aligned Texture") };
+    case kb::render::RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+        return std::string{ EditorText("materialEditor.node.parallaxOcclusionMapping", "Parallax Occlusion Mapping") };
+    case kb::render::RenderMaterialGraphNodeKind::FlipBook:
+        return std::string{ EditorText("materialEditor.node.flipBook", "FlipBook") };
+    case kb::render::RenderMaterialGraphNodeKind::Checkerboard:
+        return std::string{ EditorText("materialEditor.node.checkerboard", "Checkerboard") };
+    case kb::render::RenderMaterialGraphNodeKind::PolarCoordinates:
+        return std::string{ EditorText("materialEditor.node.polarCoordinates", "Polar Coordinates") };
+    case kb::render::RenderMaterialGraphNodeKind::Twirl:
+        return std::string{ EditorText("materialEditor.node.twirl", "Twirl") };
+    case kb::render::RenderMaterialGraphNodeKind::Ellipse:
+        return std::string{ EditorText("materialEditor.node.ellipse", "Ellipse") };
+    case kb::render::RenderMaterialGraphNodeKind::Rectangle:
+        return std::string{ EditorText("materialEditor.node.rectangle", "Rectangle") };
+    case kb::render::RenderMaterialGraphNodeKind::RoundedRectangle:
+        return std::string{ EditorText("materialEditor.node.roundedRectangle", "Rounded Rectangle") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendOverlay:
+        return std::string{ EditorText("materialEditor.node.blendOverlay", "Blend Overlay") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendScreen:
+        return std::string{ EditorText("materialEditor.node.blendScreen", "Blend Screen") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendSoftLight:
+        return std::string{ EditorText("materialEditor.node.blendSoftLight", "Blend Soft Light") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendHardLight:
+        return std::string{ EditorText("materialEditor.node.blendHardLight", "Blend Hard Light") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendLinearLight:
+        return std::string{ EditorText("materialEditor.node.blendLinearLight", "Blend Linear Light") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendColorBurn:
+        return std::string{ EditorText("materialEditor.node.blendColorBurn", "Blend Color Burn") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendColorDodge:
+        return std::string{ EditorText("materialEditor.node.blendColorDodge", "Blend Color Dodge") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendDarken:
+        return std::string{ EditorText("materialEditor.node.blendDarken", "Blend Darken") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendLighten:
+        return std::string{ EditorText("materialEditor.node.blendLighten", "Blend Lighten") };
+    case kb::render::RenderMaterialGraphNodeKind::BlendDifference:
+        return std::string{ EditorText("materialEditor.node.blendDifference", "Blend Difference") };
+    case kb::render::RenderMaterialGraphNodeKind::Contrast:
+        return std::string{ EditorText("materialEditor.node.contrast", "Contrast") };
+    case kb::render::RenderMaterialGraphNodeKind::HueShift:
+        return std::string{ EditorText("materialEditor.node.hueShift", "Hue Shift") };
+    case kb::render::RenderMaterialGraphNodeKind::ChannelMixer:
+        return std::string{ EditorText("materialEditor.node.channelMixer", "Channel Mixer") };
+    case kb::render::RenderMaterialGraphNodeKind::RemapValueRange:
+        return std::string{ EditorText("materialEditor.node.remapValueRange", "Remap Value Range") };
     default:
         break;
     }
@@ -1151,7 +1169,7 @@ void DrawGraphCommentBox(HDC dc, const RECT& rect, const kb::render::RenderMater
         rect.right - ScaleMetric(10, scale),
         std::min(rect.bottom, rect.top + ScaleMetric(26, scale)),
     };
-    const std::string label = comment.text.empty() ? std::string{ "Comment" } : comment.text;
+    const std::string label = comment.text.empty() ? std::string{ EditorText("materialEditor.comment", "Comment") } : comment.text;
     DrawGraphText(dc, title, label.c_str(), RGB(239, 244, 249), ScaleMetric(kGraphPinFontSize, scale), FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
@@ -1171,7 +1189,7 @@ void DrawGraphCompositeBox(HDC dc, const RECT& rect, const kb::render::RenderMat
         rect.right - ScaleMetric(10, scale),
         std::min(rect.bottom, rect.top + ScaleMetric(28, scale)),
     };
-    const std::string label = composite.name.empty() ? std::string{ "Composite" } : composite.name;
+    const std::string label = composite.name.empty() ? std::string{ EditorText("materialEditor.composite", "Composite") } : composite.name;
     DrawGraphText(dc, title, label.c_str(), RGB(239, 244, 249), ScaleMetric(kGraphPinFontSize, scale), FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     const RECT status{
@@ -1180,7 +1198,8 @@ void DrawGraphCompositeBox(HDC dc, const RECT& rect, const kb::render::RenderMat
         rect.right - ScaleMetric(10, scale),
         rect.bottom - ScaleMetric(4, scale),
     };
-    const std::string summary = std::to_string(composite.nodeIds.size()) + (composite.nodeIds.size() == 1U ? " node" : " nodes");
+    const std::string summary = EditorLocalization::Plural("materialEditor.compositeNodeCount",
+        static_cast<std::int64_t>(composite.nodeIds.size()), "{count} node", "{count} nodes");
     DrawGraphText(dc, status, summary.c_str(), RGB(205, 218, 226), ScaleMetric(kGraphPinFontSize, scale), FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
@@ -1700,7 +1719,7 @@ void DrawColorRampWatcher(HDC dc, const RECT& nodeRect, const kb::render::Render
     DrawGraphText(
         dc,
         RECT{ gradient.left, gradient.bottom + ScaleMetric(22, scale), gradient.right, watcher.bottom },
-        "Gradient stops",
+        EditorText("materialEditor.gradientStops", "Gradient stops"),
         MaterialGraphTheme::TextMuted,
         ScaleMetric(kGraphPinFontSize, scale),
         FW_NORMAL,
@@ -2153,7 +2172,7 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
         {},
         !sceneContext.MaterialGraphContextMenuSearchQuery().empty());
     const std::string searchText = sceneContext.MaterialGraphContextMenuSearchQuery().empty()
-        ? std::string{ "Search nodes..." }
+        ? std::string{ EditorText("materialEditor.searchNodes", "Search nodes...") }
         : std::string{ sceneContext.MaterialGraphContextMenuSearchQuery() };
     EditorDialogStyle::PaintText(
         dc,
@@ -2271,7 +2290,7 @@ struct MaterialGraphTexturePickerRow {
     if (!metadata.virtualPath.empty()) {
         return metadata.virtualPath.stem().string();
     }
-    return "Texture";
+    return std::string{ EditorText("assetPicker.unnamedTexture", "Texture") };
 }
 
 [[nodiscard]] std::string MaterialGraphTexturePickerDisplayPath(const kb::assets::AssetMetadata& metadata) {
@@ -2355,8 +2374,8 @@ struct MaterialGraphTexturePickerRow {
         return lhs.assetId.value < rhs.assetId.value;
     });
     rows.insert(rows.begin(), MaterialGraphTexturePickerRow{
-        .name = "None / Clear",
-        .path = "Remove the texture assignment",
+        .name = std::string{ EditorText("materialEditor.texturePicker.clearRow", "None / Clear") },
+        .path = std::string{ EditorText("materialEditor.texturePicker.clearRowHint", "Remove the texture assignment") },
         .clear = true,
     });
     return rows;
@@ -2485,7 +2504,7 @@ struct MaterialGraphTexturePickerRow {
     return {};
 }
 
-void DrawMaterialGraphTexturePickerButton(HDC dc, const RECT& rect, const char* label, bool enabled) {
+void DrawMaterialGraphTexturePickerButton(HDC dc, const RECT& rect, std::string_view label, bool enabled) {
     const EditorTheme theme = MakeEditorDarkTheme();
     EditorDialogStyle::PaintButton(dc, rect, theme, label, EditorDialogButtonTone::Neutral, false, enabled);
 }
@@ -2537,7 +2556,7 @@ void DrawMaterialGraphTexturePickerTile(
         DrawText(
             dc,
             image,
-            "Clear",
+            EditorText("assetPicker.clear", "Clear"),
             RGB(196, 207, 220),
             12,
             FW_SEMIBOLD,
@@ -2577,8 +2596,8 @@ void DrawMaterialGraphTexturePickerOverlay(
         EditorDialogStyle::Color(theme.textPrimary),
         11);
 
-    DrawMaterialGraphTexturePickerButton(dc, layout.accept, "Accept", layout.acceptEnabled);
-    DrawMaterialGraphTexturePickerButton(dc, layout.cancel, "Cancel", true);
+    DrawMaterialGraphTexturePickerButton(dc, layout.accept, EditorText("assetPicker.accept", "Accept"), layout.acceptEnabled);
+    DrawMaterialGraphTexturePickerButton(dc, layout.cancel, EditorText("common.cancel", "Cancel"), true);
 
     const RECT viewport = layout.viewport;
     const int maxScroll = layout.maxScroll;
@@ -2603,7 +2622,7 @@ void DrawMaterialGraphTexturePickerOverlay(
         DrawText(
             dc,
             viewport,
-            "No textures",
+            EditorText("materialEditor.texturePicker.noTextures", "No textures"),
             RGB(126, 135, 149),
             11,
             FW_NORMAL,
@@ -2841,12 +2860,10 @@ struct MaterialEditorDocumentView {
     std::vector<std::uint32_t> diagnosticNodeIds;
     bool hasErrorDiagnostic = false;
 
-    // Call once after building, so `material` points at whatever the view ended up owning.
-    [[nodiscard]] MaterialEditorDocumentView&& Resolved() && noexcept {
-        if (material == nullptr && ownedMaterial.has_value()) {
-            material = &*ownedMaterial;
-        }
-        return std::move(*this);
+    // The material the view shows: the borrowed working copy, else its own copy. Resolved on every call:
+    // a pointer into ownedMaterial taken before the view is moved into its optional would dangle.
+    [[nodiscard]] const kb::render::RenderMaterialAssetData* Material() const noexcept {
+        return material != nullptr ? material : (ownedMaterial.has_value() ? &*ownedMaterial : nullptr);
     }
 };
 
@@ -2920,7 +2937,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
             .parentMaterialAssetId = {},
             .diagnostics = { "Error file_open_failed: Material document path could not be resolved." },
             .hasErrorDiagnostic = true,
-        }.Resolved();
+        };
     }
 
     if (metadata.type == "RenderMaterial") {
@@ -2933,7 +2950,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
                 .diagnostics = std::move(diagnostics),
                 .diagnosticNodeIds = sceneContext.MaterialEditor().DiagnosticNodeIds(),
                 .hasErrorDiagnostic = sceneContext.MaterialEditor().DiagnosticsHaveError(),
-            }.Resolved();
+            };
         }
         kb::render::RenderMaterialAssetParseResult result = kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata.id);
         std::vector<std::string> diagnostics;
@@ -2948,7 +2965,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
             .parentMaterialAssetId = {},
             .diagnostics = std::move(diagnostics),
             .hasErrorDiagnostic = hasError,
-        }.Resolved();
+        };
     }
 
     if (metadata.type == kb::render::kRenderMaterialGraphAssetType) {
@@ -2962,7 +2979,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
                 .diagnostics = std::move(diagnostics),
                 .diagnosticNodeIds = sceneContext.MaterialEditor().DiagnosticNodeIds(),
                 .hasErrorDiagnostic = sceneContext.MaterialEditor().DiagnosticsHaveError(),
-            }.Resolved();
+            };
         }
         kb::render::RenderMaterialAssetParseResult result =
             kb::render::RenderMaterialGraphAssetLoader::LoadGraphWithDiagnostics(path, metadata.id);
@@ -2984,7 +3001,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
             .parentMaterialAssetId = {},
             .diagnostics = std::move(diagnostics),
             .hasErrorDiagnostic = hasError,
-        }.Resolved();
+        };
     }
 
     if (metadata.type != "RenderMaterialInstance") {
@@ -3002,7 +3019,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
             .parentMaterialAssetId = {},
             .diagnostics = std::move(diagnostics),
             .hasErrorDiagnostic = true,
-        }.Resolved();
+        };
     }
 
     const kb::assets::AssetMetadata* parentMetadata = manager.Registry().Find(instance.asset->parentMaterialAssetId);
@@ -3022,7 +3039,7 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
         .parentMaterialAssetId = instance.asset->parentMaterialAssetId,
         .diagnostics = std::move(diagnostics),
         .hasErrorDiagnostic = hasError,
-    }.Resolved();
+    };
 }
 
 void DrawGraphOverlay(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
@@ -3051,7 +3068,8 @@ void DrawPreviewOverlay(
     const EditorMaterialPreviewTelemetry& telemetry,
     const EditorMaterialGraphCookBanner& cookBanner) {
     DrawGraphOverlay(dc, layout.previewFrame, RGB(9, 10, 12), RGB(54, 58, 66));
-    DrawText(dc, layout.previewFrame, telemetry.materialLoaded ? "Preview" : "Preview unavailable", RGB(86, 92, 100), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DrawText(dc, layout.previewFrame, telemetry.materialLoaded ? EditorText("materialEditor.preview.preview", "Preview")
+                                                                : EditorText("materialEditor.preview.unavailable", "Preview unavailable"), RGB(86, 92, 100), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     // MAT-32: surface the live graph cook/program state over the preview so the artist sees whether
     // the GPU graph program is ready, compiling, fell back, or failed - never a silent black frame.
@@ -3074,7 +3092,7 @@ void DrawDiagnosticsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const
     const COLORREF border = document.hasErrorDiagnostic ? RGB(151, 76, 76) : RGB(137, 109, 54);
     const COLORREF titleColor = document.hasErrorDiagnostic ? RGB(247, 171, 171) : RGB(239, 203, 127);
     DrawGraphOverlay(dc, layout.diagnosticsPanel, RGB(29, 26, 24), border);
-    DrawText(dc, RECT{ layout.diagnosticsPanel.left + 10, layout.diagnosticsPanel.top + 6, layout.diagnosticsPanel.right - 10, layout.diagnosticsPanel.top + 28 }, "Diagnostics", titleColor, 12, FW_SEMIBOLD);
+    DrawText(dc, RECT{ layout.diagnosticsPanel.left + 10, layout.diagnosticsPanel.top + 6, layout.diagnosticsPanel.right - 10, layout.diagnosticsPanel.top + 28 }, EditorText("materialEditor.diagnostics", "Diagnostics"), titleColor, 12, FW_SEMIBOLD);
     const int rowTop = layout.diagnosticsPanel.top + 32;
     const int rowHeight = 22;
     const int availableRows = (static_cast<int>(layout.diagnosticsPanel.bottom) - rowTop - 8) / rowHeight;
@@ -3094,7 +3112,8 @@ void DrawDiagnosticsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const
         DrawText(dc, row, text.c_str(), clickable ? RGB(150, 197, 236) : RGB(224, 220, 211), 10);
     }
     if (document.diagnostics.size() > count && count > 0U) {
-        const std::string more = "+" + std::to_string(document.diagnostics.size() - count) + " more";
+        const std::string more = EditorLocalization::Format("materialEditor.diagnosticsMore", "+{count} more",
+            { { "count", std::to_string(document.diagnostics.size() - count) } });
         DrawText(dc, RECT{ layout.diagnosticsPanel.left + 10, layout.diagnosticsPanel.bottom - 24, layout.diagnosticsPanel.right - 10, layout.diagnosticsPanel.bottom - 6 }, more.c_str(), RGB(168, 159, 145), 10, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
 }
@@ -3112,26 +3131,26 @@ void DrawDetailsPanel(
     DrawText(dc, RECT{ layout.detailsPanel.left + 10, layout.detailsPanel.top + 8, layout.detailsPanel.right - 10, layout.detailsPanel.top + 30 }, rows.title.c_str(), RGB(235, 238, 243), 12, FW_SEMIBOLD);
     FillRoundedRect(dc, detailsLayout.searchRect, rows.findFocused ? RGB(34, 45, 55) : RGB(30, 34, 40), 4);
     StrokeRoundedRect(dc, detailsLayout.searchRect, rows.findFocused ? RGB(83, 128, 165) : RGB(62, 70, 82), 4);
-    const std::string searchText = rows.findQuery.empty() ? "Find in material" : rows.findQuery;
+    const std::string searchText = rows.findQuery.empty() ? std::string{ EditorText("materialEditor.findInMaterial", "Find in material") } : rows.findQuery;
     DrawText(dc, RECT{ detailsLayout.searchRect.left + 8, detailsLayout.searchRect.top, detailsLayout.searchRect.right - 8, detailsLayout.searchRect.bottom }, searchText.c_str(), rows.findQuery.empty() ? RGB(151, 162, 176) : RGB(232, 237, 243), 9, rows.findFocused ? FW_SEMIBOLD : FW_NORMAL, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
 
-    const auto sectionLabel = [](MaterialEditorDetailsSection section) noexcept {
+    const auto sectionLabel = [](MaterialEditorDetailsSection section) -> std::string_view {
         switch (section) {
-        case MaterialEditorDetailsSection::ParentChain: return "Parent Chain";
-        case MaterialEditorDetailsSection::InstanceOverrides: return "Instance Overrides";
-        case MaterialEditorDetailsSection::StaticSwitches: return "Static Switches";
-        case MaterialEditorDetailsSection::LayerStack: return "Layer Stack";
-        case MaterialEditorDetailsSection::FindResults: return "Find";
-        case MaterialEditorDetailsSection::MaterialSettings: return "Material";
-        case MaterialEditorDetailsSection::NodeProperties: return "Node Properties";
-        case MaterialEditorDetailsSection::MaterialDiff: return "Material Diff";
-        case MaterialEditorDetailsSection::DebugChannels: return "Debug Channels";
-        case MaterialEditorDetailsSection::Parameters: return "Parameters";
-        case MaterialEditorDetailsSection::TextureSlots: return "Texture Slots";
-        case MaterialEditorDetailsSection::MaterialStats: return "Material Stats";
-        case MaterialEditorDetailsSection::ShaderViewer: return "Shader Viewer";
+        case MaterialEditorDetailsSection::ParentChain: return EditorText("materialEditor.section.parentChain", "Parent Chain");
+        case MaterialEditorDetailsSection::InstanceOverrides: return EditorText("materialEditor.section.instanceOverrides", "Instance Overrides");
+        case MaterialEditorDetailsSection::StaticSwitches: return EditorText("materialEditor.section.staticSwitches", "Static Switches");
+        case MaterialEditorDetailsSection::LayerStack: return EditorText("materialEditor.section.layerStack", "Layer Stack");
+        case MaterialEditorDetailsSection::FindResults: return EditorText("materialEditor.section.find", "Find");
+        case MaterialEditorDetailsSection::MaterialSettings: return EditorText("materialEditor.section.material", "Material");
+        case MaterialEditorDetailsSection::NodeProperties: return EditorText("materialEditor.section.nodeProperties", "Node Properties");
+        case MaterialEditorDetailsSection::MaterialDiff: return EditorText("materialEditor.section.materialDiff", "Material Diff");
+        case MaterialEditorDetailsSection::DebugChannels: return EditorText("materialEditor.section.debugChannels", "Debug Channels");
+        case MaterialEditorDetailsSection::Parameters: return EditorText("materialEditor.section.parameters", "Parameters");
+        case MaterialEditorDetailsSection::TextureSlots: return EditorText("materialEditor.section.textureSlots", "Texture Slots");
+        case MaterialEditorDetailsSection::MaterialStats: return EditorText("materialEditor.section.materialStats", "Material Stats");
+        case MaterialEditorDetailsSection::ShaderViewer: return EditorText("materialEditor.section.shaderViewer", "Shader Viewer");
         }
-        return "Details";
+        return EditorText("materialEditor.section.details", "Details");
     };
 
     const int savedDc = SaveDC(dc);
@@ -3158,17 +3177,27 @@ void DrawDetailsPanel(
         }
         case MaterialEditorDetailsItemKind::InstanceOverrideGroupRow: {
             const MaterialEditorInstanceOverrideGroupRow& row = rows.instanceOverrideGroupRows[item.index];
-            text = std::string{ row.expanded ? "v " : "> " } + MaterialEditorPanelParameterGroupName(row.group) + "  " + std::to_string(row.activeOverrideCount) + "/" + std::to_string(row.totalParameterCount) + " overrides";
+            text = std::string{ row.expanded ? "v " : "> " } + EditorLocalization::Format("materialEditor.overrideGroupRow",
+                "{group}  {active}/{total} overrides", {
+                    { "group", std::string{ MaterialEditorPanelParameterGroupName(row.group) } },
+                    { "active", std::to_string(row.activeOverrideCount) },
+                    { "total", std::to_string(row.totalParameterCount) },
+                });
             break;
         }
         case MaterialEditorDetailsItemKind::StaticSwitchRow: {
             const MaterialEditorInstanceStaticSwitchRow& row = rows.instanceStaticSwitchRows[item.index];
-            text = row.displayName + " = " + row.value + (row.overrideActive ? " override" : " parent");
+            text = row.displayName + " = " + row.value + " " + std::string{ row.overrideActive
+                ? EditorText("materialEditor.staticSwitch.override", "override")
+                : EditorText("materialEditor.staticSwitch.parent", "parent") };
             break;
         }
         case MaterialEditorDetailsItemKind::LayerRow: {
             const MaterialEditorLayerTreeRow& row = rows.layerTreeRows[item.index];
-            text = std::string{ row.enabled ? "[on] " : "[off] " } + (row.layerName.empty() ? ("Layer " + std::to_string(row.index + 1U)) : row.layerName);
+            text = std::string{ row.enabled ? EditorText("materialEditor.layer.on", "[on]") : EditorText("materialEditor.layer.off", "[off]") } + " " +
+                (row.layerName.empty()
+                    ? EditorLocalization::Format("materialEditor.layer.unnamed", "Layer {index}", { { "index", std::to_string(row.index + 1U) } })
+                    : row.layerName);
             break;
         }
         case MaterialEditorDetailsItemKind::FindResultRow:
@@ -3178,7 +3207,7 @@ void DrawDetailsPanel(
             const MaterialEditorGraphNodeProperty& row = rows.nodePropertyRows[item.index];
             text = row.displayName + " = " + MaterialEditorPanelParameterValueText(row.value);
             if (row.kind == MaterialEditorGraphNodePropertyKind::TextureAsset) {
-                text += "  Pick";
+                text += "  " + std::string{ EditorText("materialEditor.pickTexture", "Pick") };
             }
             break;
         }
@@ -3207,14 +3236,21 @@ void DrawDetailsPanel(
             break;
         case MaterialEditorDetailsItemKind::MaterialStatsPassRow: {
             const MaterialEditorMaterialStatsPassRow& row = rows.materialStats.passRows[item.index];
-            text = row.passName + (row.graphProgram ? " GPU" : " unavailable") +
-                " bytes " + std::to_string(row.binaryByteSize) +
-                " inst " + (row.instructionCountAvailable ? std::to_string(row.instructionCount) : std::string{ "n/a" }) +
-                " bindings " + std::to_string(row.samplerCount) +
-                " uniforms " + std::to_string(row.uniformCount) +
-                " varyings " + std::to_string(row.varyingCount) +
-                " variants " + std::to_string(row.staticVariantCount) +
-                (row.cacheHit ? " cache" : " compiled");
+            text = EditorLocalization::Format("materialEditor.stats.passRow",
+                "{pass} {program} bytes {bytes} inst {instructions} bindings {bindings} uniforms {uniforms} varyings {varyings} variants {variants} {source}", {
+                    { "pass", row.passName },
+                    { "program", std::string{ row.graphProgram ? EditorText("materialEditor.stats.gpu", "GPU")
+                                                               : EditorText("materialEditor.stats.unavailable", "unavailable") } },
+                    { "bytes", std::to_string(row.binaryByteSize) },
+                    { "instructions", row.instructionCountAvailable ? std::to_string(row.instructionCount)
+                                                                    : std::string{ EditorText("materialEditor.stats.notAvailable", "n/a") } },
+                    { "bindings", std::to_string(row.samplerCount) },
+                    { "uniforms", std::to_string(row.uniformCount) },
+                    { "varyings", std::to_string(row.varyingCount) },
+                    { "variants", std::to_string(row.staticVariantCount) },
+                    { "source", std::string{ row.cacheHit ? EditorText("materialEditor.stats.cache", "cache")
+                                                          : EditorText("materialEditor.stats.compiled", "compiled") } },
+                });
             break;
         }
         case MaterialEditorDetailsItemKind::MaterialStatsWarningRow:
@@ -3259,24 +3295,24 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
 
     if (!document.has_value()) {
         DrawGraphGrid(dc, layout.graphCanvas);
-        DrawText(dc, layout.graphCanvas, "Material document could not be read.", RGB(232, 112, 112), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, layout.graphCanvas, EditorText("materialEditor.documentUnreadable", "Material document could not be read."), RGB(232, 112, 112), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
     }
 
-    if (document->material != nullptr) {
-        DrawGraphCanvas(dc, content, *document->material, sceneContext, metadata.id, sceneContext.SelectedMaterialGraphNodeId());
+    if (document->Material() != nullptr) {
+        DrawGraphCanvas(dc, content, *document->Material(), sceneContext, metadata.id, sceneContext.SelectedMaterialGraphNodeId());
     } else {
         DrawGraphGrid(dc, layout.graphCanvas);
-        DrawText(dc, layout.graphCanvas, "Material document could not be parsed.", RGB(232, 112, 112), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, layout.graphCanvas, EditorText("materialEditor.documentUnparsable", "Material document could not be parsed."), RGB(232, 112, 112), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     const EditorMaterialGraphCookBanner cookBanner =
         MakeEditorMaterialGraphCookBanner(sceneContext.OpenMaterialGraphCookResult().status);
     DrawPreviewOverlay(dc, layout, telemetry, cookBanner);
     DrawDiagnosticsPanel(dc, layout, *document);
-    if (sceneContext.MaterialEditor().InfoPanelVisible() && document->material != nullptr) {
+    if (sceneContext.MaterialEditor().InfoPanelVisible() && document->Material() != nullptr) {
         const MaterialEditorPanelDetailsRows details = MaterialEditorPanelRenderer::DetailsRowsForDocument(
             sceneContext,
-            *document->material,
+            *document->Material(),
             metadata.type == "RenderMaterialInstance");
         const MaterialEditorDetailsLayout detailsLayout = MaterialEditorPanelRenderer::ResolveDetailsLayout(
             content,
@@ -3433,7 +3469,7 @@ void MaterialEditorPanelRenderer::Paint(HDC dc, const RECT& content, const Edito
 
     if (metadata == nullptr || !IsMaterialDocument(*metadata)) {
         const RECT body = ResolveLayout(content).graphCanvas;
-        DrawText(dc, body, "Double-click a Material (.kbmat) or Material Instance (.kbmatinst) in Project Files to edit it here.", GdiDrawing::ToColorRef(theme.textDisabled), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+        DrawText(dc, body, EditorText("materialEditor.empty", "Double-click a Material (.kbmat) or Material Instance (.kbmatinst) in Project Files to edit it here."), GdiDrawing::ToColorRef(theme.textDisabled), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
         return;
     }
 

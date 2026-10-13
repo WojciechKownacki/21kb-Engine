@@ -59,6 +59,8 @@ enum class EditorAssetContextCommand {
     NewInputMappingContext,
     NewAudioMixer,
     NewParticleEffect,
+    NewPostProcessProfile,
+    NewImportPreset,
     ExtractMaterials,
     AddLighting,
     AddDirectionalLight,
@@ -78,7 +80,7 @@ enum class EditorAssetDropAction {
 
 struct EditorAssetContextMenuItem {
     EditorAssetContextCommand command = EditorAssetContextCommand::None;
-    const char* label = "";
+    std::string label; // in the editor language
     bool separatorAfter = false;
 };
 

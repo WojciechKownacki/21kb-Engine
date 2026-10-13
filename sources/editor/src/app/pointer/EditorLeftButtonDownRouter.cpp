@@ -1,3 +1,5 @@
+#include "app/EditorSceneLifecycleGuard.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "app/pointer/EditorLeftButtonDownRouter.hpp"
 #include "app/EditorKeyState.hpp"
 
@@ -41,6 +43,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
+#include "inspection/InspectorSceneColor.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelLayout.hpp"
@@ -58,12 +61,16 @@
 #include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
 #include "platform/win32/EditorBuildGameFileDialog.hpp"
+#include "platform/win32/EditorFileDialogFilter.hpp"
 #include "packaging/EditorProjectPackageService.hpp"
 #include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
+#include "platform/win32/EditorPostProcessProfileAssetPickerDialog.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "platform/win32/EditorChoiceDialog.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorTerrainService.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <array>
@@ -179,12 +186,12 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
         return true;
     }
     const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
-        .title = "Unsaved Material",
-        .message = "Save changes to the open material before closing the Material Editor?",
-        .supportingText = "Choose whether to preserve the current material changes.",
-        .primaryLabel = "Save",
-        .secondaryLabel = "Discard",
-        .cancelLabel = "Cancel",
+        .title = std::string{ EditorText("materialDirty.title", "Unsaved Material") },
+        .message = std::string{ EditorText("materialDirty.beforeCloseMaterialEditor", "Save changes to the open material before closing the Material Editor?") },
+        .supportingText = std::string{ EditorText("materialDirty.supporting", "Choose whether to preserve the current material changes.") },
+        .primaryLabel = std::string{ EditorText("common.save", "Save") },
+        .secondaryLabel = std::string{ EditorText("common.discard", "Discard") },
+        .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
         .icon = HeroIconKind::RectangleGroup,
     });
     const kb::assets::AssetId materialId = sceneContext.MaterialEditor().OpenAssetId();
@@ -202,12 +209,12 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
 [[nodiscard]] bool ResolveDirtySkeletalMeshEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
     if (!sceneContext.HasDirtySkeletalMeshEditorAssetEdit()) return true;
     const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
-        .title = "Unsaved Skeletal Asset",
-        .message = "Save changes to the open skeletal assets before closing the editor?",
-        .supportingText = "Choose whether to preserve the current asset changes.",
-        .primaryLabel = "Save",
-        .secondaryLabel = "Discard",
-        .cancelLabel = "Cancel",
+        .title = std::string{ EditorText("skeletalDirty.title", "Unsaved Skeletal Asset") },
+        .message = std::string{ EditorText("skeletalDirty.beforeCloseTab", "Save changes to the open skeletal assets before closing the editor?") },
+        .supportingText = std::string{ EditorText("skeletalDirty.supporting", "Choose whether to preserve the current asset changes.") },
+        .primaryLabel = std::string{ EditorText("common.save", "Save") },
+        .secondaryLabel = std::string{ EditorText("common.discard", "Discard") },
+        .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
         .icon = HeroIconKind::Skeleton,
     });
     if (result == EditorChoiceDialogResult::Primary) return sceneContext.SaveSkeletalMeshEditorAsset();
@@ -218,12 +225,12 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
 [[nodiscard]] bool ResolveDirtyAnimatorEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
     if (!sceneContext.HasDirtyAnimatorEditorAssetEdit()) return true;
     const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
-        .title = "Unsaved Animator Controller",
-        .message = "Save changes to the open Animator Controller before closing the editor?",
-        .supportingText = "Choose whether to preserve the current controller changes.",
-        .primaryLabel = "Save",
-        .secondaryLabel = "Discard",
-        .cancelLabel = "Cancel",
+        .title = std::string{ EditorText("animatorDirty.title", "Unsaved Animator Controller") },
+        .message = std::string{ EditorText("animatorDirty.beforeCloseTab", "Save changes to the open Animator Controller before closing the editor?") },
+        .supportingText = std::string{ EditorText("animatorDirty.supporting", "Choose whether to preserve the current controller changes.") },
+        .primaryLabel = std::string{ EditorText("common.save", "Save") },
+        .secondaryLabel = std::string{ EditorText("common.discard", "Discard") },
+        .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
         .icon = HeroIconKind::Gamepad2,
     });
     if (result == EditorChoiceDialogResult::Primary) return sceneContext.SaveAnimatorEditorAsset();
@@ -351,10 +358,15 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
     dialog.hwndOwner = owner;
-    dialog.lpstrFilter = L"Heightmaps (*.png;*.raw;*.r16)\0*.png;*.raw;*.r16\0All files (*.*)\0*.*\0\0";
+    const std::wstring filter = EditorFileDialogFilter({
+        { EditorText("fileDialog.heightmapFilter", "Heightmaps (*.png;*.raw;*.r16)"), "*.png;*.raw;*.r16" },
+        { EditorText("fileDialog.allFiles", "All files (*.*)"), "*.*" },
+    });
+    const std::wstring title = ScriptEditorTextEncoding::Widen(EditorText("fileDialog.importHeightmapTitle", "Import Terrain Heightmap"));
+    dialog.lpstrFilter = filter.c_str();
     dialog.lpstrFile = path.data();
     dialog.nMaxFile = static_cast<DWORD>(path.size());
-    dialog.lpstrTitle = L"Import Terrain Heightmap";
+    dialog.lpstrTitle = title.c_str();
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     return GetOpenFileNameW(&dialog) != FALSE ? std::optional<std::filesystem::path>{ path.data() } : std::nullopt;
 }
@@ -363,7 +375,8 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     HWND owner,
     const MaterialEditorParameterValue& value,
     POINT anchorScreenPoint) {
-    return EditorMaterialColorPickerDialog::Show(owner, "Material Graph Color", value.numbers, &anchorScreenPoint);
+    return EditorMaterialColorPickerDialog::Show(owner, std::string{ EditorText("materialEditor.graphColorTitle", "Material Graph Color") },
+        value.numbers, &anchorScreenPoint);
 }
 
 [[nodiscard]] std::string GraphColorValueText(const MaterialEditorParameterValue& value, bool alpha) {
@@ -472,8 +485,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor &&
                 !EditorParticleDocumentLifecycle::Resolve(
                     messageWindow, sceneContext_,
-                    kb::particle_editor::ParticleDocumentTransition::CloseTab,
-                    L"closing the particle editor tab")) {
+                    kb::particle_editor::ParticleDocumentTransition::CloseTab)) {
                 return;
             }
             if (dockModel_.Commands().ClosePanel(closeTab->panelId)) {
@@ -538,12 +550,21 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 if (inspector.modules.size() >= kb::scene::kParticleEffectMaxModulesPerEmitter) return;
                 HMENU menu = CreatePopupMenu();
                 if (menu == nullptr) return;
-                constexpr const char* labels[] = {"Initial Velocity", "Gravity", "Wind", "Drag", "Color Over Life",
-                    "Size Over Life", "Alpha Over Life", "Collision Plane", "Sub Emitter"};
-                for (UINT index = 0U; index < static_cast<UINT>(std::size(labels)); ++index) {
+                const std::array<std::string, 9> labels{
+                    std::string{ EditorText("particleEditor.module.initialVelocity", "Initial Velocity") },
+                    std::string{ EditorText("particleEditor.module.gravity", "Gravity") },
+                    std::string{ EditorText("particleEditor.module.wind", "Wind") },
+                    std::string{ EditorText("particleEditor.module.drag", "Drag") },
+                    std::string{ EditorText("particleEditor.module.colorOverLife", "Color Over Life") },
+                    std::string{ EditorText("particleEditor.module.sizeOverLife", "Size Over Life") },
+                    std::string{ EditorText("particleEditor.module.alphaOverLife", "Alpha Over Life") },
+                    std::string{ EditorText("particleEditor.module.collisionPlane", "Collision Plane") },
+                    std::string{ EditorText("particleEditor.module.subEmitter", "Sub Emitter") },
+                };
+                for (UINT index = 0U; index < static_cast<UINT>(labels.size()); ++index) {
                     const UINT flags = index == static_cast<UINT>(kb::scene::ParticleModuleType::SubEmitter) &&
                         rows.size() < 2U ? MF_STRING | MF_GRAYED : MF_STRING;
-                    AppendMenuA(menu, flags, 100U + index, labels[index]);
+                    kb::editor::AppendMenuUtf8(menu, flags, 100U + index, labels[index].c_str());
                 }
                 POINT point{x, y}; ClientToScreen(messageWindow, &point);
                 const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
@@ -559,7 +580,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     for (const auto& row : rows) {
                         if (row.emitterId == inspector.emitterId) continue;
                         targetIds[targetCount] = row.emitterId;
-                        AppendMenuA(targets, MF_STRING, 200U + targetCount, row.name.c_str());
+                        kb::editor::AppendMenuUtf8(targets, MF_STRING, 200U + targetCount, row.name.c_str());
                         ++targetCount;
                     }
                     const UINT targetChoice = TrackPopupMenu(targets, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
@@ -626,8 +647,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                         property.label == "Curve" || property.label == "Rate curve";
                     const auto edited = EditorMaterialParameterValueDialog::Show(
                         mainWindow_, property.label, property.value,
-                        isCurve ? "Keys as time,value,easing; separated by ';', e.g. 0,1,0;1,0.5,3"
-                        : "Use numbers like: 0.25 or 1 0 0 1");
+                        isCurve ? EditorText("particleEditor.curveHint", "Keys as time,value,easing; separated by ';', e.g. 0,1,0;1,0.5,3")
+                        : EditorText("materialParameter.valueHint", "Use numbers like: 0.25 or 1 0 0 1"));
                     if (!edited.has_value()) return;
                     editedValue = *edited;
                 }
@@ -843,6 +864,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                             sceneContext_.CloseMaterialGraphNodeEnumDropdown();
                             if (property.stableId == "node.name") {
                                 static_cast<void>(sceneContext_.BeginMaterialGraphNodeRenameEdit(materialId, property.nodeId));
+                            } else if (property.nodeId == 0U) {
+                                // A typed material setting (Max World Position Offset Displacement).
+                                const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                                    messageWindow,
+                                    property.displayName,
+                                    MaterialEditorPanelParameterValueText(property.value));
+                                if (value.has_value()) {
+                                    static_cast<void>(sceneContext_.SetMaterialGraphSetting(materialId, property.stableId, *value));
+                                }
                             } else {
                                 const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
                                     messageWindow,
@@ -1214,15 +1244,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             case SkeletalAssetCommand::Reload:
                 if (!sceneContext_.HasDirtyActiveSkeletalMeshEditorDocument() || EditorChoiceDialog::Show(
                         mainWindow_, EditorChoiceDialogDescriptor{
-                            .title = sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
-                                ? "Reload Skeleton"
-                                : "Reload Skeletal Mesh",
-                            .message = sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
-                                ? "Reload will discard unsaved Skeleton edits."
-                                : "Reload will discard unsaved Skeletal Mesh edits.",
-                            .supportingText = "This action cannot be undone.",
-                            .primaryLabel = "Reload",
-                            .secondaryLabel = "Keep Editing",
+                            .title = std::string{ sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
+                                ? EditorText("skeletalMeshEditor.reloadSkeletonTitle", "Reload Skeleton")
+                                : EditorText("skeletalMeshEditor.reloadMeshTitle", "Reload Skeletal Mesh") },
+                            .message = std::string{ sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
+                                ? EditorText("skeletalMeshEditor.reloadSkeleton", "Reload will discard unsaved Skeleton edits.")
+                                : EditorText("skeletalMeshEditor.reloadMesh", "Reload will discard unsaved Skeletal Mesh edits.") },
+                            .supportingText = std::string{ EditorText("common.cannotUndo", "This action cannot be undone.") },
+                            .primaryLabel = std::string{ EditorText("skeletalMeshEditor.reload", "Reload") },
+                            .secondaryLabel = std::string{ EditorText("skeletalMeshEditor.keepEditing", "Keep Editing") },
                             .icon = HeroIconKind::Skeleton,
                             .primaryTone = EditorDialogButtonTone::Destructive,
                         }) == EditorChoiceDialogResult::Primary) {
@@ -1259,11 +1289,11 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 break;
             case SkeletalAssetCommand::DeleteSocket:
                 if (EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
-                        .title = "Delete Skeleton Socket",
-                        .message = "Delete the selected socket from this Skeleton?",
-                        .supportingText = "This action cannot be undone.",
-                        .primaryLabel = "Delete",
-                        .secondaryLabel = "Cancel",
+                        .title = std::string{ EditorText("skeletalMeshEditor.deleteSocketTitle", "Delete Skeleton Socket") },
+                        .message = std::string{ EditorText("skeletalMeshEditor.deleteSocket", "Delete the selected socket from this Skeleton?") },
+                        .supportingText = std::string{ EditorText("common.cannotUndo", "This action cannot be undone.") },
+                        .primaryLabel = std::string{ EditorText("common.delete", "Delete") },
+                        .secondaryLabel = std::string{ EditorText("common.cancel", "Cancel") },
                         .icon = HeroIconKind::XMark,
                         .primaryTone = EditorDialogButtonTone::Destructive,
                     }) == EditorChoiceDialogResult::Primary) {
@@ -1307,11 +1337,13 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     if (menu != nullptr) {
                         const std::optional<std::uint32_t> forced =
                             sceneContext_.SkeletalMeshEditorForcedPreviewLod();
-                        AppendMenuA(menu, MF_STRING | (!forced.has_value() ? MF_CHECKED : 0U), 1U, "Auto");
+                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (!forced.has_value() ? MF_CHECKED : 0U), 1U,
+                            std::string{ EditorText("skeletalMeshEditor.lodAuto", "Auto") }.c_str());
                         const std::uint32_t lodCount = sceneContext_.SkeletalMeshEditorLodCount();
                         for (std::uint32_t lod = 0U; lod < lodCount; ++lod) {
-                            const std::string label = "LOD " + std::to_string(lod);
-                            AppendMenuA(menu, MF_STRING | (forced == lod ? MF_CHECKED : 0U),
+                            const std::string label = EditorLocalization::Format("skeletalMeshEditor.lod", "LOD {index}",
+                                { { "index", std::to_string(lod) } });
+                            kb::editor::AppendMenuUtf8(menu, MF_STRING | (forced == lod ? MF_CHECKED : 0U),
                                 100U + lod, label.c_str());
                         }
                         POINT point{ x, y };
@@ -1334,16 +1366,17 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     break;
                 case SkeletalMeshEditorDetailsAction::LodScreenCoverage: {
                     const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
-                        mainWindow_, "LOD " + std::to_string(field.lodIndex) + " Min Screen Coverage", field.value);
+                        mainWindow_, EditorLocalization::Format("skeletalMeshEditor.lodMinScreenCoverage", "LOD {index} Min Screen Coverage",
+                            { { "index", std::to_string(field.lodIndex) } }), field.value);
                     float parsed = 0.0F;
                     if (value.has_value() && kb::render::ParseFiniteMaterialFloatToken(*value, parsed)) {
                         static_cast<void>(sceneContext_.SetSkeletalMeshEditorLodScreenCoverage(field.lodIndex, parsed));
                     } else if (value.has_value()) {
                         static_cast<void>(EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
-                            .title = "Invalid LOD Screen Coverage",
-                            .message = "Enter a finite number from 0 to 1.",
-                            .supportingText = "The previous value was not applied.",
-                            .primaryLabel = "OK",
+                            .title = std::string{ EditorText("skeletalMeshEditor.invalidCoverageTitle", "Invalid LOD Screen Coverage") },
+                            .message = std::string{ EditorText("skeletalMeshEditor.invalidCoverage", "Enter a finite number from 0 to 1.") },
+                            .supportingText = std::string{ EditorText("common.valueNotApplied", "The previous value was not applied.") },
+                            .primaryLabel = std::string{ EditorText("common.ok", "OK") },
                             .icon = HeroIconKind::AdjustmentsHorizontal,
                         }));
                     }
@@ -1364,7 +1397,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 case SkeletalMeshEditorDetailsAction::FixedBoundsExtents: {
                     const bool extents = field.action == SkeletalMeshEditorDetailsAction::FixedBoundsExtents;
                     const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
-                        mainWindow_, extents ? "Fixed Bounds Extents (X, Y, Z)" : "Fixed Bounds Center (X, Y, Z)",
+                        mainWindow_, extents ? EditorText("skeletalMeshEditor.fixedBoundsExtents", "Fixed Bounds Extents (X, Y, Z)")
+                                             : EditorText("skeletalMeshEditor.fixedBoundsCenter", "Fixed Bounds Center (X, Y, Z)"),
                         TupleEditorValue(field.value));
                     std::array<float, 3U> parsed{};
                     if (value.has_value() && kb::render::ParseExactFiniteMaterialFloatTuple(*value, parsed)) {
@@ -1374,10 +1408,10 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                             extents ? std::optional<kb::scene::Vec3>{ vector } : std::nullopt));
                     } else if (value.has_value()) {
                         static_cast<void>(EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
-                            .title = "Invalid Fixed Bounds",
-                            .message = "Enter three finite values: X, Y, Z.",
-                            .supportingText = "The previous value was not applied.",
-                            .primaryLabel = "OK",
+                            .title = std::string{ EditorText("skeletalMeshEditor.invalidBoundsTitle", "Invalid Fixed Bounds") },
+                            .message = std::string{ EditorText("skeletalMeshEditor.invalidBounds", "Enter three finite values: X, Y, Z.") },
+                            .supportingText = std::string{ EditorText("common.valueNotApplied", "The previous value was not applied.") },
+                            .primaryLabel = std::string{ EditorText("common.ok", "OK") },
                             .icon = HeroIconKind::AdjustmentsHorizontal,
                         }));
                     }
@@ -1622,7 +1656,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     HMENU menu = CreatePopupMenu();
                     if (menu == nullptr) return;
                     for (std::size_t index = 0; index < row.choices.size(); ++index) {
-                        AppendMenuA(menu, MF_STRING | (std::stoul(row.value) == index ? MF_CHECKED : 0),
+                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (std::stoul(row.value) == index ? MF_CHECKED : 0),
                             index + 1, std::string{row.choices[index]}.c_str());
                     }
                     POINT anchor{x, y};
@@ -1637,6 +1671,23 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     return;
                 }
             }
+        }
+        if (hit.kind == InspectorHitKind::ColorField && InspectorSceneColor::IsColorProperty(hit.property)) {
+            // Scene colours are linear; the picker shows and returns sRGB, as Unity's does.
+            const auto entity = sceneContext_.SelectedEntity();
+            if (const auto linear = InspectorSceneColor::Read(sceneContext_, entity, hit.property)) {
+                POINT anchor{x, y};
+                ClientToScreen(messageWindow, &anchor);
+                const std::array<float, 4U> shown{ InspectorSceneColor::LinearToSrgb((*linear)[0]),
+                    InspectorSceneColor::LinearToSrgb((*linear)[1]), InspectorSceneColor::LinearToSrgb((*linear)[2]), 1.0F };
+                if (const auto picked = EditorMaterialColorPickerDialog::Show(mainWindow_, InspectorSceneColor::Label(hit.property), shown, &anchor)) {
+                    const std::array<float, 3U> chosen{ InspectorSceneColor::SrgbToLinear((*picked)[0]),
+                        InspectorSceneColor::SrgbToLinear((*picked)[1]), InspectorSceneColor::SrgbToLinear((*picked)[2]) };
+                    if (InspectorSceneColor::Apply(sceneContext_, entity, hit.property, chosen)) sceneViewport_.RequestPresent();
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
         }
         if (hit.kind == InspectorHitKind::ColorField) {
             const auto component = InspectorUIComponentModel::Component(hit.section);
@@ -1687,6 +1738,21 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     }
                 }
             }
+        }
+        if (hit.section == InspectorSectionId::ScenePostProcess
+            && hit.property == InspectorPropertyId::ScenePostProcessProfile) {
+            const EditorPostProcessProfileAssetPickerDialog::Result result =
+                EditorPostProcessProfileAssetPickerDialog::Show(
+                    mainWindow_,
+                    MakeEditorDarkTheme(),
+                    sceneContext_,
+                    kb::assets::AssetId{ kb::scene::ScenePostProcessAccess::ActiveProfile(sceneContext_.Scene()) });
+            if (result.accepted) {
+                static_cast<void>(sceneContext_.SetScenePostProcessProfile(result.assetId));
+                sceneViewport_.RequestPresent();
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
         }
         if (hit.section == InspectorSectionId::SceneAudioRouting
             && hit.property == InspectorPropertyId::SceneAudioMixerPicker) {
@@ -1942,8 +2008,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
 
     if (panelHit.inEditorSettingsPanel) {
-        EditorSettingsPointerController editorSettingsPointer(sceneContext_);
-        if (editorSettingsPointer.HandlePointerDown(*panelHit.editorSettingsContent, x, y)) {
+        EditorSettingsPointerController editorSettingsPointer(sceneContext_, dockModel_, floatingWindows_);
+        if (editorSettingsPointer.HandlePointerDown(messageWindow, *panelHit.editorSettingsContent, x, y)) {
             sceneViewport_.RequestPresent();
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -1976,7 +2042,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (sceneContext_.BuildGamePackageSnapshot().state == EditorPackageJobState::Running) {
                 sceneContext_.CancelBuildGamePackage();
             } else {
-                if (sceneContext_.StartBuildGamePackage()) {
+                const std::optional<EditorDirtySceneResolution> resolution =
+                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow_, sceneContext_, EditorSceneTransition::BuildGame);
+                if (resolution.has_value() && sceneContext_.StartBuildGamePackage(*resolution)) {
                     static_cast<void>(SetTimer(messageWindow, kEditorPackageStatusTimer, 100U, nullptr));
                 }
             }
@@ -2012,20 +2080,20 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 const std::filesystem::path initial = sceneContext_.BuildGameSettings().For(
                     sceneContext_.BuildGameTarget()).outputDirectory;
                 if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
-                        mainWindow_, initial, L"Select package output directory")) {
+                        mainWindow_, initial, EditorText("fileDialog.selectOutputDirectoryTitle", "Select package output directory"))) {
                     changed = sceneContext_.SetBuildGameOutputDirectory(*selected);
                 }
                 break;
             }
             case BuildGameField::BuildRoot:
                 if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
-                        mainWindow_, sceneContext_.BuildGameSettings().buildRoot, L"Select build directory")) {
+                        mainWindow_, sceneContext_.BuildGameSettings().buildRoot, EditorText("fileDialog.selectBuildDirectoryTitle", "Select build directory"))) {
                     changed = sceneContext_.SetBuildGameBuildRoot(*selected);
                 }
                 break;
             case BuildGameField::EmsdkRoot:
                 if (const auto selected = EditorBuildGameFileDialog::SelectFolder(
-                        mainWindow_, sceneContext_.BuildGameSettings().emsdkRoot, L"Select Emscripten SDK directory")) {
+                        mainWindow_, sceneContext_.BuildGameSettings().emsdkRoot, EditorText("fileDialog.selectEmsdkDirectoryTitle", "Select Emscripten SDK directory"))) {
                     changed = sceneContext_.SetBuildGameToolchainDirectory(field, *selected);
                 }
                 break;
@@ -2052,11 +2120,35 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             case BuildGameField::LaunchAfterBuild:
                 changed = sceneContext_.ToggleBuildGameLaunchAfterBuild();
                 break;
+            case BuildGameField::StartupMap: {
+                // A list of the project's scenes, like Unreal's Game Default Map, not a free path.
+                const std::vector<std::string> scenes = sceneContext_.ProjectScenePaths();
+                HMENU menu = CreatePopupMenu();
+                if (menu != nullptr) {
+                    if (scenes.empty()) {
+                        kb::editor::AppendMenuUtf8(menu, MF_STRING | MF_GRAYED, 0U,
+                            EditorText("buildGame.noScenes", "This project has no scenes yet").data());
+                    }
+                    for (std::size_t index = 0; index < scenes.size(); ++index) {
+                        const bool current = scenes[index] == sceneContext_.ProjectConfiguration().defaultMap;
+                        kb::editor::AppendMenuUtf8(menu, MF_STRING | (current ? MF_CHECKED : 0U),
+                            static_cast<UINT_PTR>(index + 1U), scenes[index].c_str());
+                    }
+                    POINT cursor{};
+                    GetCursorPos(&cursor);
+                    const int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY,
+                        cursor.x, cursor.y, 0, mainWindow_, nullptr);
+                    DestroyMenu(menu);
+                    if (chosen > 0 && static_cast<std::size_t>(chosen) <= scenes.size()) {
+                        changed = sceneContext_.SetStartupScene(scenes[static_cast<std::size_t>(chosen - 1)]);
+                    }
+                }
+                break;
+            }
             case BuildGameField::Publisher:
             case BuildGameField::Version:
             case BuildGameField::ProductName:
             case BuildGameField::ExecutableName:
-            case BuildGameField::StartupMap:
             case BuildGameField::AndroidApplicationId:
             case BuildGameField::AndroidVersionCode:
             case BuildGameField::AndroidLabel:

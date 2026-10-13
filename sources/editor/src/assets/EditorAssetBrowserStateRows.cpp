@@ -1,4 +1,5 @@
 #include "assets/EditorAssetBrowserState.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include "assets/EditorAssetBrowserAssetRows.hpp"
 
@@ -59,7 +60,7 @@ std::vector<EditorAssetSelectionSummaryRow> EditorAssetBrowserState::SelectedCon
             .key = FolderDeleteTargetKey(folder.virtualPath),
             .id = kb::assets::NormalizeAssetPath(folder.virtualPath),
             .name = folder.name,
-            .objectType = "Folder",
+            .objectType = std::string{ EditorText("projectFiles.objectType.folder", "Folder") },
             .checked = IsDeleteTargetChecked(FolderDeleteTargetKey(folder.virtualPath)),
         });
     }
@@ -71,7 +72,7 @@ std::vector<EditorAssetSelectionSummaryRow> EditorAssetBrowserState::SelectedCon
             .key = AssetDeleteTargetKey(asset.metadata.id),
             .id = std::to_string(asset.metadata.id.value),
             .name = asset.metadata.name.empty() ? asset.metadata.virtualPath.filename().string() : asset.metadata.name,
-            .objectType = asset.metadata.type.empty() ? "Asset" : asset.metadata.type,
+            .objectType = asset.metadata.type.empty() ? std::string{ EditorText("projectFiles.objectType.asset", "Asset") } : asset.metadata.type,
             .checked = IsDeleteTargetChecked(AssetDeleteTargetKey(asset.metadata.id)),
         });
     }
@@ -90,7 +91,7 @@ std::vector<EditorAssetSelectionSummaryRow> EditorAssetBrowserState::DeleteTarge
                 .key = AssetDeleteTargetKey(metadata->id),
                 .id = std::to_string(metadata->id.value),
                 .name = metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name,
-                .objectType = metadata->type.empty() ? "Asset" : metadata->type,
+                .objectType = metadata->type.empty() ? std::string{ EditorText("projectFiles.objectType.asset", "Asset") } : metadata->type,
                 .checked = IsDeleteTargetChecked(AssetDeleteTargetKey(metadata->id)),
             });
         }
@@ -104,7 +105,7 @@ std::vector<EditorAssetSelectionSummaryRow> EditorAssetBrowserState::DeleteTarge
                 .key = FolderDeleteTargetKey(folder),
                 .id = kb::assets::NormalizeAssetPath(folder),
                 .name = folder.filename().string().empty() ? kb::assets::NormalizeAssetPath(folder) : folder.filename().string(),
-                .objectType = "Folder",
+                .objectType = std::string{ EditorText("projectFiles.objectType.folder", "Folder") },
                 .checked = IsDeleteTargetChecked(FolderDeleteTargetKey(folder)),
             });
         }

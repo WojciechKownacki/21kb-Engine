@@ -6,6 +6,11 @@
 // The point-shadow atlas takes a free builtin stage (see PointShadowUniforms::kGraphSamplerStage).
 #define KB_POINT_SHADOW_GRAPH 1
 #include "point_shadow.sh"
+#include "gbuffer_contract.sh"
+#include "shading_models.sh"
+// The prefiltered sky takes a free builtin stage of graph shaders (they own the stages from 6 up).
+SAMPLERCUBE(s_skyReflection, 3);
+#include "sky_reflection.sh"
 
 uniform vec4 u_cameraPosition;
 uniform vec4 u_lightDirKind[32];
@@ -55,7 +60,9 @@ float KbDiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
     return lightScatter * viewScatter * energyFactor;
 }
 
-vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
+// Material ambient occlusion darkens only the light from the surroundings (fs_deferred_lighting.sc).
+vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular,
+    float shadingModel, float customData0, float customData1, vec3 modelColor, vec3 irisNormal, vec2 iris)
 {
     vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
     if (u_sceneLightGridDimensions.w > 0.5) {
@@ -94,8 +101,10 @@ vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldP
         if (dirKind.w > 2.5) attenuation *= max(dot(normalize(dirKind.xyz), normalize(-lightVector)), 0.0);
     }
 
-    float nDotL = max(dot(normal, lightVector), 0.0);
-    if (nDotL <= 0.0) {
+    float nDotLRaw = dot(normal, lightVector);
+    float nDotL = max(nDotLRaw, 0.0);
+    // Light from behind lights only a surface that lets it through (subsurface).
+    if (nDotL <= 0.0 && !KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_SUBSURFACE)) {
         return vec3(0.0, 0.0, 0.0);
     }
 
@@ -108,10 +117,13 @@ vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldP
     vec3 fresnel = KbFresnelSchlick(hDotV, f0);
     float distribution = KbDistributionGgx(nDotH, roughness);
     float geometry = KbGeometrySchlickGgx(nDotV, roughness) * KbGeometrySchlickGgx(nDotL, roughness);
-    vec3 specularTerm = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
-    vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * KbDiffuseBurley(nDotV, nDotL, lDotH, roughness)) * occlusion;
-    vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation);
-    return (diffuse + specularTerm) * radiance * nDotL;
+    vec3 specularTerm = nDotL > 0.0 ? (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001) : vec3_splat(0.0);
+    vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * KbDiffuseBurley(nDotV, nDotL, lDotH, roughness));
+    // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
+    // surface returns its albedo, so the physical BRDF above is taken times pi.
+    vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
+    return KbShadingModelLightFull(shadingModel, customData0, customData1, normal, viewDir, lightVector, nDotLRaw,
+        albedo, metallic, roughness, diffuse, specularTerm, modelColor, irisNormal, iris) * radiance;
 }
 
 vec3 KbEnvironmentColor(vec3 direction)
@@ -134,23 +146,46 @@ vec3 KbEvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metalli
     vec3 diffuseEnv = KbEnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
-    vec3 specularEnv = KbEnvironmentColor(reflectionDir) * fresnel * specularEnergy * u_environmentParams.z;
+    vec3 specularEnv = KbSkyReflection(reflectionDir, roughness, KbEnvironmentColor(reflectionDir)) * fresnel * specularEnergy * u_environmentParams.z;
     return diffuseEnv + specularEnv;
 }
 
-vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
+// shadingModel and customData0/1 as the G-buffer carries them (gbuffer_contract.sh, shading_models.sh);
+// modelColor the colour the model scatters with (KbDefaultShadingModelColor unless the graph gives one).
+vec3 KbEvaluateForwardLightingFull(vec3 worldNormal, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion,
+    float shadingModel, float customData0, float customData1, vec3 modelColor, vec3 irisNormal, vec2 iris)
 {
     vec3 viewDir = normalize(u_cameraPosition.xyz - worldPos);
     vec3 lighting = KbEvaluateEnvironment(worldNormal, viewDir, albedo, metallic, roughness, specular, occlusion);
+    if (KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_CLEAR_COAT) && u_environmentParams.x > 0.5) {
+        vec3 coatDirection = reflect(-viewDir, worldNormal);
+        vec3 coatReflection = KbSkyReflection(coatDirection, customData1, KbEnvironmentColor(coatDirection)) * u_environmentParams.z;
+        lighting = KbClearCoatEnvironment(lighting, coatReflection, dot(worldNormal, viewDir), customData0);
+    }
     vec2 lightList = KbLightGridList(worldPos, u_lightParams.x);
     for (int entry = 0; entry < int(lightList.y); ++entry) {
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
-            lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, specular, occlusion) *
+            lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, specular,
+                shadingModel, customData0, customData1, modelColor, irisNormal, iris) *
                 KbPointShadowFactor(lightIndex, worldPos);
         }
     }
     return lighting;
+}
+
+vec3 KbEvaluateForwardLightingColor(vec3 worldNormal, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion,
+    float shadingModel, float customData0, float customData1, vec3 modelColor)
+{
+    return KbEvaluateForwardLightingFull(worldNormal, worldPos, albedo, metallic, roughness, specular, occlusion,
+        shadingModel, customData0, customData1, modelColor, worldNormal, vec2_splat(0.0));
+}
+
+vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion,
+    float shadingModel, float customData0, float customData1)
+{
+    return KbEvaluateForwardLightingColor(worldNormal, worldPos, albedo, metallic, roughness, specular, occlusion,
+        shadingModel, customData0, customData1, KbDefaultShadingModelColor(shadingModel, albedo, metallic));
 }
 
 #endif // KB_PBR_GRAPH_FORWARD_SH

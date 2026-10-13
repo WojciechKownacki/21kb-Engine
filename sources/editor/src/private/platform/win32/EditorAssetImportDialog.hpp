@@ -10,9 +10,17 @@
 
 #include <filesystem>
 #include <optional>
+#include <span>
+#include <string>
 #include <vector>
 
 namespace kb::editor {
+
+// An import preset of the project (.kbimportpreset) the dialog offers: its name and options.
+struct EditorAssetImportPreset {
+    std::string name;
+    kb::assets::AssetImportOptions options{};
+};
 
 #if defined(_WIN32)
 
@@ -25,7 +33,7 @@ class EditorAssetImportDialog {
 public:
     EditorAssetImportDialog() = delete;
 
-    [[nodiscard]] static std::optional<EditorAssetImportSelection> Open(HWND owner);
+    [[nodiscard]] static std::optional<EditorAssetImportSelection> Open(HWND owner, std::span<const EditorAssetImportPreset> presets = {});
 };
 
 #endif

@@ -320,6 +320,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds, cullingMask, &section)) {
                     continue;
                 }
+                // The material's World Position Offset reach (Max World Position Offset Displacement).
+                const float boundsMargin = MeshPipelineVisibility::MaterialBoundsMargin(materialResource);
                 const RenderBoundsSphere localBounds = instance.boundsOverride.IsValid()
                     ? instance.boundsOverride
                     : (section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds));
@@ -335,7 +337,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     auto bounds = cluster.origins;
                     const auto& center = localBounds.center;
                     bounds.radius += cluster.maximumScale * (localBounds.radius +
-                        std::sqrt(center[0]*center[0] + center[1]*center[1] + center[2]*center[2]));
+                        std::sqrt(center[0]*center[0] + center[1]*center[1] + center[2]*center[2])) + boundsMargin;
                     if (cluster.instanceCount != 0U && cluster.instanceCount <= batch.instances.size()-instanceIndex &&
                         !MeshPipelineVisibility::IsInsideFrustum(frustum, bounds)) {
                         culledForSection += cluster.instanceCount;
@@ -344,7 +346,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                         continue;
                     }
                 }
-                const RenderBoundsSphere worldBounds = MeshPipelineVisibility::TransformBounds(localBounds, instance.model);
+                const RenderBoundsSphere worldBounds = MeshPipelineVisibility::GrowBounds(
+                    MeshPipelineVisibility::TransformBounds(localBounds, instance.model), boundsMargin);
                 const bool gpuDrivenCandidate = MeshPipelineGpuDrivenRecorder::IsCandidate(meshResource);
                 if (!MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds)) {
                     ++culledForSection;

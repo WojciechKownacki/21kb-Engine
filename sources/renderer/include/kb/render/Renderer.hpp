@@ -10,6 +10,7 @@
 #include "kb/render/frame/EditorRenderPassSubmitter.hpp"
 #include "kb/render/gi/SceneGiHistory.hpp"
 #include "kb/render/gi/SceneGiResolvePass.hpp"
+#include "kb/render/scene/SceneSkyReflection.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/frame/FinalCompositePass.hpp"
 #include "kb/render/frame/RenderFramePipeline.hpp"
@@ -244,6 +245,9 @@ public:
     void SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept;
     [[nodiscard]] bool GpuDrivenRuntimeDispatchEnabled() const noexcept;
     void SetGraphShaderCacheRoot(std::string root);
+    // Cook graph materials on demand into the graph shader cache (an unpackaged project run, as
+    // Unreal compiles a missing material shader); std::nullopt draws only already cooked binaries.
+    void SetGraphShaderCookToolchain(std::optional<RenderMaterialGraphShaderToolchain> toolchain);
     [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
     [[nodiscard]] bool SetShaderBinaryProvider(
         std::shared_ptr<const ShaderBinaryProvider> provider) noexcept;
@@ -305,6 +309,8 @@ private:
     std::unique_ptr<FinalCompositePass> finalCompositePass_;
     std::unique_ptr<SceneDeferredLightingPass> deferredLightingPass_;
     SceneGiResolvePass giResolvePass_;
+    // Unreal's SkyLight: the backdrop captured and prefiltered for the reflections of the lighting.
+    SceneSkyReflection skyReflection_;
     SceneGiVoxelGrid giVoxelGrid_;
     SceneRenderTarget defaultSceneTarget_;
     // G-buffer commands are consumed asynchronously by bgfx. Reusing one allocation for
@@ -359,6 +365,7 @@ private:
     std::optional<RenderMaterialGraphShaderStage> lastRuntimeMaterialShaderStage_;
     std::optional<RenderMaterialGraphVariantUsage> lastRuntimeMaterialVariantUsage_;
     std::string graphShaderCacheRoot_;
+    std::optional<RenderMaterialGraphShaderToolchain> graphShaderCookToolchain_;
     std::shared_ptr<const ShaderBinaryProvider> shaderBinaryProvider_;
     float frameDeltaSeconds_ = 1.0F / 60.0F;
     bool gpuDrivenRuntimeDispatchEnabled_ = false;

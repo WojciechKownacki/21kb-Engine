@@ -1,4 +1,5 @@
 #include "rendering/HierarchyPanelToolbarRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
@@ -37,7 +38,7 @@ RECT HierarchyPanelToolbarRenderer::Paint(HDC dc, const RECT& content, const Edi
         GdiDrawing::ToColorRef(theme.chrome),
         GdiDrawing::ToColorRef(sceneContext.IsHierarchySearchFocused() ? theme.accent : theme.borderPanel));
     const std::string_view query = sceneContext.HierarchySearchQuery();
-    const std::string searchText = query.empty() ? std::string{ "Search" } : std::string{ query };
+    const std::string searchText = query.empty() ? std::string{ EditorText("hierarchy.search", "Search") } : std::string{ query };
     GdiDrawing::DrawTextBlock(
         dc,
         layout.searchText,

@@ -3,6 +3,8 @@
 
 #include <charconv>
 #include <sstream>
+#include <cmath>
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
@@ -242,7 +244,9 @@ void AddGraphMigrationDiagnostic(
     std::size_t line,
     RenderMaterialGraphDocument& graph,
     std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
-    if (rest != "surface") {
+    // A production domain by its written name (surface, postProcess, ...).
+    const RenderMaterialDomain domain = ParseRenderMaterialDomain(rest);
+    if (rest != RenderMaterialDomainName(domain) || !IsRenderMaterialDomainProduction(domain)) {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphMaterialDomain", "Unsupported material graph domain.", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
     }
@@ -282,6 +286,24 @@ void AddGraphMigrationDiagnostic(
         return RenderMaterialGraphFieldParseResult::Failed;
     }
     graph.blendMode = std::string{ rest };
+    return RenderMaterialGraphFieldParseResult::Parsed;
+}
+
+[[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphMaxWorldPositionOffsetDisplacement(
+    std::string_view rest,
+    std::size_t line,
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
+    float value = 0.0F;
+    const std::string text{ rest };
+    char* end = nullptr;
+    value = std::strtof(text.c_str(), &end);
+    if (text.empty() || end == text.c_str() || *end != '\0' || !std::isfinite(value) || value < 0.0F) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line,
+            "graphMaxWorldPositionOffsetDisplacement", "Max World Position Offset Displacement must be a finite value of 0 or more.", text);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    graph.maxWorldPositionOffsetDisplacement = value;
     return RenderMaterialGraphFieldParseResult::Parsed;
 }
 
@@ -438,38 +460,11 @@ void AddGraphMigrationDiagnostic(
         return RenderMaterialGraphFieldParseResult::Failed;
     }
     RenderMaterialGraphNode* node = FindMutableGraphNode(graph, nodeId);
-    const bool supportsMetadata = node != nullptr &&
-        (IsRenderMaterialGraphParameterNode(node->kind) ||
-            node->kind == RenderMaterialGraphNodeKind::TextureSample ||
-            node->kind == RenderMaterialGraphNodeKind::TextureObject ||
-            node->kind == RenderMaterialGraphNodeKind::TextureSampleCube ||
-            node->kind == RenderMaterialGraphNodeKind::TextureObjectCube ||
-            node->kind == RenderMaterialGraphNodeKind::TextureSampleVolume ||
-            node->kind == RenderMaterialGraphNodeKind::TextureObjectVolume ||
-            node->kind == RenderMaterialGraphNodeKind::TextureSample2DArray ||
-            node->kind == RenderMaterialGraphNodeKind::TextureObject2DArray ||
-            node->kind == RenderMaterialGraphNodeKind::ConstantScalar ||
-            node->kind == RenderMaterialGraphNodeKind::ConstantBool ||
-            node->kind == RenderMaterialGraphNodeKind::ConstantVector2 ||
-            node->kind == RenderMaterialGraphNodeKind::ConstantVector ||
-            node->kind == RenderMaterialGraphNodeKind::ConstantColor ||
-            node->kind == RenderMaterialGraphNodeKind::CollectionParameter ||
-            node->kind == RenderMaterialGraphNodeKind::ColorRamp ||
-            node->kind == RenderMaterialGraphNodeKind::Uv ||
-            node->kind == RenderMaterialGraphNodeKind::StaticBoolParameter ||
-            node->kind == RenderMaterialGraphNodeKind::StaticSwitch ||
-            node->kind == RenderMaterialGraphNodeKind::StaticComponentMask ||
-            node->kind == RenderMaterialGraphNodeKind::Reroute ||
-            node->kind == RenderMaterialGraphNodeKind::NamedRerouteDeclaration ||
-            node->kind == RenderMaterialGraphNodeKind::NamedRerouteUsage ||
-            node->kind == RenderMaterialGraphNodeKind::CompositeInput ||
-            node->kind == RenderMaterialGraphNodeKind::CompositeOutput ||
-            node->kind == RenderMaterialGraphNodeKind::FunctionInput ||
-            node->kind == RenderMaterialGraphNodeKind::FunctionOutput ||
-            node->kind == RenderMaterialGraphNodeKind::MaterialFunctionCall ||
-            node->kind == RenderMaterialGraphNodeKind::LayerStack);
+    // Every node but the Material Output keeps its settings and title (RenderMaterialGraphDocument
+    // writes them for exactly these nodes).
+    const bool supportsMetadata = node != nullptr && node->kind != RenderMaterialGraphNodeKind::MaterialOutput;
     if (!supportsMetadata) {
-        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphParameter", "Material graph parameter metadata must reference an existing parameter, constant, texture sample or graph organization node.", nodeIdText);
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphParameter", "Material graph node metadata must reference an existing node other than the Material Output.", nodeIdText);
         return RenderMaterialGraphFieldParseResult::Failed;
     }
 
@@ -1027,6 +1022,9 @@ RenderMaterialGraphFieldParseResult RenderMaterialGraphFieldParser::Apply(
     }
     if (keyword == "graphBlendMode") {
         return ParseGraphBlendMode(rest, line, asset.graph, diagnostics);
+    }
+    if (keyword == "graphMaxWorldPositionOffsetDisplacement") {
+        return ParseGraphMaxWorldPositionOffsetDisplacement(rest, line, asset.graph, diagnostics);
     }
     if (keyword == "graphStorageModel") {
         return ParseGraphStorageModel(rest, line, asset.graph, diagnostics);

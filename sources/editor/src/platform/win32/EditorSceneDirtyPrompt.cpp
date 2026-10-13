@@ -1,6 +1,7 @@
 #include "platform/win32/EditorSceneDirtyPrompt.hpp"
 
 #if defined(_WIN32)
+#include "localization/EditorLocalization.hpp"
 #include "platform/win32/EditorChoiceDialog.hpp"
 #include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
 
@@ -9,21 +10,34 @@
 namespace kb::editor {
 namespace {
 
-[[nodiscard]] std::wstring SceneLabel(const std::filesystem::path& scenePath) {
+[[nodiscard]] std::string SceneLabel(const std::filesystem::path& scenePath) {
     const std::filesystem::path filename = scenePath.filename();
     if (!filename.empty()) {
-        return filename.wstring();
+        return ScriptEditorTextEncoding::Narrow(filename.wstring());
     }
-    return L"Untitled.21kbscene";
+    return std::string{ EditorText("toolbar.untitledScene", "Untitled.21kbscene") };
 }
 
-[[nodiscard]] std::wstring PromptText(const std::filesystem::path& scenePath, std::wstring_view action) {
-    std::wstring text = L"Save changes to ";
-    text += SceneLabel(scenePath);
-    text += L" before ";
-    text += action;
-    text += L"?";
-    return text;
+[[nodiscard]] std::string PromptText(const std::filesystem::path& scenePath, EditorSceneTransition transition) {
+    const std::string scene = SceneLabel(scenePath);
+    switch (transition) {
+    case EditorSceneTransition::NewScene:
+        return EditorLocalization::Format("sceneDirty.beforeNewScene",
+            "Save changes to {scene} before creating a new scene?", { { "scene", scene } });
+    case EditorSceneTransition::OpenScene:
+        return EditorLocalization::Format("sceneDirty.beforeOpenScene",
+            "Save changes to {scene} before opening another scene?", { { "scene", scene } });
+    case EditorSceneTransition::CloseEditor:
+        return EditorLocalization::Format("sceneDirty.beforeCloseEditor",
+            "Save changes to {scene} before closing the editor?", { { "scene", scene } });
+    case EditorSceneTransition::ConvertSceneToWorld:
+        return EditorLocalization::Format("sceneDirty.beforeConvertToWorld",
+            "Save changes to {scene} before converting the scene to a world?", { { "scene", scene } });
+    case EditorSceneTransition::BuildGame:
+    default:
+        return EditorLocalization::Format("sceneDirty.beforeBuildGame",
+            "Save changes to {scene} before building the game?", { { "scene", scene } });
+    }
 }
 
 } // namespace
@@ -31,15 +45,14 @@ namespace {
 EditorSceneDirtyPromptResult EditorSceneDirtyPrompt::Confirm(
     HWND owner,
     const std::filesystem::path& scenePath,
-    std::wstring_view action) {
-    const std::wstring text = PromptText(scenePath, action);
+    EditorSceneTransition transition) {
     switch (EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
-        .title = "Unsaved Scene",
-        .message = ScriptEditorTextEncoding::Narrow(text),
-        .supportingText = "Choose whether to preserve the current scene changes.",
-        .primaryLabel = "Save",
-        .secondaryLabel = "Don't Save",
-        .cancelLabel = "Cancel",
+        .title = std::string{ EditorText("sceneDirty.title", "Unsaved Scene") },
+        .message = PromptText(scenePath, transition),
+        .supportingText = std::string{ EditorText("sceneDirty.supporting", "Choose whether to preserve the current scene changes.") },
+        .primaryLabel = std::string{ EditorText("common.save", "Save") },
+        .secondaryLabel = std::string{ EditorText("common.dontSave", "Don't Save") },
+        .cancelLabel = std::string{ EditorText("common.cancel", "Cancel") },
         .icon = HeroIconKind::DocumentText,
     })) {
     case EditorChoiceDialogResult::Primary:

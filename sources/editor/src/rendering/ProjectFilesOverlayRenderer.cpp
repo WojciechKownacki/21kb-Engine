@@ -1,4 +1,5 @@
 #include "rendering/ProjectFilesOverlayRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserGeometry.hpp"
@@ -113,9 +114,9 @@ void DrawSelectionSummary(
     RECT idHeader{ header.left + checkboxColumn, header.top, header.left + checkboxColumn + idColumn, header.bottom };
     RECT nameHeader{ idHeader.right, header.top, header.right - typeColumn - kSummaryScrollbarWidth, header.bottom };
     RECT typeHeader{ nameHeader.right, header.top, header.right - kSummaryScrollbarWidth, header.bottom };
-    Draw::DrawTextWithFont(dc, idHeader, "ID", Draw::Color(theme.textSecondary), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    Draw::DrawTextWithFont(dc, nameHeader, "Name", Draw::Color(theme.textSecondary), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    Draw::DrawTextWithFont(dc, typeHeader, "Object Type", Draw::Color(theme.textSecondary), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    Draw::DrawTextWithFont(dc, idHeader, EditorText("projectFiles.summary.id", "ID"), Draw::Color(theme.textSecondary), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    Draw::DrawTextWithFont(dc, nameHeader, EditorText("projectFiles.summary.name", "Name"), Draw::Color(theme.textSecondary), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    Draw::DrawTextWithFont(dc, typeHeader, EditorText("projectFiles.summary.objectType", "Object Type"), Draw::Color(theme.textSecondary), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     Draw::DrawHairline(dc, RECT{ summary.left + 1, header.bottom, summary.right - 1, header.bottom + 1 }, Draw::Color(theme.borderPanel));
 
     const RECT viewport = SummaryViewportRect(summary);
@@ -223,13 +224,13 @@ void DrawContextMenu(HDC dc, const RECT& content, const EditorTheme& theme, cons
 
     struct LightingRow {
         EditorAssetContextCommand command;
-        const char* label;
+        std::string_view label;
     };
-    constexpr LightingRow rows[] = {
-        { EditorAssetContextCommand::AddLighting, "Lighting" },
-        { EditorAssetContextCommand::AddDirectionalLight, "Directional Light" },
-        { EditorAssetContextCommand::AddPointLight, "Point Light" },
-        { EditorAssetContextCommand::AddSpotLight, "Spot Light" },
+    const LightingRow rows[] = {
+        { EditorAssetContextCommand::AddLighting, EditorText("projectFiles.menu.lighting", "Lighting") },
+        { EditorAssetContextCommand::AddDirectionalLight, EditorText("projectFiles.menu.directionalLight", "Directional Light") },
+        { EditorAssetContextCommand::AddPointLight, EditorText("projectFiles.menu.pointLight", "Point Light") },
+        { EditorAssetContextCommand::AddSpotLight, EditorText("projectFiles.menu.spotLight", "Spot Light") },
     };
     for (int index = 0; index < kLightingSubmenuRows; ++index) {
         const RECT row = EditorAssetBrowserLayout::ContextMenuItemRect(submenu, index);
@@ -261,7 +262,10 @@ void DrawDropActionMenu(HDC dc, const RECT& content, const EditorTheme& theme, c
     GdiDrawing::FillRectAlpha(dc, shadow, RGB(0, 0, 0), 90);
     EditorDialogStyle::PaintSurface(dc, menu, theme);
 
-    constexpr const char* labels[2] = { "Move Here", "Copy Here" };
+    const std::string_view labels[2] = {
+        EditorText("projectFiles.drop.moveHere", "Move Here"),
+        EditorText("projectFiles.drop.copyHere", "Copy Here"),
+    };
     constexpr EditorAssetDropAction commands[2] = { EditorAssetDropAction::MoveHere, EditorAssetDropAction::CopyHere };
     for (int index = 0; index < 2; ++index) {
         const RECT row = EditorAssetBrowserLayout::ContextMenuItemRect(menu, index);
@@ -274,7 +278,7 @@ void DrawDropActionMenu(HDC dc, const RECT& content, const EditorTheme& theme, c
     }
 }
 
-void DrawModalButton(HDC dc, RECT rect, const EditorTheme& theme, const char* text, bool destructive) {
+void DrawModalButton(HDC dc, RECT rect, const EditorTheme& theme, std::string_view text, bool destructive) {
     EditorDialogStyle::PaintButton(
         dc,
         rect,
@@ -309,7 +313,8 @@ void DrawDeleteConfirmDialogRect(HDC dc, const RECT& dialog, const EditorTheme& 
 
     const std::vector<EditorAssetSelectionSummaryRow> deleteRows = state.DeleteTargetRows(manager);
     const bool deletingAsset = state.SelectionKind() == EditorAssetBrowserSelectionKind::Asset;
-    const std::string titleText = deleteRows.size() == 1U ? "Delete selected object?" : ("Delete selected objects (" + std::to_string(deleteRows.size()) + ")?");
+    const std::string titleText = EditorLocalization::Plural("projectFiles.deleteConfirm.title", static_cast<std::int64_t>(deleteRows.size()),
+        "Delete selected object?", "Delete selected objects ({count})?");
     EditorDialogStyle::PaintHeader(
         dc,
         theme,
@@ -321,12 +326,12 @@ void DrawDeleteConfirmDialogRect(HDC dc, const RECT& dialog, const EditorTheme& 
         });
 
     RECT body{ dialog.left + 24, dialog.top + 84, dialog.right - 24, dialog.top + 104 };
-    Draw::DrawTextWithFont(dc, body, "This action will permanently remove the listed object(s) from Project Files.", Draw::Color(theme.textSecondary), 12, FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    Draw::DrawTextWithFont(dc, body, EditorText("projectFiles.deleteConfirm.body", "The listed object(s) go to the Recycle Bin, where you can restore them."), Draw::Color(theme.textSecondary), 12, FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     const RECT list = DeleteConfirmListRectForDialog(dialog);
     DrawSelectionSummary(dc, list, theme, deleteRows, state.DeleteConfirmListScrollOffset(), DeleteConfirmMaxScrollForList(list, state, manager));
 
-    DrawModalButton(dc, EditorAssetBrowserGeometry::DeleteConfirmAcceptRect(dialog), theme, "Delete", true);
-    DrawModalButton(dc, EditorAssetBrowserGeometry::DeleteConfirmCancelRect(dialog), theme, "Cancel", false);
+    DrawModalButton(dc, EditorAssetBrowserGeometry::DeleteConfirmAcceptRect(dialog), theme, EditorText("common.delete", "Delete"), true);
+    DrawModalButton(dc, EditorAssetBrowserGeometry::DeleteConfirmCancelRect(dialog), theme, EditorText("common.cancel", "Cancel"), false);
 }
 
 void DrawDeleteConfirmDialog(HDC dc, const RECT& bounds, const EditorTheme& theme, const EditorAssetBrowserState& state, const kb::assets::AssetManager& manager, bool shadowed) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/SceneTemplates.hpp"
 #include "engine/assets/AssetImportTypes.hpp"
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "engine/assets/TerrainAsset.hpp"
@@ -24,6 +25,7 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "commands/EditorCommandStack.hpp"
 #include "console/EditorConsoleState.hpp"
+#include "scene/EditorSceneAssetBrowserCommands.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRow.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
@@ -60,6 +62,7 @@
 #include "app/scene_viewport/EditorSceneViewportSelectionTypes.hpp"
 #include "inspection/InspectorPanelState.hpp"
 #include "app/EditorPlayModeSceneSession.hpp"
+#include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
@@ -254,6 +257,13 @@ public:
     // surface the editor reads and edits; the descriptor carries a mirror of the same
     // values for consumers that still read the project file, written only here.
     [[nodiscard]] const kb::project::ProjectSettings& ProjectConfiguration() const noexcept;
+    // The project's scenes (virtual paths, sorted): the choices for the scene the game starts in.
+    [[nodiscard]] std::vector<std::string> ProjectScenePaths() const;
+    // Makes `virtualPath` the scene the game starts in; refused, with a named reason, for a path
+    // that is not a scene of this project.
+    [[nodiscard]] bool SetStartupScene(const std::string& virtualPath);
+    // Empty when the startup scene is a scene of this project, else why the game cannot start.
+    [[nodiscard]] std::string StartupSceneProblem() const;
     [[nodiscard]] const std::filesystem::path& ProjectFile() const noexcept;
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
     [[nodiscard]] std::uint64_t SceneDocumentGeneration() const noexcept;
@@ -296,7 +306,14 @@ public:
     [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
     [[nodiscard]] kb::scene::SceneEntity PlayCameraEntity() const noexcept;
     [[nodiscard]] bool ReloadSceneFromProject();
-    [[nodiscard]] bool NewScene(EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
+    // A new, unsaved Untitled scene filled from `sceneTemplate`.
+    [[nodiscard]] bool NewScene(EditorDirtySceneResolution dirtyResolution, kb::scene::SceneTemplate sceneTemplate);
+    // File > New Scene: writes `folder`/`name`.21kbscene from the template, opens it and, when asked,
+    // makes it the scene the game starts in. Nothing is written when the name or folder is refused.
+    [[nodiscard]] bool CreateScene(std::string_view folder, std::string_view name, kb::scene::SceneTemplate sceneTemplate,
+        bool setAsStartupScene, EditorDirtySceneResolution dirtyResolution);
+    // Why `folder`/`name` cannot be a new scene of the project, or an empty string when it can.
+    [[nodiscard]] std::string NewScenePathError(std::string_view folder, std::string_view name) const;
     [[nodiscard]] bool OpenDefaultScene();
     [[nodiscard]] bool OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool SaveCurrentScene();
@@ -452,7 +469,8 @@ public:
     [[nodiscard]] bool SetBuildGameLocalFile(BuildGameField field, const std::filesystem::path& path);
     [[nodiscard]] bool ImportBuildGameApplicationIcon(const std::filesystem::path& path);
     [[nodiscard]] bool ToggleBuildGameLaunchAfterBuild();
-    [[nodiscard]] bool StartBuildGamePackage();
+    // Save writes the open scene first; Discard ("Don't Save") packages the scene as saved on disk.
+    [[nodiscard]] bool StartBuildGamePackage(EditorDirtySceneResolution dirtyResolution);
     void CancelBuildGamePackage() noexcept;
     [[nodiscard]] bool IsHierarchyScrollbarDragging() const noexcept;
     [[nodiscard]] bool SetHierarchyScrollOffset(int offset, int maxOffset) noexcept;
@@ -534,6 +552,8 @@ public:
     [[nodiscard]] kb::scene::SceneEntity CreateHierarchyObject();
     [[nodiscard]] kb::scene::SceneEntity CreateUIObject(kb::scene::UIComponentType type, kb::scene::SceneEntity parent = {});
     [[nodiscard]] kb::scene::SceneEntity CreateLightObject(kb::scene::LightKind kind);
+    // An entry of the hierarchy Create menu (kb::scene::SceneCreateMenu), under parent when valid.
+    [[nodiscard]] kb::scene::SceneEntity CreateMenuObject(std::string_view id, kb::scene::SceneEntity parent = {});
     [[nodiscard]] bool ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent);
     [[nodiscard]] bool ReparentEntities(std::span<const kb::scene::SceneEntity> children, kb::scene::SceneEntity parent);
     [[nodiscard]] bool CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path);
@@ -541,6 +561,9 @@ public:
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateAudioMixerAsset(const std::filesystem::path& virtualFolder);
+    // Create > Post-Process Profile and Create > Import Preset (EditorSceneContextPostProcess.cpp).
+    [[nodiscard]] bool CreatePostProcessProfileAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateImportPresetAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateParticleEffectAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialFunctionAsset(const std::filesystem::path& virtualFolder);
@@ -816,6 +839,15 @@ public:
     [[nodiscard]] bool SetSceneAudioMixer(kb::assets::AssetId id);
     [[nodiscard]] bool SetSceneAudioSnapshot(std::string_view snapshot);
     [[nodiscard]] bool SetSceneAudioOcclusion(const kb::scene::AudioOcclusionSettings& settings);
+    // A post-process profile asset's values (the Inspector edits them, undoably) and the scene's
+    // profile (saved with the scene, undoable through the scene history); 0 clears it.
+    [[nodiscard]] std::optional<kb::render::ScenePostProcessSettings> ReadPostProcessProfile(kb::assets::AssetId id) const;
+    [[nodiscard]] bool SetPostProcessProfile(kb::assets::AssetId id, const kb::render::ScenePostProcessSettings& settings);
+    [[nodiscard]] bool SetScenePostProcessProfile(kb::assets::AssetId id);
+    // The settings the scene's profile gives the edit-mode viewport (nullopt without one).
+    [[nodiscard]] std::optional<kb::render::ScenePostProcessSettings> ScenePostProcessProfileSettings() const;
+    // Import presets of the project for the import dialog: name, virtual path and options.
+    [[nodiscard]] std::vector<std::pair<std::string, kb::assets::AssetImportOptions>> ImportPresets();
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialInstanceAssetData> ReadMaterialInstanceAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadEffectiveMaterialAsset(kb::assets::AssetId id) const;
@@ -833,6 +865,10 @@ public:
     [[nodiscard]] std::uint64_t RequestMaterialThumbnailCapture(const std::filesystem::path& path);
     [[nodiscard]] kb::scene::SceneScreenCaptureStatus MaterialThumbnailCaptureStatus(std::uint64_t captureId) const noexcept;
     [[nodiscard]] std::uint64_t MaterialThumbnailSceneRevision() const noexcept;
+    // The same capture for the Material Editor's or the Inspector's material preview: its next
+    // presented frame is written to `path` (headless automation reads what the panel shows).
+    [[nodiscard]] std::uint64_t RequestMaterialPreviewCapture(EditorMaterialPreviewSurface surface, const std::filesystem::path& path);
+    [[nodiscard]] kb::scene::SceneScreenCaptureStatus MaterialPreviewCaptureStatus(EditorMaterialPreviewSurface surface, std::uint64_t captureId) const noexcept;
     [[nodiscard]] const EditorMaterialPreviewSceneSettings& MaterialPreviewSceneSettings() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings);
     // Orbit (drag) and dolly (wheel) the material preview camera around the framed object.
@@ -1403,6 +1439,11 @@ private:
     [[nodiscard]] bool SaveProjectConfiguration();
     // Records the document the author has open, so reopening the project returns to it.
     void RememberLastOpenMap();
+    // The editor's start when no saved scene can be opened: a new, unsaved Untitled scene from Basic.
+    void StartUntitledBasicScene();
+    // The open scene and the startup scene, which Project Files does not delete, rename or move.
+    [[nodiscard]] EditorProtectedScenes ProtectedScenes() const;
+    [[nodiscard]] static std::string SceneDocumentName(const std::filesystem::path& scenePath);
     void ClearSceneDocumentDirty() noexcept;
     void ReleaseRenderedSceneResources();
     void InvalidateHierarchyRows() noexcept;
@@ -1561,6 +1602,8 @@ private:
     std::vector<std::uint64_t> sceneRenderDirtyEntityIds_;
     bool sceneRenderFullDirty_ = true;
     bool sceneRenderStructuralDirty_ = false;
+    // Whether the scene had unsaved edits when Play began, so Stop brings them back as unsaved.
+    bool playModeDocumentWasDirty_ = false;
     bool sceneDocumentDirty_ = false;
     EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;

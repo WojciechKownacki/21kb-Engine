@@ -1,9 +1,19 @@
 #include "app/EditorAutomationScenarioRunner.hpp"
+#include "engine/assets/AssetImportPreset.hpp"
+#include "engine/assets/ImportedAsset.hpp"
+#include "engine/assets/ImportedAssetLoader.hpp"
+#include "inspection/InspectorPostProcessProfileModel.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
+#include "localization/EditorLocalization.hpp"
+#include "editor/ParticleEditorText.hpp"
+#include "rendering/gdi/CutTextAudit.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "app/EditorPlayModeState.hpp"
+#include "engine/scene/SceneTemplates.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
@@ -977,6 +987,99 @@ ReadScriptValue(
 }
 
 // Navigation operations: baking a scene's navigation mesh, its debug view and agents walking on it.
+// Post-process profiles (.kbppfx) and the scene's profile, through the Inspector's own rows:
+// a click lands where the panel hit-tests the row, a number is typed and committed with Enter.
+[[nodiscard]] std::optional<StepOutcome> ExecutePostProcessStep(
+    ScenarioState& state, const JsonValue& step, std::string_view operation) {
+    std::string error;
+    EditorSceneContext& context = state.context;
+    const auto rowOf = [](std::string_view field) {
+        const std::span<const InspectorPostProcessProfileRow> rows = InspectorPostProcessProfileModel::Rows();
+        for (std::size_t index = 0U; index < rows.size(); ++index) {
+            if (rows[index].field == field) return static_cast<int>(index);
+        }
+        return -1;
+    };
+    if (operation == "post_process_row") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto field = StringMember(step, "field", error);
+        const auto text = StringMember(step, "text", error, false);
+        if (!asset || !field) return StepOutcome{ false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        const int row = rowOf(*field);
+        if (!id.IsValid() || row < 0) return StepOutcome{ false, "unknown profile or field " + *field };
+        if (!context.AssetBrowser().SelectAsset(id, context.Scene().Assets().Manager())) return StepOutcome{ false, "profile not selectable" };
+        const InspectorPostProcessProfileRow& entry = InspectorPostProcessProfileModel::Rows()[static_cast<std::size_t>(row)];
+        const InspectorHitKind kind = entry.kind == InspectorPostProcessProfileRowKind::Bool ? InspectorHitKind::BoolField : InspectorHitKind::TextField;
+        if (!state.automation.InspectorClickRow(InspectorPropertyId::PostProcessProfileField, row, kind)) {
+            return StepOutcome{ false, "the Inspector shows no row for " + *field };
+        }
+        if (text.has_value()) {
+            if (entry.kind != InspectorPostProcessProfileRowKind::Number) return StepOutcome{ false, *field + " takes no typed value" };
+            for (int erase = 0; erase < 32; ++erase) static_cast<void>(state.automation.InspectorKey(VK_BACK));
+            for (const unsigned char character : *text) {
+                if (!state.automation.InspectorChar(static_cast<wchar_t>(character))) return StepOutcome{ false, "typing was not routed" };
+            }
+            if (!state.automation.InspectorKey(VK_RETURN)) return StepOutcome{ false, "Enter was not routed" };
+        }
+        return StepOutcome{ true, *field };
+    }
+    if (operation == "assert_post_process_profile") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto field = StringMember(step, "field", error);
+        const auto value = StringMember(step, "value", error);
+        if (!asset || !field || !value) return StepOutcome{ false, error };
+        const std::optional<kb::render::ScenePostProcessSettings> settings = context.ReadPostProcessProfile(ResolveAsset(state, *asset));
+        if (!settings.has_value()) return StepOutcome{ false, "the profile could not be read" };
+        std::istringstream lines{ kb::render::PostProcessProfileAssetLoader::Describe(*settings) };
+        std::string line;
+        while (std::getline(lines, line)) {
+            if (line.rfind(*field + " ", 0U) == 0U) {
+                const std::string actual = line.substr(field->size() + 1U);
+                return StepOutcome{ actual == *value, *field + " = " + actual };
+            }
+        }
+        return StepOutcome{ false, "the profile has no field " + *field };
+    }
+    if (operation == "set_scene_post_process_profile") {
+        // What the Scene Profile picker does when a profile is chosen.
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return StepOutcome{ false, error };
+        const kb::assets::AssetId id = *asset == "none" ? kb::assets::AssetId{} : ResolveAsset(state, *asset);
+        return StepOutcome{ context.SetScenePostProcessProfile(id), *asset };
+    }
+    if (operation == "clear_scene_post_process_profile") {
+        // The Inspector's Clear Scene Profile row on the selected environment object.
+        return StepOutcome{ state.automation.InspectorClickRow(InspectorPropertyId::ScenePostProcessProfileClear, -1, InspectorHitKind::TextField),
+            "Clear Scene Profile" };
+    }
+    if (operation == "assert_viewport_post_process") {
+        // What the Scene panel's viewport renders with: a field of its post-process settings.
+        const auto field = StringMember(step, "field", error);
+        const auto value = StringMember(step, "value", error);
+        if (!field || !value) return StepOutcome{ false, error };
+        const std::optional<kb::render::ScenePostProcessSettings> settings = state.automation.SceneViewportPostProcessSettings();
+        if (!settings.has_value()) return StepOutcome{ false, "the viewport renders the renderer's defaults" };
+        std::istringstream lines{ kb::render::PostProcessProfileAssetLoader::Describe(*settings) };
+        std::string line;
+        while (std::getline(lines, line)) {
+            if (line.rfind(*field + " ", 0U) == 0U) {
+                const std::string actual = line.substr(field->size() + 1U);
+                return StepOutcome{ actual == *value, *field + " = " + actual };
+            }
+        }
+        return StepOutcome{ false, "no field " + *field };
+    }
+    if (operation == "assert_scene_post_process_profile") {
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return StepOutcome{ false, error };
+        const std::uint64_t expected = *asset == "none" ? 0U : ResolveAsset(state, *asset).value;
+        const std::uint64_t actual = kb::scene::ScenePostProcessAccess::ActiveProfile(context.Scene());
+        return StepOutcome{ actual == expected, "profile " + std::to_string(actual) };
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] std::optional<StepOutcome> ExecuteNavigationStep(
     ScenarioState& state, const JsonValue& step, std::string_view operation) {
     std::string error;
@@ -1084,12 +1187,18 @@ ReadScriptValue(
     if (std::optional<StepOutcome> navigation = ExecuteNavigationStep(state, step, *operation)) {
         return *navigation;
     }
+    if (std::optional<StepOutcome> postProcess = ExecutePostProcessStep(state, step, *operation)) {
+        return *postProcess;
+    }
 
     if (*operation == "verify_prefab_round_trip") {
         return {state.automation.VerifyPrefabRoundTrip(), "Prefab create, place, override, apply, save, reopen, play, stop and undo keep the asset link"};
     }
     if (*operation == "verify_ui_2d") {
         return {state.automation.VerifyUI2DEditing(), "2D toolbar, UI selection, eight resize handles, move, undo and cancel"};
+    }
+    if (*operation == "assert_scene_creation_menu") {
+        return {state.automation.VerifySceneCreationMenu(), "Hierarchy Create menu: every scene object, its components and Undo"};
     }
     if (*operation == "assert_ui_creation_menu") {
         return {state.automation.VerifyUICreationMenu(), "Hierarchy UI creation, dependencies, parenting and Undo"};
@@ -1913,6 +2022,34 @@ ReadScriptValue(
         return { configured, configured ? virtualPath.generic_string() : "physics layers project setting failed" };
     }
 
+    if (*operation == "set_startup_scene") {
+        // Build Game > Startup map: the scene the game starts in, chosen from the project's scenes.
+        const auto path = StringMember(step, "path", error);
+        const auto refusedWith = StringMember(step, "refused_with", error, false);
+        if (!path || !error.empty()) return { false, error };
+        const bool set = state.context.SetStartupScene(*path);
+        if (refusedWith.has_value()) {
+            const auto& entries = state.context.Console().Entries();
+            const std::string reason = entries.empty() ? std::string{} : entries.back().message;
+            return { !set && state.context.ProjectConfiguration().defaultMap != *path &&
+                         reason.find(*refusedWith) != std::string::npos, reason };
+        }
+        return { set && state.context.ProjectConfiguration().defaultMap == *path &&
+                     state.context.StartupSceneProblem().empty(), state.context.ProjectConfiguration().defaultMap };
+    }
+
+    if (*operation == "set_language") {
+        // The editor's language for the steps after it (Editor Settings > General > Language).
+        const auto language = StringMember(step, "language", error);
+        if (!language) return { false, error };
+        std::string languageError;
+        if (!EditorLocalization::SetLanguage(*language, EditorLocalization::DefaultCatalogFolder(), languageError)) {
+            return { false, languageError };
+        }
+        kb::particle_editor::SetTextSource(&EditorLocalization::Text);
+        return { true, std::string{ EditorLocalization::Current() } };
+    }
+
     if (*operation == "select_project_settings_category") {
         const auto category = StringMember(step, "category", error);
         if (!category) return { false, error };
@@ -2131,14 +2268,35 @@ ReadScriptValue(
         const auto combineMeshes = BoolMember(step, "combine_meshes", error, false);
         if (!combineMeshes && step.Find("combine_meshes") != nullptr) return { false, error };
         kb::assets::AssetImportOptions options{};
-        options.mesh.importSkeletalMesh = skeletal.value_or(false);
-        options.mesh.importTextures = importTextures.value_or(false);
-        options.mesh.importMaterials = importMaterials.value_or(false);
-        options.mesh.combineMeshes = combineMeshes.value_or(false);
-        return {
-            state.context.ImportAssetFiles(
-                sources, std::filesystem::path{ *destination }, options),
-            sourcePath->string() };
+        // "preset": an import preset of the project (the dialog's Import preset row), whose
+        // options the members below then change, as the dialog's rows do.
+        if (const auto preset = StringMember(step, "preset", error, false)) {
+            const kb::assets::AssetMetadata* metadata =
+                state.context.Scene().Assets().Manager().Registry().Find(ResolveAsset(state, *preset));
+            std::string presetError;
+            const std::optional<kb::assets::AssetImportOptions> loaded = metadata == nullptr
+                ? std::nullopt : kb::assets::AssetImportPresetIO::Load(metadata->physicalPath, &presetError);
+            if (!loaded.has_value()) return { false, "import preset not readable: " + presetError };
+            options = *loaded;
+        }
+        if (skeletal.has_value()) options.mesh.importSkeletalMesh = *skeletal;
+        if (importTextures.has_value()) options.mesh.importTextures = *importTextures;
+        if (importMaterials.has_value()) options.mesh.importMaterials = *importMaterials;
+        if (combineMeshes.has_value()) options.mesh.combineMeshes = *combineMeshes;
+        if (const auto scale = NumberMember(step, "scale", error, false)) {
+            options.mesh.transform.scale = static_cast<float>(*scale);
+        }
+        if (const JsonValue* rotation = step.Find("rotation"); rotation != nullptr) {
+            if (rotation->GetKind() != JsonValue::Kind::Array || rotation->Size() != 3U) return { false, "rotation must be [x, y, z]" };
+            for (std::size_t axis = 0U; axis < 3U; ++axis) {
+                if (rotation->At(axis)->GetKind() != JsonValue::Kind::Number) return { false, "rotation must be [x, y, z]" };
+                options.mesh.transform.rotationDegrees[axis] = static_cast<float>(rotation->At(axis)->AsNumber());
+            }
+        }
+        // "refused": the import must fail (and say why), as the editor refuses it.
+        const bool refused = BoolMember(step, "refused", error, false).value_or(false);
+        const bool imported = state.context.ImportAssetFiles(sources, std::filesystem::path{ *destination }, options);
+        return { imported != refused, sourcePath->string() };
     }
 
     if (*operation == "create_entity") {
@@ -2934,6 +3092,31 @@ ReadScriptValue(
             metadata == nullptr ? "absent" : metadata->type };
     }
 
+    if (*operation == "assert_import_transform") {
+        // The scale and rotation an imported model's container keeps (and every load applies).
+        const auto path = StringMember(step, "path", error);
+        const auto scale = NumberMember(step, "scale", error);
+        const JsonValue* rotation = Member(step, "rotation", JsonValue::Kind::Array, error);
+        if (!path || !scale || rotation == nullptr || rotation->Size() != 3U) return { false, error.empty() ? "rotation must be [x, y, z]" : error };
+        const kb::assets::AssetMetadata* metadata =
+            state.context.Scene().Assets().Manager().Registry().FindByPath(std::filesystem::path{ *path });
+        if (metadata == nullptr) return { false, "asset is absent" };
+        for (std::size_t axis = 0U; axis < 3U; ++axis) {
+            if (rotation->At(axis)->GetKind() != JsonValue::Kind::Number) return { false, "rotation must be [x, y, z]" };
+        }
+        kb::assets::ImportedAssetLoader loader;
+        const kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{ *metadata, metadata->physicalPath });
+        const auto imported = std::static_pointer_cast<kb::assets::ImportedAsset>(loaded.asset);
+        if (!loaded.Succeeded() || imported == nullptr) return { false, "container not readable" };
+        const kb::assets::AssetMeshImportTransform& transform = imported->meshTransform;
+        const bool matched = std::fabs(transform.scale - *scale) < 0.0001 &&
+            std::fabs(transform.rotationDegrees[0] - rotation->At(0)->AsNumber()) < 0.0001 &&
+            std::fabs(transform.rotationDegrees[1] - rotation->At(1)->AsNumber()) < 0.0001 &&
+            std::fabs(transform.rotationDegrees[2] - rotation->At(2)->AsNumber()) < 0.0001;
+        return { matched, "scale " + std::to_string(transform.scale) + " rotation " + std::to_string(transform.rotationDegrees[0]) + ',' +
+            std::to_string(transform.rotationDegrees[1]) + ',' + std::to_string(transform.rotationDegrees[2]) };
+    }
+
     if (*operation == "assert_asset_compatibility") {
         const auto asset = StringMember(step, "asset", error);
         const auto expected = BoolMember(step, "compatible", error);
@@ -3162,6 +3345,10 @@ ReadScriptValue(
                 state.context.CreateMaterialTypeAsset(virtualFolder);
         } else if (*type == "particle_effect") {
             created = state.context.CreateParticleEffectAsset(virtualFolder);
+        } else if (*type == "post_process_profile") {
+            created = state.context.CreatePostProcessProfileAsset(virtualFolder);
+        } else if (*type == "import_preset") {
+            created = state.context.CreateImportPresetAsset(virtualFolder);
         } else {
             return { false, "unsupported asset type" };
         }
@@ -3192,6 +3379,8 @@ ReadScriptValue(
         const auto destination =
             StringMember(step, "destination", error);
         if (!asset || !destination) return { false, error };
+        const auto refusedWith = StringMember(step, "refused_with", error, false);
+        if (!error.empty()) return { false, error };
         const kb::assets::AssetId id = ResolveAsset(state, *asset);
         if (!id.IsValid()) return { false, "asset was not found" };
         const bool succeeded =
@@ -3200,16 +3389,24 @@ ReadScriptValue(
                 id, std::filesystem::path{ *destination })
             : state.context.MoveAssetToFolder(
                 id, std::filesystem::path{ *destination });
+        if (refusedWith.has_value()) {
+            const std::string reason = state.context.Scene().Assets().Manager().LastError();
+            return { !succeeded && reason.find(*refusedWith) != std::string::npos, reason };
+        }
         return { succeeded, *destination };
     }
 
     if (*operation == "delete_asset") {
         const auto asset = StringMember(step, "asset", error);
-        if (!asset) return { false, error };
+        const auto refusedWith = StringMember(step, "refused_with", error, false);
+        if (!asset || !error.empty()) return { false, error };
         const kb::assets::AssetId id = ResolveAsset(state, *asset);
-        return {
-            id.IsValid() && state.context.DeleteAssetBrowserItem(id),
-            *asset };
+        const bool deleted = id.IsValid() && state.context.DeleteAssetBrowserItem(id);
+        if (refusedWith.has_value()) {
+            const std::string reason = state.context.Scene().Assets().Manager().LastError();
+            return { !deleted && reason.find(*refusedWith) != std::string::npos, reason };
+        }
+        return { deleted, *asset };
     }
 
     if (*operation == "assign_asset") {
@@ -3928,8 +4125,13 @@ ReadScriptValue(
     }
 
     if (*operation == "new_scene") {
+        const auto templateName = StringMember(step, "template", error, false);
+        if (!error.empty()) return { false, error };
+        const std::optional<kb::scene::SceneTemplate> sceneTemplate =
+            kb::scene::SceneTemplates::Parse(templateName.value_or("Empty"));
+        if (!sceneTemplate.has_value()) return { false, "unknown template " + templateName.value_or("") };
         return {
-            state.context.NewScene(EditorDirtySceneResolution::Discard),
+            state.context.NewScene(EditorDirtySceneResolution::Discard, *sceneTemplate),
             "new scene" };
     }
 
@@ -3942,10 +4144,18 @@ ReadScriptValue(
         }
         const auto path = StringMember(step, "path", error, false);
         if (!error.empty()) return { false, error };
+        // "outside_project": a path relative to the project root that may leave it ("../x"), to
+        // prove the editor refuses it; "refused_with": the refusal the console must show.
+        const auto outside = StringMember(step, "outside_project", error, false);
+        const auto refusedWith = StringMember(step, "refused_with", error, false);
+        if (!error.empty()) return { false, error };
         const auto started = std::chrono::steady_clock::now();
         bool saved = false;
         std::filesystem::path savedPath;
-        if (!path.has_value()) {
+        if (outside.has_value()) {
+            savedPath = (EditorProjectPaths::ProjectRoot() / *outside).lexically_normal();
+            saved = state.context.SaveCurrentSceneAs(savedPath);
+        } else if (!path.has_value()) {
             saved = state.context.SaveCurrentScene();
             savedPath = state.context.CurrentScenePath();
         } else {
@@ -3953,6 +4163,13 @@ ReadScriptValue(
             if (!resolved) return { false, error };
             saved = state.context.SaveCurrentSceneAs(*resolved);
             savedPath = *resolved;
+        }
+        if (refusedWith.has_value()) {
+            const auto& entries = state.context.Console().Entries();
+            const std::string reason = entries.empty() ? std::string{} : entries.back().message;
+            std::error_code missing;
+            return { !saved && !std::filesystem::exists(savedPath, missing) && reason.find(*refusedWith) != std::string::npos,
+                reason };
         }
 
         const double elapsedMilliseconds =
@@ -3983,6 +4200,73 @@ ReadScriptValue(
             autosave.NotificationText().empty()
                 ? std::string{ "no autosave notification" }
                 : autosave.NotificationText() };
+    }
+
+    // File > New Scene without its window: the dialog's validation, then CreateScene.
+    if (*operation == "create_scene") {
+        const auto name = StringMember(step, "name", error);
+        if (!name) return { false, error };
+        const auto folder = StringMember(step, "folder", error, false);
+        const auto templateName = StringMember(step, "template", error, false);
+        const auto startup = BoolMember(step, "startup", error, false);
+        const auto refusedWith = StringMember(step, "refused_with", error, false);
+        if (!error.empty()) return { false, error };
+        const std::optional<kb::scene::SceneTemplate> sceneTemplate =
+            kb::scene::SceneTemplates::Parse(templateName.value_or("Basic"));
+        if (!sceneTemplate.has_value()) return { false, "unknown template " + templateName.value_or("") };
+        const std::string folderText{ folder.value_or("Assets/Scenes") };
+        const std::string refusal = state.context.NewScenePathError(folderText, *name);
+        if (refusedWith.has_value()) {
+            const bool refused = refusal.find(*refusedWith) != std::string::npos &&
+                !state.context.CreateScene(folderText, *name, *sceneTemplate, false, EditorDirtySceneResolution::Discard);
+            return { refused, refusal.empty() ? std::string{ "not refused" } : refusal };
+        }
+        if (!refusal.empty()) return { false, refusal };
+        return {
+            state.context.CreateScene(folderText, *name, *sceneTemplate, startup.value_or(false), EditorDirtySceneResolution::Discard),
+            state.context.CurrentScenePath().generic_string() };
+    }
+
+    // The open scene, its root objects in order and the scene the game starts in.
+    if (*operation == "assert_current_scene") {
+        const auto path = StringMember(step, "path", error);
+        const auto roots = StringMember(step, "roots", error, false);
+        const auto startup = StringMember(step, "startup", error, false);
+        const auto dirty = BoolMember(step, "dirty", error, false);
+        if (!path || !error.empty()) return { false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return { false, error };
+        std::error_code same;
+        bool matches = std::filesystem::equivalent(state.context.CurrentScenePath(), *resolved, same) && !same;
+        std::string names;
+        for (const kb::scene::SceneEntity root : state.context.Scene().Hierarchy().RootEntities()) {
+            names += (names.empty() ? "" : ",") + std::string{ state.context.Scene().Entities().Name(root) };
+        }
+        if (roots.has_value()) matches = matches && names == *roots;
+        if (startup.has_value()) matches = matches && state.context.ProjectConfiguration().defaultMap == *startup;
+        if (dirty.has_value()) matches = matches && state.context.SceneDocumentDirty() == *dirty;
+        return { matches, state.context.CurrentScenePath().generic_string() + " roots=" + names + " startup=" +
+            state.context.ProjectConfiguration().defaultMap + (state.context.SceneDocumentDirty() ? " unsaved" : " saved") };
+    }
+
+    // Opening the project again, as the editor does on its next start: which scene comes up.
+    if (*operation == "assert_reopened_scene") {
+        const auto path = StringMember(step, "path", error);
+        if (!path) return { false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return { false, error };
+        const auto roots = StringMember(step, "roots", error, false);
+        if (!error.empty()) return { false, error };
+        EditorSceneContext reopened;
+        std::error_code same;
+        bool matches = std::filesystem::equivalent(reopened.CurrentScenePath(), *resolved, same) && !same &&
+            !reopened.SceneDocumentDirty();
+        std::string names;
+        for (const kb::scene::SceneEntity root : reopened.Scene().Hierarchy().RootEntities()) {
+            names += (names.empty() ? "" : ",") + std::string{ reopened.Scene().Entities().Name(root) };
+        }
+        if (roots.has_value()) matches = matches && names == *roots;
+        return { matches, reopened.CurrentScenePath().generic_string() + " roots=" + names };
     }
 
     if (*operation == "open_scene") {
@@ -4443,9 +4727,23 @@ ReadScriptValue(
         const double height = NumberMember(step, "height", error, false).value_or(700.0);
         if (!error.empty() || width < 240.0 || width > 3840.0 || height < 200.0 || height > 2160.0)
             return {false, "capture dimensions outside supported bounds"};
-        return {
-            state.automation.CapturePanel(*panel, *checkpoint, static_cast<int>(width), static_cast<int>(height)),
-            *panel + ':' + *checkpoint };
+        // "text_fits": no single-line text of the panel may be cut (a translation must fit too).
+        const bool textFits = BoolMember(step, "text_fits", error, false).value_or(false);
+        std::vector<CutText> cut;
+        if (textFits) CutTextSink() = &cut;
+        const bool captured =
+            state.automation.CapturePanel(*panel, *checkpoint, static_cast<int>(width), static_cast<int>(height));
+        CutTextSink() = nullptr;
+        if (!captured) return { false, *panel + ':' + *checkpoint };
+        if (!cut.empty()) {
+            std::string message = *panel + ": " + std::to_string(cut.size()) + " cut text(s):";
+            for (std::size_t index = 0; index < cut.size() && index < 8U; ++index) {
+                message += " \"" + cut[index].text + "\" needs " + std::to_string(cut[index].needed) + " px, has " +
+                    std::to_string(cut[index].available) + " px;";
+            }
+            return { false, message };
+        }
+        return { true, *panel + ':' + *checkpoint };
     }
 
     if (*operation == "capture_screenshot_matrix") {
@@ -4481,6 +4779,16 @@ ReadScriptValue(
             }
         }
         return {changed >= 100U, "changed pixels: " + std::to_string(changed) + " (minimum 100)"};
+    }
+
+    if (*operation == "capture_material_preview") {
+        // The Material Editor's preview of the open material, as the panel shows it.
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        if (!checkpoint) return { false, error };
+        const double width = NumberMember(step, "width", error, false).value_or(512.0);
+        const double height = NumberMember(step, "height", error, false).value_or(512.0);
+        return { state.automation.CaptureMaterialPreview(*checkpoint, static_cast<int>(width), static_cast<int>(height)),
+                 "material_preview:" + *checkpoint };
     }
 
     if (*operation == "capture_scene_viewport") {
@@ -4545,6 +4853,18 @@ ReadScriptValue(
             state.automation.CaptureRuntime(
                 *checkpoint, requireNonUniform),
             *checkpoint };
+    }
+
+    if (*operation == "verify_toolbar_menu_overlay") {
+        return {
+            state.automation.VerifyToolbarMenuOverlay(),
+            "world,layout" };
+    }
+
+    if (*operation == "verify_add_component_search_input") {
+        return {
+            state.automation.VerifyAddComponentSearchInput(),
+            "click,type-window,type-popup,filtered" };
     }
 
     if (*operation == "verify_viewport_host_lifecycle") {

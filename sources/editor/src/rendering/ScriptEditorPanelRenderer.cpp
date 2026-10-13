@@ -1,9 +1,11 @@
 #include "rendering/ScriptEditorPanelRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <string>
 
@@ -12,12 +14,12 @@ namespace {
 
 constexpr int kHeaderHeight = 34;
 
-void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
     ScopedFont font{ pointSize, weight };
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+    kb::editor::DrawTextUtf8(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
 } // namespace
@@ -42,14 +44,14 @@ void ScriptEditorPanelRenderer::Paint(
     GdiDrawing::FillRectColor(dc, RECT{ header.left, header.bottom - 1, header.right, header.bottom }, GdiDrawing::ToColorRef(theme.borderChrome));
 
     if (!script.IsOpen()) {
-        DrawText(dc, RECT{ header.left + 12, header.top, header.right - 12, header.bottom }, "Script Editor", GdiDrawing::ToColorRef(theme.textSecondary), 12, FW_SEMIBOLD);
-        DrawText(dc, BodyRect(content), "Double-click a .lua file in Project Files to edit it.", GdiDrawing::ToColorRef(theme.textDisabled), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, RECT{ header.left + 12, header.top, header.right - 12, header.bottom }, EditorText("panel.scriptEditor", "Script Editor"), GdiDrawing::ToColorRef(theme.textSecondary), 12, FW_SEMIBOLD);
+        DrawText(dc, BodyRect(content), EditorText("scriptEditor.empty", "Double-click a .lua file in Project Files to edit it."), GdiDrawing::ToColorRef(theme.textDisabled), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
     }
 
     const std::string title = (dirty ? "\xE2\x97\x8F " : "") + script.Title(); // U+25CF bullet marks unsaved edits.
-    DrawText(dc, RECT{ header.left + 12, header.top, header.right - 110, header.bottom }, title.c_str(), dirty ? RGB(226, 196, 120) : GdiDrawing::ToColorRef(theme.textPrimary), 12, FW_SEMIBOLD);
-    DrawText(dc, RECT{ header.right - 104, header.top, header.right - 12, header.bottom }, "Ctrl+S to save", GdiDrawing::ToColorRef(theme.textDisabled), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    DrawText(dc, RECT{ header.left + 12, header.top, header.right - 110, header.bottom }, title, dirty ? RGB(226, 196, 120) : GdiDrawing::ToColorRef(theme.textPrimary), 12, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.right - 104, header.top, header.right - 12, header.bottom }, EditorText("scriptEditor.saveHint", "Ctrl+S to save"), GdiDrawing::ToColorRef(theme.textDisabled), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
 } // namespace kb::editor

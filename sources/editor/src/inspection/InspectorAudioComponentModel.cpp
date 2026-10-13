@@ -1,4 +1,5 @@
 #include "inspection/InspectorAudioComponentModel.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #include "engine/assets/AssetHandle.hpp"
 #include "engine/assets/AssetId.hpp"
@@ -24,30 +25,30 @@ namespace kb::editor {
 namespace {
 
 constexpr std::array<InspectorAudioRow, 17U> kSourceRows{ {
-    { InspectorPropertyId::AudioSourceClip, InspectorAudioControlKind::Asset, "Clip", InspectorPropertyId::AudioSourceClipPicker },
-    { InspectorPropertyId::AudioSourceClipClear, InspectorAudioControlKind::Action, "Clear Clip" },
-    { InspectorPropertyId::AudioSourceVolume, InspectorAudioControlKind::Float, "Volume" },
-    { InspectorPropertyId::AudioSourcePitch, InspectorAudioControlKind::Float, "Pitch" },
-    { InspectorPropertyId::AudioSourceEnabled, InspectorAudioControlKind::Bool, "Enabled" },
-    { InspectorPropertyId::AudioSourceAutoplay, InspectorAudioControlKind::Bool, "Autoplay" },
-    { InspectorPropertyId::AudioSourceLoop, InspectorAudioControlKind::Bool, "Loop" },
-    { InspectorPropertyId::AudioSourceMute, InspectorAudioControlKind::Bool, "Mute" },
-    { InspectorPropertyId::AudioSourceSpatial, InspectorAudioControlKind::Bool, "Spatial" },
-    { InspectorPropertyId::AudioSourcePan, InspectorAudioControlKind::Float, "Pan" },
-    { InspectorPropertyId::AudioSourceSpatialBlend, InspectorAudioControlKind::Float, "Spatial Blend" },
-    { InspectorPropertyId::AudioSourceAttenuation, InspectorAudioControlKind::Enum, "Attenuation" },
-    { InspectorPropertyId::AudioSourceMinDistance, InspectorAudioControlKind::Float, "Min Distance" },
-    { InspectorPropertyId::AudioSourceMaxDistance, InspectorAudioControlKind::Float, "Max Distance" },
-    { InspectorPropertyId::AudioSourceRolloff, InspectorAudioControlKind::Float, "Rolloff" },
-    { InspectorPropertyId::AudioSourceDopplerFactor, InspectorAudioControlKind::Float, "Doppler Factor" },
-    { InspectorPropertyId::AudioSourceOutputBus, InspectorAudioControlKind::Route, "Output Bus" },
+    { InspectorPropertyId::AudioSourceClip, InspectorAudioControlKind::Asset, InspectorPropertyId::AudioSourceClipPicker },
+    { InspectorPropertyId::AudioSourceClipClear, InspectorAudioControlKind::Action },
+    { InspectorPropertyId::AudioSourceVolume, InspectorAudioControlKind::Float },
+    { InspectorPropertyId::AudioSourcePitch, InspectorAudioControlKind::Float },
+    { InspectorPropertyId::AudioSourceEnabled, InspectorAudioControlKind::Bool },
+    { InspectorPropertyId::AudioSourceAutoplay, InspectorAudioControlKind::Bool },
+    { InspectorPropertyId::AudioSourceLoop, InspectorAudioControlKind::Bool },
+    { InspectorPropertyId::AudioSourceMute, InspectorAudioControlKind::Bool },
+    { InspectorPropertyId::AudioSourceSpatial, InspectorAudioControlKind::Bool },
+    { InspectorPropertyId::AudioSourcePan, InspectorAudioControlKind::Float },
+    { InspectorPropertyId::AudioSourceSpatialBlend, InspectorAudioControlKind::Float },
+    { InspectorPropertyId::AudioSourceAttenuation, InspectorAudioControlKind::Enum },
+    { InspectorPropertyId::AudioSourceMinDistance, InspectorAudioControlKind::Float },
+    { InspectorPropertyId::AudioSourceMaxDistance, InspectorAudioControlKind::Float },
+    { InspectorPropertyId::AudioSourceRolloff, InspectorAudioControlKind::Float },
+    { InspectorPropertyId::AudioSourceDopplerFactor, InspectorAudioControlKind::Float },
+    { InspectorPropertyId::AudioSourceOutputBus, InspectorAudioControlKind::Route },
 } };
 
 constexpr std::array<InspectorAudioRow, 4U> kListenerRows{ {
-    { InspectorPropertyId::AudioListenerPriority, InspectorAudioControlKind::Integer, "Priority" },
-    { InspectorPropertyId::AudioListenerLocalUser, InspectorAudioControlKind::Integer, "Local User" },
-    { InspectorPropertyId::AudioListenerPrimary, InspectorAudioControlKind::Bool, "Primary" },
-    { InspectorPropertyId::AudioListenerEnabled, InspectorAudioControlKind::Bool, "Enabled" },
+    { InspectorPropertyId::AudioListenerPriority, InspectorAudioControlKind::Integer },
+    { InspectorPropertyId::AudioListenerLocalUser, InspectorAudioControlKind::Integer },
+    { InspectorPropertyId::AudioListenerPrimary, InspectorAudioControlKind::Bool },
+    { InspectorPropertyId::AudioListenerEnabled, InspectorAudioControlKind::Bool },
 } };
 
 [[nodiscard]] std::string_view Trim(std::string_view text) noexcept {
@@ -118,6 +119,33 @@ std::span<const InspectorAudioRow> InspectorAudioComponentModel::SourceRows() no
 
 std::span<const InspectorAudioRow> InspectorAudioComponentModel::ListenerRows() noexcept {
     return kListenerRows;
+}
+
+std::string_view InspectorAudioComponentModel::Label(InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::AudioSourceClip: return EditorText("inspector.audioSource.clip", "Clip");
+    case InspectorPropertyId::AudioSourceClipClear: return EditorText("inspector.audioSource.clearClip", "Clear Clip");
+    case InspectorPropertyId::AudioSourceVolume: return EditorText("inspector.audioSource.volume", "Volume");
+    case InspectorPropertyId::AudioSourcePitch: return EditorText("inspector.audioSource.pitch", "Pitch");
+    case InspectorPropertyId::AudioSourceEnabled: return EditorText("inspector.enabled", "Enabled");
+    case InspectorPropertyId::AudioSourceAutoplay: return EditorText("inspector.audioSource.autoplay", "Autoplay");
+    case InspectorPropertyId::AudioSourceLoop: return EditorText("inspector.audioSource.loop", "Loop");
+    case InspectorPropertyId::AudioSourceMute: return EditorText("inspector.audioSource.mute", "Mute");
+    case InspectorPropertyId::AudioSourceSpatial: return EditorText("inspector.audioSource.spatial", "Spatial");
+    case InspectorPropertyId::AudioSourcePan: return EditorText("inspector.audioSource.pan", "Pan");
+    case InspectorPropertyId::AudioSourceSpatialBlend: return EditorText("inspector.audioSource.spatialBlend", "Spatial Blend");
+    case InspectorPropertyId::AudioSourceAttenuation: return EditorText("inspector.audioSource.attenuation", "Attenuation");
+    case InspectorPropertyId::AudioSourceMinDistance: return EditorText("inspector.audioSource.minDistance", "Min Distance");
+    case InspectorPropertyId::AudioSourceMaxDistance: return EditorText("inspector.audioSource.maxDistance", "Max Distance");
+    case InspectorPropertyId::AudioSourceRolloff: return EditorText("inspector.audioSource.rolloff", "Rolloff");
+    case InspectorPropertyId::AudioSourceDopplerFactor: return EditorText("inspector.audioSource.dopplerFactor", "Doppler Factor");
+    case InspectorPropertyId::AudioSourceOutputBus: return EditorText("inspector.audioSource.outputBus", "Output Bus");
+    case InspectorPropertyId::AudioListenerPriority: return EditorText("inspector.audioListener.priority", "Priority");
+    case InspectorPropertyId::AudioListenerLocalUser: return EditorText("inspector.audioListener.localUser", "Local User");
+    case InspectorPropertyId::AudioListenerPrimary: return EditorText("inspector.audioListener.primary", "Primary");
+    case InspectorPropertyId::AudioListenerEnabled: return EditorText("inspector.enabled", "Enabled");
+    default: return {};
+    }
 }
 
 const InspectorAudioRow* InspectorAudioComponentModel::FindRow(InspectorPropertyId property) noexcept {
@@ -310,14 +338,14 @@ bool InspectorAudioComponentModel::CycleAttenuation(kb::scene::Scene& scene, kb:
 std::string InspectorAudioComponentModel::ClipDisplay(const kb::scene::Scene& scene, const kb::scene::AudioSourceComponent& source) {
     const kb::assets::AssetId clipId{ source.clipAssetId };
     if (!clipId.IsValid()) {
-        return "(none)";
+        return std::string{ EditorText("inspector.noAsset", "(none)") };
     }
     const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(clipId);
     if (metadata == nullptr) {
-        return "(missing)";
+        return std::string{ EditorText("inspector.missingAsset", "(missing)") };
     }
     if (!kb::assets::AssetMatchesKind(*metadata, kb::assets::AssetKind::Audio)) {
-        return "(invalid audio asset)";
+        return std::string{ EditorText("inspector.audioSource.invalidClip", "(invalid audio asset)") };
     }
     return metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
 }
@@ -390,17 +418,17 @@ bool InspectorAudioComponentModel::CycleOutputBus(kb::scene::Scene& scene, kb::s
 
 std::string InspectorAudioComponentModel::OutputBusDisplay(const kb::scene::Scene& scene, const kb::scene::AudioSourceComponent& source) {
     if (!kb::scene::IsAudioSourceOutputBusValid(source)) {
-        return "(invalid)";
+        return std::string{ EditorText("inspector.audioSource.invalidBus", "(invalid)") };
     }
     const std::string_view current = kb::scene::AudioSourceOutputBus(source);
     if (current.empty()) {
-        return "(master)";
+        return std::string{ EditorText("inspector.audioSource.masterBus", "(master)") };
     }
     const InspectorAudioRouteChoices choices = RouteChoices(scene);
     if (std::ranges::any_of(choices.names, [current](const std::string& name) { return name == current; })) {
         return std::string{ current };
     }
-    return std::string{ current } + " (missing)";
+    return EditorLocalization::Format("inspector.audioSource.missingBus", "{bus} (missing)", { { "bus", std::string{ current } } });
 }
 
 } // namespace kb::editor

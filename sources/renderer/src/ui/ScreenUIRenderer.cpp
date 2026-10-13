@@ -125,6 +125,7 @@ bool ScreenUIRenderer::Submit(const ScreenUISubmitDesc& desc) {
         .outputTransform = desc.outputTransform,
         .drawList = &drawList,
         .textures = resolvedTextures_,
+        .sceneRenderer = desc.sceneRenderer,
     });
 }
 

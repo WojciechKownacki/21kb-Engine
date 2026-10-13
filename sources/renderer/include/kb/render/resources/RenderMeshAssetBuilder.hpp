@@ -26,7 +26,8 @@ struct RenderMeshAssetMaterialBinding {
 struct RenderMeshObjImportDesc {
     const RenderMeshAssetMaterialBinding* materialBindings = nullptr;
     std::uint32_t materialBindingCount = 0;
-    bool flipV = false;
+    // Import scale and rotation (ModelImporter Scale Factor), applied after the handedness conversion.
+    kb::assets::AssetMeshImportTransform transform{};
 };
 
 struct RenderMeshGltfImportDesc {
@@ -37,12 +38,14 @@ struct RenderMeshGltfImportDesc {
     // they do not hold is read relative to the source path, when there is one.
     const kb::assets::ImportedAssetResource* externalResources = nullptr;
     std::uint32_t externalResourceCount = 0;
+    kb::assets::AssetMeshImportTransform transform{};
 };
 
 struct RenderMeshFbxImportDesc {
     const RenderMeshAssetMaterialBinding* materialBindings = nullptr;
     std::uint32_t materialBindingCount = 0;
     bool importMaterialSlots = true;
+    kb::assets::AssetMeshImportTransform transform{};
 };
 
 struct RenderMeshEmbeddedMaterial {

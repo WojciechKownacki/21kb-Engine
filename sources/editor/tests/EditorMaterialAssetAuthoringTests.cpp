@@ -14,6 +14,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -1748,6 +1749,39 @@ void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
+// Unreal's Material Domain in the Details panel: the production domains are offered, and a Deferred Decal, a Post
+// Process or a User Interface material authored in the editor compiles in its domain.
+void RunMaterialEditorDomainSettingTest() {
+    kb::editor::MaterialEditorState materialEditor;
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    materialEditor.Open(kb::assets::AssetId{ 0x0530U }, material);
+    std::vector<std::string> offered;
+    for (const kb::editor::MaterialEditorGraphNodeProperty& row : materialEditor.MaterialSettingsProperties()) {
+        for (const kb::editor::MaterialEditorGraphNodePropertyOption& option : row.stableId == "material.domain" ? row.options
+                                                                                                         : std::vector<kb::editor::MaterialEditorGraphNodePropertyOption>{}) {
+            offered.push_back(option.value);
+        }
+    }
+    kb::editor::tests::Require(offered == std::vector<std::string>{ "surface", "deferredDecal", "postProcess", "userInterface" },
+        "Material Domain: Details must offer Surface, Deferred Decal, Post Process and User Interface");
+    std::uint32_t colorNodeId = 0U;
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -300, 40, &colorNodeId) &&
+            materialEditor.ConnectGraphPins(colorNodeId, "rgba", 1U, "emissive"),
+        "Material Domain: the editor should connect a color to Emissive Color");
+    for (const auto& [domain, expected] : { std::pair{ "deferredDecal", kb::render::RenderMaterialDomain::DeferredDecal },
+             std::pair{ "postProcess", kb::render::RenderMaterialDomain::PostProcess },
+             std::pair{ "userInterface", kb::render::RenderMaterialDomain::UserInterface } }) {
+        kb::editor::tests::Require(materialEditor.SetGraphMaterialSetting("material.domain", domain) &&
+                materialEditor.WorkingCopy()->graph.materialDomain == domain,
+            "Material Domain: Details should set the domain");
+        const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
+            materialEditor.WorkingCopy()->graph, kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x0530U });
+        kb::editor::tests::Require(compiled.Succeeded() && compiled.shader.reflection.domain == expected,
+            "Material Domain: a material authored in the editor must compile in its domain");
+    }
+}
+
 void RunMaterialEditorVariantSwitchAuthoringTest() {
     kb::editor::MaterialEditorState materialEditor;
     kb::render::RenderMaterialAssetData material{};
@@ -2608,6 +2642,17 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
                     compileEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -620, 80, &colorNodeId) &&
                     compileEditor.ConnectGraphPins(colorNodeId, "rgba", declarationNodeId, "input"),
                 "KBMAT-MAT57C: Palette-created named reroute usage should compile with an editor-authored declaration");
+        }
+        // A required texture input (WorldAlignedTexture's TextureObject) gets a Texture Object, as a user connects one.
+        for (const std::string& inputPin : kb::render::RenderMaterialGraphNodeInputPinNames(kind)) {
+            if (kb::render::RenderMaterialGraphPinDataType(kind, inputPin, false) != kb::render::RenderMaterialGraphPinType::Texture2D) {
+                continue;
+            }
+            std::uint32_t textureObjectNodeId = 0U;
+            kb::editor::tests::Require(
+                compileEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureObject, -620, 240, &textureObjectNodeId) &&
+                    compileEditor.ConnectGraphPins(textureObjectNodeId, "texture", subjectNodeId, inputPin),
+                "KBMAT-MAT57C: A palette-created node's texture input should accept an editor-authored Texture Object");
         }
 
         bool routed = false;
@@ -3756,8 +3801,9 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     const auto colorProperty = std::ranges::find_if(colorProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
         return property.kind == kb::editor::MaterialEditorGraphNodePropertyKind::Color;
     });
-    kb::editor::tests::Require(colorProperty != colorProperties.end() && colorProperty->range.has_value(),
-        "KBMAT-MAT58: Color constants should expose a typed color property with metadata range");
+    // As Unreal's Constant4Vector: a colour constant has no range, so HDR and negative values stay.
+    kb::editor::tests::Require(colorProperty != colorProperties.end() && !colorProperty->range.has_value(),
+        "KBMAT-MAT58: Color constants should expose a typed color property without a clamping range");
     const std::string colorBeforeInvalidEdit = kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, colorNodeId)->parameter.defaultValueHint;
     kb::editor::tests::Require(!materialEditor.SetGraphConstantColorValue(
             colorNodeId,
@@ -3771,11 +3817,11 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         return property.kind == kb::editor::MaterialEditorGraphNodePropertyKind::Color;
     });
     kb::editor::tests::Require(updatedColor != colorProperties.end() &&
-            updatedColor->value.numbers[0] == 1.0F &&
-            updatedColor->value.numbers[1] == 0.0F &&
+            updatedColor->value.numbers[0] == 1.4F &&
+            updatedColor->value.numbers[1] == -0.25F &&
             updatedColor->value.numbers[2] == 0.5F &&
-            updatedColor->value.numbers[3] == 1.0F,
-        "KBMAT-MAT58: Color picker values should be clamped through node metadata");
+            updatedColor->value.numbers[3] == 2.0F,
+        "KBMAT-MAT58: Color picker values should be kept unclamped (HDR) on a colour constant");
 
     std::vector<kb::editor::MaterialEditorGraphNodeProperty> scalarProperties = materialEditor.GraphNodeProperties(scalarNodeId);
     const auto scalarProperty = std::ranges::find_if(scalarProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
@@ -4085,6 +4131,13 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             textureCoordinateUvProperty != textureCoordinateProperties.end() &&
             textureCoordinateUvProperty->value.text == "1",
         "KBMAT-MAT81: TextureCoordinate UV Set enum should preserve tiling while selecting UV1");
+    // Unreal's Coordinate Index reaches UV7: eight options, UV5 kept in the hint.
+    kb::editor::tests::Require(textureCoordinateUvProperty->options.size() == 8U && textureCoordinateUvProperty->options[7].label == "UV7" &&
+            materialEditor.SetGraphNodeEnumValue(textureCoordinateNodeId, "uvSet", "5"),
+        "TextureCoordinate UV Set should offer UV0..UV7");
+    textureCoordinateNode = kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, textureCoordinateNodeId);
+    kb::editor::tests::Require(textureCoordinateNode != nullptr && textureCoordinateNode->parameter.defaultValueHint == "2 3 5",
+        "TextureCoordinate UV5 should persist in the hint");
 
     kb::editor::MaterialEditorState tiledTextureCoordinateEditor;
     kb::render::RenderMaterialAssetData tiledTextureCoordinateAsset{};
@@ -4128,7 +4181,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     kb::editor::tests::Require(uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Panner, -520, -120, &pannerNodeId),
         "KBMAT-MAT82: Material Editor should create a Panner node for numeric utility property editing");
     std::vector<kb::editor::MaterialEditorGraphNodeProperty> pannerProperties = uvUtilityEditor.GraphNodeProperties(pannerNodeId);
-    requireUtilityNumericProperty(pannerProperties, "panner.speedU", 0.1F, "KBMAT-MAT82: Panner should expose Speed U as a numeric property");
+    requireUtilityNumericProperty(pannerProperties, "panner.speedU", 0.0F, "KBMAT-MAT82: Panner should expose Speed U as a numeric property");
     requireUtilityNumericProperty(pannerProperties, "panner.speedV", 0.0F, "KBMAT-MAT82: Panner should expose Speed V as a numeric property");
     kb::editor::tests::Require(uvUtilityEditor.SetGraphConstantComponentValue(pannerNodeId, 0U, 0.25F) &&
             uvUtilityEditor.SetGraphConstantComponentValue(pannerNodeId, 1U, -0.5F),
@@ -4142,7 +4195,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     kb::editor::tests::Require(uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Rotator, -520, 40, &rotatorNodeId),
         "KBMAT-MAT82: Material Editor should create a Rotator node for numeric utility property editing");
     std::vector<kb::editor::MaterialEditorGraphNodeProperty> rotatorProperties = uvUtilityEditor.GraphNodeProperties(rotatorNodeId);
-    requireUtilityNumericProperty(rotatorProperties, "rotator.speed", 1.0F, "KBMAT-MAT82: Rotator should expose Speed as a numeric property");
+    requireUtilityNumericProperty(rotatorProperties, "rotator.speed", 0.25F, "KBMAT-MAT82: Rotator should expose Speed as a numeric property");
     requireUtilityNumericProperty(rotatorProperties, "rotator.centerU", 0.5F, "KBMAT-MAT82: Rotator should expose Center U as a numeric property");
     requireUtilityNumericProperty(rotatorProperties, "rotator.centerV", 0.5F, "KBMAT-MAT82: Rotator should expose Center V as a numeric property");
     kb::editor::tests::Require(uvUtilityEditor.SetGraphConstantComponentValue(rotatorNodeId, 0U, 2.0F) &&
@@ -4284,7 +4337,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     const kb::render::RenderMaterialGraphNode* fresnelNode =
         kb::render::FindRenderMaterialGraphNode(shadingUtilityEditor.WorkingCopy()->graph, fresnelNodeId);
     kb::editor::tests::Require(desaturateNode != nullptr && desaturateNode->parameter.defaultValueHint == "1" &&
-            fresnelNode != nullptr && fresnelNode->parameter.defaultValueHint == "5 0",
+            fresnelNode != nullptr && fresnelNode->parameter.defaultValueHint == "5 0.04",
         "KBMAT-MAT89: Shading utility nodes should carry explicit editor metadata defaults");
     std::vector<kb::editor::MaterialEditorGraphNodeProperty> desaturateProperties =
         shadingUtilityEditor.GraphNodeProperties(desaturateNodeId);
@@ -4303,7 +4356,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     requireUtilityNumericProperty(
         fresnelProperties,
         "fresnel.base",
-        0.0F,
+        0.04F,
         "KBMAT-MAT89: Fresnel should expose Base as a numeric property");
     kb::editor::tests::Require(shadingUtilityEditor.SetGraphConstantComponentValue(desaturateNodeId, 0U, 0.35F) &&
             shadingUtilityEditor.SetGraphConstantComponentValue(fresnelNodeId, 0U, 3.5F) &&
@@ -4386,7 +4439,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             proceduralMaskEditor.WorkingCopy()->graph,
             kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5813U });
     kb::editor::tests::Require(proceduralMaskCompiled.Succeeded() &&
-            proceduralMaskCompiled.shader.source.find("smoothstep(0.375, 1.5") != std::string::npos &&
+            proceduralMaskCompiled.shader.source.find("/ 1.5) / 0.25, 0.0, 1.0)") != std::string::npos &&
             proceduralMaskCompiled.shader.source.find("smoothstep(0.33 -") != std::string::npos,
         "KBMAT-MAT83: Edited procedural mask properties should compile into production shader expressions");
 
@@ -5069,6 +5122,22 @@ void RunMaterialEditorGraphProductGeometryAuditTest() {
                     hit->pin == outputPins[pinIndex],
                 ("KBMAT-MAT90: output pin hit-test mismatch: " + nodeName + "." + outputPins[pinIndex]).c_str());
         }
+        // As in Unreal, a node grows with its pins: each pin keeps a full row, however many there are
+        // (Material Output's 28 inputs, the material attribute nodes' 25).
+        if (kb::editor::MaterialGraphCanvasPinRowsHeight(kb::editor::BuildMaterialGraphCanvasNode(node)) > 0.0F) {
+            for (std::size_t pinIndex = 1U; pinIndex < inputPins.size(); ++pinIndex) {
+                const LONG step = kb::editor::MaterialEditorPanelInputPinPoint(*rect, node.kind, pinIndex).y -
+                    kb::editor::MaterialEditorPanelInputPinPoint(*rect, node.kind, pinIndex - 1U).y;
+                kb::editor::tests::Require(step >= kb::editor::MaterialEditorPanelMetrics::GraphNodePinRowHeight - 1,
+                    ("KBMAT-MAT90: input pins must keep a full row each: " + nodeName + "." + inputPins[pinIndex]).c_str());
+            }
+            for (std::size_t pinIndex = 1U; pinIndex < outputPins.size(); ++pinIndex) {
+                const LONG step = kb::editor::MaterialEditorPanelOutputPinPoint(*rect, node, pinIndex, outputPins.size()).y -
+                    kb::editor::MaterialEditorPanelOutputPinPoint(*rect, node, pinIndex - 1U, outputPins.size()).y;
+                kb::editor::tests::Require(step >= kb::editor::MaterialEditorPanelMetrics::GraphNodePinRowHeight - 1,
+                    ("KBMAT-MAT90: output pins must keep a full row each: " + nodeName + "." + outputPins[pinIndex]).c_str());
+            }
+        }
 
         if (IsAuditedTextureNode(kind)) {
             if (kb::editor::MaterialEditorPanelIsTextureSamplePreviewNode(kind)) {
@@ -5329,11 +5398,12 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
             groups[0].group == kb::editor::MaterialEditorParameterGroup::Surface &&
             groups[0].expanded &&
             groups[0].activeOverrideCount == 0U &&
-            groups[0].totalParameterCount == 3U &&
-            groups[0].parameters.size() == 3U &&
+            groups[0].totalParameterCount == 4U &&
+            groups[0].parameters.size() == 4U &&
             groups[0].parameters[0].stableId == "tint" &&
             groups[0].parameters[1].stableId == "roughness" &&
-            groups[0].parameters[2].stableId == "paint",
+            groups[0].parameters[2].stableId == "paint" &&
+            groups[0].parameters[3].stableId == "paint@uv",
         "KBMAT-MAT60: Instance override groups must be sorted by editor order and expanded by default");
     kb::editor::tests::Require(!editor.ToggleInstanceOverrideGroup(kb::editor::MaterialEditorParameterGroup::Surface),
         "KBMAT-MAT60: Instance override group toggle must collapse an expanded group");
@@ -5341,7 +5411,7 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
     kb::editor::tests::Require(groups.size() == 1U &&
             !groups[0].expanded &&
             groups[0].parameters.empty() &&
-            groups[0].totalParameterCount == 3U,
+            groups[0].totalParameterCount == 4U,
         "KBMAT-MAT60: Collapsed instance override group must retain counts but hide rows");
     kb::editor::tests::Require(editor.ToggleInstanceOverrideGroup(kb::editor::MaterialEditorParameterGroup::Surface),
         "KBMAT-MAT60: Instance override group toggle must expand a collapsed group");
@@ -5368,6 +5438,7 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
     edited.overrides.graphParameterValues.push_back(kb::render::RenderMaterialGraphParameterValue{
         .stableId = "paint",
         .type = kb::render::RenderMaterialParameterType::Texture,
+        .numbers = { 1.0F, 0.0F, 0.0F, 0.0F },  // the slot samples UV1
         .assetId = 4242U,
     });
     editor.SetInstanceWorkingCopy(edited, kb::render::BuildEffectiveRenderMaterialInstanceAsset(parent, edited));
@@ -5381,11 +5452,14 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
         "MAT-40 instance editor should show override tint value and parent default");
     kb::editor::tests::Require(textureAfter != nullptr && textureAfter->overrideActive && textureAfter->value.assetId == 4242U,
         "MAT-40 instance editor should expose texture parameter overrides");
+    const kb::editor::MaterialEditorParameter* textureUv = findParameter("paint@uv");
+    kb::editor::tests::Require(textureUv != nullptr && textureUv->value.text == "UV1",
+        "Texture slot UV channel: the instance's Details must show the slot's UV channel");
 
     groups = editor.InstanceOverrideGroups();
     kb::editor::tests::Require(groups.size() == 1U &&
             groups[0].activeOverrideCount == 2U &&
-            groups[0].totalParameterCount == 3U,
+            groups[0].totalParameterCount == 4U,
         "KBMAT-MAT60: Instance override groups must count active color/texture overrides");
 
     const kb::render::RenderMaterialInstanceAssetData overrideSnapshot = *editor.InstanceWorkingCopy();
@@ -5492,7 +5566,7 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
             saved->staticParameterOverrides[0].stableId == "useBlue" &&
             saved->staticParameterOverrides[0].value == "true" &&
             savedText.str().find("graphParameterValue tint") != std::string::npos &&
-            savedText.str().find("graphParameterValue paint") != std::string::npos &&
+            savedText.str().find("graphParameterValue paint Texture 4242 uv=1") != std::string::npos &&
             savedText.str().find("graphParameterValue roughness") == std::string::npos,
         "MAT-40 instance editor command should persist only explicit graph parameter override lines plus static switch overrides");
     const kb::render::RenderMaterialAssetData effective = kb::render::BuildEffectiveRenderMaterialInstanceAsset(parent, *saved);
@@ -7133,7 +7207,114 @@ void RunMaterialGraphTextureSemanticTraversalTest() {
 
 namespace kb::editor::tests {
 
+// The Unreal/Unity utility nodes in the Material Editor palette: each is listed in its category under its
+// name, found by search (Voronoi and Simplex find Unreal's Noise, Triplanar the World Aligned Texture), named
+// in the editor language and created by the Material Editor; Noise exposes Unreal's properties.
+void RunMaterialEditorUtilityNodePaletteTest() {
+    using Command = kb::editor::MaterialEditorGraphMenuCommand;
+    using Kind = kb::render::RenderMaterialGraphNodeKind;
+    const std::vector<Command> textures = kb::editor::MaterialEditorGraphContextMenuCommands(0U);
+    const std::vector<Command> math = kb::editor::MaterialEditorGraphContextMenuCommands(5U);
+    const std::vector<Command> utility = kb::editor::MaterialEditorGraphContextMenuCommands(6U);
+    struct Entry {
+        Command command;
+        Kind kind;
+        const std::vector<Command>* category;
+        std::string_view english;
+    };
+    const std::array<Entry, 23U> entries{ {
+        { Command::CreateWorldAlignedTexture, Kind::WorldAlignedTexture, &textures, "World Aligned Texture" },
+        { Command::CreateParallaxOcclusionMapping, Kind::ParallaxOcclusionMapping, &textures, "Parallax Occlusion Mapping" },
+        { Command::CreateFlipBook, Kind::FlipBook, &textures, "FlipBook" },
+        { Command::CreateRemapValueRange, Kind::RemapValueRange, &math, "Remap Value Range" },
+        { Command::CreateCheckerboard, Kind::Checkerboard, &utility, "Checkerboard" },
+        { Command::CreatePolarCoordinates, Kind::PolarCoordinates, &utility, "Polar Coordinates" },
+        { Command::CreateTwirl, Kind::Twirl, &utility, "Twirl" },
+        { Command::CreateEllipse, Kind::Ellipse, &utility, "Ellipse" },
+        { Command::CreateRectangle, Kind::Rectangle, &utility, "Rectangle" },
+        { Command::CreateRoundedRectangle, Kind::RoundedRectangle, &utility, "Rounded Rectangle" },
+        { Command::CreateBlendOverlay, Kind::BlendOverlay, &utility, "Blend Overlay" },
+        { Command::CreateBlendScreen, Kind::BlendScreen, &utility, "Blend Screen" },
+        { Command::CreateBlendSoftLight, Kind::BlendSoftLight, &utility, "Blend Soft Light" },
+        { Command::CreateBlendHardLight, Kind::BlendHardLight, &utility, "Blend Hard Light" },
+        { Command::CreateBlendLinearLight, Kind::BlendLinearLight, &utility, "Blend Linear Light" },
+        { Command::CreateBlendColorBurn, Kind::BlendColorBurn, &utility, "Blend Color Burn" },
+        { Command::CreateBlendColorDodge, Kind::BlendColorDodge, &utility, "Blend Color Dodge" },
+        { Command::CreateBlendDarken, Kind::BlendDarken, &utility, "Blend Darken" },
+        { Command::CreateBlendLighten, Kind::BlendLighten, &utility, "Blend Lighten" },
+        { Command::CreateBlendDifference, Kind::BlendDifference, &utility, "Blend Difference" },
+        { Command::CreateContrast, Kind::Contrast, &utility, "Contrast" },
+        { Command::CreateHueShift, Kind::HueShift, &utility, "Hue Shift" },
+        { Command::CreateChannelMixer, Kind::ChannelMixer, &utility, "Channel Mixer" },
+    } };
+
+    kb::editor::MaterialEditorState editor;
+    kb::render::RenderMaterialAssetData asset{};
+    asset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    editor.Open(kb::assets::AssetId{ 0x5A10U }, asset);
+    int x = -900;
+    for (const Entry& entry : entries) {
+        kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(*entry.category, entry.command),
+            ("Utility nodes: the palette must list " + std::string{ entry.english } + " in its category").c_str());
+        kb::editor::tests::Require(kb::editor::MaterialEditorGraphMenuCommandNodeKind(entry.command) == entry.kind,
+            ("Utility nodes: " + std::string{ entry.english } + " must create its graph node").c_str());
+        kb::editor::tests::Require(kb::editor::MaterialEditorGraphContextMenuCommandName(entry.command) == entry.english &&
+                kb::editor::MaterialEditorGraphPaletteCommandMatches(entry.command, entry.english),
+            ("Utility nodes: the palette must name and find " + std::string{ entry.english }).c_str());
+        std::uint32_t nodeId = 0U;
+        kb::editor::tests::Require(editor.AddGraphNode(entry.kind, x, 400, &nodeId) && nodeId != 0U,
+            ("Utility nodes: the Material Editor must add " + std::string{ entry.english }).c_str());
+        x += 40;
+    }
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateNoise, "voronoi") &&
+            kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateNoise, "simplex") &&
+            kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateWorldAlignedTexture, "triplanar") &&
+            kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateParallaxOcclusionMapping, "pom") &&
+            kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateBlendOverlay, "blend") &&
+            kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateRemapValueRange, "remap"),
+        "Utility nodes: palette search must find Noise by its functions and the new nodes by their Unreal names");
+
+    // Unreal's Noise details: Function and Turbulence dropdowns, then Scale, Quality, Levels, Level Scale,
+    // Output Min and Output Max; edits write the renderer's Noise settings hint.
+    std::uint32_t noiseNodeId = 0U;
+    kb::editor::tests::Require(editor.AddGraphNode(Kind::Noise, -400, 80, &noiseNodeId), "Utility nodes: the Material Editor must add Noise");
+    const std::vector<kb::editor::MaterialEditorGraphNodeProperty> noiseProperties = editor.GraphNodeProperties(noiseNodeId);
+    const auto findProperty = [&noiseProperties](std::string_view stableId) -> const kb::editor::MaterialEditorGraphNodeProperty* {
+        const auto found = std::ranges::find_if(noiseProperties, [stableId](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+            return property.stableId == stableId;
+        });
+        return found == noiseProperties.end() ? nullptr : &*found;
+    };
+    const kb::editor::MaterialEditorGraphNodeProperty* function = findProperty("noise.function");
+    kb::editor::tests::Require(function != nullptr && function->options.size() == 4U && function->options[3].value == "voronoi" &&
+            findProperty("noise.turbulence") != nullptr && findProperty("noise.scale") != nullptr && findProperty("noise.quality") != nullptr &&
+            findProperty("noise.levels") != nullptr && findProperty("noise.levelScale") != nullptr &&
+            findProperty("noise.outputMin") != nullptr && findProperty("noise.outputMax") != nullptr,
+        "Utility nodes: Noise must expose Unreal's Function, Turbulence, Scale, Quality, Levels, Level Scale and Output range");
+    kb::editor::tests::Require(editor.SetGraphNodeEnumValue(noiseNodeId, "noise.function", "voronoi") &&
+            editor.SetGraphNodeEnumValue(noiseNodeId, "noise.turbulence", "false") &&
+            editor.SetGraphConstantComponentValue(noiseNodeId, 1U, 3.0F) &&
+            editor.SetGraphConstantComponentValue(noiseNodeId, 2U, 15.0F),
+        "Utility nodes: Noise properties must be editable");
+    const kb::render::RenderMaterialGraphNode* noise = kb::render::FindRenderMaterialGraphNode(editor.WorkingCopy()->graph, noiseNodeId);
+    kb::editor::tests::Require(noise != nullptr && noise->parameter.defaultValueHint == "voronoi false 1 3 10 2 -1 1",
+        "Utility nodes: Noise edits must write the settings hint, with Levels clamped to Unreal's 10");
+
+    std::string error;
+    kb::editor::tests::Require(kb::editor::EditorLocalization::SetLanguage("pl", KB_EDITOR_LOCALIZATION_DIR, error),
+        ("Utility nodes: the Polish catalog must load: " + error).c_str());
+    for (const Entry& entry : entries) {
+        const std::string_view localized = kb::editor::MaterialEditorGraphContextMenuCommandName(entry.command);
+        kb::editor::tests::Require(!localized.empty() && kb::editor::MaterialEditorGraphPaletteCommandMatches(entry.command, localized),
+            ("Utility nodes: the palette must name " + std::string{ entry.english } + " in Polish").c_str());
+    }
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphContextMenuCommandName(Command::CreateHueShift) != "Hue Shift",
+        "Utility nodes: the Polish palette must translate the new node names");
+    kb::editor::tests::Require(kb::editor::EditorLocalization::SetLanguage("en", {}, error), "Utility nodes: English must come back");
+}
+
 void RunEditorMaterialAssetAuthoringTests() {
+    RunMaterialEditorUtilityNodePaletteTest();
     RunCreateMaterialAssetThroughEditorAuthoringTest();
     RunCreateMaterialGraphAndTypeThroughEditorAuthoringTest();
     RunCreateMaterialFunctionAssetThroughEditorAuthoringTest();
@@ -7151,6 +7332,7 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunMaterialEditorWorkingCopySaveRevertUndoRedoTest();
     RunMaterialEditorDocumentHistoryIsolationTest();
     RunMaterialEditorGraphWorkingCopyRuntimeTest();
+    RunMaterialEditorDomainSettingTest();
     RunMaterialEditorVariantSwitchAuthoringTest();
     RunMaterialEditorGraphRuntimeStateTest();
     RunMaterialGraphTextureSemanticTraversalTest();

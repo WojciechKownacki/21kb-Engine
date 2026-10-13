@@ -8,7 +8,11 @@
 
 #include <bgfx/bgfx.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 #include <sstream>
 
 namespace kb::render {
@@ -138,6 +142,7 @@ void SceneRenderer::Shutdown() {
     resourceMap_.Clear();
     resources_.Shutdown();
     skinningPalettes_.Shutdown();
+    motionPreviousModels_.Shutdown();
     initialized_ = false;
 }
 
@@ -267,6 +272,13 @@ void SceneRenderer::SubmitMeshPass(
         } else {
             gpuMeshDrawScratch_.clear();
         }
+        const SceneMotionVectorFrame motionVectors{
+            .previousViewProjection = motionVectorPreviousViewProjection_,
+            .currentViewProjection = motionVectorCurrentViewProjection_,
+            .previousFrameTime = previousFrameTime_,
+            .motionFrame = renderScene.MotionFrame(),
+            .previousModels = &motionPreviousModels_,
+        };
         lastSubmitStats_ = meshSubmitter_->Submit(
             viewId,
             renderScene,
@@ -286,7 +298,7 @@ void SceneRenderer::SubmitMeshPass(
                 ? sceneDepthTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
             pass == MeshPassType::BaseTransparent ? sceneColorTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
             terrainLayersOnly,
-            motionVectorPreviousViewProjection_,
+            pass == MeshPassType::MotionVectors ? &motionVectors : nullptr,
             pass == MeshPassType::BaseTransparent ? particleRenderer_.get() : nullptr,
             // Mesh-output particles (submitted internally through the ordinary mesh pipeline, not
             // particleRenderer_'s quad/billboard path above) need the snapshot in every pass - their
@@ -337,6 +349,68 @@ void SceneRenderer::SubmitMeshPass(
     }
 }
 
+bgfx::TextureHandle SceneRenderer::SubmitPostProcessMaterials(const RenderScene& renderScene, const ScenePostProcessMaterialChainDesc& chain) const {
+    std::vector<std::pair<std::uint64_t, const RenderMaterialResource*>> materials;
+    for (const auto& [entityId, proxy] : renderScene.MeshProxies()) {
+        if (!proxy.desc.visible || proxy.desc.materialAssetId == 0U) {
+            continue;
+        }
+        const RenderMaterialResource* material = resources_.FindMaterial(resourceMap_.ResolveMaterial(proxy.desc.materialAssetId));
+        if (material != nullptr && material->graphProgram.active && material->graphProgram.postProcessDomain) {
+            materials.emplace_back(entityId, material);
+        }
+    }
+    std::ranges::sort(materials, [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+    bgfx::TextureHandle current = chain.input;
+    const std::array<float, 16> identity{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+    std::size_t drawn = 0U;
+    for (const auto& [entityId, material] : materials) {
+        if (drawn >= chain.views.size()) {
+            WriteRendererDebugLog("post_process", "PostProcessMaterialLimit: entity " + std::to_string(entityId) +
+                " skipped, the chain draws " + std::to_string(chain.views.size()) + " Post Process materials per view");
+            continue;
+        }
+        // The target that does not hold the current image.
+        const std::size_t target = current.idx == chain.textures[0].idx ? 1U : 0U;
+        const bgfx::ViewId view = chain.views[drawn];
+        bgfx::setViewName(view, "KB Post Process Material");
+        bgfx::setViewFrameBuffer(view, chain.frameBuffers[target]);
+        bgfx::setViewRect(view, 0, 0, chain.width, chain.height);
+        bgfx::setViewClear(view, BGFX_CLEAR_NONE);
+        bgfx::setViewTransform(view, identity.data(), identity.data());
+        if (!meshSubmitter_->SubmitScreenMaterial(SceneMeshScreenMaterialDesc{
+                .viewId = view, .material = *material, .resources = resources_, .resourceMap = resourceMap_,
+                .input = current, .depth = chain.depth, .frameTime = FrameTimeConstants(),
+                .dynamicParameter = DynamicParameterConstants() })) {
+            WriteRendererDebugLog("post_process", "PostProcessMaterialUnavailable: entity " + std::to_string(entityId) +
+                " has no PostProcess program (material not cooked for the pass)");
+            continue;
+        }
+        current = chain.textures[target];
+        ++drawn;
+    }
+    return current;
+}
+
+bool SceneRenderer::SubmitUserInterfaceMaterial(bgfx::ViewId viewId, std::uint64_t materialAssetId, const bgfx::TransientVertexBuffer& vertices,
+    const bgfx::TransientIndexBuffer& indices, std::uint32_t firstIndex, std::uint32_t indexCount) const {
+    const RenderMaterialResource* material = resources_.FindMaterial(resourceMap_.ResolveMaterial(materialAssetId));
+    if (material == nullptr || !material->graphProgram.active || !material->graphProgram.userInterfaceDomain) {
+        WriteRendererDebugLog("screen_ui", "UserInterfaceMaterialUnavailable: material " + std::to_string(materialAssetId) +
+            (material == nullptr ? " is not loaded" : " is not a User Interface material"));
+        return false;
+    }
+    if (meshSubmitter_ == nullptr || !meshSubmitter_->SubmitScreenMaterial(SceneMeshScreenMaterialDesc{
+            .viewId = viewId, .material = *material, .resources = resources_, .resourceMap = resourceMap_,
+            .frameTime = FrameTimeConstants(), .dynamicParameter = DynamicParameterConstants(), .uiVertices = &vertices,
+            .uiIndices = &indices, .firstIndex = firstIndex, .indexCount = indexCount })) {
+        WriteRendererDebugLog("screen_ui", "UserInterfaceMaterialUnavailable: material " + std::to_string(materialAssetId) +
+            " has no UserInterface program (material not cooked for the pass)");
+        return false;
+    }
+    return true;
+}
+
 void SceneRenderer::SetDefaultDrawBudget(SceneRenderDrawBudget drawBudget) noexcept {
     defaultDrawBudget_ = drawBudget;
 }
@@ -375,6 +449,7 @@ const std::string& SceneRenderer::GraphShaderCacheRoot() const noexcept {
 }
 
 void SceneRenderer::AdvanceFrameTime(float deltaSeconds) noexcept {
+    previousFrameTime_ = FrameTimeConstants();
     frameDeltaSeconds_ = deltaSeconds;
     frameTimeSeconds_ += deltaSeconds;
     ++frameTimeIndex_;
@@ -400,13 +475,20 @@ void SceneRenderer::SetSceneColorTexture(bgfx::TextureHandle texture) noexcept {
     sceneColorTexture_ = texture;
 }
 
-void SceneRenderer::SetMotionVectorPreviousViewProjection(const std::array<float, 16>& matrix) noexcept {
-    motionVectorPreviousViewProjection_ = matrix;
+void SceneRenderer::SetMotionVectorViewProjections(
+    const std::array<float, 16>& current, const std::array<float, 16>& previous) noexcept {
+    motionVectorCurrentViewProjection_ = current;
+    motionVectorPreviousViewProjection_ = previous;
 }
 
-bool SceneRenderer::BeginSkinningFrame(
+bool SceneRenderer::BeginFrameMatrixRows(
     std::uint64_t frame, std::uint64_t completedFrame) noexcept {
-    return initialized_ && skinningPalettes_.BeginFrame(frame, completedFrame);
+    if (!initialized_) {
+        return false;
+    }
+    const bool skinning = skinningPalettes_.BeginFrame(frame, completedFrame);
+    const bool motion = motionPreviousModels_.BeginFrame(frame, completedFrame);
+    return skinning && motion;
 }
 
 RenderSkinningPaletteAllocator& SceneRenderer::SkinningPalettes() noexcept {

@@ -29,9 +29,14 @@ enum class RenderPassKind : std::uint8_t {
     ScreenUIComposite,
     EditorUiComposite,
     EditorGizmoOverlay,
+    // Unreal's post-process materials (blendables), after the HDR finalize and before the tonemap.
+    PostProcessMaterial0,
+    PostProcessMaterial1,
+    PostProcessMaterial2,
+    PostProcessMaterial3,
 };
 
-constexpr std::size_t RenderPassKindCount = 22U;
+constexpr std::size_t RenderPassKindCount = 26U;
 
 [[nodiscard]] const char* RenderPassKindName(RenderPassKind kind) noexcept;
 [[nodiscard]] std::span<const RenderPassKind> RequiredRenderPassKinds() noexcept;

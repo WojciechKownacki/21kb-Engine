@@ -270,6 +270,9 @@ enum class PhysicsContactPhase : std::uint8_t {
     Enter,
     Stay,
     Exit,
+    // A character controller hit a solid collider while moving (Unity's OnControllerColliderHit);
+    // queued for the controller only.
+    ControllerHit,
 };
 
 // Queued by whichever physics plugin is loaded (never constructed by script

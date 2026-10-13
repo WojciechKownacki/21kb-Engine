@@ -45,6 +45,7 @@ void HashString(std::uint64_t& hash, std::string_view value) noexcept {
         << " graphHash=" << key.graphSourceHash
         << " variant=" << key.variantKey
         << " pipeline=" << key.pipelineStateKey
+        << " skinned=" << (key.skinned ? "true" : "false")
         << " backend=" << key.backend
         << " binaryRevision=" << key.binaryRevision
         << " generatedVS=" << (key.requiresGeneratedVertexShader ? "true" : "false")
@@ -63,6 +64,7 @@ bool MaterialProgramKey::operator==(const MaterialProgramKey& rhs) const noexcep
         backend == rhs.backend &&
         binaryRevision == rhs.binaryRevision &&
         pipelineStateKey == rhs.pipelineStateKey &&
+        skinned == rhs.skinned &&
         requiresGeneratedVertexShader == rhs.requiresGeneratedVertexShader &&
         graphProgram == rhs.graphProgram;
 }
@@ -77,6 +79,7 @@ std::uint64_t MaterialProgramKeyIdentityHash(const MaterialProgramKey& key) noex
     HashU32(hash, key.backend);
     HashU64(hash, key.binaryRevision);
     HashU64(hash, key.pipelineStateKey);
+    HashByte(hash, key.skinned ? 1U : 0U);
     HashByte(hash, key.requiresGeneratedVertexShader ? 1U : 0U);
     HashByte(hash, key.graphProgram ? 1U : 0U);
     return hash;

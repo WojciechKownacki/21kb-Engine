@@ -392,7 +392,18 @@ std::uint64_t EditorMaterialPreviewScene::Revision() const noexcept {
     return revision_;
 }
 
+void EditorMaterialPreviewScene::SetReleaseHandler(std::function<void(const kb::scene::Scene&)> handler) {
+    releaseHandler_ = std::move(handler);
+}
+
+void EditorMaterialPreviewScene::ReleaseScene() noexcept {
+    if (scene_ != nullptr && releaseHandler_) {
+        releaseHandler_(*scene_);
+    }
+}
+
 void EditorMaterialPreviewScene::Clear() noexcept {
+    ReleaseScene();
     scene_.reset();
     previewMeshEntity_ = {};
     if (!workingCopyPath_.empty()) {
@@ -480,6 +491,7 @@ void EditorMaterialPreviewScene::Rebuild(
         return;
     }
 
+    ReleaseScene();
     scene_ = std::make_unique<kb::scene::Scene>(kb::scene::SceneMode::Runtime);
     kb::assets::AssetManager& targetManager = scene_->Assets().Manager();
     RegisterPreviewLoaders(targetManager);

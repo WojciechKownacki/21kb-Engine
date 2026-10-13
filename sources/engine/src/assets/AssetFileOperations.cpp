@@ -1,5 +1,7 @@
 #include "assets/AssetFileOperations.hpp"
 
+#include "engine/assets/AssetFileName.hpp"
+#include "engine/platform/Trash.hpp"
 #include "assets/AssetFileSystem.hpp"
 #include "assets/AssetPathUtilities.hpp"
 
@@ -83,8 +85,8 @@ bool AssetFileOperations::RenameAsset(
         errorMessage = "Asset is not registered";
         return false;
     }
-    if (!AssetPathUtilities::IsValidEntryName(newName)) {
-        errorMessage = "Invalid asset name";
+    if (std::string problem = AssetFileNameError(newName); !problem.empty()) {
+        errorMessage = std::move(problem);
         return false;
     }
 
@@ -198,19 +200,16 @@ bool AssetFileOperations::DeleteAsset(
         return false;
     }
 
-    std::filesystem::remove(physical, error);
-    if (error) {
-        errorMessage = "Asset file could not be deleted";
+    // To the Recycle Bin / Trash, where the user can restore it, like Unity and Unreal.
+    std::string trashError;
+    if (!kb::platform::MoveToTrash(physical, trashError)) {
+        errorMessage = physical.filename().string() + " could not be deleted: " + trashError;
         return false;
     }
     std::filesystem::path metaPath;
-    if (ExistingMetaSidecar(physical, metaPath)) {
-        error.clear();
-        std::filesystem::remove(metaPath, error);
-        if (error) {
-            errorMessage = "Asset meta could not be deleted";
-            return false;
-        }
+    if (ExistingMetaSidecar(physical, metaPath) && !kb::platform::MoveToTrash(metaPath, trashError)) {
+        errorMessage = metaPath.filename().string() + " could not be deleted: " + trashError;
+        return false;
     }
     return true;
 }

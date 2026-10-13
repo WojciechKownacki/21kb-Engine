@@ -1,10 +1,24 @@
 #include "CliCommon.hpp"
 
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/math/ColorSpace.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#if KB_CLI_RENDERER
+#include "engine/assets/AssetManager.hpp"
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#if KB_CLI_RENDERER
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#endif
+#include "engine/assets/AssetImportPreset.hpp"
+#endif
 
+#include <cmath>
+#include <charconv>
 #include <algorithm>
+#include <memory>
 #include <system_error>
 
 namespace kb::cli {
@@ -79,6 +93,19 @@ bool MountProjectAssets(
         error = "could not mount project assets under: " + projectRoot.string();
         return false;
     }
+#if KB_CLI_RENDERER
+    // Materials are typed by the renderer's loader, as in the editor and the game; without it
+    // a .kbmat is an unknown file and MeshRenderer material= cannot reference it.
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
+    // Post-process profiles (.kbppfx) likewise, for scene-post-process.
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::PostProcessProfileAssetLoader>()));
+    // Material instances (.kbmatinst) for material-instance-* and MeshRenderer material=, and
+    // textures (images under Assets, imported textures) for the materials' texture slots.
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>()));
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()));
+#endif
+    // Import presets (.kbimportpreset) for import --preset, as the editor's import dialog lists them.
+    static_cast<void>(scene.Assets().Manager().RegisterLoader(std::make_unique<kb::assets::AssetImportPresetLoader>()));
     const std::size_t discovered = scene.Assets().Discover();
     if (discoveredCount != nullptr) {
         *discoveredCount = discovered;
@@ -98,6 +125,26 @@ std::filesystem::path ResolveInputPath(
         return anchored;
     }
     return input;
+}
+
+std::filesystem::path ResolveProjectFile(
+    const std::filesystem::path& input,
+    const std::filesystem::path& projectRoot,
+    std::string& error) {
+    const std::filesystem::path resolved = ResolveInputPath(input, projectRoot);
+    if (projectRoot.empty()) {
+        return resolved;
+    }
+    std::error_code errorCode;
+    const std::filesystem::path file = std::filesystem::weakly_canonical(std::filesystem::absolute(resolved, errorCode), errorCode);
+    const std::filesystem::path root = std::filesystem::weakly_canonical(std::filesystem::absolute(projectRoot, errorCode), errorCode);
+    const std::filesystem::path relative = file.lexically_relative(root);
+    if (errorCode || relative.empty() || *relative.begin() == "..") {
+        error = "the path " + input.generic_string() + " is outside the project " + projectRoot.generic_string() +
+            ". Pass a path inside the project, e.g. Assets/Scenes/Main.21kbscene or /Game/Scenes/Main.21kbscene.";
+        return {};
+    }
+    return resolved;
 }
 
 const kb::assets::AssetMetadata* FindAssetByFlexiblePath(
@@ -120,6 +167,32 @@ const kb::assets::AssetMetadata* FindAssetByFlexiblePath(
         }
     }
     return nullptr;
+}
+
+std::optional<std::array<float, 4>> ParseColorText(std::string_view text, const std::size_t channels) {
+    if (!text.empty() && text.front() == '#') {
+        const std::optional<std::array<float, 4>> srgb = kb::math::ParseHexColor(text);
+        if (!srgb.has_value() || (channels < 4U && text.size() != 7U)) return std::nullopt;
+        return std::array<float, 4>{ kb::math::SrgbToLinear((*srgb)[0]), kb::math::SrgbToLinear((*srgb)[1]),
+            kb::math::SrgbToLinear((*srgb)[2]), (*srgb)[3] };
+    }
+    std::array<float, 4> color{ 0.0F, 0.0F, 0.0F, 1.0F };
+    std::size_t count = 0U;
+    for (std::string_view rest = text; ; ++count) {
+        const std::size_t comma = rest.find(',');
+        const std::string_view part = rest.substr(0U, comma);
+        float value = 0.0F;
+        const auto [end, error] = std::from_chars(part.data(), part.data() + part.size(), value);
+        if (count >= channels || error != std::errc{} || end != part.data() + part.size() ||
+            !std::isfinite(value) || value < 0.0F || value > 1.0F) {
+            return std::nullopt;
+        }
+        color[count] = value;
+        if (comma == std::string_view::npos) break;
+        rest = rest.substr(comma + 1U);
+    }
+    if (count + 1U != 3U && count + 1U != channels) return std::nullopt;
+    return color;
 }
 
 } // namespace kb::cli

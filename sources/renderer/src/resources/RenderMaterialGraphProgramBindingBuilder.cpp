@@ -163,11 +163,15 @@ std::uint64_t RenderMaterialGraphPipelineStateKey(const RenderMaterialGraphShade
     HashByte(hash, static_cast<std::uint8_t>(AlphaModeForBlendMode(shader.reflection.blendMode)));
     HashByte(hash, static_cast<std::uint8_t>(TranslucencyBlendForBlendMode(shader.reflection.blendMode)));
     HashByte(hash, static_cast<std::uint8_t>(shader.reflection.shadingModel));
+    HashByte(hash, static_cast<std::uint8_t>(shader.reflection.domain));
     HashByte(hash, static_cast<std::uint8_t>(shader.reflection.blendMode));
     HashBool(hash, shader.reflection.hasWorldPositionOffset);
     HashBool(hash, shader.reflection.hasCustomizedUv0);
     HashBool(hash, shader.reflection.hasDisplacement);
     HashBool(hash, shader.reflection.hasTangentOutput);
+    HashBool(hash, shader.reflection.hasPixelDepthOffset);
+    HashBool(hash, shader.reflection.hasRefraction);
+    HashBool(hash, shader.reflection.writesShadingModelColor);
     HashBool(hash, shader.reflection.usesSceneDepth);
     HashBool(hash, shader.reflection.usesSceneColor);
     HashU32(hash, static_cast<std::uint32_t>(shader.reflection.textures.size()));
@@ -189,12 +193,14 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
     binding.variantKey = RenderMaterialGraphVariantKey(shader);
     binding.pipelineStateKey = RenderMaterialGraphPipelineStateKey(shader);
     binding.requiredVaryings = shader.reflection.requiredVaryings;
-    binding.requiresGeneratedVertexShader =
-        shader.reflection.hasWorldPositionOffset ||
-        shader.reflection.hasCustomizedUv0 ||
-        shader.reflection.hasDisplacement;
+    binding.requiresGeneratedVertexShader = RenderMaterialGraphRequiresGeneratedVertexShader(shader.reflection);
+    binding.drawsOwnMotionVectors = RenderMaterialGraphDrawsOwnMotionVectors(shader.reflection);
+    binding.postProcessDomain = shader.reflection.domain == RenderMaterialDomain::PostProcess;
+    binding.decalDomain = shader.reflection.domain == RenderMaterialDomain::DeferredDecal;
+    binding.userInterfaceDomain = shader.reflection.domain == RenderMaterialDomain::UserInterface;
     binding.usesSceneDepth = shader.reflection.usesSceneDepth;
     binding.usesSceneColor = shader.reflection.usesSceneColor;
+    binding.writesShadingModelColor = shader.reflection.writesShadingModelColor;
 
     // MAT-38/#25d: resolve the scene render state from the graph blend mode so the scene submits a
     // translucent graph material in the transparent pass with the matching blend equation.

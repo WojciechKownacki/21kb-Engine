@@ -155,7 +155,10 @@ public:
         const float expectedX = -vertex.z / radius;
         const float expectedZ = vertex.x / radius;
         const float alignment = (tx * expectedX) + (tz * expectedZ);
-        if (alignment < 0.96F || std::abs(ty) > 0.08F || vertex.tw >= 0.0F) {
+        // The bitangent points up the image (smaller V), where a normal map's +Y points (ShapeMeshes). The
+        // sphere's V grows towards its top pole, so smaller V is down the sphere, along cross(normal, tangent):
+        // w = +1.
+        if (alignment < 0.96F || std::abs(ty) > 0.08F || vertex.tw <= 0.0F) {
             return false;
         }
         ++checked;
@@ -442,7 +445,7 @@ void RunAudioInspectorComponentModelTest() {
     const std::span<const kb::editor::InspectorAudioRow> sourceRows = InspectorAudioComponentModel::SourceRows();
     kb::editor::tests::Require(sourceRows.size() == expectedSourceRows.size(), "Audio Source Inspector should expose every authored field exactly once");
     for (std::size_t index = 0U; index < expectedSourceRows.size(); ++index) {
-        kb::editor::tests::Require(sourceRows[index].property == expectedSourceRows[index].first && sourceRows[index].kind == expectedSourceRows[index].second && !sourceRows[index].label.empty(), "Audio Source Inspector row order, kind, or label is inconsistent");
+        kb::editor::tests::Require(sourceRows[index].property == expectedSourceRows[index].first && sourceRows[index].kind == expectedSourceRows[index].second && !InspectorAudioComponentModel::Label(sourceRows[index].property).empty(), "Audio Source Inspector row order, kind, or label is inconsistent");
     }
     kb::editor::tests::Require(sourceRows.front().pickerProperty == InspectorPropertyId::AudioSourceClipPicker, "Audio clip row should use the shared asset picker affordance");
     kb::editor::tests::Require(InspectorAudioComponentModel::HitKindForControl(InspectorAudioControlKind::Asset) == InspectorHitKind::TextField
@@ -467,7 +470,7 @@ void RunAudioInspectorComponentModelTest() {
     const std::span<const kb::editor::InspectorAudioRow> listenerRows = InspectorAudioComponentModel::ListenerRows();
     kb::editor::tests::Require(listenerRows.size() == expectedListenerRows.size(), "Audio Listener Inspector should expose every authored field exactly once");
     for (std::size_t index = 0U; index < expectedListenerRows.size(); ++index) {
-        kb::editor::tests::Require(listenerRows[index].property == expectedListenerRows[index].first && listenerRows[index].kind == expectedListenerRows[index].second && !listenerRows[index].label.empty(), "Audio Listener Inspector row order, kind, or label is inconsistent");
+        kb::editor::tests::Require(listenerRows[index].property == expectedListenerRows[index].first && listenerRows[index].kind == expectedListenerRows[index].second && !InspectorAudioComponentModel::Label(listenerRows[index].property).empty(), "Audio Listener Inspector row order, kind, or label is inconsistent");
     }
 
     kb::scene::Scene scene;
@@ -2875,7 +2878,7 @@ void RunInspectorPhysicsModelTest() {
     // Rigidbody: enum cycle, float apply/read, bool toggle, kind mismatch rejection.
     kb::scene::RigidbodyComponent rb;
     const std::vector<kb::editor::PhysicsField> rbFields = InspectorPhysicsModel::Fields(rb);
-    kb::editor::tests::Require(rbFields.size() == 12U, "Rigidbody exposes 12 inspector fields");
+    kb::editor::tests::Require(rbFields.size() == 14U, "Rigidbody exposes 14 inspector fields");
     kb::editor::tests::Require(rbFields[0].kind == PhysicsFieldKind::Enum && rbFields[0].value == "Dynamic",
         "Rigidbody field 0 is the Body Type enum defaulting to Dynamic");
     kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(rb, 0) && rb.bodyType == kb::scene::RigidbodyBodyType::Kinematic,
@@ -2886,6 +2889,8 @@ void RunInspectorPhysicsModelTest() {
     kb::editor::tests::Require(rb.useGravity && InspectorPhysicsModel::ToggleBool(rb, 3) && !rb.useGravity, "Toggling Rigidbody Use Gravity flips it");
     kb::editor::tests::Require(!InspectorPhysicsModel::ApplyFloat(rb, 3, 1.0F), "ApplyFloat rejects a Bool field index");
     kb::editor::tests::Require(!InspectorPhysicsModel::ToggleBool(rb, 1), "ToggleBool rejects a Float field index");
+    kb::editor::tests::Require(rb.linearDamping == 0.0F && InspectorPhysicsModel::ApplyFloat(rb, 12, 0.5F) && rb.linearDamping == 0.5F &&
+        InspectorPhysicsModel::ApplyFloat(rb, 13, 2.0F) && rb.angularDamping == 2.0F, "Rigidbody Linear/Angular Damping fields write damping");
 
     // Collider: shape cycle, vec3 flattened into X/Y/Z floats, trigger toggle.
     kb::scene::ColliderComponent col;
@@ -3072,6 +3077,12 @@ void RunUIComponentAuthoringTest() {
         kb::scene::FindUIComponentProperty(UIComponentType::Image, "imageAssetId");
     const kb::scene::UIComponentPropertyDescriptor* fontAsset =
         kb::scene::FindUIComponentProperty(UIComponentType::Text, "fontAssetId");
+    // Unreal's UI material: an Image draws with a material of the User Interface domain.
+    const kb::scene::UIComponentPropertyDescriptor* imageMaterial =
+        kb::scene::FindUIComponentProperty(UIComponentType::Image, "materialAssetId");
+    kb::editor::tests::Require(imageMaterial != nullptr && imageMaterial->assetKind == kb::assets::AssetKind::Material &&
+            imageMaterial->assetDependencyRole == "ui.material",
+        "An Image's material should be a Material asset field with its dependency role");
     kb::editor::tests::Require(imageAsset != nullptr &&
             imageAsset->assetKind == kb::assets::AssetKind::Texture &&
             imageAsset->assetDependencyRole == "ui.image" &&

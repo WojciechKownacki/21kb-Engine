@@ -26,6 +26,7 @@
 #include "project/EditorProjectPaths.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/MaterialPreviewPresentSettings.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewRenderPolicy.hpp"
@@ -50,6 +51,8 @@
 #include "app/EditorEditCommandPolicy.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
+#include "localization/EditorLocalization.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -184,78 +187,6 @@ constexpr int kMaxMessagesPerPump = 128;
     };
 }
 
-[[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
-    return static_cast<std::uint32_t>(std::max<LONG>(0, rect.right - rect.left));
-}
-
-[[nodiscard]] std::uint32_t RectHeight(const RECT& rect) noexcept {
-    return static_cast<std::uint32_t>(std::max<LONG>(0, rect.bottom - rect.top));
-}
-
-[[nodiscard]] float Aspect(std::uint32_t width, std::uint32_t height) noexcept {
-    return height == 0U ? 1.0F : static_cast<float>(std::max(1U, width)) / static_cast<float>(height);
-}
-
-[[nodiscard]] kb::render::SceneRenderCamera BuildMaterialPreviewCamera(
-    std::uint32_t renderWidth,
-    std::uint32_t renderHeight,
-    const EditorMaterialPreviewSceneSettings& settings) noexcept {
-    kb::render::SceneRenderCamera camera{};
-    const std::array<float, 3U> eye = settings.CameraEye();
-    bx::mtxLookAt(camera.view.data(), bx::Vec3{eye[0], eye[1], eye[2]}, bx::Vec3{0.0F, 0.0F, 0.0F}, bx::Vec3{0.0F, 1.0F, 0.0F});
-    kb::render::SceneDepthPolicy::MakePerspective(
-        camera.projection.data(),
-        settings.verticalFovDegrees,
-        Aspect(renderWidth, renderHeight),
-        0.05F,
-        50.0F,
-        kb::render::SceneDepthPolicy::HomogeneousDepth());
-    return camera;
-}
-
-[[nodiscard]] kb::render::SceneRenderLightingConfig BuildMaterialPreviewLightingConfig(
-    const EditorMaterialPreviewSceneSettings& settings,
-    kb::project::ProjectSceneLightingPath projectLightingPath) noexcept {
-    return MaterialPreviewRenderPolicy::NeutralPbrLightingConfig(settings, projectLightingPath);
-}
-
-[[nodiscard]] const kb::assets::AssetMetadata* MaterialMetadataForAsset(const EditorSceneContext& sceneContext, kb::assets::AssetId assetId) noexcept {
-    if (!assetId.IsValid()) {
-        return nullptr;
-    }
-    const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(assetId);
-    return metadata != nullptr && (metadata->type == "RenderMaterial" || metadata->type == "RenderMaterialInstance") ? metadata : nullptr;
-}
-
-[[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildMaterialPreviewSettings(EditorSceneContext& sceneContext, const RECT& previewRect, std::uint64_t viewportKey) {
-    const std::uint32_t renderWidth = std::max<std::uint32_t>(1U, RectWidth(previewRect));
-    const std::uint32_t renderHeight = std::max<std::uint32_t>(1U, RectHeight(previewRect));
-    const EditorMaterialPreviewSceneSettings& previewSettings = sceneContext.MaterialPreviewSceneSettings();
-    const EditorMaterialPreviewSurface previewSurface = viewportKey == kInspectorMaterialPreviewViewportKey
-        ? EditorMaterialPreviewSurface::Inspector
-        : EditorMaterialPreviewSurface::MaterialEditor;
-    return EditorSceneBgfxViewport::PresentSettings{
-        .renderWidth = renderWidth,
-        .renderHeight = renderHeight,
-        .fitMode = EditorViewportFitMode::Fit,
-        .cameraOverride = BuildMaterialPreviewCamera(renderWidth, renderHeight, previewSettings),
-        .viewportKey = viewportKey,
-        .editorSceneOverlaysEnabled = false,
-        .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
-        .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.ProjectConfiguration().lightingPath),
-        .postProcessSettings = MaterialPreviewRenderPolicy::StableExposurePostProcessSettings(previewSettings),
-        .shadowPassEnabled = false,
-        .postProcessEnabled = previewSettings.postProcessEnabled && !previewSettings.normalDebugView,
-        .selectionMaskEnabled = false,
-        .selectionOutlineEnabled = false,
-        .gpuDrivenRuntimeDispatchEnabled = false,
-        .drawSafeArea = false,
-        .sceneRevision = sceneContext.MaterialPreviewRevision(previewSurface),
-        .sceneDirtyBaseRevision = sceneContext.MaterialPreviewRevision(previewSurface),
-        .sceneFullSyncRequired = true,
-    };
-}
-
 [[nodiscard]] DockLayout BuildMainLayout(const EditorApplicationState& state) {
     RECT client{};
     GetClientRect(state.window, &client);
@@ -319,6 +250,28 @@ void InvalidateSceneToolbars(EditorApplicationState& state) {
     invalidate(state.window);
     for (HWND window : state.floatingWindows.Queries().Windows()) {
         invalidate(window);
+    }
+}
+
+// The window title names the open scene, with * while it has unsaved changes, and the project,
+// like Unity's "Level1* - MyGame - Unity".
+void SyncWindowTitle(const EditorApplicationState& state) {
+    if (state.window == nullptr) {
+        return;
+    }
+    const std::u8string stem = state.sceneContext.CurrentScenePath().stem().u8string();
+    std::string scene = stem.empty() ? std::string{ EditorText("window.untitledScene", "Untitled") }
+                                     : std::string{ stem.begin(), stem.end() };
+    if (state.sceneContext.SceneDocumentDirty()) {
+        scene += "*";
+    }
+    const std::string& project = state.sceneContext.ProjectConfiguration().name;
+    const std::wstring title = kb::editor::WidenUtf8((scene + " - " + (project.empty() ? std::string{} : project + " - ") +
+        "21kb Engine").c_str());
+    static std::wstring shown;
+    if (title != shown) {
+        SetWindowTextW(state.window, title.c_str());
+        shown = title;
     }
 }
 
@@ -388,8 +341,8 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
         std::uint64_t viewportKey;
         const kb::assets::AssetMetadata* metadata = nullptr;
     };
-    const kb::assets::AssetMetadata* inspectorMetadata = MaterialMetadataForAsset(state.sceneContext, state.sceneContext.AssetBrowser().InspectorAsset());
-    const kb::assets::AssetMetadata* materialEditorMetadata = MaterialMetadataForAsset(state.sceneContext, state.sceneContext.MaterialEditor().OpenAssetId());
+    const kb::assets::AssetMetadata* inspectorMetadata = MaterialPreviewMetadata(state.sceneContext, state.sceneContext.AssetBrowser().InspectorAsset());
+    const kb::assets::AssetMetadata* materialEditorMetadata = MaterialPreviewMetadata(state.sceneContext, state.sceneContext.MaterialEditor().OpenAssetId());
     const PreviewTarget targets[2] = {
         PreviewTarget{
             inspectorMetadata != nullptr && inspectorContent.has_value()
@@ -412,7 +365,7 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
                 ? EditorMaterialPreviewSurface::Inspector
                 : EditorMaterialPreviewSurface::MaterialEditor;
             const kb::scene::Scene& previewScene = state.sceneContext.MaterialPreviewScene(target.metadata->id, previewSurface);
-            const EditorSceneBgfxViewport::PresentSettings settings = BuildMaterialPreviewSettings(state.sceneContext, *target.rect, target.viewportKey);
+            const EditorSceneBgfxViewport::PresentSettings settings = BuildMaterialPreviewPresentSettings(state.sceneContext, *target.rect, target.viewportKey);
             state.sceneViewport.Present(host, *target.rect, previewScene, settings);
             presented = true;
         }
@@ -1540,6 +1493,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
         if (!state.running) {
             break;
         }
+        SyncWindowTitle(state);
 
         const auto currentTick = std::chrono::steady_clock::now();
         if (!state.playMode.IsPaused() && currentTick < nextEditorFrame) {

@@ -832,9 +832,15 @@ void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {
     Require(asset.has_value(), "OBJ importer failed to build a mesh asset");
     Require(asset->desc.vertexFormat == RenderVertexFormat::P3N3T4UV2, "OBJ importer did not synthesize tangent vertex storage for the PBR shader");
     Require(asset->vertices.empty() && asset->tangentVertices.size() == asset->desc.vertexCount, "OBJ importer did not expose tangent vertices through RenderMeshDesc");
+    // +U runs along source +X, which the right- to left-handed import mirrors to engine -X. OBJ
+    // counts V from the bottom of the image and 21kb from its top, so V = 1 - y on this quad, and
+    // the bitangent cross(normal, tangent) * w points up the image (+y), where a normal map's +Y is.
     for (const RenderStaticMeshVertexP3N3T4UV2& vertex : asset->tangentVertices) {
-        Require(NearlyEqual(vertex.tx, 1.0F) && NearlyEqual(vertex.ty, 0.0F) && NearlyEqual(vertex.tz, 0.0F) && vertex.tw > 0.0F,
+        Require(NearlyEqual(vertex.tx, -1.0F) && NearlyEqual(vertex.ty, 0.0F) && NearlyEqual(vertex.tz, 0.0F),
             "OBJ importer tangent fallback must use UV-derived +U tangents for normal maps");
+        Require(NearlyEqual(vertex.v, 1.0F - vertex.y), "OBJ importer must read V from the top of the image");
+        const float bitangentY = (vertex.nz * vertex.tx - vertex.nx * vertex.tz) * vertex.tw;
+        Require(bitangentY > 0.5F, "OBJ importer bitangent must point up the image, where a normal map's +Y points");
     }
     Require(asset->desc.indexFormat == RenderIndexFormat::Uint16, "OBJ importer did not compact small OBJ indices to uint16");
     Require(asset->desc.vertexCount == 4U, "OBJ importer did not deduplicate shared vertex tuples");
@@ -844,7 +850,8 @@ void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {
     Require(asset->materialSlots.size() == 2U, "OBJ importer did not preserve mesh material slots");
     Require(asset->sections[0].materialSlot == 0U && asset->sections[1].materialSlot == 1U, "OBJ importer did not keep section-to-material-slot mapping");
     Require(asset->bounds.IsValid() && asset->desc.bounds.IsValid(), "OBJ importer did not compute mesh bounds");
-    Require(NearlyEqual(asset->bounds.center[0], 0.5F) && NearlyEqual(asset->bounds.center[1], 0.5F), "OBJ importer computed the wrong mesh bounds center");
+    // Source x 0..1 is mirrored into the left-handed engine: center x = -0.5.
+    Require(NearlyEqual(asset->bounds.center[0], -0.5F) && NearlyEqual(asset->bounds.center[1], 0.5F), "OBJ importer computed the wrong mesh bounds center");
     Require(asset->sections[0].bounds.IsValid() && asset->sections[1].bounds.IsValid(), "OBJ importer did not compute section bounds");
     Require(asset->meshlets.size() == asset->sections.size(), "OBJ importer did not build meshlet metadata per section");
     Require(asset->lods.size() == 1U, "OBJ importer did not build base LOD metadata");
@@ -1469,7 +1476,8 @@ void RunRenderMeshAssetLoaderDiscoversAndLoadsGltfThroughAssetManagerTest() {
     Require(asset->desc.vertexFormat == RenderVertexFormat::P3N3T4UV2, "glTF importer did not choose the tangent static mesh vertex format");
     Require(asset->desc.vertexCount == 3U && asset->desc.indexCount == 3U, "glTF importer produced wrong geometry counts");
     Require(asset->tangentVertices.size() == 3U && asset->vertices.empty(), "glTF importer did not store tangent vertices");
-    Require(NearlyEqual(asset->tangentVertices[0].nx, -0.5547002F) && NearlyEqual(asset->tangentVertices[0].ny, 0.8320503F), "glTF importer did not transform normals through inverse-transpose");
+    // The node-transformed normal (-0.5547, 0.8321) mirrored into the left-handed engine.
+    Require(NearlyEqual(asset->tangentVertices[0].nx, 0.5547002F) && NearlyEqual(asset->tangentVertices[0].ny, 0.8320503F), "glTF importer did not transform normals through inverse-transpose");
     Require(NearlyEqual(asset->tangentVertices[0].tx, 0.0F) && NearlyEqual(asset->tangentVertices[0].ty, 1.0F), "glTF importer did not transform tangents through the node transform");
     Require(asset->sections.size() == 1U && asset->sections[0].indexCount == 3U, "glTF importer did not create one primitive section");
     Require(asset->materialNames.size() == 1U && asset->materialNames[0] == "surface", "glTF importer did not preserve material slot name");

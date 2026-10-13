@@ -1,4 +1,5 @@
 #include "rendering/ParticleEditorPanelRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "engine/scene/SceneAssets.hpp"
@@ -13,6 +14,7 @@
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #pragma warning(push, 0)
 #include <objidl.h>
@@ -93,21 +95,22 @@ void FillEllipse(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
         static_cast<INT>(rect.right - rect.left - 1), static_cast<INT>(rect.bottom - rect.top - 1));
 }
 
-void DrawTextUtf8(HDC dc, RECT rect, const char* text, COLORREF color, UINT format) {
-    if (text == nullptr || text[0] == '\0') return;
+void DrawTextUtf8(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format) {
+    if (text.empty()) return;
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    const int wideLength = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, nullptr, 0);
-    if (wideLength <= 1) {
-        DrawTextA(dc, text, -1, &rect, format | DT_NOPREFIX);
+    const int length = static_cast<int>(text.size());
+    const int wideLength = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), length, nullptr, 0);
+    if (wideLength <= 0) {
+        kb::editor::DrawTextUtf8(dc, text.data(), length, &rect, format | DT_NOPREFIX);
         return;
     }
-    std::wstring wide(static_cast<std::size_t>(wideLength - 1), L'\0');
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide.data(), wideLength) <= 0) return;
-    DrawTextW(dc, wide.c_str(), -1, &rect, format | DT_NOPREFIX);
+    std::wstring wide(static_cast<std::size_t>(wideLength), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), length, wide.data(), wideLength) <= 0) return;
+    kb::editor::DrawTextWide(dc, wide.c_str(), wideLength, &rect, format | DT_NOPREFIX);
 }
 
-void DrawButton(HDC dc, const RECT& rect, const char* label, ParticleEditorButtonTone tone = ParticleEditorButtonTone::Neutral,
+void DrawButton(HDC dc, const RECT& rect, std::string_view label, ParticleEditorButtonTone tone = ParticleEditorButtonTone::Neutral,
                 bool enabled = true) {
     COLORREF fill = kStudioSurface;
     COLORREF border = kStudioBorder;
@@ -369,7 +372,7 @@ void DrawProperty(HDC dc, const ParticleEditorPropertyRowLayout& row,
         for (std::uint8_t index = 0U; index < row.enumChipCount; ++index) {
             const bool active = index == property.enumValue;
             DrawButton(dc, row.enumChips[index],
-                property.enumLabels[index] != nullptr ? property.enumLabels[index] : "",
+                property.enumLabels[index] != nullptr ? std::string_view{ property.enumLabels[index] } : std::string_view{},
                 active ? ParticleEditorButtonTone::Selected : ParticleEditorButtonTone::Neutral, property.editable);
         }
         return;
@@ -479,7 +482,7 @@ void ParticleEditorPanelRenderer::Paint(
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     RECT header{layout.toolbar.left + 14, layout.toolbar.top, layout.toolbar.right - 14, layout.toolbar.bottom};
-    std::string title = "21kb Particle System";
+    std::string title{ EditorText("panel.particleEditor", "21kb Particle System") };
     if (sceneContext.HasParticleEditorAsset()) {
         const auto* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.ParticleEditorAssetId());
         if (metadata != nullptr) title = metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
@@ -488,11 +491,11 @@ void ParticleEditorPanelRenderer::Paint(
     if (sceneContext.HasParticleEditorAsset() && sceneContext.ParticleEditorDirty()) {
         RECT badge{layout.toolbar.right - 92, layout.toolbar.top + 10, layout.toolbar.right - 16, layout.toolbar.bottom - 10};
         FillRound(dc, badge, RGB(64, 48, 22), kStudioGold, 8.0F);
-        DrawTextUtf8(dc, badge, "UNSAVED", kStudioGold, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawTextUtf8(dc, badge, EditorText("particleEditor.unsavedBadge", "UNSAVED"), kStudioGold, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     if (!sceneContext.HasParticleEditorAsset()) {
         RECT empty = layout.preview;
-        DrawTextUtf8(dc, empty, "Open a .kbvfx asset to begin editing.", kStudioMuted,
+        DrawTextUtf8(dc, empty, EditorText("particleEditor.empty", "Open a .kbvfx asset to begin editing."), kStudioMuted,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
     }
@@ -503,10 +506,10 @@ void ParticleEditorPanelRenderer::Paint(
         return workspace.ComposerSectionExpanded(section);
     };
     const std::string emitterCount = std::to_string(rows.size());
-    DrawSectionHeader(dc, layout.composerHeader, theme, "Emitters", HeroIconKind::Bolt,
+    DrawSectionHeader(dc, layout.composerHeader, theme, EditorText("particleEditor.emitters", "Emitters"), HeroIconKind::Bolt,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Emitters), emitterCount);
     if (expanded(kb::particle_editor::ParticleEditorComposerSection::Emitters)) {
-        DrawButton(dc, layout.addEmitter, "+  Add Emitter", ParticleEditorButtonTone::Primary,
+        DrawButton(dc, layout.addEmitter, EditorText("particleEditor.addEmitter", "+  Add Emitter"), ParticleEditorButtonTone::Primary,
             rows.size() < kb::scene::kParticleEffectMaxEmitters);
     }
     for (std::size_t index = 0U; index < layout.emitterRowCount; ++index) {
@@ -529,20 +532,20 @@ void ParticleEditorPanelRenderer::Paint(
         DrawMoveChevron(dc, rowLayout.moveDown, false);
         DrawIconButton(dc, rowLayout.remove, HeroIconKind::XMark, ParticleEditorButtonTone::Destructive);
     }
-    DrawSectionHeader(dc, layout.propertyHeader, theme, "Emitter Settings", HeroIconKind::AdjustmentsHorizontal,
+    DrawSectionHeader(dc, layout.propertyHeader, theme, EditorText("particleEditor.emitterSettings", "Emitter Settings"), HeroIconKind::AdjustmentsHorizontal,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Settings));
     for (std::size_t index = 0U; index < layout.propertyRowCount; ++index)
         DrawProperty(dc, layout.propertyRows[index], inspector.properties[index], theme);
     const std::string recipeCount = std::to_string(recipes.size());
-    DrawSectionHeader(dc, layout.recipeHeader, theme, "Recipes", HeroIconKind::ListBullet,
+    DrawSectionHeader(dc, layout.recipeHeader, theme, EditorText("particleEditor.recipes", "Recipes"), HeroIconKind::ListBullet,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Recipes), recipeCount);
     for (std::size_t index = 0U; index < layout.recipeTileCount; ++index)
         DrawRecipeTile(dc, layout.recipeTiles[index], recipes[index]);
     const std::string moduleCount = std::to_string(inspector.modules.size());
-    DrawSectionHeader(dc, layout.moduleHeader, theme, "Behavior Modules", HeroIconKind::RectangleGroup,
+    DrawSectionHeader(dc, layout.moduleHeader, theme, EditorText("particleEditor.behaviorModules", "Behavior Modules"), HeroIconKind::RectangleGroup,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Modules), moduleCount);
     if (expanded(kb::particle_editor::ParticleEditorComposerSection::Modules)) {
-        DrawButton(dc, layout.addModule, "+  Add Module", ParticleEditorButtonTone::Primary,
+        DrawButton(dc, layout.addModule, EditorText("particleEditor.addModule", "+  Add Module"), ParticleEditorButtonTone::Primary,
             inspector.modules.size() < kb::scene::kParticleEffectMaxModulesPerEmitter);
     }
     for (std::size_t index = 0U; index < layout.moduleRowCount; ++index) {
@@ -563,24 +566,24 @@ void ParticleEditorPanelRenderer::Paint(
         DrawMoveChevron(dc, row.moveDown, false);
         DrawIconButton(dc, row.remove, HeroIconKind::XMark, ParticleEditorButtonTone::Destructive);
     }
-    DrawSectionHeader(dc, layout.outputHeader, theme, "Renderer", HeroIconKind::Cube,
+    DrawSectionHeader(dc, layout.outputHeader, theme, EditorText("particleEditor.renderer", "Renderer"), HeroIconKind::Cube,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Output));
     if (expanded(kb::particle_editor::ParticleEditorComposerSection::Output)) {
-        DrawButton(dc, layout.materialPicker, "Material");
-        DrawButton(dc, layout.meshPicker, "Mesh");
-        DrawButton(dc, layout.texturePicker, "Atlas");
+        DrawButton(dc, layout.materialPicker, EditorText("particleEditor.material", "Material"));
+        DrawButton(dc, layout.meshPicker, EditorText("particleEditor.mesh", "Mesh"));
+        DrawButton(dc, layout.texturePicker, EditorText("particleEditor.atlas", "Atlas"));
     }
     for (std::size_t index = 0U; index < layout.outputChoiceCount; ++index) {
         const auto& choice = inspector.outputChoices[index];
         const auto* asset = sceneContext.ParticleEditorWorkingAsset();
         const auto* emitter = asset == nullptr ? nullptr : kb::particle_editor::ParticleEmitterListModel::Find(*asset, inspector.emitterId);
         const bool active = emitter != nullptr && emitter->output.type == choice.type;
-        DrawButton(dc, layout.outputChoices[index], choice.label.c_str(),
+        DrawButton(dc, layout.outputChoices[index], choice.label,
             active ? ParticleEditorButtonTone::Selected : ParticleEditorButtonTone::Neutral, choice.enabled);
         if (!choice.enabled) {
             RECT mark = layout.outputChoices[index];
             mark.left = mark.right - 36;
-            DrawTextUtf8(dc, mark, "N/A", RGB(176, 132, 132), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            DrawTextUtf8(dc, mark, EditorText("particleEditor.notAvailable", "N/A"), RGB(176, 132, 132), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         }
     }
     if (workspace.ModuleDragActive() && layout.moduleRowCount != 0U) {
@@ -590,7 +593,7 @@ void ParticleEditorPanelRenderer::Paint(
         GdiDrawing::FillRectColor(dc, {target.left, target.top - 1, target.right, target.top + 2}, kStudioGold);
     }
     const std::string dependencyCount = std::to_string(inspector.dependencies.size());
-    DrawSectionHeader(dc, layout.dependencyHeader, theme, "Dependencies", HeroIconKind::Folder,
+    DrawSectionHeader(dc, layout.dependencyHeader, theme, EditorText("particleEditor.dependencies", "Dependencies"), HeroIconKind::Folder,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Dependencies), dependencyCount);
     for (std::size_t index = 0U; index < layout.dependencyRowCount; ++index) {
         DenseListRow::Paint(dc, theme, DenseListRowDescriptor{
@@ -601,7 +604,7 @@ void ParticleEditorPanelRenderer::Paint(
         });
     }
     const std::string diagnosticCount = std::to_string(inspector.diagnostics.size());
-    DrawSectionHeader(dc, layout.diagnosticHeader, theme, "Diagnostics", HeroIconKind::CommandLine,
+    DrawSectionHeader(dc, layout.diagnosticHeader, theme, EditorText("particleEditor.diagnostics", "Diagnostics"), HeroIconKind::CommandLine,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Diagnostics), diagnosticCount);
     for (std::size_t index = 0U; index < layout.diagnosticRowCount; ++index) {
         FillRound(dc, layout.diagnosticRows[index], RGB(48, 28, 30), RGB(128, 72, 76), 4.0F);
@@ -628,9 +631,13 @@ void ParticleEditorPanelRenderer::Paint(
     FillEllipse(dc, dot, dirty ? kStudioGold : kStudioToggle, dirty ? kStudioGoldSoft : RGB(48, 96, 72));
     RECT status = layout.statusBar;
     status.left += 26;
-    const std::string statusText = std::to_string(rows.size()) + " / " +
-        std::to_string(kb::scene::kParticleEffectMaxEmitters) + " emitters   ·   " +
-        (dirty ? "Unsaved changes" : "Saved") + "   ·   LMB orbit  ·  Wheel zoom";
+    const std::string statusText = EditorLocalization::Format("particleEditor.status",
+        "{count} / {max} emitters   ·   {state}   ·   LMB orbit  ·  Wheel zoom", {
+            { "count", std::to_string(rows.size()) },
+            { "max", std::to_string(kb::scene::kParticleEffectMaxEmitters) },
+            { "state", std::string{ dirty ? EditorText("particleEditor.unsavedChanges", "Unsaved changes")
+                                          : EditorText("particleEditor.saved", "Saved") } },
+        });
     DrawTextUtf8(dc, status, statusText.c_str(), kStudioMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     if (sceneViewport != nullptr)
         static_cast<void>(PresentViewport(*sceneViewport, host, content, panel, sceneContext, renderBackendSettings));

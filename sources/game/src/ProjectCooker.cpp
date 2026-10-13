@@ -1,4 +1,5 @@
 #include "ProjectCooker.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
 
 #include "engine/platform/FileSystemPath.hpp"
 #include "PackagedRuntimeModuleContract.hpp"
@@ -21,6 +22,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
+#include "engine/script/ScriptProjectFiles.hpp"
 #include "engine/world/WorldCellBuilder.hpp"
 #include "kb/render/ShaderManifest.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
@@ -30,6 +32,7 @@
 #include "kb/render/resources/RenderMaterialCookPayload.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderToolchain.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
@@ -100,9 +103,6 @@ constexpr std::string_view kSourceFileBakerId = "SourceFile";
 constexpr std::string_view kShaderBinaryBakerId = "ShaderBinary";
 constexpr std::string_view kRuntimeManifestBakerId = "RuntimeManifest";
 constexpr std::string_view kStoredBytesBakerVersion = "1";
-constexpr std::array<std::string_view, 4U> kMaterialPasses{
-    "BaseOpaque", "GBuffer", "ShadowDepth", "BaseTransparent"
-};
 
 class VectorWriter final : public bx::WriterI {
 public:
@@ -784,6 +784,23 @@ struct CookerToolInputSnapshot {
     snapshots.clear();
     snapshots.reserve(assets.size());
     for (const kb::assets::AssetMetadata& metadata : assets) {
+        // An engine shape has no file: its source is the text the engine names it by, packed
+        // like any other source and baked by the same mesh loader.
+        if (const kb::assets::BuiltInShapeDesc* shape = kb::assets::FindBuiltInShape(metadata); shape != nullptr) {
+            const std::filesystem::path snapshotPath = snapshotRoot / std::to_string(metadata.id.value) /
+                std::filesystem::path{ shape->virtualPath }.relative_path().make_preferred();
+            std::error_code shapeError;
+            std::filesystem::create_directories(snapshotPath.parent_path(), shapeError);
+            std::ofstream output{ snapshotPath, std::ios::binary | std::ios::trunc };
+            output.write(shape->source.data(), static_cast<std::streamsize>(shape->source.size()));
+            if (shapeError || !output.good()) {
+                error = "engine shape source could not be written: " + std::string{ shape->virtualPath } + " -> " +
+                    snapshotPath.generic_string() + (shapeError ? " (" + shapeError.message() + ")" : std::string{});
+                return false;
+            }
+            snapshots.emplace(metadata.id.value, SourceSnapshot{ .path = snapshotPath, .trackedFiles = {} });
+            continue;
+        }
         std::filesystem::path relativeSource;
         if (!CanonicalRelativePathWithin(metadata.physicalPath, contentRoot, relativeSource)) {
             error = "asset source resolves outside the project content root: " +
@@ -1132,11 +1149,10 @@ struct CookerToolInputSnapshot {
         error = "project path could not be resolved";
         return {};
     }
-    if (std::filesystem::is_directory(path, pathError) && !pathError) {
-        path /= "Project.21kbproject";
-    }
-    if (pathError || !std::filesystem::is_regular_file(path, pathError) || pathError) {
-        error = "project descriptor was not found: " + path.generic_string();
+    std::string projectError;
+    path = kb::project::ProjectManager::FindProjectFile(path, projectError);
+    if (path.empty()) {
+        error = "project descriptor was not found: " + projectError;
         return {};
     }
     return path;
@@ -1325,10 +1341,7 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
                 return false;
             }
             if (descriptor->build.enabled) {
-                auto build = descriptor->build;
-                if (build.workingDirectory.empty()) build.workingDirectory = projectRoot;
-                else if (build.workingDirectory.is_relative())
-                    build.workingDirectory = metadata.physicalPath.parent_path() / build.workingDirectory;
+                const auto build = kb::script::ScriptProjectFiles::BuildOf(*descriptor, metadata.physicalPath, projectRoot);
                 const auto built = kb::script::NativeScriptBuildPipeline::Build(build);
                 if (!built.Succeeded()) {
                     error = "native behaviour build failed: " +
@@ -1697,7 +1710,10 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
         backends.push_back(*mapped);
     }
 
-    for (const std::string_view pass : kMaterialPasses) {
+    for (const std::string_view pass : kb::render::kRenderMaterialGraphScenePasses) {
+        if (!kb::render::RenderMaterialGraphCooksScenePass(payload.graphShader.reflection, pass)) {
+            continue;
+        }
         kb::render::RenderMaterialGraphShaderArtifactRequest shaderRequest{};
         shaderRequest.shadercPath = request.shadercPath.generic_string();
         shaderRequest.varyingDefPath = (shaderSources / "varying.def.sc").generic_string();
@@ -2364,7 +2380,8 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             .browseTag = metadata.browseTag,
             .name = metadata.name,
             .virtualPath = virtualPath,
-            .sourceExtension = metadata.physicalPath.extension().generic_string(),
+            .sourceExtension = metadata.physicalPath.empty() ? metadata.sourceExtension
+                                                             : metadata.physicalPath.extension().generic_string(),
             // The runtime deployment verifies extracted bytes with the same target-independent
             // digest for every source, including assets whose editor registry used an older
             // filesystem hash. The value remains an opaque change token to AssetManager.

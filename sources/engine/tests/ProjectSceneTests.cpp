@@ -35,6 +35,7 @@
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -1350,7 +1351,8 @@ void RunSceneAudioDocumentBackwardCompatibilityTest() {
         + sizeof(std::uint8_t) + sizeof(float) * 2U + sizeof(std::uint32_t) * 2U;
     Require(sceneBytes.size() > authoredAudioBlockBytes,
         "Legacy scene audio compatibility fixture is shorter than the v32 audio block");
-    sceneBytes.resize(sceneBytes.size() - authoredAudioBlockBytes);
+    // The v44 post-process profile id follows the audio block; a v31 file has neither.
+    sceneBytes.resize(sceneBytes.size() - authoredAudioBlockBytes - sizeof(std::uint64_t));
     WriteUInt32(sceneBytes, kSceneMagic.size(), 31U);
     Require(WriteBytes(sceneFile, sceneBytes), "Legacy scene audio compatibility fixture could not be rewritten");
 
@@ -1399,6 +1401,7 @@ void RunSceneV32BackwardCompatibilityTest() {
     Require(kb::scene::SceneDocumentService::Save(current, sceneFile), "v32 compatibility fixture could not be saved");
 
     std::vector<std::uint8_t> sceneBytes = ReadBytes(sceneFile);
+    sceneBytes.resize(sceneBytes.size() - sizeof(std::uint64_t)); // a v32 file has no v44 post-process profile id
     WriteUInt32(sceneBytes, kSceneMagic.size(), 32U);
     Require(WriteBytes(sceneFile, sceneBytes), "v32 compatibility scene could not be rewritten");
     const TestIntegrity integrity = ComputeIntegrity(sceneBytes);
@@ -1414,6 +1417,38 @@ void RunSceneV32BackwardCompatibilityTest() {
     const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(sceneFile);
     Require(loaded.succeeded && loaded.document.fileVersion == 32U && loaded.document.worldPrefab.Empty(),
         "v32 scene did not load after the v33 component extension");
+}
+
+// v44: the scene's post-process profile is saved with the scene, reloaded into the runtime scene the
+// renderer reads, and captured back, as a Unity global Volume or a Godot WorldEnvironment is.
+void RunScenePostProcessProfileDocumentTest() {
+    CleanTempRoot();
+    const std::filesystem::path sceneFile = TempRoot() / "PostProcessProfile.21kbscene";
+    kb::scene::SceneDocument authored;
+    authored.guid = "scene:post-process-profile";
+    authored.name = "PostProcessProfile";
+    authored.postProcessProfileAssetId = 0x5EC0A1D0F00DU;
+    Require(kb::scene::SceneDocumentService::Save(authored, sceneFile), "Post-process profile scene could not be saved");
+
+    const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(sceneFile);
+    Require(loaded.succeeded && loaded.document.postProcessProfileAssetId == 0x5EC0A1D0F00DU,
+        "Scene file did not keep its post-process profile");
+
+    kb::scene::Scene scene;
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, 9U);
+    Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, loaded.document),
+        "Post-process profile scene did not load into a runtime scene");
+    Require(kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 0x5EC0A1D0F00DU,
+        "Loaded scene did not activate its post-process profile");
+    Require(kb::scene::SceneDocumentService::Capture(scene, "PostProcessProfile").postProcessProfileAssetId == 0x5EC0A1D0F00DU,
+        "Captured scene lost its post-process profile");
+
+    kb::scene::SceneDocument withoutProfile;
+    withoutProfile.guid = "scene:no-post-process-profile";
+    withoutProfile.name = "NoPostProcessProfile";
+    Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, withoutProfile)
+            && kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 0U,
+        "A scene without a post-process profile kept the previous scene's profile");
 }
 
 void RunScenePhysicsComponentReflectionSerializationTest() {
@@ -1643,6 +1678,7 @@ void RunProjectSceneTests() {
     RunSceneAudioSourcePrefabRoundTripTest();
     RunSceneAudioDocumentLoadSemanticsTest();
     RunSceneAudioDocumentBackwardCompatibilityTest();
+    RunScenePostProcessProfileDocumentTest();
     RunSceneV32BackwardCompatibilityTest();
     RunScenePhysicsComponentReflectionSerializationTest();
     RunEmptySceneDocumentClearsRuntimeSceneTest();

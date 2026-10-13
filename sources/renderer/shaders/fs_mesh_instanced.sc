@@ -12,6 +12,7 @@ SAMPLER2D(s_occlusion, 3);
 SAMPLER2D(s_emissive, 4);
 SAMPLER2D(s_shadowMap, 5);
 SAMPLER2D(s_terrainLayerWeights, 15);
+SAMPLERCUBE(s_skyReflection, 12);
 uniform vec4 u_materialParams;
 uniform vec4 u_materialEmissive;
 uniform vec4 u_materialFlags;
@@ -27,6 +28,7 @@ uniform vec4 u_ambientColor;
 uniform vec4 u_environmentZenith;
 uniform vec4 u_environmentGround;
 uniform vec4 u_environmentParams;
+#include "sky_reflection.sh"
 uniform vec4 u_shadowParams;
 uniform vec4 u_terrainLayerParams;
 
@@ -81,7 +83,8 @@ float DiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
     return lightScatter * viewScatter * energyFactor;
 }
 
-vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float occlusion)
+// Material ambient occlusion darkens only the light from the surroundings (fs_deferred_lighting.sc).
+vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness)
 {
     vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
     if (u_sceneLightGridDimensions.w > 0.5) {
@@ -137,8 +140,10 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     float distribution = DistributionGgx(nDotH, roughness);
     float geometry = GeometrySchlickGgx(nDotV, roughness) * GeometrySchlickGgx(nDotL, roughness);
     vec3 specular = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
-    vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * DiffuseBurley(nDotV, nDotL, lDotH, roughness)) * occlusion;
-    vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation);
+    vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * DiffuseBurley(nDotV, nDotL, lDotH, roughness));
+    // Light intensity follows the Unity convention: a light of intensity 1 shining straight onto a
+    // surface returns its albedo, so the physical BRDF above is taken times pi.
+    vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation * 3.14159265);
     return (diffuse + specular) * radiance * nDotL;
 }
 
@@ -162,7 +167,7 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     vec3 diffuseEnv = EnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
     float specularEnergy = mix(1.0, 0.18, roughness * roughness);
-    vec3 specularEnv = EnvironmentColor(reflectionDir) * fresnel * specularEnergy * u_environmentParams.z;
+    vec3 specularEnv = KbSkyReflection(reflectionDir, roughness, EnvironmentColor(reflectionDir)) * fresnel * specularEnergy * u_environmentParams.z;
     return diffuseEnv + specularEnv;
 }
 
@@ -227,11 +232,13 @@ void main()
     for (int entry = 0; entry < int(lightList.y); ++entry) {
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
-            vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, v_worldPos, albedo.rgb, metallic, roughness, occlusion);
+            vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, v_worldPos, albedo.rgb, metallic, roughness);
             lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, v_worldPos);
         }
     }
     vec3 emissive = texture2D(s_emissive, materialUv).rgb * u_materialEmissive.rgb * u_materialEmissive.a;
-    float outputAlpha = (u_materialFlags.x < 0.5 ? 1.0 : albedo.a) * terrainLayerOpacity;
+    // Opaque and masked surfaces cover what is behind them (the scene colour alpha is 1, SceneColorAlphaPolicy);
+    // only a blended material has an opacity. A terrain layer blends by its weight.
+    float outputAlpha = (u_materialFlags.x < 1.5 ? 1.0 : albedo.a) * terrainLayerOpacity;
     gl_FragColor = vec4(lighting + emissive, outputAlpha);
 }

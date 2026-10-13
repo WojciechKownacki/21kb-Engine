@@ -48,6 +48,13 @@ SceneRenderLightingConfig RendererSceneLightingConfigResolver::Resolve(SceneRend
     };
 }
 
+void RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(
+    SceneRenderLightingConfig& config, const ScenePostProcessSettings& settings) noexcept {
+    config.ambientOcclusionEnabled = settings.ambientOcclusionEnabled;
+    config.aoIntensity = settings.ambientOcclusionIntensity;
+    config.aoRadius = settings.ambientOcclusionRadius;
+}
+
 std::uint32_t RendererSceneLightingConfigResolver::ShadowFilterSampleCount(SceneRenderShadowFilter filter) noexcept {
     switch (filter) {
     case SceneRenderShadowFilter::Hard:

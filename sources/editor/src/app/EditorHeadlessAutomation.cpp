@@ -1,4 +1,6 @@
 #include "app/EditorHeadlessAutomation.hpp"
+#include "rendering/EditorPanelStyle.hpp"
+#include "app/EditorHeadlessPopupChecks.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorWorkspaceSession.hpp"
@@ -18,6 +20,9 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "inspection/ui/InspectorUIComponentModel.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/scene/SceneCreateMenu.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUI.hpp"
@@ -28,6 +33,8 @@
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/MaterialPreviewPresentSettings.hpp"
+#include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/ParticleThumbnailTimeline.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
@@ -187,7 +194,8 @@ FindInspectorHit(
         if (static_cast<std::size_t>(index) < rows.size()) {
             const auto& group = rows[static_cast<std::size_t>(rows[index].groupStart)];
             if (group.fieldCount > 1 && !group.color) {
-                const int left = kInspectorContent.left + (kInspectorContent.right - kInspectorContent.left) * 36 / 100;
+                // The value column starts where the Inspector's label column ends (InspectorLabelColumnRight).
+                const int left = panel_style::InspectorLabelColumnRight(kInspectorContent);
                 const int width = kInspectorContent.right - left - 24;
                 compactX = left + width * (2 * (index - group.groupStart) + 1) / (2 * group.fieldCount);
             }
@@ -205,14 +213,16 @@ FindInspectorHit(
         : property == InspectorPropertyId::UIAnchorPreset ? 40 + 64 * (std::max(0, index) % 4)
         : property == InspectorPropertyId::UIRectLayoutField ? (index % 2 == 0 ? 225 : 585)
         : uiField
-        ? kInspectorContent.left + (kInspectorContent.right - kInspectorContent.left) * 36 / 100 + 8
+        ? panel_style::InspectorLabelColumnRight(kInspectorContent) + 8
         : addButton ? (kInspectorContent.left + kInspectorContent.right) / 2
         : kInspectorContent.left;
     // The picker button sits at the value column's right edge, which moves left once the Inspector
     // is long enough to show its scrollbar, so it is searched across that edge rather than at one x.
     const int lastX = leftEdgeHandle ? kInspectorContent.left + 40
         : rightEdgeButton ? kInspectorContent.right - 4
-        : uiField || addButton ? firstX + 1 : kInspectorContent.right;
+        : addButton ? firstX + 1
+        // A value control starts a few pixels past the label column; a short sweep finds it in any row inset.
+        : uiField ? firstX + 48 : kInspectorContent.right;
     for (int scroll = addButton ? InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context) : 0;;) {
         const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(
             kInspectorContent, context);
@@ -694,6 +704,9 @@ struct EditorHeadlessAutomation::Impl {
         const DockPanel panel{ .id = static_cast<std::uint32_t>(viewportKey), .kind = DockPanelKind::Scene };
         auto settings = ScenePanelContentRenderer::BuildSettings(RECT{ 0, -34, 640, 360 }, panel, context, backendSettings);
         settings.presentToHost = false;
+        // The editor loop points the viewport at the project's cooked graph shaders before every
+        // present; without it graph materials draw the built-in fallback, not what the panel shows.
+        viewport.SetGraphShaderCacheRoot(context.GraphShaderCacheRoot());
         viewport.BeginPaintLayout(window);
         viewport.Present(window, RECT{ 0, 0, 640, 360 }, context.Scene(), settings);
         viewport.EndPaintLayout();
@@ -753,6 +766,23 @@ struct EditorHeadlessAutomation::Impl {
         viewport.EndPaintLayout();
         return std::string_view{ viewport.ActiveBackendLabel() } !=
             "Not initialized";
+    }
+
+    // The Material Editor's preview, presented with the panel's own settings (camera, lighting,
+    // graph variant) into the offscreen target a capture reads.
+    [[nodiscard]] bool RenderMaterialPreview(EditorSceneContext& context, const RECT& bounds) {
+        if (window == nullptr) return false;
+        const kb::assets::AssetId asset = context.MaterialEditor().OpenAssetId();
+        if (MaterialPreviewMetadata(context, asset) == nullptr) return false;
+        const kb::scene::Scene& previewScene = context.MaterialPreviewScene(asset, EditorMaterialPreviewSurface::MaterialEditor);
+        EditorSceneBgfxViewport::PresentSettings settings =
+            BuildMaterialPreviewPresentSettings(context, bounds, kMaterialEditorPreviewViewportKey);
+        settings.presentToHost = false;
+        viewport.SetGraphShaderCacheRoot(context.GraphShaderCacheRoot());
+        viewport.BeginPaintLayout(window);
+        viewport.Present(window, bounds, previewScene, settings);
+        viewport.EndPaintLayout();
+        return std::string_view{ viewport.ActiveBackendLabel() } != "Not initialized";
     }
 
     HWND window = nullptr;
@@ -880,7 +910,10 @@ bool EditorHeadlessAutomation::AddComponent(
             option.index >= 0;
     }
     if (!foundOption) {
-        Trace("add_component", false, "result-not-found");
+        const InspectorPanelState& inspector = context_.Inspector();
+        Trace("add_component", false, "result-not-found: query '" +
+            (inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch ? inspector.EditBuffer() : std::string{}) +
+            "' for '" + std::string{ componentId } + "'");
         return false;
     }
     const POINT optionPoint = Center(option.rect);
@@ -1517,6 +1550,71 @@ bool EditorHeadlessAutomation::SetUIRectLayoutField(int field, float value) {
     return matched;
 }
 
+// Every scene object of the hierarchy Create menu: found where SceneCreateMenu puts it, created
+// with its name and components through the menu command, and undone as one step.
+bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
+    const auto fail = [&](std::string_view reason) {
+        Trace("scene_creation_menu", false, reason);
+        return false;
+    };
+    const auto findSubmenu = [](HMENU menu, std::string_view label) -> HMENU {
+        for (int index = 0; index < GetMenuItemCount(menu); ++index) {
+            char text[128]{};
+            GetMenuStringA(menu, static_cast<UINT>(index), text, sizeof(text), MF_BYPOSITION);
+            if (label == text) return GetSubMenu(menu, index);
+        }
+        return nullptr;
+    };
+    const auto findCommand = [](HMENU menu, std::string_view label) -> std::optional<UINT> {
+        for (int index = 0; index < GetMenuItemCount(menu); ++index) {
+            char text[128]{};
+            GetMenuStringA(menu, static_cast<UINT>(index), text, sizeof(text), MF_BYPOSITION);
+            const std::string_view row{ text };
+            if (GetSubMenu(menu, index) == nullptr && row.substr(0, row.find('\t')) == label) return GetMenuItemID(menu, index);
+        }
+        return std::nullopt;
+    };
+    HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu();
+    if (!menu) return fail("menu-allocation-failed");
+    const HMENU create = findSubmenu(menu, "Create");
+    std::vector<std::pair<const kb::scene::SceneCreateItem*, UINT>> commands;
+    for (const kb::scene::SceneCreateItem& item : kb::scene::SceneCreateMenu::Items()) {
+        const HMENU holder = !create ? nullptr : item.submenu.empty() ? create : findSubmenu(create, item.submenu);
+        const std::optional<UINT> command = holder ? findCommand(holder, item.label) : std::nullopt;
+        if (!command) {
+            DestroyMenu(menu);
+            return fail(std::string{ item.id } + ": missing from the Create menu");
+        }
+        commands.emplace_back(&item, *command);
+    }
+    DestroyMenu(menu);
+    const auto baseline = context_.HierarchyRows().size();
+    for (const auto& [item, command] : commands) {
+        const std::string id{ item->id };
+        if (!EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(command, context_)) return fail(id + ": creation failed");
+        const kb::scene::SceneEntity entity = context_.SelectedEntity();
+        if (context_.Scene().Entities().Name(entity) != item->name) return fail(id + ": wrong name");
+        const auto has = [&](std::string_view component) { return kb::scene::SceneComponentAuthoring::Has(context_.Scene(), entity, component); };
+        const bool shape = kb::assets::FindBuiltInShape(item->id) != nullptr;
+        const bool components =
+            shape ? has("MeshRenderer") && (item->id == "Cone" || has("Collider")) :
+            item->id.ends_with("Light") ? has("Light") :
+            item->id == "Environment" ? has("WorldBackdrop") && has("Ambient Radiance") :
+            item->id == "Camera" ? has("Camera") :
+            item->id == "Particle System" ? has("Particle Effect") :
+            item->id == "Audio Source" ? has("AudioSource") :
+            item->id == "Audio Listener" ? has("AudioListener") : true;
+        if (!components) return fail(id + ": components missing");
+        if (shape && context_.Scene().Components().MeshRenderers().TryGet(entity)->meshAssetId !=
+                kb::assets::BuiltInShapeId(kb::assets::FindBuiltInShape(item->id)->shape).value)
+            return fail(id + ": not the engine shape");
+        if (context_.HierarchyRows().size() != baseline + 1U || !context_.UndoSceneCommand() ||
+            context_.HierarchyRows().size() != baseline) return fail(id + ": not one undo step");
+        Trace("scene_creation_menu", true, id);
+    }
+    return true;
+}
+
 bool EditorHeadlessAutomation::VerifyUICreationMenu() {
     const auto fail = [&](std::string_view reason) {
         Trace("ui_creation_menu", false, reason);
@@ -1533,7 +1631,7 @@ bool EditorHeadlessAutomation::VerifyUICreationMenu() {
     HMENU menu = EditorRightButtonDownRouter::CreateHierarchyMenu();
     if (!menu) return fail("menu-allocation-failed");
     const auto create = findSubmenu(menu, "Create");
-    const auto widgets = create ? findSubmenu(create, "User Widget") : nullptr;
+    const auto widgets = create ? findSubmenu(create, "User Interface") : nullptr;
     std::vector<std::pair<std::string, UINT>> commands;
     const auto collect = [&](auto&& self, HMENU current) -> void {
         for (int index = 0; index < GetMenuItemCount(current); ++index) {
@@ -3518,6 +3616,51 @@ bool EditorHeadlessAutomation::CaptureSceneViewport(std::string_view checkpoint)
     });
 }
 
+bool EditorHeadlessAutomation::CaptureMaterialPreview(std::string_view checkpoint, int width, int height) {
+    if (width < 64 || width > 3840 || height < 64 || height > 2160) {
+        Trace("capture_material_preview", false, "size");
+        return false;
+    }
+    const RECT bounds{ 0, 0, width, height };
+    const std::filesystem::path output = artifactRoot_ / "screenshots" / (SafeCheckpoint(checkpoint) + ".png");
+    // The first present makes the preview scene (and asks for the open graph's preview cook).
+    if (!impl_->RenderMaterialPreview(context_, bounds)) {
+        Trace("capture_material_preview", false, "no-open-material");
+        return false;
+    }
+    const std::uint64_t capture = context_.RequestMaterialPreviewCapture(EditorMaterialPreviewSurface::MaterialEditor, output);
+    if (capture == 0U) {
+        Trace("capture_material_preview", false, "request-rejected");
+        return false;
+    }
+    for (const auto deadline = std::chrono::steady_clock::now() + kCaptureDeadline;
+         std::chrono::steady_clock::now() < deadline;) {
+        if (!impl_->RenderMaterialPreview(context_, bounds) || !impl_->viewport.AdvanceAsyncReadbacks()) {
+            Trace("capture_material_preview", false, "present-failed");
+            return false;
+        }
+        const kb::scene::SceneScreenCaptureStatus status =
+            context_.MaterialPreviewCaptureStatus(EditorMaterialPreviewSurface::MaterialEditor, capture);
+        if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
+            const bool valid = ValidateCapturedImage(output, true);
+            Trace("capture_material_preview", valid, output.filename().string());
+            return valid;
+        }
+        if (status == kb::scene::SceneScreenCaptureStatus::Failed) {
+            Trace("capture_material_preview", false, "capture-failed");
+            return false;
+        }
+        Sleep(5U);
+    }
+    Trace("capture_material_preview", false, "capture-timeout");
+    return false;
+}
+
+std::optional<kb::render::ScenePostProcessSettings> EditorHeadlessAutomation::SceneViewportPostProcessSettings() {
+    const DockPanel panel{ .id = 1U, .kind = DockPanelKind::Scene };
+    return ScenePanelContentRenderer::BuildSettings(RECT{ 0, -34, 640, 360 }, panel, context_, impl_->backendSettings).postProcessSettings;
+}
+
 bool EditorHeadlessAutomation::CaptureScene(
     std::string_view operation, std::string_view checkpoint, const std::function<bool()>& render) {
 
@@ -3600,6 +3743,27 @@ bool EditorHeadlessAutomation::InspectorPointerDrag(
             context_, x, y);
     Trace("inspector_pointer_drag", routed);
     return routed;
+}
+
+bool EditorHeadlessAutomation::InspectorClickRow(InspectorPropertyId property, int index, InspectorHitKind kind) {
+    // Scrolled the way a person scrolls to a row below the panel's height.
+    for (int offset = 0; offset <= 4000; offset += 150) {
+        static_cast<void>(context_.Inspector().SetScrollOffset(offset, std::numeric_limits<int>::max()));
+        for (int y = kInspectorContent.top + 1; y < kInspectorContent.bottom; y += 2) {
+            for (int x = kInspectorContent.left + 8; x < kInspectorContent.right; x += 16) {
+                const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kInspectorContent, context_, x, y);
+                if (hit.property != property || hit.kind != kind || (index >= 0 && hit.index != index)) {
+                    continue;
+                }
+                const bool pressed = InspectorPointerDown(x, y);
+                const bool released = InspectorPointerUp();
+                Trace("inspector_click_row", pressed);
+                return pressed || released;
+            }
+        }
+    }
+    Trace("inspector_click_row", false);
+    return false;
 }
 
 bool EditorHeadlessAutomation::InspectorPointerUp() {
@@ -4069,6 +4233,20 @@ void EditorHeadlessAutomation::SnapshotConsole(
                << entry.category << '\t' << entry.message << '\n';
     }
     Trace("snapshot_console", output.good(), path.filename().string());
+}
+
+bool EditorHeadlessAutomation::VerifyToolbarMenuOverlay() {
+    const EditorHeadlessPopupCheckResult result =
+        EditorHeadlessPopupChecks::VerifyToolbarMenuOverlay(context_, impl_->viewport);
+    Trace("verify_toolbar_menu_overlay", result.succeeded, result.detail);
+    return result.succeeded;
+}
+
+bool EditorHeadlessAutomation::VerifyAddComponentSearchInput() {
+    const EditorHeadlessPopupCheckResult result =
+        EditorHeadlessPopupChecks::VerifyAddComponentSearchInput(context_, impl_->viewport);
+    Trace("verify_add_component_search_input", result.succeeded, result.detail);
+    return result.succeeded;
 }
 
 void EditorHeadlessAutomation::Trace(

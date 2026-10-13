@@ -26,10 +26,11 @@ void EditorAssetBrowserFolderExpansionState::ExpandAncestors(const std::filesyst
     while (!parent.empty() && asset_browser::Normalize(parent) != asset_browser::Normalize(virtualPath)) {
         const std::string normalizedParent = asset_browser::Normalize(parent);
         collapsedFolders_.erase(normalizedParent);
-        if (normalizedParent == "/Game") {
+        const std::filesystem::path next = asset_browser::ParentVirtualPath(parent);
+        if (asset_browser::Normalize(next) == normalizedParent) {
             break;
         }
-        parent = asset_browser::ParentVirtualPath(parent);
+        parent = next;
     }
 }
 

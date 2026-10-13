@@ -635,6 +635,8 @@ void AppendTriangle(RenderMeshAssetData& asset, Bounds3 bounds, Vec3 a, Vec3 b, 
         return std::nullopt;
     }
 
+    RenderMeshAssetFinalizer::ConvertRightHandedSource(asset);
+    RenderMeshAssetFinalizer::ApplyImportTransform(asset, desc.transform);
     if (!RenderMeshAssetFinalizer::Finalize(asset)) {
         return std::nullopt;
     }

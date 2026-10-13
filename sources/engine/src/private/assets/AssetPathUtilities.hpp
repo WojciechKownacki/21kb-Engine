@@ -15,7 +15,8 @@ public:
     AssetPathUtilities() = delete;
 
     [[nodiscard]] static std::string LowerExtension(const std::filesystem::path& extension);
-    [[nodiscard]] static bool IsValidEntryName(std::string_view name) noexcept;
+    // True when AssetFileNameError has nothing against `name`.
+    [[nodiscard]] static bool IsValidEntryName(std::string_view name);
     [[nodiscard]] static std::filesystem::path ParentVirtualPath(const std::filesystem::path& virtualPath);
     [[nodiscard]] static std::optional<std::filesystem::path> ResolveMountedFolderRoot(
         const AssetMountTable& mounts,

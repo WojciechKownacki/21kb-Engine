@@ -1,4 +1,5 @@
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "platform/win32/EditorDebugLogGate.hpp"
@@ -741,7 +742,7 @@ private:
         EditorDialogStyle::PaintSurface(dc, client, theme);
         EditorDialogStyle::PaintTitleBar(dc, theme, EditorDialogHeaderDescriptor{
             .bounds = Rect(client.left + 1, client.top + 1, client.right - 1, client.top + EditorDialogStyle::TitleBarHeight),
-            .title = title_.empty() ? std::string_view{"Color"} : std::string_view{title_},
+            .title = title_.empty() ? EditorText("colorPicker.title", "Color") : std::string_view{title_},
             .icon = HeroIconKind::AdjustmentsHorizontal,
             .showIcon = true,
         });
@@ -755,8 +756,8 @@ private:
             Rect(client.left + 1, PreviewRect().top - 6, client.right - 1, client.bottom - 1),
             theme);
         DrawPreview(dc);
-        DrawButton(dc, CancelButtonRect(), "Cancel", false);
-        DrawButton(dc, OkButtonRect(), "Apply", true);
+        DrawButton(dc, CancelButtonRect(), EditorText("common.cancel", "Cancel"), false);
+        DrawButton(dc, OkButtonRect(), EditorText("common.apply", "Apply"), true);
     }
 
     void DrawSaturationValue(HDC dc) const {
@@ -857,7 +858,7 @@ private:
 
     void DrawFields(HDC dc) const {
         const EditorTheme theme = MakeEditorDarkTheme();
-        EditorDialogStyle::PaintText(dc, HexLabelRect(), "Hex", EditorDialogStyle::Color(theme.textSecondary));
+        EditorDialogStyle::PaintText(dc, HexLabelRect(), EditorText("colorPicker.hex", "Hex"), EditorDialogStyle::Color(theme.textSecondary));
         DrawField(dc, PickerField::Hex, FieldText(PickerField::Hex));
         DrawField(dc, PickerField::Red, "R " + FieldText(PickerField::Red));
         DrawField(dc, PickerField::Green, "G " + FieldText(PickerField::Green));

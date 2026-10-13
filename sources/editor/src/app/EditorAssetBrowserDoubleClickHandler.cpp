@@ -129,8 +129,7 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
         if (metadata->type == kb::scene::kParticleEffectAssetType) {
             if (!EditorParticleDocumentLifecycle::Resolve(
                     owner, sceneContext,
-                    kb::particle_editor::ParticleDocumentTransition::Open,
-                    L"opening another particle effect")) {
+                    kb::particle_editor::ParticleDocumentTransition::Open)) {
                 return EditorAssetBrowserDoubleClickResult::None;
             }
             return sceneContext.OpenParticleEditorAsset(metadata->id)
@@ -157,7 +156,7 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAs
         return EditorAssetBrowserDoubleClickResult::None;
     }
     const std::optional<EditorDirtySceneResolution> resolution =
-        EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(owner, sceneContext, L"opening another scene");
+        EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(owner, sceneContext, EditorSceneTransition::OpenScene);
     if (!resolution.has_value()) {
         return EditorAssetBrowserDoubleClickResult::None;
     }

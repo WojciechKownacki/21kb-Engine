@@ -1,4 +1,5 @@
 #include "rendering/ProjectFilesToolbarRenderer.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserGeometry.hpp"
@@ -65,7 +66,7 @@ void DrawSearch(HDC dc, RECT rect, const EditorTheme& theme, const EditorAssetBr
 
     RECT text{ rect.left + 30, rect.top, rect.right - 8, rect.bottom };
     const std::string query{ state.SearchQuery() };
-    Draw::DrawLabel(dc, text, query.empty() ? "Szukaj zawartosci..." : query.c_str(), query.empty() ? Draw::Color(theme.textDisabled) : Draw::Color(theme.textPrimary));
+    Draw::DrawLabel(dc, text, query.empty() ? EditorText("projectFiles.searchPlaceholder", "Search content...") : std::string_view{ query }, query.empty() ? Draw::Color(theme.textDisabled) : Draw::Color(theme.textPrimary));
 }
 
 void DrawNewFolderButton(HDC dc, RECT rect, const EditorTheme& theme, bool active) {
@@ -82,8 +83,8 @@ void DrawNewFolderButton(HDC dc, RECT rect, const EditorTheme& theme, bool activ
 void ProjectFilesToolbarRenderer::Paint(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme, const EditorAssetBrowserState& state) {
     GdiDrawing::DrawSharpFrame(dc, layout.toolbar, Draw::Blend(Draw::Color(theme.strip), RGB(0, 0, 0), 10), Draw::Color(theme.borderPanel));
     DrawNewFolderButton(dc, layout.newFolderButton, theme, state.TextEditMode() == EditorAssetTextEditMode::NewFolder);
-    Draw::DrawTextButton(dc, layout.importButton, theme, "Import", false);
-    Draw::DrawTextButton(dc, layout.filtersButton, theme, "Filters", !state.TypeFilter().empty());
+    Draw::DrawTextButton(dc, layout.importButton, theme, EditorText("projectFiles.import", "Import"), false);
+    Draw::DrawTextButton(dc, layout.filtersButton, theme, EditorText("projectFiles.filters", "Filters"), !state.TypeFilter().empty());
     DrawBreadcrumb(dc, layout.path, theme, state.SelectedFolder());
     DrawSearch(dc, layout.search, theme, state);
 }

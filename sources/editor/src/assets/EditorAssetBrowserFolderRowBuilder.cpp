@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <set>
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace kb::editor {
 
@@ -12,7 +14,19 @@ std::vector<EditorAssetFolderRow> EditorAssetBrowserFolderRowBuilder::BuildTreeR
     const kb::assets::AssetManager& manager,
     const std::filesystem::path& selectedFolder,
     const std::unordered_set<std::string>& collapsedFolders) {
-    const std::set<std::string> folders = asset_browser::AllFolderPaths(manager);
+    const std::set<std::string> allFolders = asset_browser::AllFolderPaths(manager);
+    // The project's own folder (/Game) leads the tree; engine and plugin content follows it.
+    std::vector<std::string> folders;
+    folders.reserve(allFolders.size());
+    const auto inProject = [](const std::string& folder) {
+        return folder == "/Game" || folder.rfind("/Game/", 0) == 0;
+    };
+    for (const std::string& folder : allFolders) {
+        if (inProject(folder)) folders.push_back(folder);
+    }
+    for (const std::string& folder : allFolders) {
+        if (!inProject(folder)) folders.push_back(folder);
+    }
     std::unordered_set<std::string> parentsWithChildren;
     parentsWithChildren.reserve(folders.size());
     for (const std::string& folder : folders) {

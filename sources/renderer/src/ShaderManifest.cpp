@@ -50,6 +50,10 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_deferred_lighting.sc", .stage = ShaderStage::Fragment},
     // Optional: without it (no Metal variant is generated on Windows hosts) screen-space GI stays off.
     ShaderManifestEntry{.name = "fs_ssgi_resolve.sc", .stage = ShaderStage::Fragment, .required = false},
+    // Optional likewise: without them (no Metal variant is generated on Windows hosts) reflections keep
+    // the environment colour instead of the captured sky.
+    ShaderManifestEntry{.name = "fs_sky_capture.sc", .stage = ShaderStage::Fragment, .required = false},
+    ShaderManifestEntry{.name = "fs_sky_prefilter.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_mesh.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_gbuffer_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_instanced.sc", .stage = ShaderStage::Fragment},
@@ -60,7 +64,6 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_post_bloom_combine.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_post_bloom_prefilter.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_post_exposure_luminance.sc", .stage = ShaderStage::Fragment},
-    ShaderManifestEntry{.name = "fs_post_fxaa.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_post_motion_vectors.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_post_taa_resolve.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_particle_instanced.sc", .stage = ShaderStage::Fragment},
@@ -105,7 +108,6 @@ constexpr auto kRequiredPrograms = std::to_array<ShaderProgramManifestEntry>({
     ShaderProgramManifestEntry{.name = "post_bloom_blur", .vertexShader = "vs_present.sc", .fragmentShader = "fs_post_bloom_blur.sc"},
     ShaderProgramManifestEntry{.name = "post_bloom_combine", .vertexShader = "vs_present.sc", .fragmentShader = "fs_post_bloom_combine.sc"},
     ShaderProgramManifestEntry{.name = "post_exposure_luminance", .vertexShader = "vs_present.sc", .fragmentShader = "fs_post_exposure_luminance.sc"},
-    ShaderProgramManifestEntry{.name = "post_fxaa", .vertexShader = "vs_present.sc", .fragmentShader = "fs_post_fxaa.sc"},
     ShaderProgramManifestEntry{.name = "post_motion_vectors", .vertexShader = "vs_present.sc", .fragmentShader = "fs_post_motion_vectors.sc"},
     ShaderProgramManifestEntry{.name = "scene_mesh_motion_vectors", .vertexShader = "vs_mesh_motion_vectors_instanced.sc", .fragmentShader = "fs_mesh_motion_vectors.sc"},
     ShaderProgramManifestEntry{.name = "scene_mesh_skinned_motion_vectors", .vertexShader = "vs_mesh_skinned_motion_vectors_instanced.sc", .fragmentShader = "fs_mesh_motion_vectors.sc"},

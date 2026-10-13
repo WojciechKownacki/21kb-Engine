@@ -73,6 +73,14 @@ struct SceneRenderWorldBackdrop {
     std::uint64_t environmentAssetId = 0U;
     float horizonHeight = 0.0F;
     float gradientExponent = 1.0F;
+    // ProceduralSky only; mirrors WorldBackdropComponent (0 no sun disc, 1 simple, 2 high quality).
+    std::uint32_t sunDisk = 2U;
+    float sunSize = 0.04F;
+    float sunSizeConvergence = 5.0F;
+    float atmosphereThickness = 1.0F;
+    std::array<float, 3> skyTint{ 0.2140F, 0.2140F, 0.2140F };
+    std::array<float, 3> groundColor{ 0.1119F, 0.0999F, 0.0953F };
+    float exposure = 1.3F;
 };
 
 enum class SceneRenderAmbientRadianceMode : std::uint8_t {
@@ -95,7 +103,7 @@ struct SceneRenderAmbientRadiance {
     std::uint64_t environmentAssetId = 0U;
     float intensity = 1.0F;
     float diffuseIntensity = 1.0F;
-    float specularIntensity = 0.25F;
+    float specularIntensity = 1.0F;
 };
 
 enum class SceneRenderLightingPath : std::uint8_t {
@@ -175,6 +183,11 @@ struct SceneRenderMeshInstance {
     float customData0 = 0.0F;
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
+    // The model the instance had when the motion frame `previousModelFrame` began (RenderScene::MotionFrame).
+    // In any later motion frame the instance has not moved since, so its previous model is `model`
+    // (SceneRenderPreviousModel); 0 names no frame.
+    std::array<float, 16> previousModel{};
+    std::uint64_t previousModelFrame = 0U;
     RenderBoundsSphere worldBounds{};
     std::uint16_t depthBucket = 0;
     bool castsShadow = true;
@@ -192,6 +205,15 @@ struct SceneRenderMeshInstance {
     std::int32_t lodBias = 0;
     bool lodEnabled = true;
 };
+
+// The model an instance was drawn with in the previous motion frame, as seen from `motionFrame`: what it
+// recorded when it moved in this frame, its current model otherwise (Unreal's PreviousLocalToWorld).
+[[nodiscard]] inline const std::array<float, 16>& SceneRenderPreviousModel(
+    const SceneRenderMeshInstance& instance, std::uint64_t motionFrame) noexcept {
+    return instance.previousModelFrame != 0U && instance.previousModelFrame == motionFrame
+        ? instance.previousModel
+        : instance.model;
+}
 
 // A homogeneous generated range; origin bounds are padded by the resolved
 // section bound at submission. Ordinary mesh proxies keep per-instance culling.
@@ -295,7 +317,7 @@ struct SceneRenderLightingConfig {
     std::array<float, 3> environmentZenithColor{ 0.36F, 0.42F, 0.52F };
     std::array<float, 3> environmentGroundColor{ 0.08F, 0.075F, 0.065F };
     float environmentDiffuseIntensity = 1.0F;
-    float environmentSpecularIntensity = 0.25F;
+    float environmentSpecularIntensity = 1.0F;
     bool editorPreviewKeyLightEnabled = false;
     std::array<float, 3> editorPreviewKeyLightDirection{ 0.35F, -0.62F, 0.70F };
     std::array<float, 3> editorPreviewKeyLightColor{ 1.0F, 0.96F, 0.90F };
@@ -333,6 +355,10 @@ struct SceneRenderLightingConfig {
     bool contactShadowsEnabled = false;
     bool volumetricLightingEnabled = false;
     SceneRenderDebugView debugView = SceneRenderDebugView::None;
+    // The sky light's prefiltered cube (SceneSkyReflection) and its last mip; invalid while there is
+    // none, and reflections then use the environment colour.
+    bgfx::TextureHandle skyReflection = BGFX_INVALID_HANDLE;
+    float skyReflectionMaxMip = 0.0F;
 };
 
 // Cube shadows of up to four point lights share one depth atlas: face f of light s occupies the
@@ -391,6 +417,10 @@ struct SceneRenderSubmitStats {
     std::uint32_t submittedMeshCount = 0;
     std::uint32_t submittedDrawGroupCount = 0;
     std::uint32_t submittedDrawCallCount = 0;
+    // G-buffer draws of graph materials that write the model colour (the custom data target).
+    std::uint32_t shadingModelColorDrawCallCount = 0;
+    // Motion vector instances drawn with an uploaded previous model (draws with an instance that moved).
+    std::uint32_t motionVectorMovedInstanceCount = 0;
     std::uint32_t droppedInstanceCount = 0;
     std::uint32_t meshPipelineCommandCount = 0;
     std::uint32_t meshPipelineCommandCapacity = 0;
@@ -550,6 +580,12 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     UITextUnavailable,
     PostProcessProfileUnavailable,
     LightGridUnavailable,
+    // A motion vector draw whose instances moved could not upload their previous models (the per-frame rows
+    // are exhausted). The draw is skipped: those pixels keep the camera motion. `instanceCount` names how many.
+    MotionVectorPreviousModelsUnavailable,
+    // Instances simulated on the GPU (mesh particles) keep no previous transforms: their own motion is not
+    // written and their pixels keep the camera motion.
+    MotionVectorGpuInstancesUnsupported,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -608,6 +644,8 @@ struct SceneRenderDiagnostics {
     lhs.submittedMeshCount += rhs.submittedMeshCount;
     lhs.submittedDrawGroupCount += rhs.submittedDrawGroupCount;
     lhs.submittedDrawCallCount += rhs.submittedDrawCallCount;
+    lhs.shadingModelColorDrawCallCount += rhs.shadingModelColorDrawCallCount;
+    lhs.motionVectorMovedInstanceCount += rhs.motionVectorMovedInstanceCount;
     lhs.droppedInstanceCount += rhs.droppedInstanceCount;
     lhs.meshPipelineCommandCount += rhs.meshPipelineCommandCount;
     lhs.meshPipelineCommandCapacity += rhs.meshPipelineCommandCapacity;

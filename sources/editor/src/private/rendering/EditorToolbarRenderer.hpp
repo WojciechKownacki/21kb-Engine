@@ -57,8 +57,15 @@ public:
     [[nodiscard]] static std::optional<int> HitTestMenuRow(const EditorMenuRects& rects, int x, int y) noexcept;
     [[nodiscard]] static EditorTransportCommand HitTestTransport(const EditorToolbarRects& rects, int x, int y) noexcept;
     [[nodiscard]] static bool HitTestSave(const EditorToolbarRects& rects, int x, int y) noexcept;
+    // Everything the open menu's dropdown paints, its shadow included.
+    [[nodiscard]] static RECT MenuDropdownPaintBounds(const EditorMenuRects& menu) noexcept;
 
+    // The menu bar. The open menu's dropdown is not painted here: it hangs over the
+    // panels below, scene viewports included, so EditorToolbarMenuOverlayWindow
+    // shows it in a popup above them and paints it with PaintMenuDropdown.
     void PaintMenu(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorShellInteractionState& interaction) const;
+    // The open menu's dropdown at the dropdown and row rectangles `menu` holds.
+    void PaintMenuDropdown(HDC dc, const EditorMenuRects& menu, const EditorTheme& theme, const EditorShellInteractionState& interaction) const;
     void PaintToolbar(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode, const EditorShellInteractionState& interaction) const;
 #endif
 

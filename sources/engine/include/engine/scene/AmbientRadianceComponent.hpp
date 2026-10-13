@@ -33,7 +33,9 @@ struct AmbientRadianceComponent {
     std::uint64_t environmentAssetId = 0U;
     float intensity = 1.0F;
     float diffuseIntensity = 1.0F;
-    float specularIntensity = 0.25F;
+    // Reflections of the surroundings at full strength by default, as Unity's Reflection Intensity
+    // Multiplier and Unreal's SkyLight intensity (the sky light capture makes them the real sky).
+    float specularIntensity = 1.0F;
     std::int32_t priority = 0;
     bool enabled = true;
 };

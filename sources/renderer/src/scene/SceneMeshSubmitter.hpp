@@ -51,7 +51,7 @@ public:
         bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE,
         bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE,
         bool terrainLayersOnly = false,
-        std::array<float, 16> motionVectorPreviousViewProjection = {},
+        const SceneMotionVectorFrame* motionVectors = nullptr,
         ParticleGpuRenderer* particleRenderer = nullptr,
         const kb::particles::ParticleRenderSnapshot* particleSnapshot = nullptr,
         std::span<const ParticleGpuMeshDraw> gpuMeshDraws = {}) const;
@@ -80,6 +80,7 @@ public:
         passResources_.EndFrame(frameIndex);
     }
     void SetGraphShaderCacheRoot(std::string root) { passResources_.SetGraphShaderCacheRoot(std::move(root)); }
+    [[nodiscard]] bool SubmitScreenMaterial(const SceneMeshScreenMaterialDesc& desc) const { return passResources_.SubmitScreenMaterial(desc); }
     void SetSkinningPaletteAllocator(const RenderSkinningPaletteAllocator* allocator) noexcept { skinningPaletteAllocator_ = allocator; }
 
 private:

@@ -1,4 +1,5 @@
 #include "app/pointer/EditorLeftButtonDoubleClickRouter.hpp"
+#include "localization/EditorLocalization.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
@@ -131,7 +132,7 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
                             }
                         }
                         const std::optional<std::string> text = EditorMaterialParameterValueDialog::Show(
-                            messageWindow, "Comment", comment != nullptr ? comment->text : std::string{});
+                            messageWindow, EditorText("materialEditor.comment", "Comment"), comment != nullptr ? comment->text : std::string{});
                         if (text.has_value()) {
                             static_cast<void>(sceneContext_.SetMaterialGraphCommentText(materialId, *commentId, *text));
                         }

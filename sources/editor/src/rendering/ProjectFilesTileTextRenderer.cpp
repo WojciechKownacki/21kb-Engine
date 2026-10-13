@@ -4,6 +4,7 @@
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <algorithm>
 #include <string>
@@ -22,7 +23,7 @@ using Draw = ProjectFilesPanelDrawing;
     }
 
     SIZE size{};
-    GetTextExtentPoint32A(dc, text.data(), static_cast<int>(text.size()), &size);
+    kb::editor::GetTextExtentPoint32Utf8(dc, text.data(), static_cast<int>(text.size()), &size);
     return size.cx;
 }
 
@@ -118,7 +119,7 @@ void ProjectFilesTileTextRenderer::PaintWrapped(HDC dc, RECT rect, const char* t
     int top = rect.top + std::max(0, (Draw::RectHeight(rect) - blockHeight) / 2);
     for (const std::string& line : lines) {
         RECT lineRect{ rect.left, top, rect.right, top + lineHeight };
-        DrawTextA(dc, line.c_str(), -1, &lineRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        kb::editor::DrawTextUtf8(dc, line.c_str(), -1, &lineRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         top += lineHeight;
     }
 }

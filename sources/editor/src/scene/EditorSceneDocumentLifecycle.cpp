@@ -7,6 +7,7 @@
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "scene/audio/EditorSceneAudioSettingsService.hpp"
+#include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -21,11 +22,12 @@
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
+#include "engine/assets/AssetImportPreset.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialParameterValidation.hpp"
 #include "project/EditorProjectPaths.hpp"
-#include "scene/EditorDefaultSceneFactory.hpp"
+#include "engine/scene/SceneTemplates.hpp"
 #include "scene/EditorPlayCameraResolver.hpp"
 #include "scene/EditorSceneDocumentAssetLoaders.hpp"
 
@@ -139,6 +141,8 @@ void RegisterEditorSceneDocumentAssetLoaders(kb::scene::Scene& scene) {
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialParameterCollectionAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialTypeAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::PostProcessProfileAssetLoader>()));
+    // Import presets (.kbimportpreset): Project Files lists them and the import dialog offers them.
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::assets::AssetImportPresetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()));
     kb::render::InstallRuntimeMaterialParameterValidation(scene);
     // ParticleEffectAssetLoader is registered unconditionally by every kb::scene::Scene's own
@@ -169,6 +173,12 @@ void EditorSceneContext::DiscardDirtySceneDocument(std::string_view reason) {
 void EditorSceneContext::SetRenderSceneReleaseHandler(
     std::function<void(const kb::scene::Scene&)> handler) {
     renderSceneReleaseHandler_ = std::move(handler);
+    // The material previews render through the same renderer as the main scene.
+    for (EditorMaterialPreviewScene* preview : { materialPreviewScene_.get(), inspectorMaterialPreviewScene_.get(), materialThumbnailScene_.get() }) {
+        if (preview != nullptr) {
+            preview->SetReleaseHandler(renderSceneReleaseHandler_);
+        }
+    }
 }
 
 void EditorSceneContext::ReleaseRenderedSceneResources() {
@@ -203,11 +213,9 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
         return false;
     }
     trace.Phase(phaseStarted, "transition=begin phase=pending-plugin-reload");
-    phaseStarted = std::chrono::steady_clock::now();
-    if (!SaveDirtySceneDocument("entering play mode")) {
-        return false;
-    }
-    trace.Phase(phaseStarted, "transition=begin phase=save-dirty-scene");
+    // Like Unity and Unreal, Play runs the scene as it is in the editor, saved or not: the snapshot below
+    // brings the edited scene back afterwards, still unsaved when it was.
+    playModeDocumentWasDirty_ = sceneDocumentDirty_;
     kb::audio::AudioPlayback::StopAll(*scene_);
 
     // Asset authoring paths publish or invalidate the edited asset at the mutation
@@ -219,7 +227,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     trace.Phase(phaseStarted, "transition=begin phase=physics-layers");
 
     phaseStarted = std::chrono::steady_clock::now();
-    const std::string name = currentScenePath_.stem().string().empty() ? std::string{ "Main" } : currentScenePath_.stem().string();
+    const std::string name = SceneDocumentName(currentScenePath_);
     playModeSelectionSnapshot_.CaptureAuthoredHierarchy(*scene_);
     playModeRenderTopologyVersion_ = 0U;
     playModeRenderTopologyVersionInitialized_ = false;
@@ -288,6 +296,10 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
     playModeSelectionSnapshot_.Clear();
     ResetSceneEditState();
     ClearSceneDocumentDirty();
+    if (playModeDocumentWasDirty_) {
+        MarkSceneDocumentDirty();
+    }
+    playModeDocumentWasDirty_ = false;
     playCameraEntity_ = {};
     playModeRenderTopologyVersion_ = 0U;
     playModeRenderTopologyVersionInitialized_ = false;
@@ -318,12 +330,17 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     if (RejectWhilePrefabEditing() || !RestorePlayModeSceneSession()) {
         return false;
     }
-    if (!SaveDirtySceneDocument("reloading project plugins")) {
+    // A partitioned world reopens from its files, so it is saved first; a scene is carried over as
+    // edited - saved or not - and stays unsaved when it was.
+    const bool reloadFromWorld = worldPartition_.IsOpen();
+    if (reloadFromWorld && !SaveDirtySceneDocument("reloading project plugins")) {
         return false;
     }
-    if (currentScenePath_.empty() && !SaveCurrentScene()) {
-        console_.Error("Project", "Scene could not be saved before reloading project plugins.");
-        return false;
+    const bool documentWasDirty = sceneDocumentDirty_ && !reloadFromWorld;
+    // Unsaved edits are carried over from memory; a scene without any is read from its file as before.
+    std::optional<kb::scene::SceneDocument> edited;
+    if (documentWasDirty) {
+        edited = kb::scene::SceneDocumentService::Capture(*scene_, SceneDocumentName(currentScenePath_));
     }
 
     if (scriptModuleHost_ != nullptr) {
@@ -360,10 +377,24 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         for (const kb::world::WorldCellCoord& cell : cells) {
             static_cast<void>(worldPartition_.Session().LoadRegion(cell, cell, error));
         }
+    } else if (edited.has_value()) {
+        loaded.document = std::move(*edited);
+        loaded.succeeded = true;
+        if (!kb::scene::SceneDocumentService::LoadIntoScene(*nextScene, loaded.document)) {
+            console_.Error("Project", "Scene could not be rebuilt with the new plugin settings: " +
+                currentScenePath_.generic_string() + ". The scene file was not changed.");
+            return false;
+        }
     } else if (!currentScenePath_.empty()) {
         loaded = kb::scene::SceneDocumentService::Load(currentScenePath_);
-        if (!loaded.succeeded || !kb::scene::SceneDocumentService::LoadIntoScene(*nextScene, loaded.document)) {
-            console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string());
+        if (!loaded.succeeded) {
+            console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string() + " could not be read" +
+                (loaded.error.empty() ? std::string{ "." } : ": " + loaded.error));
+            return false;
+        }
+        if (!kb::scene::SceneDocumentService::LoadIntoScene(*nextScene, loaded.document)) {
+            console_.Error("Project", "Scene could not be reloaded: the content of " + currentScenePath_.generic_string() +
+                " could not be built into the scene.");
             return false;
         }
     }
@@ -377,13 +408,16 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
     ClearSceneDocumentDirty();
+    if (documentWasDirty) {
+        MarkSceneDocumentDirty();
+    }
     console_.Info("Project", "Reloaded scene with current project plugin settings.");
     UpgradePrefabLinksOnSave(loaded.document);
     CompleteLoadedUIComponents();
     return true;
 }
 
-bool EditorSceneContext::NewScene(EditorDirtySceneResolution dirtyResolution) {
+bool EditorSceneContext::NewScene(EditorDirtySceneResolution dirtyResolution, kb::scene::SceneTemplate sceneTemplate) {
     if (RejectWhilePrefabEditing() || !RestorePlayModeSceneSession()) {
         return false;
     }
@@ -399,13 +433,59 @@ bool EditorSceneContext::NewScene(EditorDirtySceneResolution dirtyResolution) {
     EditorSceneAudioSettingsService::ResetForNewDocument(*scene_);
     ReleaseRenderedSceneResources();
 
-    hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
+    if (std::string filled = kb::scene::SceneTemplates::Fill(*scene_, sceneTemplate, Project()); !filled.empty()) {
+        console_.Error("Project", filled);
+    }
+    SelectFirstSceneEntityOrClear();
     currentScenePath_ = EditorProjectPaths::UniqueScenePath("Untitled");
     AdvanceSceneDocumentGeneration();
     ResetSceneEditState();
     MarkSceneDocumentDirty();
     console_.Info("Project", "New scene created: " + currentScenePath_.generic_string());
     return true;
+}
+
+std::string EditorSceneContext::NewScenePathError(std::string_view folder, std::string_view name) const {
+    return kb::scene::SceneTemplates::ResolveNewScene(EditorProjectPaths::ProjectRoot(), folder, name).error;
+}
+
+bool EditorSceneContext::CreateScene(std::string_view folder, std::string_view name, kb::scene::SceneTemplate sceneTemplate,
+    bool setAsStartupScene, EditorDirtySceneResolution dirtyResolution) {
+    if (RejectWhilePrefabEditing() || !RestorePlayModeSceneSession()) {
+        return false;
+    }
+    const kb::scene::NewScenePath target =
+        kb::scene::SceneTemplates::ResolveNewScene(EditorProjectPaths::ProjectRoot(), folder, name);
+    if (!target.error.empty()) {
+        console_.Error("Project", "Scene could not be created: " + target.error);
+        return false;
+    }
+    // The open scene is settled first, so a cancelled or failed save leaves no new file behind.
+    if (!PrepareDirtySceneTransition("creating a new scene", dirtyResolution)) {
+        return false;
+    }
+    if (std::string created = kb::scene::SceneTemplates::WriteSceneFile(target.file, sceneTemplate, Project()); !created.empty()) {
+        console_.Error("Project", "Scene could not be created: " + created);
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Discover());
+    if (!OpenScene(target.file, EditorDirtySceneResolution::Discard)) {
+        return false;
+    }
+    if (setAsStartupScene) {
+        projectConfig_.defaultMap = target.virtualPath;
+        static_cast<void>(SaveProjectConfiguration());
+    }
+    console_.Info("Project", "Scene created: " + target.virtualPath + " (template " +
+        std::string{ kb::scene::SceneTemplates::Name(sceneTemplate) } + ")" +
+        (setAsStartupScene ? std::string{ "; the game now starts in it." } : std::string{ "." }));
+    return true;
+}
+
+// The scene document's name: the file's name in UTF-8 (any letters), "Main" for a path without one.
+std::string EditorSceneContext::SceneDocumentName(const std::filesystem::path& scenePath) {
+    const std::u8string stem = scenePath.stem().u8string();
+    return stem.empty() ? std::string{ "Main" } : std::string{ reinterpret_cast<const char*>(stem.data()), stem.size() };
 }
 
 bool EditorSceneContext::OpenDefaultScene() {
@@ -431,8 +511,21 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
         return false;
     }
     worldPartition_.Close();
+    // Loading replaces the open scene's objects before it can fail; the scene that was open comes
+    // back then, so a later save can never write an empty scene over its file.
+    const kb::scene::SceneDocument previous = kb::scene::SceneDocumentService::Capture(*scene_, SceneDocumentName(currentScenePath_));
     if (!kb::scene::SceneDocumentService::LoadIntoScene(*scene_, loaded.document)) {
-        console_.Error("Project", "Scene could not be instantiated: " + scenePath.generic_string());
+        const bool restored = kb::scene::SceneDocumentService::LoadIntoScene(*scene_, previous);
+        console_.Error("Project", "Scene could not be instantiated: " + scenePath.generic_string() +
+            (restored ? std::string{ ". The scene that was open is still open." } : std::string{}));
+        if (!restored) {
+            for (const kb::scene::SceneEntity root : scene_->Hierarchy().RootEntities()) {
+                scene_->Entities().Destroy(root);
+            }
+            StartUntitledBasicScene();
+        }
+        ReleaseRenderedSceneResources();
+        AdvanceSceneDocumentGeneration();
         return false;
     }
     EditorSceneAudioSettingsService::PrepareDocument(*scene_);
@@ -570,6 +663,14 @@ bool EditorSceneContext::SaveCurrentSceneAs(const std::filesystem::path& path) {
         console_.Warning("Project", "Save As ignored while play mode is active. Stop play mode before saving.");
         return false;
     }
+    std::error_code error;
+    const std::filesystem::path assets = std::filesystem::weakly_canonical(EditorProjectPaths::AssetsRoot(), error);
+    const std::filesystem::path relative = std::filesystem::weakly_canonical(path, error).lexically_relative(assets);
+    if (error || relative.empty() || *relative.begin() == "..") {
+        console_.Error("Project", "Scenes are saved inside the project's Assets folder (" + assets.generic_string() +
+            "); nothing was saved to " + path.generic_string() + ".");
+        return false;
+    }
     return SaveSceneToPath(path);
 }
 
@@ -624,7 +725,7 @@ bool EditorSceneContext::SaveSceneToPath(const std::filesystem::path& path) {
     }
     trace.Phase(phaseStarted, "phase=create-directory");
 
-    const std::string name = scenePath.stem().string().empty() ? std::string{ "Main" } : scenePath.stem().string();
+    const std::string name = SceneDocumentName(scenePath);
     phaseStarted = std::chrono::steady_clock::now();
     if (!kb::scene::SceneDocumentService::Save(*scene_, scenePath, name)) {
         console_.Error("Project", "Scene could not be saved: " + scenePath.generic_string());

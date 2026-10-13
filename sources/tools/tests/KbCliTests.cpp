@@ -3,6 +3,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/BuiltInShapes.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
@@ -15,6 +16,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -22,19 +24,32 @@
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/security/ReleaseKeys.hpp"
 #include "engine/world/WorldCellIndex.hpp"
 #include "engine/world/WorldDescriptor.hpp"
 #include "engine/world/WorldObjectFile.hpp"
+#include "engine/assets/ImportedAsset.hpp"
+#include "engine/assets/ImportedAssetLoader.hpp"
+#if KB_CLI_RENDERER
+#include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <memory>
 #include <span>
 #include <sstream>
 #include <string>
@@ -55,6 +70,10 @@ void Require(bool condition, const char* message) {
         std::fputs("\n", stderr);
         std::exit(EXIT_FAILURE);
     }
+}
+
+void Require(bool condition, const std::string& message) {
+    Require(condition, message.c_str());
 }
 
 [[nodiscard]] std::filesystem::path TestRoot() {
@@ -220,6 +239,16 @@ void RunValidateCommandTests() {
     const CommandRun bad = Run(&kb::cli::RunValidateCommand, { "--project", root, "Assets/Logic/Broken.lua" });
     Require(bad.exitCode == 1, "validate passed a broken script");
     Require(Contains(bad.output, "FAIL"), "validate did not report FAIL");
+
+    // A script written the Unity way loads, but its callbacks are never called: validate says so.
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "UnityStyle.lua",
+        "function OnStart(self)\nend\n\nlocal function helper() end\n\nfunction Update(self, dt)\nend\n");
+    const CommandRun unity = Run(&kb::cli::RunValidateCommand, { "--project", root, "Assets/Logic/UnityStyle.lua" });
+    Require(unity.exitCode == 0 && Contains(unity.output, "(2 warnings)") &&
+            Contains(unity.output, "UnityStyle.lua:1: OnStart() is never called - 21kb calls Ready(self, dt)") &&
+            Contains(unity.output, "UnityStyle.lua:6: Update() is never called - 21kb calls Tick(self, dt)"),
+        "validate must name the Unity-style callbacks a script defines: " + unity.output);
+    Require(!Contains(good.output, "WARN"), "a script with 21kb hooks must validate without warnings");
 }
 
 void RunImportCommandTests() {
@@ -664,7 +693,7 @@ function Tick(self, dt)
             and not Physics.Sleep(0) and not Physics.Wake(0) and not Physics.IsSleeping(0) then
             -- A loaded backend must also reject the wrong *live* body kind,
             -- not only an unknown entity. Rigidbody controls are Dynamic
-            -- only; Kinematic bodies accept only MoveKinematic.
+            -- only; Kinematic bodies accept only MoveKinematic and report its velocity.
             local staticRejected = not Physics.AddForce(queryTarget, 1.0, 0.0, 0.0)
                 and not Physics.AddImpulse(queryTarget, 1.0, 0.0, 0.0)
                 and not Physics.SetVelocity(queryTarget, 1.0, 0.0, 0.0)
@@ -676,7 +705,7 @@ function Tick(self, dt)
             local kinematicRejected = not Physics.AddForce(kinematicBody, 1.0, 0.0, 0.0)
                 and not Physics.AddImpulse(kinematicBody, 1.0, 0.0, 0.0)
                 and not Physics.SetVelocity(kinematicBody, 1.0, 0.0, 0.0)
-                and kinematicVelocity ~= nil and not kinematicVelocity.found
+                and kinematicVelocity ~= nil and kinematicVelocity.found
                 and not Physics.SetAngularVelocity(kinematicBody, 0.0, 0.0, 1.0)
                 and kinematicAngularVelocity ~= nil and not kinematicAngularVelocity.found
                 and not Physics.Sleep(kinematicBody) and not Physics.Wake(kinematicBody) and not Physics.IsSleeping(kinematicBody)
@@ -2027,6 +2056,342 @@ void RunProjectileTemplateTests() {
         "LIB-129 CLI failure-path test did not restore the valid production fixture settings");
 }
 
+// `kb_cli new` makes the project the Hub makes, without a window.
+void RunNewCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "new_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    const CommandRun created = Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Gra" });
+    Require(created.exitCode == 0, "new failed");
+    const std::filesystem::path project = parent / "Gra" / "Gra.21kbproject";
+    Require(kb::project::ProjectManager::LoadProject(project).succeeded, "new did not write a loadable project");
+    Require(kb::scene::SceneDocumentService::Load(parent / "Gra" / "Assets" / "Scenes" / "Main.21kbscene").succeeded,
+        "new did not write the startup scene the settings point to");
+    Require(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(parent / "Gra")).found,
+        "new did not write the project settings");
+    // The project directory alone is enough to run it, whatever the descriptor's name.
+    const CommandRun ran = Run(&kb::cli::RunRunCommand,
+        { "--project", (parent / "Gra").string(), "--scene", "/Game/Scenes/Main.21kbscene", "--frames", "1" });
+    Require(ran.exitCode == 0, "a new project could not be run from its directory");
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Gra" }).exitCode != 0,
+        "new over an existing project must be refused");
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "zla nazwa" }).exitCode != 0,
+        "new with an invalid name must be refused");
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "CON" }).exitCode != 0,
+        "new with a name Windows reserves must be refused");
+
+    // The startup scene is made from the Basic template: camera, sun, sky and floor, ready for Play.
+    const auto rootNames = [](const std::filesystem::path& scenePath) {
+        kb::scene::Scene scene;
+        const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(scenePath);
+        Require(loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(scene, loaded.document),
+            "a new scene could not be reloaded");
+        std::vector<std::string> names;
+        for (const kb::scene::SceneEntity root : scene.Hierarchy().RootEntities()) {
+            names.emplace_back(scene.Entities().Name(root));
+        }
+        return names;
+    };
+    Require(rootNames(parent / "Gra" / "Assets" / "Scenes" / "Main.21kbscene") ==
+            std::vector<std::string>{ "Main Camera", "Sun", "Environment", "Plane" },
+        "a new project's startup scene must hold the Basic template's camera, sun, sky and floor");
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Pusty", "--template", "Empty" }).exitCode == 0 &&
+            rootNames(parent / "Pusty" / "Assets" / "Scenes" / "Main.21kbscene").empty(),
+        "new --template Empty must start from an empty scene");
+
+    // Nothing the user already has is overwritten: a folder holding an Assets folder is refused
+    // and left exactly as it was.
+    const std::filesystem::path busy = parent / "Zajety";
+    std::filesystem::create_directories(busy / "Assets" / "Scenes");
+    {
+        std::ofstream keep{ busy / "Assets" / "Scenes" / "Main.21kbscene" };
+        keep << "user scene";
+    }
+    const CommandRun refused = Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Zajety" });
+    Require(refused.exitCode != 0 && Contains(refused.output, "already exists and is not empty"),
+        "new into a folder that is not empty must be refused by name");
+    std::ifstream kept{ busy / "Assets" / "Scenes" / "Main.21kbscene" };
+    Require(std::string{ std::istreambuf_iterator<char>{ kept }, {} } == "user scene" &&
+            !std::filesystem::exists(busy / "Zajety.21kbproject"),
+        "a refused new must leave the user's files untouched");
+
+    // Polish letters: the name reaches the disk as the same UTF-8 name.
+    const std::string race = "Wy\xC5\x9B" "cig";
+    const CommandRun polish = Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", race });
+    Require(polish.exitCode == 0, "new with a Polish name failed: " + polish.output);
+    const std::u8string raceUtf8{ reinterpret_cast<const char8_t*>(race.data()), race.size() };
+    Require(std::filesystem::exists(parent / std::filesystem::path{ raceUtf8 } / std::filesystem::path{ raceUtf8 + u8".21kbproject" }),
+        "a Polish project name must be written in UTF-8");
+    std::filesystem::remove_all(parent, error);
+}
+
+// File > New Scene without the editor: templates, names, folders and the startup scene.
+void RunSceneNewCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "scene_new_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Sceny", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path root = parent / "Sceny";
+    const std::string project = root.string();
+
+    const CommandRun created = Run(&kb::cli::RunSceneNewCommand, { "--project", project, "--name", "Level1" });
+    Require(created.exitCode == 0 && Contains(created.output, "Scene created: /Game/Scenes/Level1.21kbscene (template Basic)."),
+        "scene-new did not create the Basic scene: " + created.output);
+    kb::scene::Scene level;
+    const kb::scene::SceneDocumentLoadResult loaded =
+        kb::scene::SceneDocumentService::Load(root / "Assets" / "Scenes" / "Level1.21kbscene");
+    Require(loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(level, loaded.document) &&
+            level.Hierarchy().RootEntities().size() == 4U,
+        "scene-new must write the Basic template's four objects");
+
+    const auto refusedWith = [&](std::vector<std::string> arguments, std::string_view reason) {
+        arguments.insert(arguments.begin(), { "--project", project });
+        const CommandRun run = Run(&kb::cli::RunSceneNewCommand, arguments);
+        Require(run.exitCode != 0 && Contains(run.output, reason), "scene-new must refuse with '" + std::string{ reason } +
+            "', got: " + run.output);
+    };
+    refusedWith({ "--name", "Level1" }, "already exists");
+    refusedWith({ "--name", "Lev:el" }, "can't contain the character ':'");
+    refusedWith({ "--name", "NUL" }, "reserves for devices");
+    refusedWith({ "--name", "Level2." }, "can't end with a space or a dot");
+    refusedWith({ "--name", "Level2", "--folder", "Saved" }, "must be inside Assets");
+    refusedWith({ "--name", "Level2", "--folder", "Assets/../Saved" }, "reserved names");
+    refusedWith({ "--name", "Level2", "--template", "Fancy" }, "unknown template 'Fancy'");
+
+    const CommandRun startup = Run(&kb::cli::RunSceneNewCommand, { "--project", project, "--name", "Arena",
+        "--folder", "/Game/Levels", "--template", "empty", "--default", "yes" });
+    Require(startup.exitCode == 0 && std::filesystem::exists(root / "Assets" / "Levels" / "Arena.21kbscene"),
+        "scene-new into a virtual folder failed: " + startup.output);
+    Require(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root)).settings.defaultMap ==
+            "/Game/Levels/Arena.21kbscene",
+        "scene-new --default yes must make the scene the one the game starts in");
+
+    const std::string meadow = "\xC5\x81\xC4\x85ka";
+    Require(Run(&kb::cli::RunSceneNewCommand, { "--project", project, "--name", meadow }).exitCode == 0,
+        "scene-new with a Polish name failed");
+    std::filesystem::remove_all(parent, error);
+}
+
+// Scripts without the editor: script-new writes what the Create menu writes, never over a file,
+// and script-build runs each C++ script's build as Play and the cooker do.
+void RunScriptCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "script_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Skrypty", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path root = parent / "Skrypty";
+    const std::string project = root.string();
+
+    const CommandRun lua = Run(&kb::cli::RunScriptNewCommand, { "--project", project, "--name", "Player", "--language", "lua" });
+    Require(lua.exitCode == 0 && Contains(lua.output, "Lua script created: /Game/Scripts/Player.lua"),
+        "script-new did not create the Lua script: " + lua.output);
+    std::ifstream luaFile{ root / "Assets" / "Scripts" / "Player.lua" };
+    const std::string luaSource{ std::istreambuf_iterator<char>{ luaFile }, {} };
+    Require(Contains(luaSource, "function Ready(self, dt)") && Contains(luaSource, "function Tick(self, dt)"),
+        "script-new must write the Lua template with Ready and Tick");
+    luaFile.close();
+    WriteTextFile(root / "Assets" / "Scripts" / "Player.lua", "-- the user's own code\n");
+
+    const auto refusedWith = [&](std::vector<std::string> arguments, std::string_view reason) {
+        arguments.insert(arguments.begin(), { "--project", project });
+        const CommandRun run = Run(&kb::cli::RunScriptNewCommand, arguments);
+        Require(run.exitCode != 0 && Contains(run.output, reason), "script-new must refuse with '" + std::string{ reason } +
+            "', got: " + run.output);
+    };
+    refusedWith({ "--name", "Player", "--language", "lua" }, "already exists");
+    std::ifstream kept{ root / "Assets" / "Scripts" / "Player.lua" };
+    Require(std::string{ std::istreambuf_iterator<char>{ kept }, {} } == "-- the user's own code\n",
+        "a refused script-new must leave the user's script untouched");
+    refusedWith({ "--name", "Pla:yer", "--language", "lua" }, "can't contain the character ':'");
+    refusedWith({ "--name", "Enemy", "--language", "python" }, "unknown language 'python'");
+    refusedWith({ "--name", "Enemy", "--language", "lua", "--folder", "Saved" }, "must be inside Assets");
+    refusedWith({ "--name", "Enemy" }, "requires --project <dir> --name <Name> --language lua|cpp");
+    refusedWith({ "--name", "2Fast", "--language", "cpp" }, "its class name");
+    refusedWith({ "--name", "Gracz\xC5\x82", "--language", "cpp" }, "its class name");
+    refusedWith({ "--name", "class", "--language", "cpp" }, "C++ keyword");
+    const std::string polish = "Gracz\xC5\x82";
+    Require(Run(&kb::cli::RunScriptNewCommand, { "--project", project, "--name", polish, "--language", "lua", "--folder", "/Game/Logic" })
+                .exitCode == 0,
+        "script-new with a Polish Lua name into a virtual folder failed");
+
+#if defined(_WIN32)
+    // The C++ script builds against the engine kb_cli_tests itself was built from.
+    const CommandRun cpp = Run(&kb::cli::RunScriptNewCommand, { "--project", project, "--name", "Enemy", "--language", "cpp" });
+    Require(cpp.exitCode == 0 && Contains(cpp.output, "C++ script created: /Game/Scripts/Enemy.native") &&
+            Contains(cpp.output, "Source/NativeScripts/Enemy/Enemy.cpp"),
+        "script-new did not create the C++ script: " + cpp.output);
+    for (const std::filesystem::path& file : { root / "Assets" / "Scripts" / "Enemy.native",
+             root / "Source" / "NativeScripts" / "Enemy" / "Enemy.cpp", root / "Source" / "NativeScripts" / "Enemy" / "CMakeLists.txt" }) {
+        Require(std::filesystem::is_regular_file(file), "script-new did not write " + file.generic_string());
+    }
+    // A name the C++ script's source folder already has is taken, even from another Assets folder.
+    refusedWith({ "--name", "Enemy", "--language", "cpp", "--folder", "Assets/Other" }, "Source/NativeScripts/Enemy");
+#endif
+
+    // script-build: one built, one failing, one without a build command; the exit code says it.
+    const std::filesystem::path builds = TestRoot() / "script_build_project";
+    std::filesystem::remove_all(builds, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", builds.string(), "--name", "Budowa", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path buildRoot = builds / "Budowa";
+    const std::string buildProject = buildRoot.string();
+    Require(Run(&kb::cli::RunScriptBuildCommand, { "--project", buildProject }).output.find("no C++ scripts") != std::string::npos,
+        "script-build must say when a project has no C++ scripts");
+    WriteTextFile(buildRoot / "Binaries" / "NativeScripts" / "Good.dll", "module");
+    WriteTextFile(buildRoot / "Assets" / "Scripts" / "Good.native",
+        "name = Good\nsymbol = project.Good\nmodule = ../../Binaries/NativeScripts/Good.dll\nbuild = exit 0\n");
+    const CommandRun good = Run(&kb::cli::RunScriptBuildCommand, { "--project", buildProject, "--script", "/Game/Scripts/Good.native" });
+    Require(good.exitCode == 0 && Contains(good.output, "Built /Game/Scripts/Good.native: Binaries/NativeScripts/Good.dll"),
+        "script-build of a script that builds failed: " + good.output);
+
+    WriteTextFile(buildRoot / "Assets" / "Scripts" / "Broken.native",
+        "name = Broken\nsymbol = project.Broken\nmodule = ../../Binaries/NativeScripts/Broken.dll\nbuild = exit 3\n");
+    WriteTextFile(buildRoot / "Assets" / "Scripts" / "Silent.native",
+        "name = Silent\nsymbol = project.Silent\nmodule = ../../Binaries/NativeScripts/Silent.dll\nbuild = exit 0\n");
+    const CommandRun all = Run(&kb::cli::RunScriptBuildCommand, { "--project", buildProject });
+    Require(all.exitCode == 1 && Contains(all.output, "/Game/Scripts/Broken.native: native script build command failed with exit code") &&
+            Contains(all.output, "/Game/Scripts/Silent.native: the build command succeeded but did not write") &&
+            Contains(all.output, "C++ scripts: 1 ready, 2 failed."),
+        "script-build must name each script that does not build: " + all.output);
+    const CommandRun notScript = Run(&kb::cli::RunScriptBuildCommand, { "--project", buildProject, "--script", "Assets/Scripts" });
+    Require(notScript.exitCode == 1, "script-build of something that is not a C++ script must fail: " + notScript.output);
+    std::filesystem::remove_all(builds, error);
+    std::filesystem::remove_all(parent, error);
+}
+
+// An agent builds a scene without the editor: entities, transform in degrees, components and
+// their properties land in the project's startup scene.
+void RunEntityComponentCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "entity_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Scena", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::string project = (parent / "Scena").string();
+
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--name", "Sun", "--position", "0,3,0",
+        "--rotation", "35,30,0" }).exitCode == 0, "entity add failed");
+    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "Light",
+        "--set", "intensity=2.5", "--set", "color=1,0.5,0.25" }).exitCode == 0, "component add with settings failed");
+    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "Light" }).exitCode != 0,
+        "a second Light must be refused");
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "Light",
+        "--set", "nosuch=1" }).exitCode != 0, "an unknown property must be refused");
+    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Nobody", "--type", "Camera" }).exitCode != 0,
+        "a missing entity must be refused");
+    // Engine shapes exist in every project, like Unreal's /Engine/BasicShapes.
+    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "MeshRenderer",
+        "--set", "mesh=/Engine/Shapes/Plane" }).exitCode == 0, "an engine shape could not be assigned");
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "MeshRenderer",
+        "--set", "mesh=/Game/NoSuch.obj" }).exitCode != 0, "a missing mesh must be refused");
+    // Procedural sky settings with Unity's Skybox/Procedural ranges.
+    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "WorldBackdrop",
+        "--set", "mode=3", "--set", "sunDisk=1", "--set", "sunSize=0.1", "--set", "skyTint=0.5,0.2,0.1", "--set", "exposure=2" }).exitCode == 0,
+        "procedural sky settings could not be written");
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "WorldBackdrop",
+        "--set", "sunSize=2" }).exitCode != 0, "a sun size outside 0..1 must be refused");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneDocumentLoadResult loaded =
+        kb::scene::SceneDocumentService::Load(parent / "Scena" / "Assets" / "Scenes" / "Main.21kbscene");
+    Require(loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(scene, loaded.document), "scene could not be reloaded");
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    Require(roots.size() == 1U && scene.Entities().Name(roots.front()) == "Sun", "the scene must hold exactly the Sun");
+    const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(roots.front());
+    Require(transform != nullptr && std::abs(transform->localPosition.y - 3.0F) < 0.0001F, "position was not written");
+    const kb::math::Vec3 degrees = kb::math::ToEulerDegrees(transform->localRotation);
+    Require(std::abs(degrees.x - 35.0F) < 0.01F && std::abs(degrees.y - 30.0F) < 0.01F, "rotation was not written in degrees");
+    const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(roots.front());
+    Require(light != nullptr && std::abs(light->intensity - 2.5F) < 0.0001F && std::abs(light->color.y - 0.5F) < 0.0001F,
+        "light properties were not written");
+    const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(roots.front());
+    Require(renderer != nullptr &&
+            renderer->meshAssetId == kb::assets::BuiltInShapeId(kb::assets::BuiltInShape::Plane).value,
+        "the engine Plane was not written as the mesh");
+    const kb::scene::WorldBackdropComponent* sky = scene.Components().WorldBackdrops().TryGet(roots.front());
+    Require(sky != nullptr && sky->mode == kb::scene::WorldBackdropMode::ProceduralSky &&
+            sky->sunDisk == kb::scene::WorldBackdropSunDisk::Simple && std::abs(sky->sunSize - 0.1F) < 0.0001F &&
+            std::abs(sky->skyTint.y - 0.2F) < 0.0001F && std::abs(sky->exposure - 2.0F) < 0.0001F &&
+            std::abs(sky->atmosphereThickness - 1.0F) < 0.0001F,
+        "procedural sky settings were not saved");
+
+    // --create makes what the editor's Create menu makes: a Cube is the engine cube with a fitted collider.
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Cube", "--parent", "Sun" }).exitCode == 0,
+        "entity add --create Cube failed");
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Teapot" }).exitCode != 0,
+        "an unknown Create item must be refused");
+    kb::scene::Scene withCube;
+    const kb::scene::SceneDocumentLoadResult reloaded =
+        kb::scene::SceneDocumentService::Load(parent / "Scena" / "Assets" / "Scenes" / "Main.21kbscene");
+    Require(reloaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(withCube, reloaded.document), "scene could not be reloaded");
+    const std::vector<kb::scene::SceneEntity> sunRoots = withCube.Hierarchy().RootEntities();
+    Require(sunRoots.size() == 1U, "the Cube must be created under the Sun");
+    const auto cubes = withCube.Hierarchy().Children(withCube.Entities().Object(sunRoots.front()));
+    Require(cubes.size() == 1U && withCube.Entities().Name(cubes.front().Entity()) == "Cube", "the Cube was not created");
+    const kb::scene::MeshRendererComponent* cubeMesh = withCube.Components().MeshRenderers().TryGet(cubes.front().Entity());
+    const kb::scene::ColliderComponent* cubeCollider = withCube.Components().Colliders().TryGet(cubes.front().Entity());
+    Require(cubeMesh != nullptr && cubeMesh->meshAssetId == kb::assets::BuiltInShapeId(kb::assets::BuiltInShape::Cube).value &&
+            cubeCollider != nullptr && cubeCollider->shape == kb::scene::ColliderShape::Box,
+        "the Cube must be the engine cube with a box collider");
+
+    // Names stay addressable: a second 'Sun' is refused, a path picks a child, rename renames.
+    const CommandRun twin = Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--name", "Sun" });
+    Require(twin.exitCode != 0 && Contains(twin.output, "already exists at the scene root"),
+        "a second entity with the same name must be refused: " + twin.output);
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun/Cube", "--type", "Transform",
+        "--set", "localPosition=0,1,0" }).exitCode == 0, "a child must be addressable by its path");
+    Require(Run(&kb::cli::RunEntityCommand, { "rename", "--project", project, "--name", "Sun/Cube", "--to", "Crate" }).exitCode == 0 &&
+            Run(&kb::cli::RunEntityCommand, { "remove", "--project", project, "--name", "Crate" }).exitCode == 0,
+        "entity rename failed");
+
+    // A joint by type name, connected to another entity by its name (the world when empty).
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--name", "Door" }).exitCode == 0 &&
+            Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Door", "--type", "Joint",
+                "--set", "type=Hinge" }).exitCode == 0,
+        "a Joint type must be accepted by name");
+    const CommandRun badType = Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Door", "--type", "Joint",
+        "--set", "type=Hinged" });
+    Require(badType.exitCode != 0 && Contains(badType.output, "Fixed, Hinge, Distance, Point"),
+        "an unknown Joint type name must be refused with the accepted names: " + badType.output);
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Door", "--type", "Joint",
+                "--set", "connectedEntity=Sun" }).exitCode == 0,
+        "a Joint must connect to another entity by name");
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Door", "--type", "Joint",
+                "--set", "connectedEntity=Nobody" }).exitCode != 0,
+        "a Joint connection to a missing entity must be refused");
+    {
+        kb::scene::Scene jointScene;
+        Require(kb::scene::SceneDocumentService::LoadFileIntoScene(jointScene,
+                    std::filesystem::path{ project } / "Assets" / "Scenes" / "Main.21kbscene"),
+            "the scene with the joint must load");
+        kb::scene::SceneEntity door{};
+        kb::scene::SceneEntity sun{};
+        for (const kb::scene::SceneEntity entity : jointScene.Hierarchy().RootEntities()) {
+            if (jointScene.Entities().Name(entity) == "Door") door = entity;
+            if (jointScene.Entities().Name(entity) == "Sun") sun = entity;
+        }
+        const kb::scene::JointComponent* joint = jointScene.Components().Joints().TryGet(door);
+        Require(joint != nullptr && joint->type == kb::scene::JointType::Hinge && joint->connectedEntity == sun,
+            "the saved Joint must be a Hinge connected to Sun");
+    }
+
+    // A project command never writes into another project.
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Obcy", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path foreign = parent / "Obcy" / "Assets" / "Scenes" / "Main.21kbscene";
+    const auto foreignSize = std::filesystem::file_size(foreign);
+    for (const std::string& scenePath : { foreign.string(), std::string{ "../Obcy/Assets/Scenes/Main.21kbscene" } }) {
+        const CommandRun outside = Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--scene", scenePath,
+            "--name", "Intruder" });
+        Require(outside.exitCode != 0 && Contains(outside.output, "is outside the project"),
+            "a scene outside the project must be refused: " + outside.output);
+    }
+    Require(std::filesystem::file_size(foreign) == foreignSize, "another project's scene must stay untouched");
+    std::filesystem::remove_all(parent, error);
+}
+
 void RunApiCommandTests() {
     PrepareProject();
     const std::string root = TestRoot().string();
@@ -2979,14 +3344,298 @@ void RunNavMeshCommandTests() {
     Require(chunks.exitCode == 0 && Contains(chunks.output, "/Game/Level.cells/nav/r_0_0/"), chunks.output.c_str());
 }
 
+#if KB_CLI_RENDERER
+[[nodiscard]] std::string NewAuthoringProject(std::string_view folder) {
+    const std::filesystem::path parent = TestRoot() / std::string{ folder };
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Studio", "--template", "Empty" }).exitCode == 0,
+        "new failed for an authoring project");
+    return (parent / "Studio").string();
+}
+
+void WriteRedPixelPng(const std::filesystem::path& path) {
+    static constexpr std::array<std::uint8_t, 69U> kPng{
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+        0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+        0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D, 0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+        0x44, 0xAE, 0x42, 0x60, 0x82,
+    };
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    output.write(reinterpret_cast<const char*>(kPng.data()), static_cast<std::streamsize>(kPng.size()));
+    Require(output.good(), "the test texture could not be written");
+}
+
+// post-process-new/set take the vignette and ambient occlusion fields through the profile's own
+// field list, and refuse a value out of range naming the fields.
+void RunPostProcessCommandTests() {
+    const std::string project = NewAuthoringProject("post_process_project");
+    const CommandRun created = Run(&kb::cli::RunPostProcessNewCommand, { "--project", project, "--name", "Look",
+        "--set", "vignetteEnabled=1", "--set", "vignetteIntensity=0.45", "--set", "ambientOcclusionEnabled=1",
+        "--set", "ambientOcclusionRadius=0.9" });
+    Require(created.exitCode == 0 && Contains(created.output, "vignetteIntensity 0.45") &&
+            Contains(created.output, "ambientOcclusionEnabled 1") && Contains(created.output, "ambientOcclusionRadius 0.9"),
+        "post-process-new must write the vignette and ambient occlusion fields: " + created.output);
+    const std::optional<kb::render::ScenePostProcessSettings> saved = kb::render::PostProcessProfileAssetLoader::LoadProfile(
+        std::filesystem::path{ project } / "Assets" / "PostProcess" / "Look.kbppfx");
+    Require(saved.has_value() && saved->vignetteEnabled && saved->ambientOcclusionEnabled &&
+            std::abs(saved->ambientOcclusionRadius - 0.9F) < 0.0001F,
+        "the profile file did not keep the vignette and ambient occlusion");
+    const CommandRun refused = Run(&kb::cli::RunPostProcessSetCommand, { "--project", project,
+        "--profile", "/Game/PostProcess/Look.kbppfx", "--set", "vignetteIntensity=2" });
+    Require(refused.exitCode != 0 && Contains(refused.output, "vignetteIntensity") && Contains(refused.output, "ambientOcclusionRadius"),
+        "a vignette intensity above 1 must be refused with the field list: " + refused.output);
+}
+
+// import keeps a model's scale and rotation from a preset (import-preset-new) or flags, as the
+// editor's import dialog does; a preset's value is overridden by a flag and nonsense is refused.
+void RunImportSettingsCommandTests() {
+    const std::string project = NewAuthoringProject("import_settings_project");
+    const std::filesystem::path source = TestRoot() / "External" / "Crate.obj";
+    WriteTextFile(source, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+
+    const CommandRun preset = Run(&kb::cli::RunImportPresetNewCommand, { "--project", project, "--name", "Centimetres",
+        "--set", "scale=0.01", "--set", "rotation=-90,0,0" });
+    Require(preset.exitCode == 0 && Contains(preset.output, "/Game/ImportPresets/Centimetres.kbimportpreset") &&
+            Contains(preset.output, "scale 0.01") && Contains(preset.output, "rotation -90 0 0"),
+        "import-preset-new did not write the preset: " + preset.output);
+    Require(Run(&kb::cli::RunImportPresetNewCommand, { "--project", project, "--name", "Broken", "--set", "scale=-1" }).exitCode != 0,
+        "import-preset-new must refuse a negative scale");
+
+    const CommandRun withPreset = Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models",
+        "--preset", "/Game/ImportPresets/Centimetres.kbimportpreset", source.string() });
+    Require(withPreset.exitCode == 0 && Contains(withPreset.output, "created /Game/Models/Crate.21kb") &&
+            Contains(withPreset.output, "scale 0.01, rotation -90,0,0"),
+        "import --preset did not import with the preset's settings: " + withPreset.output);
+    const auto containerTransform = [&](const std::string& name) {
+        kb::assets::ImportedAssetLoader loader;
+        const std::filesystem::path file = std::filesystem::path{ project } / "Assets" / "Models" / name;
+        const kb::assets::AssetMetadata metadata{ .type = "RenderMesh", .physicalPath = file, .sourceExtension = ".21kb" };
+        const kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{ metadata, file });
+        Require(loaded.Succeeded(), "the imported model container could not be read: " + name);
+        return std::static_pointer_cast<kb::assets::ImportedAsset>(loaded.asset)->meshTransform;
+    };
+    const kb::assets::AssetMeshImportTransform fromPreset = containerTransform("Crate.21kb");
+    Require(std::abs(fromPreset.scale - 0.01F) < 0.00001F && fromPreset.rotationDegrees[0] == -90.0F,
+        "the imported model did not keep the preset's scale and rotation");
+
+    const CommandRun overridden = Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models",
+        "--preset", "/Game/ImportPresets/Centimetres.kbimportpreset", "--scale", "2", source.string() });
+    Require(overridden.exitCode == 0 && Contains(overridden.output, "created /Game/Models/Crate_1.21kb") &&
+            Contains(overridden.output, "scale 2, rotation -90,0,0"),
+        "--scale must override the preset's scale in a separate import: " + overridden.output);
+    Require(containerTransform("Crate_1.21kb").scale == 2.0F, "the flag's scale did not reach the import");
+
+    const CommandRun zero = Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models",
+        "--scale", "0", source.string() });
+    Require(zero.exitCode != 0 && Contains(zero.output, "--scale"), "import must refuse a zero scale: " + zero.output);
+    const CommandRun badRotation = Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models",
+        "--rotation", "90,0", source.string() });
+    Require(badRotation.exitCode != 0 && Contains(badRotation.output, "--rotation"), "import must refuse two angles: " + badRotation.output);
+    const CommandRun badFlag = Run(&kb::cli::RunImportCommand, { "--project", project, "--destination", "/Game/Models",
+        "--import-materials", "maybe", source.string() });
+    Require(badFlag.exitCode != 0 && Contains(badFlag.output, "yes or no"), "import must refuse --import-materials maybe: " + badFlag.output);
+}
+
+// material-set takes the built-in texture slots by a texture path of the project; material-graph
+// builds Unreal's VectorParameter Color -> Base Color, ScalarParameter Roughness and Metallic
+// graph; material-instance-new/set/show override those parameters and a Mesh Renderer takes the
+// instance as its material.
+void RunMaterialAuthoringCommandTests() {
+    const std::string project = NewAuthoringProject("material_authoring_project");
+    WriteRedPixelPng(std::filesystem::path{ project } / "Assets" / "Textures" / "Paint.png");
+
+    Require(Run(&kb::cli::RunMaterialNewCommand, { "--project", project, "--name", "Body",
+        "--set", "Base Color Texture=/Game/Textures/Paint.png" }).exitCode == 0,
+        "material-new did not take a base colour texture");
+    const std::optional<kb::render::RenderMaterialAssetData> body = kb::render::RenderMaterialAssetLoader::LoadMaterial(
+        std::filesystem::path{ project } / "Assets" / "Materials" / "Body.kbmat");
+    const std::uint64_t paintId = kb::assets::MakeAssetId("/Game/Textures/Paint.png:RenderTexture").value;
+    Require(body.has_value() && body->desc.albedoTextureAssetId == paintId, "the base colour texture was not written");
+    const CommandRun shown = Run(&kb::cli::RunMaterialShowCommand, { "--project", project, "--material", "/Game/Materials/Body.kbmat" });
+    Require(Contains(shown.output, "Base Color Texture = /Game/Textures/Paint.png"), "material-show must name the texture: " + shown.output);
+    const CommandRun missingTexture = Run(&kb::cli::RunMaterialSetCommand, { "--project", project,
+        "--material", "/Game/Materials/Body.kbmat", "--set", "Normal Texture=/Game/Textures/None.png" });
+    Require(missingTexture.exitCode != 0 && Contains(missingTexture.output, "not a texture"),
+        "a missing texture must be refused: " + missingTexture.output);
+
+    Require(Run(&kb::cli::RunMaterialNewCommand, { "--project", project, "--name", "Car" }).exitCode == 0, "material-new Car failed");
+    const std::vector<std::string> base{ "--project", project, "--material", "/Game/Materials/Car.kbmat" };
+    const auto graph = [&](std::vector<std::string> tail) {
+        std::vector<std::string> arguments{ tail.front() };
+        arguments.insert(arguments.end(), base.begin(), base.end());
+        arguments.insert(arguments.end(), tail.begin() + 1, tail.end());
+        return Run(&kb::cli::RunMaterialGraphCommand, arguments);
+    };
+    const CommandRun color = graph({ "add-node", "--kind", "VectorParameter", "--name", "Color", "--value", "#C8202A" });
+    Require(color.exitCode == 0 && Contains(color.output, "ParameterColor 'Color'"), "add-node VectorParameter failed: " + color.output);
+    Require(graph({ "connect", "--from", "Color", "--to", "Output", "--to-pin", "BaseColor" }).exitCode == 0, "Color -> Base Color failed");
+    Require(graph({ "add-node", "--kind", "ScalarParameter", "--name", "Roughness", "--value", "0.4" }).exitCode == 0, "Roughness node failed");
+    Require(graph({ "connect", "--from", "Roughness", "--to", "Output", "--to-pin", "roughness" }).exitCode == 0, "Roughness link failed");
+    const CommandRun metallic = graph({ "add-node", "--kind", "Constant", "--value", "1" });
+    Require(metallic.exitCode == 0, "Constant node failed: " + metallic.output);
+    Require(graph({ "promote", "--node", "Scalar", "--name", "Metallic" }).exitCode == 0, "promote to parameter failed");
+    Require(graph({ "connect", "--from", "Metallic", "--to", "Output", "--to-pin", "metallic" }).exitCode == 0, "Metallic link failed");
+    const CommandRun wrongPin = graph({ "connect", "--from", "Color", "--to", "Output", "--to-pin", "Shine" });
+    Require(wrongPin.exitCode != 0 && Contains(wrongPin.output, "baseColor"), "an unknown pin must be refused with the inputs: " + wrongPin.output);
+    const CommandRun outputValue = graph({ "set", "--node", "Output", "--value", "1" });
+    Require(outputValue.exitCode != 0, "the Material Output has no value to set");
+    // A node's settings (here a Rotator's speed and centre), a constant above 1 and the material's
+    // Blend Mode are set as the Material Editor sets them and survive the save.
+    Require(graph({ "add-node", "--kind", "Rotator", "--name", "Spin", "--value", "1 0.25 0.75" }).exitCode == 0, "Rotator node failed");
+    Require(graph({ "add-node", "--kind", "Constant", "--name", "Forty", "--value", "40" }).exitCode == 0, "a constant of 40 failed");
+    Require(graph({ "setting", "--name", "Blend Mode", "--value", "translucent" }).exitCode == 0, "setting Blend Mode failed");
+    const CommandRun badSetting = graph({ "setting", "--name", "Blend Mode", "--value", "glass" });
+    Require(badSetting.exitCode != 0 && Contains(badSetting.output, "Blend Mode does not take"), "an unknown blend mode must be refused: " + badSetting.output);
+    {
+        const std::optional<kb::render::RenderMaterialAssetData> saved = kb::render::RenderMaterialAssetLoader::LoadMaterial(
+            std::filesystem::path{ project } / "Assets" / "Materials" / "Car.kbmat");
+        Require(saved.has_value() && saved->graph.blendMode == "translucent", "Blend Mode was not saved");
+        const auto named = [&](std::string_view name) {
+            return std::ranges::find_if(saved->graph.nodes, [&](const kb::render::RenderMaterialGraphNode& node) {
+                return node.parameter.displayName == name;
+            });
+        };
+        Require(named("Spin") != saved->graph.nodes.end() && named("Spin")->parameter.defaultValueHint == "1 0.25 0.75",
+            "the Rotator's speed and centre were not saved");
+        Require(named("Forty") != saved->graph.nodes.end() && named("Forty")->parameter.defaultValueHint == "40",
+            "a constant must keep a value above 1");
+    }
+    Require(graph({ "setting", "--name", "Blend Mode", "--value", "opaque" }).exitCode == 0, "setting Blend Mode back failed");
+    const CommandRun graphShown = graph({ "show" });
+    Require(graphShown.exitCode == 0 && Contains(graphShown.output, "Compiles: yes") && Contains(graphShown.output, "Color (color") &&
+            Contains(graphShown.output, "Roughness (scalar") && Contains(graphShown.output, "Metallic (scalar"),
+        "material-graph show must list the three parameters of a compiling graph: " + graphShown.output);
+
+    const std::optional<kb::render::RenderMaterialAssetData> car = kb::render::RenderMaterialAssetLoader::LoadMaterial(
+        std::filesystem::path{ project } / "Assets" / "Materials" / "Car.kbmat");
+    Require(car.has_value() && car->graph.links.size() == 3U, "the graph must hold its three links");
+    const auto parameterValue = [](const kb::render::RenderMaterialAssetData& material, std::string_view prefix) {
+        const auto found = std::ranges::find_if(material.graphParameterValues, [&](const kb::render::RenderMaterialGraphParameterValue& value) {
+            return value.stableId.starts_with(prefix);
+        });
+        return found != material.graphParameterValues.end() ? std::optional{ *found } : std::nullopt;
+    };
+    const std::optional<kb::render::RenderMaterialGraphParameterValue> carColor = parameterValue(*car, "color");
+    Require(carColor.has_value() && std::abs(carColor->numbers[0] - 0.578F) < 0.01F, "the Color parameter value was not written (sRGB #C8 is linear 0.578)");
+
+    const CommandRun instance = Run(&kb::cli::RunMaterialInstanceNewCommand, { "--project", project, "--name", "CarRed",
+        "--parent", "/Game/Materials/Car.kbmat", "--set", "Color=#FF0000", "--set", "Roughness=0.2" });
+    Require(instance.exitCode == 0 && Contains(instance.output, "/Game/Materials/CarRed.kbmatinst") &&
+            Contains(instance.output, "Color = 1 0 0 1 (override)") && Contains(instance.output, "Roughness = 0.2 (override)"),
+        "material-instance-new did not override Color and Roughness: " + instance.output);
+    const CommandRun unknown = Run(&kb::cli::RunMaterialInstanceSetCommand, { "--project", project,
+        "--instance", "/Game/Materials/CarRed.kbmatinst", "--set", "Sparkle=1" });
+    Require(unknown.exitCode != 0 && Contains(unknown.output, "Sparkle") && Contains(unknown.output, "Metallic"),
+        "an unknown instance parameter must be refused with the parameter list: " + unknown.output);
+    const CommandRun changed = Run(&kb::cli::RunMaterialInstanceSetCommand, { "--project", project,
+        "--instance", "/Game/Materials/CarRed.kbmatinst", "--set", "Metallic=0.5", "--clear", "Roughness" });
+    Require(changed.exitCode == 0 && Contains(changed.output, "Metallic = 0.5 (override)") && Contains(changed.output, "Roughness = 0.4") &&
+            !Contains(changed.output, "Roughness = 0.4 (override)"),
+        "material-instance-set did not override Metallic and clear Roughness: " + changed.output);
+
+    const std::optional<kb::render::RenderMaterialInstanceAssetData> saved = kb::render::RenderMaterialInstanceAssetLoader::LoadInstance(
+        std::filesystem::path{ project } / "Assets" / "Materials" / "CarRed.kbmatinst");
+    Require(saved.has_value() && saved->parentMaterialAssetId == kb::assets::MakeAssetId("/Game/Materials/Car.kbmat:RenderMaterial"),
+        "the instance must name its parent");
+    const kb::render::RenderMaterialAssetData effective = kb::render::BuildEffectiveRenderMaterialInstanceAsset(*car, *saved);
+    const std::optional<kb::render::RenderMaterialGraphParameterValue> red = parameterValue(effective, "color");
+    Require(red.has_value() && red->numbers[0] == 1.0F && red->numbers[1] == 0.0F, "the effective instance colour must be the override");
+
+    // A texture slot of the graph samples the UV channel its value names: the instance picks UV1 with "@uv1".
+    const CommandRun decal = graph({ "add-node", "--kind", "TextureSample", "--name", "Decal", "--value", "/Game/Textures/Paint.png" });
+    Require(decal.exitCode == 0, "add-node TextureSample failed: " + decal.output);
+    Require(graph({ "connect", "--from", "Decal", "--to", "Output", "--to-pin", "emissive" }).exitCode == 0, "Decal link failed");
+    const CommandRun uvChannel = Run(&kb::cli::RunMaterialInstanceSetCommand, { "--project", project,
+        "--instance", "/Game/Materials/CarRed.kbmatinst", "--set", "Decal=/Game/Textures/Paint.png@uv1" });
+    Require(uvChannel.exitCode == 0 && Contains(uvChannel.output, "/Game/Textures/Paint.png@uv1 (override)"),
+        "material-instance-set did not set the texture slot's UV channel: " + uvChannel.output);
+    const std::optional<kb::render::RenderMaterialInstanceAssetData> withUv = kb::render::RenderMaterialInstanceAssetLoader::LoadInstance(
+        std::filesystem::path{ project } / "Assets" / "Materials" / "CarRed.kbmatinst");
+    Require(withUv.has_value() && std::ranges::any_of(withUv->overrides.graphParameterValues, [](const kb::render::RenderMaterialGraphParameterValue& value) {
+                return value.type == kb::render::RenderMaterialParameterType::Texture && value.numbers[0] == 1.0F;
+            }),
+        "the instance must save the texture slot's UV channel");
+
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Cube", "--name", "Car" }).exitCode == 0,
+        "entity add Cube failed");
+    const CommandRun assigned = Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Car",
+        "--type", "MeshRenderer", "--set", "material=/Game/Materials/CarRed.kbmatinst" });
+    Require(assigned.exitCode == 0, "a Mesh Renderer must take a material instance: " + assigned.output);
+    kb::scene::Scene scene;
+    const kb::scene::SceneDocumentLoadResult loaded =
+        kb::scene::SceneDocumentService::Load(std::filesystem::path{ project } / "Assets" / "Scenes" / "Main.21kbscene");
+    Require(loaded.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(scene, loaded.document), "the scene could not be reloaded");
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    const auto carEntity = std::ranges::find_if(roots, [&](kb::scene::SceneEntity entity) { return scene.Entities().Name(entity) == "Car"; });
+    Require(carEntity != roots.end(), "the Car entity is missing");
+    const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(*carEntity);
+    Require(renderer != nullptr &&
+            renderer->materialAssetId == kb::assets::MakeAssetId("/Game/Materials/CarRed.kbmatinst:RenderMaterialInstance").value,
+        "the Mesh Renderer did not keep the material instance");
+}
+
+// material-graph builds a graph of the Unreal/Unity utility nodes by their names (Unreal's Blend_Overlay
+// and Noise with its Voronoi function, Unity's Checkerboard); invalid Noise settings are refused by name.
+void RunMaterialGraphUtilityNodeCommandTests() {
+    const std::string project = NewAuthoringProject("material_graph_utility_project");
+    Require(Run(&kb::cli::RunMaterialNewCommand, { "--project", project, "--name", "Stone" }).exitCode == 0, "material-new Stone failed");
+    const std::vector<std::string> base{ "--project", project, "--material", "/Game/Materials/Stone.kbmat" };
+    const auto graph = [&](std::vector<std::string> tail) {
+        std::vector<std::string> arguments{ tail.front() };
+        arguments.insert(arguments.end(), base.begin(), base.end());
+        arguments.insert(arguments.end(), tail.begin() + 1, tail.end());
+        return Run(&kb::cli::RunMaterialGraphCommand, arguments);
+    };
+    const CommandRun checker = graph({ "add-node", "--kind", "Checkerboard", "--name", "Checker" });
+    Require(checker.exitCode == 0 && Contains(checker.output, "Checkerboard"), "add-node Checkerboard failed: " + checker.output);
+    const CommandRun noise = graph({ "add-node", "--kind", "Noise", "--name", "Cells", "--value", "voronoi false 2 3 4 2 0 1" });
+    Require(noise.exitCode == 0, "add-node Noise with Unreal's Voronoi settings failed: " + noise.output);
+    const CommandRun blend = graph({ "add-node", "--kind", "Blend_Overlay", "--name", "Mix" });
+    Require(blend.exitCode == 0 && Contains(blend.output, "BlendOverlay"), "add-node Blend_Overlay failed: " + blend.output);
+    Require(graph({ "connect", "--from", "Checker", "--to", "Mix", "--to-pin", "Base" }).exitCode == 0, "Checkerboard -> Base failed");
+    Require(graph({ "connect", "--from", "Cells", "--to", "Mix", "--to-pin", "Blend" }).exitCode == 0, "Noise -> Blend failed");
+    Require(graph({ "connect", "--from", "Mix", "--to", "Output", "--to-pin", "BaseColor" }).exitCode == 0, "Blend -> Base Color failed");
+    const CommandRun refused = graph({ "set", "--node", "Cells", "--value", "perlin" });
+    Require(refused.exitCode != 0 && Contains(refused.output, "'perlin'"), "an unknown Noise function must be refused by name: " + refused.output);
+    const CommandRun shown = graph({ "show" });
+    Require(shown.exitCode == 0 && Contains(shown.output, "Compiles: yes"), "the utility node graph must compile: " + shown.output);
+
+    const std::optional<kb::render::RenderMaterialAssetData> saved = kb::render::RenderMaterialAssetLoader::LoadMaterial(
+        std::filesystem::path{ project } / "Assets" / "Materials" / "Stone.kbmat");
+    Require(saved.has_value() && saved->graph.links.size() == 3U, "the utility node graph must hold its three links");
+    const auto cells = std::ranges::find_if(saved->graph.nodes, [](const kb::render::RenderMaterialGraphNode& node) {
+        return node.kind == kb::render::RenderMaterialGraphNodeKind::Noise;
+    });
+    Require(cells != saved->graph.nodes.end() && cells->parameter.defaultValueHint == "voronoi false 2 3 4 2 0 1",
+        "the Noise settings must be saved and the refused ones must not replace them");
+    const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
+        saved->graph, kb::render::RenderMaterialGraphBuildContext{ .assetId = 0xC11U });
+    Require(compiled.Succeeded() && Contains(compiled.shader.source, "kbVoronoiNoise3(") && Contains(compiled.shader.source, "checkerFootprint"),
+        "the saved graph must compile Unreal's Voronoi and Unity's Checkerboard");
+}
+#endif
+
 int main() {
     RunMiniJsonTests();
     RunArgumentListTests();
     RunValidateCommandTests();
     RunImportCommandTests();
+#if KB_CLI_RENDERER
+    RunPostProcessCommandTests();
+    RunImportSettingsCommandTests();
+    RunMaterialAuthoringCommandTests();
+    RunMaterialGraphUtilityNodeCommandTests();
+#endif
     RunSceneCommandTests();
     RunRunCommandTests();
     RunPlayerControllerTemplateTests();
+    RunNewCommandTests();
+    RunSceneNewCommandTests();
+    RunScriptCommandTests();
+    RunEntityComponentCommandTests();
     RunApiCommandTests();
     RunApiCheckCommandTests();
     RunMcpCommandTests();

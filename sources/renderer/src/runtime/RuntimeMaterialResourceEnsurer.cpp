@@ -6,6 +6,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
@@ -409,6 +410,13 @@ void RuntimeMaterialResourceEnsurer::Ensure(
                 ensureMaterial(proxy.desc.materialSlotAssetIds[slotIndex]);
             }
             ensureMeshMaterialSlots(proxy.desc.meshAssetId);
+        }
+    }
+    if (context.uiFrame != nullptr) {
+        for (const kb::scene::SceneUIFrameElement& element : context.uiFrame->elements) {
+            if (element.image.has_value()) {
+                ensureMaterial(element.image->materialAssetId);
+            }
         }
     }
     for (const auto& [entityId, proxy] : context.renderScene.GeometrySwarmProxies()) {

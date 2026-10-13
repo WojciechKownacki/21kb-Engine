@@ -1,5 +1,6 @@
 #pragma once
 
+#include "localization/EditorLocalization.hpp"
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/components/EditorDialogStyle.hpp"
 
@@ -25,7 +26,7 @@ struct EditorChoiceDialogDescriptor {
     std::string title;
     std::string message;
     std::string supportingText;
-    std::string primaryLabel = "OK";
+    std::string primaryLabel = std::string{ EditorText("common.ok", "OK") };
     std::string secondaryLabel;
     std::string cancelLabel;
     HeroIconKind icon = HeroIconKind::DocumentText;

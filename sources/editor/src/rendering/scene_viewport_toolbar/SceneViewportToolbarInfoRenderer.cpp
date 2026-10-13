@@ -8,6 +8,7 @@
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarMetrics.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
 
 #include <array>
 #include <span>
@@ -33,7 +34,7 @@ void SceneViewportToolbarInfoRenderer::PaintFpsCounter(HDC dc, RECT rect, const 
     const COLORREF previousTextColor = SetTextColor(
         dc,
         GdiDrawing::ToColorRef(reading.live ? theme.textSecondary : theme.textDisabled));
-    DrawTextA(dc, label.data(), static_cast<int>(label.size()), &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    kb::editor::DrawTextUtf8(dc, label.data(), static_cast<int>(label.size()), &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     SetTextColor(dc, previousTextColor);
     SetBkMode(dc, previousBkMode);
 }

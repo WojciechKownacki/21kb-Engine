@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <iterator>
 #include <limits>
@@ -18,6 +19,8 @@ constexpr std::array<char, 8> AssetMagic{ '2', '1', 'K', 'B', 'A', 'S', 'T', '\0
 constexpr std::uint32_t SupportedVersion = 1U;
 // Version 2 adds, after the names, the table of files the source referenced (AssetImportService).
 constexpr std::uint32_t ResourcesVersion = 2U;
+// Version 3 adds, after the names, the model's import scale and rotation (then the resource table).
+constexpr std::uint32_t TransformVersion = 3U;
 constexpr std::uint32_t MaximumResourceCount = 4096U;
 
 [[nodiscard]] bool ReadU16(std::istream& input, std::uint16_t& value) {
@@ -54,6 +57,18 @@ constexpr std::uint32_t MaximumResourceCount = 4096U;
         value |= static_cast<std::uint64_t>(static_cast<unsigned char>(byte)) << shift;
     }
     return true;
+}
+
+[[nodiscard]] bool ReadTransform(std::istream& input, AssetMeshImportTransform& transform) {
+    std::array<std::uint32_t, 4U> bits{};
+    for (std::uint32_t& value : bits) {
+        if (!ReadU32(input, value)) {
+            return false;
+        }
+    }
+    transform.scale = std::bit_cast<float>(bits[0]);
+    transform.rotationDegrees = { std::bit_cast<float>(bits[1]), std::bit_cast<float>(bits[2]), std::bit_cast<float>(bits[3]) };
+    return transform.IsValid();
 }
 
 [[nodiscard]] bool ReadString(std::istream& input, std::string& output) {
@@ -131,7 +146,7 @@ AssetLoadResult ImportedAssetLoader::Load(const AssetLoadRequest& request) {
     std::uint64_t sourceHash = 0;
     ImportedAsset imported;
     if (!ReadU32(input, version)
-        || (version != SupportedVersion && version != ResourcesVersion)
+        || (version != SupportedVersion && version != ResourcesVersion && version != TransformVersion)
         || !ReadU16(input, category)
         || !ReadU16(input, flags)
         || !ReadU64(input, sourceSize)
@@ -140,7 +155,11 @@ AssetLoadResult ImportedAssetLoader::Load(const AssetLoadRequest& request) {
         || !ReadString(input, imported.sourceExtension)) {
         return AssetLoadResult{ .asset = {}, .error = "Imported asset header is invalid." };
     }
-    if (version == ResourcesVersion && !ReadResources(input, sourceBytes.size(), imported.resources)) {
+    if (version == TransformVersion && !ReadTransform(input, imported.meshTransform)) {
+        return AssetLoadResult{ .asset = {}, .error = "Imported asset import transform is invalid." };
+    }
+    if ((version == ResourcesVersion || version == TransformVersion) &&
+        !ReadResources(input, sourceBytes.size(), imported.resources)) {
         return AssetLoadResult{ .asset = {}, .error = "Imported asset resource table is invalid." };
     }
 

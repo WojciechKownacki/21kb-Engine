@@ -49,6 +49,8 @@ scenario-local aliases.
 | `write_file` | `path`, `content` |
 | `write_pcm_wave` | project-relative `path`; optional `duration_ms` (1..10000), `sample_rate` (8000..48000), `frequency_hz`, `amplitude` (0..1); authors a valid mono 16-bit PCM fixture |
 | `configure_physics_layers` | project-relative `path`, two distinct indices/names (`first_layer`, `first_name`, `second_layer`, `second_name`) and `interact`; writes the binary asset and sets the project-wide physics-layers reference; use `reload_scene` before Play Mode |
+| `set_startup_scene` | `path`: a scene's virtual path (`/Game/Scenes/Level1.21kbscene`); makes it the scene the game starts in, as the Startup map list in Build Game does. With `refused_with`, the path must be refused (not a scene of the project) |
+| `set_language` | `language`: an editor language code (`pl`, `ja`, `zh-Hans`, ...); the steps after it see the editor in that language, as after a choice in Editor Settings. `capture` with `"text_fits": true` then fails on any single-line text the panel cuts or ends with an ellipsis |
 | `select_project_settings_category` | `category`: `inputs`, `graphics`, or `physics`; selects the visible Project Settings page before a panel capture |
 | `set_joint_connection` | `entity` (a Joint owner) and `connected_entity`; assigns the Joint's referenced entity and marks it modified for scene persistence |
 | `assert_joint_connection` | `entity` and `connected_entity`; verifies the Joint still targets that entity, including after scene reload |
@@ -170,7 +172,7 @@ scenario-local aliases.
 | `assert_world_build_matches_tools` | project-relative world `path`; rebuilds it from a copy of the project's content with the build kb_cli and kb_cooker run and requires byte-identical cells, index and HLOD proxies |
 | `assign_world` | `entity` with a Content Instance, `world` alias or virtual path; places the partitioned world through that component |
 | `assert_world_cell` | world owner `entity`, `state` (`unloaded`, `loading`, `loaded`, `unloading`, `failed`), integer `x`,`z` or `persistent`; optional `layer`, `hlod_visible`, `timeout_ms` (keeps Play mode ticking until the state arrives) |
-| `save_scene`, `open_scene` | optional `path`; `save_scene` also accepts a positive `max_ms` budget |
+| `save_scene`, `open_scene` | optional `path`; `save_scene` also accepts a positive `max_ms` budget, and `outside_project` (a path from the project root that leaves it) with `refused_with` (the console's refusal) to prove a scene is not saved outside the project's Assets folder |
 | `advance_autosave` | positive `seconds`; advances the production autosave clock and requires a dirty scene to be persisted with a visible success notification |
 | `undo`, `redo` | optional `restore_entity` alias refreshed from the selected restored entity |
 | `play`, `pause`, `stop` | none; `pause` toggles pause/resume for an active Play session |

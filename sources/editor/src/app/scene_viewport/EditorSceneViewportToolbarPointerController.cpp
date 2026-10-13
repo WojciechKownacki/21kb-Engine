@@ -232,7 +232,7 @@ bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const Editor
     }
     if (sceneContext_.InPrefabEditMode() && PointInRect(toolbar.prefabCloseButton, x, y)) {
         preview.CloseToolbarDropdown();
-        static_cast<void>(EditorSceneLifecycleGuard::LeavePrefabEditMode(GetActiveWindow(), sceneContext_, L"closing it"));
+        static_cast<void>(EditorSceneLifecycleGuard::LeavePrefabEditMode(GetActiveWindow(), sceneContext_, EditorPrefabLeaveReason::ClosePrefab));
         sceneViewport_.RequestPresent();
         return true;
     }

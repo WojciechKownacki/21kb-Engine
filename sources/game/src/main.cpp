@@ -71,7 +71,27 @@ struct GameOptions {
     // 0 runs until the player closes the window; a positive value bounds the
     // run so an automated check can drive the real executable to completion.
     std::uint32_t frameLimit = 0U;
+    bool help = false;
 };
+
+constexpr std::string_view kUsage = R"(kb_game - runs a 21kb project or packaged game
+
+Usage: kb_game [options]
+
+  --project=<dir|Name.21kbproject>  project to run (default: the game beside this executable)
+  --scene=/Game/<path>.21kbscene    start scene (default: the project's startup map)
+  --width=<64..8192> --height=<64..8192>  window size
+  --fullscreen                      primary monitor, native resolution
+  --headless                        render without showing the window (needs --frames)
+  --frames=<n>                      stop after n frames
+  --uncapped                        no frame rate limit
+  --screenshot-file=<file.png>      write frame --screenshot-frame as PNG (the file must not exist)
+  --screenshot-frame=<n>            which frame to capture (within --frames)
+  --profile-file=<file>             per-frame timings (needs --frames=1..120000)
+  --profile-fixed-step              fixed time step while profiling (needs --headless)
+  --profile-lighting=Forward|ForwardPlus|Deferred
+  --help                            this text
+)";
 
 struct GameFrameProfile {
     double wallFrameMilliseconds = 0.0;
@@ -181,6 +201,11 @@ constexpr std::array<std::wstring_view, 7U> kDevelopmentSwitches{
     bool explicitHeight = false;
     for (int index = 1; index < argc; ++index) {
         const std::wstring_view argument{ argv[index] };
+        if (argument == L"--help" || argument == L"-h") {
+            std::cout << kUsage;
+            options.help = true;
+            return true;
+        }
         if (HasPrefix(argument, L"--project=")) {
             options.projectPath =
                 std::filesystem::path{ std::wstring{ argument.substr(10U) } };
@@ -244,7 +269,7 @@ constexpr std::array<std::wstring_view, 7U> kDevelopmentSwitches{
             options.profilePath = std::filesystem::path{std::wstring{argument.substr(15U)}};
         } else {
             std::cerr << "kb_game: unknown option '"
-                      << kb::game::NarrowForDiagnostics(argument) << "'\n";
+                      << kb::game::NarrowForDiagnostics(argument) << "' (kb_game --help lists the options)\n";
             return false;
         }
     }
@@ -357,14 +382,27 @@ int RunGame(const GameOptions& options) {
             return EXIT_FAILURE;
         }
     } else {
-        // A cache directory whose name cannot be spelled exactly in this
-        // machine's code page is worse than no cache directory.
+        // The project's own graph shader cache, the one the editor cooks into
+        // (EditorSceneContext), so a project run outside the editor draws its
+        // graph materials instead of the built-in fallback. A cache directory
+        // whose name cannot be spelled exactly in this machine's code page is
+        // worse than no cache directory.
         const std::filesystem::path shaderCacheRoot =
-            kb::game::ExecutableDirectory() / ".cache" / "graph_shaders";
+            projectRuntime.projectRoot / ".cache" / "graph_shaders";
         if (std::optional<std::string> cacheRoot =
                 kb::game::TryNarrow(shaderCacheRoot.generic_wstring());
             cacheRoot.has_value()) {
             renderer.SetGraphShaderCacheRoot(*std::move(cacheRoot));
+            // A graph material the editor has not cooked yet is cooked when first drawn.
+            const kb::render::RenderMaterialGraphShaderToolchain toolchain =
+                kb::render::ResolveRenderMaterialGraphShaderToolchain({});
+            if (toolchain.Available()) {
+                renderer.SetGraphShaderCookToolchain(toolchain);
+            } else {
+                std::cerr << "kb_game: graph materials not cooked by the editor draw with the built-in "
+                             "material: bgfx shaderc or the engine shader sources were not found (set "
+                             "KB_GRAPH_SHADERC to shaderc, or build the shaderc target)\n";
+            }
         } else {
             std::cerr << "kb_game: graph shader cache disabled: "
                       << kb::game::NarrowForDiagnostics(shaderCacheRoot)
@@ -740,6 +778,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         LocalFree(argv);
         if (!parsed) {
             return EXIT_FAILURE;
+        }
+        if (options.help) {
+            return EXIT_SUCCESS;
         }
         // A packaged game keeps its project beside the executable, so an
         // argument-less launch starts the project's own ProjectSettings::defaultMap.

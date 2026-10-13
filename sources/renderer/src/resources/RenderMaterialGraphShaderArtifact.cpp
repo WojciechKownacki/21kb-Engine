@@ -688,19 +688,134 @@ void AddArtifactDiagnostic(
     });
 }
 
-void AppendMaterialGraphTangentBasis(std::string& wrapper, const RenderMaterialGraphShaderSource& shader) {
-    if (shader.reflection.hasWorldPositionOffset || shader.reflection.hasDisplacement) {
-        wrapper += "    vec3 basisNormal = normalize(cross(dFdx(v_worldPos), dFdy(v_worldPos)));\n";
-        wrapper += "    basisNormal = dot(basisNormal, basisNormal) > 0.0001 ? basisNormal : normalize(v_normal);\n";
-        wrapper += "    basisNormal = dot(basisNormal, v_normal) < 0.0 ? -basisNormal : basisNormal;\n";
-    } else {
-        wrapper += "    vec3 basisNormal = normalize(v_normal);\n";
+// Unreal's Pixel Depth Offset: the depth the pass writes moves away from the viewer by
+// surface.pixelDepthOffset metres (never toward it) - along the view ray of a perspective view, along
+// the view axis of an orthographic one (a directional light's shadow cascade). The shadow pass pushes
+// the caster by the same amount, so the pushed surface the lighting reconstructs does not shadow
+// itself. Writing gl_FragDepth turns off early depth testing for the material.
+void AppendMaterialGraphPixelDepthOffsetDepth(std::string& wrapper) {
+    wrapper += "    vec4 kbPdoView = mul(u_view, vec4(v_worldPos, 1.0));\n";
+    wrapper += "    float kbPdoOffset = max(surface.pixelDepthOffset, 0.0);\n";
+    wrapper += "    float kbPdoDistance = max(length(kbPdoView.xyz), 0.0001);\n";
+    wrapper += "    bool kbPdoOrthographic = abs(mul(u_proj, vec4(0.0, 0.0, 1.0, 0.0)).w) < 0.5;\n";
+    wrapper += "    vec3 kbPdoPushed = kbPdoOrthographic ? kbPdoView.xyz + vec3(0.0, 0.0, kbPdoOffset)\n";
+    wrapper += "        : kbPdoView.xyz * ((kbPdoDistance + kbPdoOffset) / kbPdoDistance);\n";
+    wrapper += "    vec4 kbPdoClip = mul(u_proj, vec4(kbPdoPushed, 1.0));\n";
+    wrapper += "    float kbPdoDepth = kbPdoClip.z / kbPdoClip.w;\n";
+    wrapper += "#if BGFX_SHADER_LANGUAGE_GLSL\n";
+    // OpenGL clip depth is -1..1; the depth buffer stores 0..1.
+    wrapper += "    kbPdoDepth = kbPdoDepth * 0.5 + 0.5;\n";
+    wrapper += "#endif\n";
+}
+
+void AppendMaterialGraphPixelDepthOffset(std::string& wrapper) {
+    AppendMaterialGraphPixelDepthOffsetDepth(wrapper);
+    wrapper += "    gl_FragDepth = kbPdoDepth;\n";
+}
+
+// Unreal's Refraction (Index of Refraction mode) on a Translucent surface: the opaque scene behind it
+// is read from the scene-color snapshot at an offset along the view-space normal, scaled by (IOR - 1)
+// and the projection, toward the middle of a convex surface when IOR > 1 like a lens; the lit surface
+// then covers it by its opacity. The fragment writes alpha 1, so the alpha blend keeps its colour.
+// The sign between NDC y and the screen position comes from the derivatives, so D3D, Vulkan and
+// OpenGL (bottom-left origin) bend the same way.
+// The opaque scene behind the surface (kbBehind), at the refracted position when the graph drives
+// Refraction (see above), else straight behind.
+void AppendMaterialGraphSceneBehind(std::string& wrapper, const std::string& normal, const bool refracts) {
+    if (!refracts) {
+        wrapper += "    vec2 kbBehindUv = ctx.screenPosition;\n";
+        wrapper += "    vec3 kbBehind = texture2DLod(s_kbSceneColor, kbBehindUv, 0.0).rgb;\n";
+        return;
     }
-    wrapper += "    vec3 vertexTangent = normalize(v_tangent - basisNormal * dot(basisNormal, v_tangent));\n";
-    wrapper += "    vec3 fallbackAxis = abs(basisNormal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n";
-    wrapper += "    vec3 fallbackTangent = normalize(cross(fallbackAxis, basisNormal));\n";
-    wrapper += "    vertexTangent = dot(vertexTangent, vertexTangent) > 0.0001 ? vertexTangent : fallbackTangent;\n";
-    wrapper += "    float vertexHandedness = dot(cross(basisNormal, vertexTangent), v_bitangent) < 0.0 ? -1.0 : 1.0;\n";
+    wrapper += "    vec3 kbRefrViewNormal = mul(u_view, vec4(" + normal + ", 0.0)).xyz;\n";
+    wrapper += "    vec4 kbRefrClip = mul(u_viewProj, vec4(v_worldPos, 1.0));\n";
+    wrapper += "    float kbRefrNdcY = kbRefrClip.y / kbRefrClip.w;\n";
+    wrapper += "    float kbRefrYSign = dFdy(kbRefrNdcY) < 0.0 ? -1.0 : 1.0;\n";
+    wrapper += "    vec2 kbRefrNdc = -kbRefrViewNormal.xy * (surface.refraction - 1.0) * vec2(u_proj[0][0], u_proj[1][1]);\n";
+    wrapper += "    vec2 kbBehindUv = clamp(ctx.screenPosition + vec2(kbRefrNdc.x, kbRefrNdc.y * kbRefrYSign) * 0.5, vec2(0.0, 0.0), vec2(1.0, 1.0));\n";
+    wrapper += "    vec3 kbBehind = texture2DLod(s_kbSceneColor, kbBehindUv, 0.0).rgb;\n";
+}
+
+void AppendMaterialGraphRefraction(std::string& wrapper, const std::string& normal, const std::string& litColor) {
+    AppendMaterialGraphSceneBehind(wrapper, normal, true);
+    wrapper += "    gl_FragColor = vec4(mix(kbBehind, " + litColor + ", clamp(surface.alpha, 0.0, 1.0)), 1.0);\n";
+}
+
+// Unreal's Thin Translucent: the scene behind passes coloured by Transmittance Color where the
+// surface does not cover it, the diffuse light is scaled by the opacity and the specular reflection
+// stays whole, as on clear glass. The specular is the lighting of the same surface with no albedo.
+// The fragment writes alpha 1 over the scene copy, so the alpha blend keeps its colour.
+void AppendMaterialGraphThinTranslucent(std::string& wrapper, const RenderMaterialGraphShaderSource& shader,
+    const std::string& shadingModel) {
+    wrapper += "    vec3 kbThinSpecular = KbEvaluateForwardLighting(worldNormal, v_worldPos, vec3(0.0, 0.0, 0.0), 0.0, roughness, specular, occlusion, " +
+        shadingModel + ", 0.0, 0.0);\n";
+    wrapper += "    vec3 kbThinDiffuse = max(lighting - kbThinSpecular, vec3(0.0, 0.0, 0.0));\n";
+    AppendMaterialGraphSceneBehind(wrapper, "worldNormal", shader.reflection.hasRefraction);
+    wrapper += "    float kbThinCoverage = clamp(surface.alpha, 0.0, 1.0);\n";
+    wrapper += "    gl_FragColor = vec4(kbBehind * surface.transmittanceColor * (1.0 - kbThinCoverage) + kbThinDiffuse * kbThinCoverage + kbThinSpecular + surface.emissive, 1.0);\n";
+}
+
+// Unreal's Single Layer Water: the scene behind is dimmed by the water between the surface and it,
+// exp(-(absorption + scattering) * thickness) times Color Scale Behind Water; the water scatters the
+// sky and the sun (Henyey-Greenstein phase of Phase G) in proportion scattering / extinction; the
+// surface reflects on top. Thickness comes from the opaque scene depth behind, along the view ray.
+void AppendMaterialGraphSingleLayerWater(std::string& wrapper, const RenderMaterialGraphShaderSource& shader,
+    const std::string& shadingModel) {
+    wrapper += "    vec3 kbWaterSpecular = KbEvaluateForwardLighting(worldNormal, v_worldPos, vec3(0.0, 0.0, 0.0), 0.0, roughness, specular, occlusion, " +
+        shadingModel + ", 0.0, 0.0);\n";
+    AppendMaterialGraphSceneBehind(wrapper, "worldNormal", shader.reflection.hasRefraction);
+    wrapper += "    float kbWaterDeviceDepth = texture2DLod(s_kbSceneDepth, kbBehindUv, 0.0).x;\n";
+    wrapper += "#if BGFX_SHADER_LANGUAGE_GLSL\n";
+    // OpenGL clip depth is -1..1; the depth buffer stores 0..1.
+    wrapper += "    kbWaterDeviceDepth = kbWaterDeviceDepth * 2.0 - 1.0;\n";
+    wrapper += "#endif\n";
+    wrapper += "    vec4 kbWaterBehindView = mul(u_invProj, vec4(0.0, 0.0, kbWaterDeviceDepth, 1.0));\n";
+    wrapper += "    vec4 kbWaterSurfaceView = mul(u_view, vec4(v_worldPos, 1.0));\n";
+    if (shader.reflection.hasRefraction) {
+        // Like Unreal: a refracted sample that lands on something in front of the water falls back to
+        // the scene straight behind.
+        wrapper += "    if ((kbWaterBehindView.z / kbWaterBehindView.w) / kbWaterSurfaceView.z < 1.0) {\n";
+        wrapper += "        kbBehindUv = ctx.screenPosition;\n";
+        wrapper += "        kbBehind = texture2DLod(s_kbSceneColor, kbBehindUv, 0.0).rgb;\n";
+        wrapper += "        kbWaterDeviceDepth = texture2DLod(s_kbSceneDepth, kbBehindUv, 0.0).x;\n";
+        wrapper += "#if BGFX_SHADER_LANGUAGE_GLSL\n";
+        wrapper += "        kbWaterDeviceDepth = kbWaterDeviceDepth * 2.0 - 1.0;\n";
+        wrapper += "#endif\n";
+        wrapper += "        kbWaterBehindView = mul(u_invProj, vec4(0.0, 0.0, kbWaterDeviceDepth, 1.0));\n";
+        wrapper += "    }\n";
+    }
+    wrapper += "    float kbWaterThickness = max(length(kbWaterSurfaceView.xyz) * ((kbWaterBehindView.z / kbWaterBehindView.w) / kbWaterSurfaceView.z - 1.0), 0.0);\n";
+    wrapper += "    vec3 kbWaterScattering = max(surface.waterScattering, vec3(0.0, 0.0, 0.0));\n";
+    wrapper += "    vec3 kbWaterExtinction = max(kbWaterScattering + max(surface.waterAbsorption, vec3(0.0, 0.0, 0.0)), vec3(0.00001, 0.00001, 0.00001));\n";
+    wrapper += "    vec3 kbWaterTransmittance = exp(-kbWaterExtinction * kbWaterThickness);\n";
+    wrapper += "    vec3 kbWaterView = normalize(u_cameraPosition.xyz - v_worldPos);\n";
+    wrapper += "    float kbWaterG = clamp(surface.waterPhaseG, -0.99, 0.99);\n";
+    wrapper += "    vec3 kbWaterSunLight = vec3(0.0, 0.0, 0.0);\n";
+    wrapper += "    if (u_lightParams.x > 0.5 && u_lightDirKind[0].w < 0.5) {\n";
+    wrapper += "        float kbWaterCos = dot(normalize(u_lightDirKind[0].xyz), kbWaterView);\n";
+    // 4 pi times the Henyey-Greenstein phase: 1 for an isotropic medium.
+    wrapper += "        float kbWaterPhase = (1.0 - kbWaterG * kbWaterG) / pow(max(1.0 + kbWaterG * kbWaterG - 2.0 * kbWaterG * kbWaterCos, 0.0001), 1.5);\n";
+    wrapper += "        kbWaterSunLight = u_lightColorIntensity[0].rgb * (u_lightColorIntensity[0].a * 3.14159265 * kbWaterPhase);\n";
+    wrapper += "    }\n";
+    wrapper += "    vec3 kbWaterAmbient = KbEnvironmentColor(vec3(0.0, 1.0, 0.0)) * u_environmentParams.y;\n";
+    wrapper += "    vec3 kbWaterInScatter = kbWaterScattering / kbWaterExtinction * (vec3(1.0, 1.0, 1.0) - kbWaterTransmittance) * (kbWaterAmbient + kbWaterSunLight);\n";
+    wrapper += "    gl_FragColor = vec4(kbBehind * kbWaterTransmittance * max(surface.waterColorScaleBehind, 0.0) + kbWaterInScatter + kbWaterSpecular + surface.emissive, 1.0);\n";
+}
+
+// The surface field with the colour the model scatters with (writesShadingModelColor).
+std::string_view GraphShadingModelColorField(const RenderMaterialGraphShaderSource& shader) {
+    return shader.reflection.shadingModel == RenderMaterialShadingModel::Cloth ? "surface.fuzzColor" : "surface.subsurfaceColor";
+}
+
+// The shading basis of a pixel, like Unreal's: the interpolated vertex normal renormalized per pixel. World
+// Position Offset and Displacement move the geometry but keep the vertex normals (a material that bends the
+// surface supplies its own normal); a normal rebuilt from screen derivatives of the position would be the flat
+// normal of each triangle and facet every curved surface.
+void AppendMaterialGraphTangentBasis(std::string& wrapper) {
+    wrapper += "    vec3 basisNormal = normalize(v_normal);\n";
+    // The graph source's tangent basis, the one PixelNormalWS reads the Normal through.
+    wrapper += "    vec3 vertexTangent = KbGraphBasisTangent(basisNormal, v_tangent);\n";
+    wrapper += "    float vertexHandedness = KbGraphBasisHandedness(basisNormal, vertexTangent, v_bitangent);\n";
     wrapper += "    vec3 vertexBitangent = normalize(cross(basisNormal, vertexTangent) * vertexHandedness);\n";
     wrapper += "    vec3 basisTangent = vertexTangent;\n";
     wrapper += "    vec3 basisBitangent = vertexBitangent;\n";
@@ -931,43 +1046,59 @@ const RenderMaterialGraphShaderManifestEntry* RenderMaterialGraphShaderManifest:
     return match;
 }
 
-std::string BuildGraphFragmentWrapperSource(
-    const RenderMaterialGraphShaderSource& shader,
-    std::string_view pass) {
-    const bool shadowPass = pass == "ShadowDepth";
-    const bool gbufferPass = pass == "GBuffer";
+namespace {
 
-    std::string wrapper;
-    wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal\n\n";
-    wrapper += "#include <bgfx_shader.sh>\n";
-    if (!shadowPass) {
-        wrapper += "#include \"pbr_graph_forward.sh\"\n";
-        wrapper += "SAMPLER2D(s_terrainLayerWeights, 15);\n";
-        wrapper += "uniform vec4 u_terrainLayerParams;\n";
-        wrapper += "float KbTerrainLayerOpacity(vec2 terrainUv)\n{\n";
-        wrapper += "    if (u_terrainLayerParams.y < 0.5 || u_terrainLayerParams.x < 0.5) return 1.0;\n";
-        wrapper += "    vec4 weights = texture2D(s_terrainLayerWeights, terrainUv);\n";
-        wrapper += "    if (u_terrainLayerParams.x < 1.5) return weights.y / max(weights.x + weights.y, 0.0001);\n";
-        wrapper += "    if (u_terrainLayerParams.x < 2.5) return weights.z / max(weights.x + weights.y + weights.z, 0.0001);\n";
-        wrapper += "    return weights.w / max(weights.x + weights.y + weights.z + weights.w, 0.0001);\n}\n";
-    }
-    if (gbufferPass) {
-        wrapper += "#include \"gbuffer_contract.sh\"\n";
-    }
-    // MAT-72 frame time constants (x=time seconds, y=deltaTime, z=frameIndex). Bound per frame by
-    // SceneMeshPassResources so graph Time/animation nodes read real engine time.
-    wrapper += "uniform vec4 u_time;\n";
-    wrapper += "uniform vec4 u_dynamicParameter;\n";
-    wrapper += "uniform vec4 u_materialParams;\n";
-    // Positions arrive camera-relative (docs/large_worlds.md); this offset turns them into the world positions the
-    // graph reads (the render origin, wrapped to a period that keeps them exact in float).
-    wrapper += "uniform vec4 u_renderOriginOffset;\n";
-    wrapper += "\n// pass:" + std::string{ pass } + "\n\n";
-    wrapper += shader.source;
-    wrapper += "\nvoid main()\n{\n";
+// UV2..UV7 travel as three extra varyings, only for a graph that reads them.
+[[nodiscard]] bool MaterialGraphUsesExtraUvs(const RenderMaterialGraphShaderSource& shader) {
+    return std::ranges::find(shader.reflection.requiredVaryings, std::string_view{ "extraUvs" }) != shader.reflection.requiredVaryings.end();
+}
+[[nodiscard]] bool MaterialGraphIsDecal(const RenderMaterialGraphShaderSource& shader) noexcept {
+    return shader.reflection.domain == RenderMaterialDomain::DeferredDecal;
+}
+// A Deferred Decal carries the rows of its box's inverse transform in the same three varyings.
+[[nodiscard]] std::string ExtraUvVaryings(const RenderMaterialGraphShaderSource& shader) {
+    return MaterialGraphUsesExtraUvs(shader) || MaterialGraphIsDecal(shader) ? ", v_uv23, v_uv45, v_uv67" : "";
+}
+
+// Unreal's Deferred Decal: the opaque surface under this pixel (the scene depth) in the space of the decal's
+// box (v_uv23/45/67 hold the rows of its inverse transform). Only what lies inside the unit box is decorated;
+// the decal projects along the box's Y axis, its X and Z span the texture.
+void AppendMaterialGraphDecalProjection(std::string& wrapper) {
+    wrapper += "    float kbDecalDepth = texture2D(s_kbSceneDepth, ctx.screenPosition).x;\n";
+    wrapper += "#if BGFX_SHADER_LANGUAGE_GLSL\n";
+    wrapper += "    vec3 kbDecalNdc = vec3(ctx.screenPosition * 2.0 - 1.0, kbDecalDepth * 2.0 - 1.0);\n";
+    wrapper += "#else\n";
+    wrapper += "    vec3 kbDecalNdc = vec3(ctx.screenPosition.x * 2.0 - 1.0, 1.0 - ctx.screenPosition.y * 2.0, kbDecalDepth);\n";
+    wrapper += "#endif\n";
+    wrapper += "    vec4 kbDecalClip = mul(u_invViewProj, vec4(kbDecalNdc, 1.0));\n";
+    wrapper += "    vec3 kbDecalPos = kbDecalClip.xyz / kbDecalClip.w;\n";
+    wrapper += "    vec3 kbDecalLocal = vec3(dot(v_uv23, vec4(kbDecalPos, 1.0)), dot(v_uv45, vec4(kbDecalPos, 1.0)), dot(v_uv67, vec4(kbDecalPos, 1.0)));\n";
+    wrapper += "    if (max(max(abs(kbDecalLocal.x), abs(kbDecalLocal.y)), abs(kbDecalLocal.z)) > 0.5)\n    {\n        discard;\n    }\n";
+    wrapper += "    vec3 kbDecalNormal = normalize(cross(dFdx(kbDecalPos), dFdy(kbDecalPos)));\n";
+    wrapper += "    kbDecalNormal = dot(kbDecalNormal, u_cameraPosition.xyz - kbDecalPos) < 0.0 ? -kbDecalNormal : kbDecalNormal;\n";
+    // The texture's X (the box's X axis, or its Z on a surface that faces X) along the surface.
+    wrapper += "    vec3 kbDecalTangent = v_uv23.xyz - kbDecalNormal * dot(kbDecalNormal, v_uv23.xyz);\n";
+    wrapper += "    kbDecalTangent = normalize(dot(kbDecalTangent, kbDecalTangent) > 0.000001 ? kbDecalTangent : v_uv67.xyz - kbDecalNormal * dot(kbDecalNormal, v_uv67.xyz));\n";
+    wrapper += "    ctx.uv0 = kbDecalLocal.xz + 0.5;\n";
+    wrapper += "    ctx.uv1 = ctx.uv0;\n";
+    wrapper += "    ctx.uv23 = vec4_splat(0.0);\n    ctx.uv45 = vec4_splat(0.0);\n    ctx.uv67 = vec4_splat(0.0);\n";
+    wrapper += "    ctx.normal = kbDecalNormal;\n";
+    wrapper += "    ctx.tangent = kbDecalTangent;\n";
+    wrapper += "    ctx.bitangent = cross(kbDecalNormal, kbDecalTangent);\n";
+    wrapper += "    ctx.worldPos = kbDecalPos + u_renderOriginOffset.xyz;\n";
+    wrapper += "    ctx.viewDir = normalize(u_cameraPosition.xyz - kbDecalPos);\n";
+    wrapper += "    ctx.localPosition = kbDecalLocal;\n";
+    wrapper += "    ctx.fragmentDepth = kbDecalDepth;\n";
+}
+
+// The material context of a fragment. The shadow pass has no lighting uniforms, so it uses explicit
+// neutral constants for the view and light inputs; every other pass reads the real camera and light.
+void AppendMaterialGraphFragmentContext(std::string& wrapper, bool shadowPass, bool extraUvs, bool decal = false) {
     wrapper += "    MaterialGraphContext ctx;\n";
     wrapper += "    ctx.uv0 = v_texcoord0;\n";
     wrapper += "    ctx.uv1 = v_shadowFlags.zw;\n";
+    wrapper += extraUvs ? "    ctx.uv23 = v_uv23;\n    ctx.uv45 = v_uv45;\n    ctx.uv67 = v_uv67;\n"
+                        : "    ctx.uv23 = vec4_splat(0.0);\n    ctx.uv45 = vec4_splat(0.0);\n    ctx.uv67 = vec4_splat(0.0);\n";
     wrapper += "    ctx.normal = normalize(v_normal);\n";
     wrapper += "    ctx.tangent = normalize(v_tangent);\n";
     wrapper += "    ctx.bitangent = normalize(v_bitangent);\n";
@@ -995,8 +1126,7 @@ std::string BuildGraphFragmentWrapperSource(
     wrapper += "    ctx.objectOrientation = dot(v_objectOrientation.xyz, v_objectOrientation.xyz) > 0.0001 ? normalize(v_objectOrientation.xyz) : vec3(0.0, 0.0, 1.0);\n";
     wrapper += "    ctx.preSkinnedPosition = v_objectLocalPos.xyz;\n";
     wrapper += "    ctx.preSkinnedNormal = dot(v_preSkinnedNormal, v_preSkinnedNormal) > 0.0001 ? normalize(v_preSkinnedNormal) : vec3(0.0, 0.0, 1.0);\n";
-    // MAT-46: world-space view/light inputs. The shadow pass has no lighting uniforms, so it uses explicit
-    // neutral constants; only the forward pass reads the real camera/light/viewport state.
+    // MAT-46: world-space view/light inputs.
     wrapper += "    ctx.viewSize = u_viewRect.zw;\n";
     wrapper += "    ctx.twoSidedSign = gl_FrontFacing ? 1.0 : -1.0;\n";
     // MAT-80/#18b: this fragment's device depth, so DepthFade can compare against the sampled scene depth.
@@ -1008,7 +1138,222 @@ std::string BuildGraphFragmentWrapperSource(
         wrapper += "    ctx.cameraPosition = u_cameraPosition.xyz + u_renderOriginOffset.xyz;\n";
         wrapper += "    ctx.lightVector = (u_lightParams.x > 0.5) ? normalize(-u_lightDirKind[0].xyz) : vec3(0.0, 1.0, 0.0);\n";
     }
+    if (decal) {
+        AppendMaterialGraphDecalProjection(wrapper);
+    }
     wrapper += "    MaterialSurface surface = EvaluateMaterialGraph(ctx);\n";
+}
+
+[[nodiscard]] bool MaterialGraphWritesDepth(const RenderMaterialGraphShaderSource& shader) noexcept {
+    return shader.reflection.blendMode == RenderMaterialGraphBlendMode::Opaque ||
+        shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked;
+}
+
+// Unreal's velocity pass with the material's own shaders: the surface the base pass kept - clipped by a
+// Masked material, at the depth its Pixel Depth Offset wrote - writes the motion between the positions its
+// vertex shader produces for this frame and for the previous one (BuildGraphVertexWrapperSource).
+std::string BuildGraphMotionVectorFragmentWrapperSource(const RenderMaterialGraphShaderSource& shader) {
+    const bool masked = shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked;
+    const bool pixelDepthOffset = shader.reflection.hasPixelDepthOffset && MaterialGraphWritesDepth(shader);
+    std::string wrapper;
+    wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal, v_currentClip, v_previousClip" + ExtraUvVaryings(shader) + "\n\n";
+    wrapper += "#include <bgfx_shader.sh>\n";
+    wrapper += "#include \"motion_vectors.sh\"\n";
+    wrapper += "SAMPLER2D(s_sceneDepth, 0);\n";
+    wrapper += "uniform vec4 u_time;\n";
+    wrapper += "uniform vec4 u_dynamicParameter;\n";
+    wrapper += "uniform vec4 u_materialParams;\n";
+    wrapper += "uniform vec4 u_renderOriginOffset;\n";
+    wrapper += "uniform vec4 u_cameraPosition;\n";
+    wrapper += "uniform vec4 u_lightDirKind[32];\n";
+    wrapper += "uniform vec4 u_lightParams;\n";
+    wrapper += "\n// pass:MotionVectors\n\n";
+    wrapper += shader.source;
+    wrapper += "\nvoid main()\n{\n";
+    wrapper += "    float kbMotionDepth = gl_FragCoord.z;\n";
+    if (masked || pixelDepthOffset) {
+        AppendMaterialGraphFragmentContext(wrapper, false, MaterialGraphUsesExtraUvs(shader));
+    }
+    if (pixelDepthOffset) {
+        AppendMaterialGraphPixelDepthOffsetDepth(wrapper);
+        wrapper += "    kbMotionDepth = kbPdoDepth;\n";
+    }
+    wrapper += "    bool kbMotionVisible = KbMotionSurfaceVisible(s_sceneDepth, gl_FragCoord.xy, kbMotionDepth);\n";
+    if (masked) {
+        wrapper += "    kbMotionVisible = kbMotionVisible && surface.alpha >= surface.alphaClipThreshold;\n";
+    }
+    wrapper += "    if (!kbMotionVisible)\n    {\n        discard;\n    }\n";
+    wrapper += "    gl_FragColor = vec4(KbMotionVelocity(v_currentClip, v_previousClip), 0.0, 1.0);\n";
+    wrapper += "}\n";
+    return wrapper;
+}
+
+} // namespace
+
+bool RenderMaterialGraphDrawsOwnMotionVectors(const RenderMaterialGraphReflection& reflection) noexcept {
+    const bool writesDepth = reflection.blendMode == RenderMaterialGraphBlendMode::Opaque ||
+        reflection.blendMode == RenderMaterialGraphBlendMode::Masked;
+    return writesDepth &&
+        (reflection.hasWorldPositionOffset || reflection.hasDisplacement || reflection.hasPixelDepthOffset ||
+         reflection.blendMode == RenderMaterialGraphBlendMode::Masked);
+}
+
+bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& reflection, std::string_view pass) noexcept {
+    // A graph of another domain draws in its own pass only.
+    if (reflection.domain == RenderMaterialDomain::PostProcess) {
+        return pass == kRenderMaterialGraphPostProcessPass;
+    }
+    if (reflection.domain == RenderMaterialDomain::UserInterface) {
+        return pass == kRenderMaterialGraphUserInterfacePass;
+    }
+    if (reflection.domain == RenderMaterialDomain::DeferredDecal) {
+        return pass == "BaseTransparent";
+    }
+    if (pass == kRenderMaterialGraphPostProcessPass || pass == kRenderMaterialGraphUserInterfacePass) {
+        return false;
+    }
+    return pass != kRenderMaterialGraphMotionVectorsPass || RenderMaterialGraphDrawsOwnMotionVectors(reflection);
+}
+
+bool RenderMaterialGraphRequiresGeneratedVertexShader(const RenderMaterialGraphReflection& reflection) noexcept {
+    return reflection.hasWorldPositionOffset || reflection.hasCustomizedUv0 || reflection.hasDisplacement ||
+        reflection.domain == RenderMaterialDomain::DeferredDecal;
+}
+
+namespace {
+
+// Unreal's post-process material: the graph evaluated for every pixel of the view with Scene Color / Scene Depth
+// reading the chain's input (s_kbSceneColor at stage 4, s_kbSceneDepth at 5); its Emissive Color replaces the
+// colour. Unreal's User Interface material: the graph evaluated over a widget's rectangle (Texture Coordinate
+// spans it); its Final Color (Emissive) and Opacity, times the widget's colour, are blended over the UI.
+std::string BuildGraphScreenFragmentWrapperSource(const RenderMaterialGraphShaderSource& shader, bool userInterface) {
+    std::string wrapper;
+    wrapper += userInterface ? "$input v_texcoord0, v_screenUILocal, v_screenUIPosition\n\n" : "$input v_texcoord0\n\n";
+    wrapper += "#include <bgfx_shader.sh>\n";
+    if (userInterface) {
+        wrapper += "uniform vec4 u_screenUIFillColor;\n";
+    }
+    wrapper += "uniform vec4 u_time;\n";
+    wrapper += "uniform vec4 u_dynamicParameter;\n";
+    wrapper += "uniform vec4 u_materialParams;\n";
+    wrapper += "uniform vec4 u_renderOriginOffset;\n";
+    wrapper += "uniform vec4 u_cameraPosition;\n\n";
+    wrapper += shader.source;
+    wrapper += "\nvoid main()\n{\n";
+    wrapper += "    MaterialGraphContext ctx;\n";
+    wrapper += "    ctx.uv0 = v_texcoord0;\n";
+    wrapper += "    ctx.uv1 = v_texcoord0;\n";
+    wrapper += "    ctx.uv23 = vec4_splat(0.0);\n    ctx.uv45 = vec4_splat(0.0);\n    ctx.uv67 = vec4_splat(0.0);\n";
+    wrapper += "    ctx.normal = vec3(0.0, 0.0, 1.0);\n";
+    wrapper += "    ctx.tangent = vec3(1.0, 0.0, 0.0);\n";
+    wrapper += "    ctx.bitangent = vec3(0.0, 1.0, 0.0);\n";
+    wrapper += "    ctx.worldPos = u_cameraPosition.xyz;\n";
+    wrapper += "    ctx.viewDir = vec3(0.0, 0.0, 1.0);\n";
+    wrapper += "    ctx.vertexColor = vec4_splat(1.0);\n";
+    wrapper += "    ctx.time = u_time.x;\n";
+    wrapper += "    ctx.deltaTime = u_time.y;\n";
+    wrapper += "    ctx.dynamicParameter = u_dynamicParameter;\n";
+    wrapper += userInterface ? "    ctx.screenPosition = gl_FragCoord.xy / max(u_viewRect.zw, vec2(1.0, 1.0));\n"
+                             : "    ctx.screenPosition = v_texcoord0;\n";
+    wrapper += userInterface ? "    ctx.localPosition = vec3(v_screenUILocal, 0.0);\n" : "    ctx.localPosition = vec3_splat(0.0);\n";
+    wrapper += "    ctx.objectPosition = vec3_splat(0.0);\n";
+    wrapper += "    ctx.perInstanceRandom = 0.0;\n";
+    wrapper += "    ctx.perInstanceFadeAmount = 0.0;\n";
+    wrapper += "    ctx.perInstanceCustomData = 0.0;\n";
+    wrapper += "    ctx.objectRadius = 0.0;\n";
+    wrapper += "    ctx.objectBounds = vec4_splat(0.0);\n";
+    wrapper += "    ctx.objectOrientation = vec3(0.0, 0.0, 1.0);\n";
+    wrapper += "    ctx.preSkinnedPosition = vec3_splat(0.0);\n";
+    wrapper += "    ctx.preSkinnedNormal = vec3(0.0, 0.0, 1.0);\n";
+    wrapper += "    ctx.cameraPosition = u_cameraPosition.xyz;\n";
+    wrapper += "    ctx.lightVector = vec3(0.0, 1.0, 0.0);\n";
+    wrapper += "    ctx.viewSize = u_viewRect.zw;\n";
+    wrapper += "    ctx.twoSidedSign = 1.0;\n";
+    wrapper += "    ctx.fragmentDepth = 0.0;\n";
+    wrapper += "    MaterialSurface surface = EvaluateMaterialGraph(ctx);\n";
+    wrapper += userInterface ? "    gl_FragColor = vec4(surface.emissive, clamp(surface.alpha, 0.0, 1.0)) * u_screenUIFillColor;\n"
+                             : "    gl_FragColor = vec4(surface.emissive, 1.0);\n";
+    wrapper += "}\n";
+    return wrapper;
+}
+
+// The fullscreen triangle of the post-process chain (vs_present.sc).
+std::string BuildGraphPostProcessVertexWrapperSource() {
+    return "$input a_position, a_texcoord0\n$output v_texcoord0\n\n#include <bgfx_shader.sh>\n\nvoid main()\n{\n"
+           "    gl_Position = vec4(a_position.xy, 0.0, 1.0);\n    v_texcoord0 = a_texcoord0;\n}\n";
+}
+
+// A widget's quad in UI pixels (vs_screen_ui.sc).
+std::string BuildGraphUserInterfaceVertexWrapperSource() {
+    return "$input a_position, a_texcoord0, a_texcoord1\n$output v_texcoord0, v_screenUILocal, v_screenUIPosition\n\n"
+           "#include <bgfx_shader.sh>\n\nuniform vec4 u_screenUIViewport;\n\nvoid main()\n{\n"
+           "    gl_Position = vec4(a_position.x * u_screenUIViewport.z * 2.0 - 1.0, 1.0 - a_position.y * u_screenUIViewport.w * 2.0, 0.0, 1.0);\n"
+           "    v_texcoord0 = a_texcoord0;\n    v_screenUILocal = a_texcoord1;\n    v_screenUIPosition = a_position.xy;\n}\n";
+}
+
+} // namespace
+
+std::string BuildGraphFragmentWrapperSource(
+    const RenderMaterialGraphShaderSource& shader,
+    std::string_view pass) {
+    if (pass == kRenderMaterialGraphMotionVectorsPass) {
+        return BuildGraphMotionVectorFragmentWrapperSource(shader);
+    }
+    if (pass == kRenderMaterialGraphPostProcessPass || pass == kRenderMaterialGraphUserInterfacePass) {
+        return BuildGraphScreenFragmentWrapperSource(shader, pass == kRenderMaterialGraphUserInterfacePass);
+    }
+    const bool shadowPass = pass == "ShadowDepth";
+    const bool gbufferPass = pass == "GBuffer";
+
+    std::string wrapper;
+    wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal" + ExtraUvVaryings(shader) + "\n\n";
+    wrapper += "#include <bgfx_shader.sh>\n";
+    if (!shadowPass) {
+        wrapper += "#include \"pbr_graph_forward.sh\"\n";
+        wrapper += "SAMPLER2D(s_terrainLayerWeights, 15);\n";
+        wrapper += "uniform vec4 u_terrainLayerParams;\n";
+        wrapper += "float KbTerrainLayerOpacity(vec2 terrainUv)\n{\n";
+        wrapper += "    if (u_terrainLayerParams.y < 0.5 || u_terrainLayerParams.x < 0.5) return 1.0;\n";
+        wrapper += "    vec4 weights = texture2D(s_terrainLayerWeights, terrainUv);\n";
+        wrapper += "    if (u_terrainLayerParams.x < 1.5) return weights.y / max(weights.x + weights.y, 0.0001);\n";
+        wrapper += "    if (u_terrainLayerParams.x < 2.5) return weights.z / max(weights.x + weights.y + weights.z, 0.0001);\n";
+        wrapper += "    return weights.w / max(weights.x + weights.y + weights.z + weights.w, 0.0001);\n}\n";
+    }
+    if (gbufferPass) {
+        wrapper += "#include \"gbuffer_contract.sh\"\n";
+    }
+    // MAT-72 frame time constants (x=time seconds, y=deltaTime, z=frameIndex). Bound per frame by
+    // SceneMeshPassResources so graph Time/animation nodes read real engine time.
+    wrapper += "uniform vec4 u_time;\n";
+    wrapper += "uniform vec4 u_dynamicParameter;\n";
+    wrapper += "uniform vec4 u_materialParams;\n";
+    // Positions arrive camera-relative (docs/large_worlds.md); this offset turns them into the world positions the
+    // graph reads (the render origin, wrapped to a period that keeps them exact in float).
+    wrapper += "uniform vec4 u_renderOriginOffset;\n";
+    wrapper += "\n// pass:" + std::string{ pass } + "\n\n";
+    wrapper += shader.source;
+    wrapper += "\nvoid main()\n{\n";
+    const bool decal = MaterialGraphIsDecal(shader);
+    AppendMaterialGraphFragmentContext(wrapper, shadowPass, MaterialGraphUsesExtraUvs(shader), decal);
+    if (decal) {
+        // The decorated surface is lit like the forward pass lights a surface; the decal's opacity blends it in.
+        if (shader.reflection.shadingModel == RenderMaterialShadingModel::Unlit) {
+            wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, surface.alpha);\n";
+        } else {
+            wrapper += "    vec3 graphNormal = (u_materialParams.z > 0.0) ? normalize(vec3(surface.normal.xy * u_materialParams.z, surface.normal.z)) : vec3(0.0, 0.0, 1.0);\n";
+            wrapper += "    vec3 worldNormal = normalize(ctx.tangent * graphNormal.x + ctx.bitangent * graphNormal.y + ctx.normal * graphNormal.z);\n";
+            wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, kbDecalPos, surface.baseColor.rgb, clamp(surface.metallic, 0.0, 1.0), "
+                       "clamp(surface.roughness, 0.04, 1.0), clamp(surface.specular, 0.0, 1.0), clamp(surface.occlusion, 0.0, 1.0), " +
+                std::to_string(static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel))) + ".0, 0.0, 0.0);\n";
+            wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);\n";
+        }
+        wrapper += "}\n";
+        return wrapper;
+    }
+    const bool writesDepth = MaterialGraphWritesDepth(shader);
+    if (shader.reflection.hasPixelDepthOffset && writesDepth) {
+        AppendMaterialGraphPixelDepthOffset(wrapper);
+    }
     if (shadowPass) {
         wrapper += "    if (surface.alpha < surface.alphaClipThreshold)\n    {\n        discard;\n    }\n";
         wrapper += "    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);\n";
@@ -1016,6 +1361,9 @@ std::string BuildGraphFragmentWrapperSource(
         wrapper += "    float terrainLayerOpacity = KbTerrainLayerOpacity(v_shadowFlags.zw);\n";
         wrapper += "    if (u_terrainLayerParams.y > 0.5 && terrainLayerOpacity <= 0.0001)\n    {\n        discard;\n    }\n";
         wrapper += "    surface.alpha *= terrainLayerOpacity;\n";
+        // The scene colour alpha (SceneColorAlphaPolicy): an opaque or masked surface covers what is behind it,
+        // only a translucent one has an opacity; a terrain layer blends by its weight.
+        const std::string outputAlpha = writesDepth ? "terrainLayerOpacity" : "surface.alpha";
         // MAT-38 Masked: clip fragments whose alpha is below the clip threshold so the background shows
         // through (binary opacity). The transparent modes keep every fragment and blend at the ROP stage.
         if (shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked) {
@@ -1023,7 +1371,7 @@ std::string BuildGraphFragmentWrapperSource(
         }
         if (gbufferPass) {
             const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
-            AppendMaterialGraphTangentBasis(wrapper, shader);
+            AppendMaterialGraphTangentBasis(wrapper);
             if (shader.reflection.hasTangentOutput) {
                 wrapper += "    vec3 materialTangent = basisTangent * surface.tangentOutput.x + basisBitangent * surface.tangentOutput.y + basisNormal * surface.tangentOutput.z;\n";
                 wrapper += "    materialTangent = dot(materialTangent, materialTangent) > 0.0001 ? normalize(materialTangent) : basisTangent;\n";
@@ -1034,16 +1382,32 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    vec3 graphNormal = surface.normal;\n";
             wrapper += "    graphNormal = (u_materialParams.z > 0.0) ? normalize(vec3(graphNormal.xy * u_materialParams.z, graphNormal.z)) : vec3(0.0, 0.0, 1.0);\n";
             wrapper += "    vec3 worldNormal = normalize(basisTangent * graphNormal.x + basisBitangent * graphNormal.y + basisNormal * graphNormal.z);\n";
-            wrapper += "    gl_FragData[0] = vec4(surface.baseColor.rgb, 1.0);\n";
-            wrapper += "    gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, 1.0);\n";
+            // Alpha of the albedo and normal targets: the shading model's CustomData0/1 (gbuffer_contract.sh).
+            wrapper += "    gl_FragData[0] = vec4(surface.baseColor.rgb, clamp(surface.clearCoat, 0.0, 1.0));\n";
+            wrapper += "    gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, KbEncodeGBufferCustomData1(surface.clearCoatRoughness));\n";
             wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), KbEncodeGBufferShadingModel(" + std::to_string(shadingModelId) + ".0));\n";
             wrapper += "    gl_FragData[3] = vec4(surface.emissive, clamp(surface.specular, 0.0, 1.0));\n";
+            if (shader.reflection.writesShadingModelColor && shader.reflection.shadingModel == RenderMaterialShadingModel::Eye) {
+                // Unreal's Eye: the iris (octahedral world normal, mask, distance) in the fifth target.
+                wrapper += "    vec3 kbIrisNormal = normalize(basisTangent * surface.irisNormal.x + basisBitangent * surface.irisNormal.y + basisNormal * surface.irisNormal.z);\n";
+                wrapper += "    gl_FragData[4] = vec4(KbOctEncode(kbIrisNormal) * 0.5 + 0.5, clamp(surface.irisMask, 0.0, 1.0), clamp(surface.irisDistance, 0.0, 1.0));\n";
+            } else if (shader.reflection.writesShadingModelColor) {
+                // Unreal's custom data: the model colour (alpha 1 = given) in the fifth target, which the
+                // G-buffer carries in frames that draw such a material.
+                wrapper += "    gl_FragData[4] = vec4(clamp(" + std::string{ GraphShadingModelColorField(shader) } +
+                    ", vec3_splat(0.0), vec3_splat(1.0)), 1.0);\n";
+            }
         } else if (shader.reflection.shadingModel == RenderMaterialShadingModel::Unlit) {
             // MAT-37 Unlit: the surface emissive plus base color go straight to the framebuffer with no lighting.
-            wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, surface.alpha);\n";
+            if (shader.reflection.hasRefraction) {
+                wrapper += "    vec3 worldNormal = normalize(v_normal) * (gl_FrontFacing ? 1.0 : -1.0);\n";
+                AppendMaterialGraphRefraction(wrapper, "worldNormal", "surface.baseColor.rgb + surface.emissive");
+            } else {
+                wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, " + outputAlpha + ");\n";
+            }
         } else {
             // MAT-37 DefaultLit: the metallic-roughness forward PBR path.
-            AppendMaterialGraphTangentBasis(wrapper, shader);
+            AppendMaterialGraphTangentBasis(wrapper);
             if (shader.reflection.hasTangentOutput) {
                 wrapper += "    vec3 materialTangent = basisTangent * surface.tangentOutput.x + basisBitangent * surface.tangentOutput.y + basisNormal * surface.tangentOutput.z;\n";
                 wrapper += "    materialTangent = dot(materialTangent, materialTangent) > 0.0001 ? normalize(materialTangent) : basisTangent;\n";
@@ -1058,23 +1422,140 @@ std::string BuildGraphFragmentWrapperSource(
             wrapper += "    float roughness = clamp(surface.roughness, 0.04, 1.0);\n";
             wrapper += "    float occlusion = clamp(surface.occlusion, 0.0, 1.0);\n";
             wrapper += "    float specular = clamp(surface.specular, 0.0, 1.0);\n";
-            wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion);\n";
-            wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);\n";
+            const auto shadingModelId = static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel));
+            if (shader.reflection.shadingModel == RenderMaterialShadingModel::Eye) {
+                // Unreal's Eye in the forward pass: the iris normal in world space, as the G-buffer stores it.
+                wrapper += "    vec3 kbIrisNormal = normalize(basisTangent * surface.irisNormal.x + basisBitangent * surface.irisNormal.y + basisNormal * surface.irisNormal.z);\n";
+                wrapper += "    vec3 lighting = KbEvaluateForwardLightingFull(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
+                    std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0), " +
+                    "KbDefaultShadingModelColor(" + std::to_string(shadingModelId) + ".0, surface.baseColor.rgb, metallic), kbIrisNormal, " +
+                    "vec2(clamp(surface.irisMask, 0.0, 1.0), clamp(surface.irisDistance, 0.0, 1.0)));\n";
+            } else if (shader.reflection.writesShadingModelColor) {
+                wrapper += "    vec3 lighting = KbEvaluateForwardLightingColor(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
+                    std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0), " +
+                    std::string{ GraphShadingModelColorField(shader) } + ");\n";
+            } else {
+                wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, specular, occlusion, " +
+                    std::to_string(shadingModelId) + ".0, clamp(surface.clearCoat, 0.0, 1.0), clamp(surface.clearCoatRoughness, 0.0, 1.0));\n";
+            }
+            if (shader.reflection.shadingModel == RenderMaterialShadingModel::ThinTranslucent) {
+                AppendMaterialGraphThinTranslucent(wrapper, shader, std::to_string(shadingModelId) + ".0");
+            } else if (shader.reflection.shadingModel == RenderMaterialShadingModel::SingleLayerWater) {
+                AppendMaterialGraphSingleLayerWater(wrapper, shader, std::to_string(shadingModelId) + ".0");
+            } else if (shader.reflection.hasRefraction) {
+                AppendMaterialGraphRefraction(wrapper, "worldNormal", "lighting + surface.emissive");
+            } else {
+                wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, " + outputAlpha + ");\n";
+            }
         }
     }
     wrapper += "}\n";
     return wrapper;
 }
 
-std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource& shader) {
+namespace {
+
+// The vertex-domain evaluation of a graph for one model and one material time: the instanced mesh vertex
+// transform (vs_mesh_instanced.sc) with the graph's vertex outputs applied before projection. Every name it
+// declares ends in `suffix`, so the motion vector pass evaluates the previous frame next to the current one.
+void AppendGraphVertexEvaluation(std::string& vs, const RenderMaterialGraphShaderSource& shader,
+    const std::string& suffix, const std::string& model, const std::string& time, const std::string& deltaTime) {
+    const auto name = [&suffix](const char* base) { return std::string{ base } + suffix; };
+    vs += "    mat4 " + name("model") + " = " + model + ";\n";
+    vs += "    vec4 " + name("worldPos") + " = mul(" + name("model") + ", vec4(a_position, 1.0));\n";
+    vs += "    vec3 " + name("objectWorldPos") + " = mul(" + name("model") + ", vec4(0.0, 0.0, 0.0, 1.0)).xyz;\n";
+    vs += "    vec3 " + name("objectOrientationRaw") + " = mul(" + name("model") + ", vec4(0.0, 0.0, 1.0, 0.0)).xyz;\n";
+    vs += "    vec3 " + name("objectOrientation") + " = dot(" + name("objectOrientationRaw") + ", " + name("objectOrientationRaw") +
+        ") > 0.0001 ? normalize(" + name("objectOrientationRaw") + ") : vec3(0.0, 0.0, 1.0);\n";
+    vs += "    vec3 " + name("vsNormal") + " = KbModelNormal(" + name("model") + ", a_normal);\n";
+    vs += "    vec3 " + name("vsTangent") + " = mul(" + name("model") + ", vec4(a_tangent.xyz, 0.0)).xyz;\n";
+    vs += "    vec3 " + name("fallbackAxis") + " = abs(" + name("vsNormal") + ".y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n";
+    vs += "    " + name("vsTangent") + " = dot(" + name("vsTangent") + ", " + name("vsTangent") + ") > 0.0001 ? normalize(" +
+        name("vsTangent") + ") : normalize(cross(" + name("fallbackAxis") + ", " + name("vsNormal") + "));\n";
+    vs += "    " + name("vsTangent") + " = normalize(" + name("vsTangent") + " - " + name("vsNormal") + " * dot(" + name("vsNormal") +
+        ", " + name("vsTangent") + "));\n";
+    vs += "    float " + name("handedness") + " = abs(a_tangent.w) > 0.0001 ? a_tangent.w : 1.0;\n";
+    vs += "    vec3 " + name("vsBitangent") + " = normalize(cross(" + name("vsNormal") + ", " + name("vsTangent") + ") * " + name("handedness") + ");\n";
+    vs += "    vec3 " + name("preSkinnedNormal") + " = dot(a_normal, a_normal) > 0.0001 ? normalize(a_normal) : vec3(0.0, 0.0, 1.0);\n";
+    const std::string ctx = name("ctx");
+    vs += "    MaterialGraphContext " + ctx + ";\n";
+    vs += "    " + ctx + ".uv0 = a_texcoord0;\n";
+    vs += "    " + ctx + ".uv1 = a_texcoord1;\n";
+    vs += MaterialGraphUsesExtraUvs(shader) && !MaterialGraphIsDecal(shader)
+        ? "    " + ctx + ".uv23 = a_color1;\n    " + ctx + ".uv45 = a_color2;\n    " + ctx + ".uv67 = a_color3;\n"
+        : "    " + ctx + ".uv23 = vec4_splat(0.0);\n    " + ctx + ".uv45 = vec4_splat(0.0);\n    " + ctx + ".uv67 = vec4_splat(0.0);\n";
+    vs += "    " + ctx + ".normal = " + name("vsNormal") + ";\n";
+    vs += "    " + ctx + ".tangent = " + name("vsTangent") + ";\n";
+    vs += "    " + ctx + ".bitangent = " + name("vsBitangent") + ";\n";
+    vs += "    " + ctx + ".worldPos = " + name("worldPos") + ".xyz + u_renderOriginOffset.xyz;\n";
+    vs += "    " + ctx + ".viewDir = vec3(0.0, 0.0, 1.0);\n";
+    vs += "    " + ctx + ".vertexColor = a_color0 * vec4(i_data4.rgb, abs(i_data4.w));\n";
+    vs += "    " + ctx + ".time = " + time + ";\n";
+    vs += "    " + ctx + ".deltaTime = " + deltaTime + ";\n";
+    vs += "    " + ctx + ".dynamicParameter = u_dynamicParameter;\n";
+    vs += "    " + ctx + ".screenPosition = vec2(0.0, 0.0);\n";
+    vs += "    " + ctx + ".localPosition = a_position;\n";
+    vs += "    " + ctx + ".objectPosition = " + name("objectWorldPos") + " + u_renderOriginOffset.xyz;\n";
+    vs += "    " + ctx + ".perInstanceRandom = instanceRandom;\n";
+    vs += "    " + ctx + ".objectRadius = instanceRadius;\n";
+    vs += "    " + ctx + ".perInstanceFadeAmount = instanceFadeAmount;\n";
+    vs += "    " + ctx + ".perInstanceCustomData = instanceCustomData;\n";
+    vs += "    " + ctx + ".objectBounds = vec4(" + name("objectWorldPos") + " + u_renderOriginOffset.xyz, max(instanceRadius, 0.0));\n";
+    vs += "    " + ctx + ".objectOrientation = " + name("objectOrientation") + ";\n";
+    vs += "    " + ctx + ".preSkinnedPosition = a_position;\n";
+    vs += "    " + ctx + ".preSkinnedNormal = " + name("preSkinnedNormal") + ";\n";
+    vs += "    " + ctx + ".cameraPosition = vec3(0.0, 0.0, 0.0);\n";
+    vs += "    " + ctx + ".lightVector = vec3(0.0, 1.0, 0.0);\n";
+    vs += "    " + ctx + ".viewSize = vec2(0.0, 0.0);\n";
+    vs += "    " + ctx + ".twoSidedSign = 1.0;\n";
+    vs += "    " + ctx + ".fragmentDepth = 0.0;\n";
+    vs += "    vec2 " + name("materialUv0") + " = a_texcoord0;\n";
+    if (shader.reflection.hasCustomizedUv0) {
+        vs += "    " + name("materialUv0") + " = EvaluateCustomizedUv0(" + ctx + ");\n";
+        vs += "    " + ctx + ".uv0 = " + name("materialUv0") + ";\n";
+    }
+    if (shader.reflection.hasWorldPositionOffset) {
+        vs += "    " + name("worldPos") + ".xyz += EvaluateWorldPositionOffset(" + ctx + ");\n";
+    }
+    if (shader.reflection.hasDisplacement) {
+        vs += "    " + name("worldPos") + ".xyz += EvaluateDisplacement(" + ctx + ");\n";
+    }
+}
+
+} // namespace
+
+std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource& shader, std::string_view pass) {
+    if (pass == kRenderMaterialGraphPostProcessPass) {
+        return BuildGraphPostProcessVertexWrapperSource();
+    }
+    if (pass == kRenderMaterialGraphUserInterfacePass) {
+        return BuildGraphUserInterfaceVertexWrapperSource();
+    }
     // MAT-67/#54: the instanced mesh vertex shader with graph vertex-domain outputs applied before
     // projection/rasterization. WPO and displacement move real geometry; CustomizedUV0 rewrites the
     // interpolated UV that fragment TextureSample nodes read. Mirrors vs_mesh_instanced.sc.
+    // The motion vector pass evaluates the graph twice, like Unreal's velocity pass runs the material's
+    // vertex factory with the previous frame's parameters: at this frame's material time with the current
+    // model, and at the previous frame's time with the previous model (motion_vectors.sh).
+    const bool motionVectors = pass == kRenderMaterialGraphMotionVectorsPass;
     std::string vs;
-    vs += "$input a_position, a_normal, a_tangent, a_texcoord0, a_texcoord1, a_color0, i_data0, i_data1, i_data2, i_data3, i_data4\n";
-    vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal\n\n";
-    vs += "#include <bgfx_shader.sh>\n";
-    vs += "uniform mat4 u_shadowViewProj;\n";
+    const bool extraUvs = MaterialGraphUsesExtraUvs(shader) && !MaterialGraphIsDecal(shader);
+    vs += std::string{ "$input a_position, a_normal, a_tangent, a_texcoord0, a_texcoord1, a_color0" } +
+        (extraUvs ? ", a_color1, a_color2, a_color3" : "") + ", i_data0, i_data1, i_data2, i_data3, i_data4\n";
+    if (motionVectors) {
+        vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal, v_currentClip, v_previousClip" + ExtraUvVaryings(shader) + "\n\n";
+        vs += "#include <bgfx_shader.sh>\n";
+        vs += "#include \"motion_vectors.sh\"\n";
+        vs += "#include \"model_normal.sh\"\n";
+        vs += "SAMPLER2D(s_motionPreviousModels, 15);\n";
+        // x: the material time of the previous frame, y: its delta time.
+        vs += "uniform vec4 u_motionPreviousTime;\n";
+    } else {
+        vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal" + ExtraUvVaryings(shader) + "\n\n";
+        vs += "#include <bgfx_shader.sh>\n";
+        vs += "#include \"model_normal.sh\"\n";
+        vs += "uniform mat4 u_shadowViewProj;\n";
+    }
     vs += "uniform vec4 u_time;\n";
     vs += "uniform vec4 u_dynamicParameter;\n";
     vs += "uniform vec4 u_renderOriginOffset;\n\n";
@@ -1084,64 +1565,25 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     vs += "    float instanceRadius = i_data1.w;\n";
     vs += "    float instanceFadeAmount = i_data2.w;\n";
     vs += "    float instanceCustomData = i_data3.w;\n";
-    vs += "    mat4 model = mtxFromCols(vec4(i_data0.xyz, 0.0), vec4(i_data1.xyz, 0.0), vec4(i_data2.xyz, 0.0), vec4(i_data3.xyz, 1.0));\n";
-    vs += "    vec4 worldPos = mul(model, vec4(a_position, 1.0));\n";
-    vs += "    vec3 objectWorldPos = mul(model, vec4(0.0, 0.0, 0.0, 1.0)).xyz;\n";
-    vs += "    vec3 objectOrientationRaw = mul(model, vec4(0.0, 0.0, 1.0, 0.0)).xyz;\n";
-    vs += "    vec3 objectOrientation = dot(objectOrientationRaw, objectOrientationRaw) > 0.0001 ? normalize(objectOrientationRaw) : vec3(0.0, 0.0, 1.0);\n";
-    vs += "    vec3 vsNormal = normalize(mul(model, vec4(a_normal, 0.0)).xyz);\n";
-    vs += "    vec3 vsTangent = mul(model, vec4(a_tangent.xyz, 0.0)).xyz;\n";
-    vs += "    vec3 fallbackAxis = abs(vsNormal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n";
-    vs += "    vsTangent = dot(vsTangent, vsTangent) > 0.0001 ? normalize(vsTangent) : normalize(cross(fallbackAxis, vsNormal));\n";
-    vs += "    vsTangent = normalize(vsTangent - vsNormal * dot(vsNormal, vsTangent));\n";
-    vs += "    float handedness = abs(a_tangent.w) > 0.0001 ? a_tangent.w : 1.0;\n";
-    vs += "    vec3 vsBitangent = normalize(cross(vsNormal, vsTangent) * handedness);\n";
-    vs += "    vec3 preSkinnedNormal = dot(a_normal, a_normal) > 0.0001 ? normalize(a_normal) : vec3(0.0, 0.0, 1.0);\n";
-    vs += "    MaterialGraphContext ctx;\n";
-    vs += "    ctx.uv0 = a_texcoord0;\n";
-    vs += "    ctx.uv1 = a_texcoord1;\n";
-    vs += "    ctx.normal = vsNormal;\n";
-    vs += "    ctx.tangent = vsTangent;\n";
-    vs += "    ctx.bitangent = vsBitangent;\n";
-    vs += "    ctx.worldPos = worldPos.xyz + u_renderOriginOffset.xyz;\n";
-    vs += "    ctx.viewDir = vec3(0.0, 0.0, 1.0);\n";
-    vs += "    ctx.vertexColor = a_color0 * vec4(i_data4.rgb, abs(i_data4.w));\n";
-    vs += "    ctx.time = u_time.x;\n";
-    vs += "    ctx.deltaTime = u_time.y;\n";
-    vs += "    ctx.dynamicParameter = u_dynamicParameter;\n";
-    vs += "    ctx.screenPosition = vec2(0.0, 0.0);\n";
-    vs += "    ctx.localPosition = a_position;\n";
-    vs += "    ctx.objectPosition = objectWorldPos + u_renderOriginOffset.xyz;\n";
-    vs += "    ctx.perInstanceRandom = instanceRandom;\n";
-    vs += "    ctx.objectRadius = instanceRadius;\n";
-    vs += "    ctx.perInstanceFadeAmount = instanceFadeAmount;\n";
-    vs += "    ctx.perInstanceCustomData = instanceCustomData;\n";
-    vs += "    ctx.objectBounds = vec4(objectWorldPos + u_renderOriginOffset.xyz, max(instanceRadius, 0.0));\n";
-    vs += "    ctx.objectOrientation = objectOrientation;\n";
-    vs += "    ctx.preSkinnedPosition = a_position;\n";
-    vs += "    ctx.preSkinnedNormal = preSkinnedNormal;\n";
-    vs += "    ctx.cameraPosition = vec3(0.0, 0.0, 0.0);\n";
-    vs += "    ctx.lightVector = vec3(0.0, 1.0, 0.0);\n";
-    vs += "    ctx.viewSize = vec2(0.0, 0.0);\n";
-    vs += "    ctx.twoSidedSign = 1.0;\n";
-    vs += "    ctx.fragmentDepth = 0.0;\n";
-    vs += "    vec2 materialUv0 = a_texcoord0;\n";
-    if (shader.reflection.hasCustomizedUv0) {
-        vs += "    materialUv0 = EvaluateCustomizedUv0(ctx);\n";
-        vs += "    ctx.uv0 = materialUv0;\n";
-    }
-    if (shader.reflection.hasWorldPositionOffset) {
-        vs += "    worldPos.xyz += EvaluateWorldPositionOffset(ctx);\n";
-    }
-    if (shader.reflection.hasDisplacement) {
-        vs += "    worldPos.xyz += EvaluateDisplacement(ctx);\n";
-    }
+    vs += "    vec4 modelColumn0 = vec4(i_data0.xyz, 0.0);\n";
+    vs += "    vec4 modelColumn1 = vec4(i_data1.xyz, 0.0);\n";
+    vs += "    vec4 modelColumn2 = vec4(i_data2.xyz, 0.0);\n";
+    vs += "    vec4 modelColumn3 = vec4(i_data3.xyz, 1.0);\n";
+    AppendGraphVertexEvaluation(vs, shader, "", "mtxFromCols(modelColumn0, modelColumn1, modelColumn2, modelColumn3)", "u_time.x", "u_time.y");
     vs += "    gl_Position = mul(u_viewProj, worldPos);\n";
+    if (motionVectors) {
+        AppendGraphVertexEvaluation(vs, shader, "Previous",
+            "KbMotionPreviousModel(s_motionPreviousModels, float(gl_InstanceID), modelColumn0, modelColumn1, modelColumn2, modelColumn3)",
+            "u_motionPreviousTime.x", "u_motionPreviousTime.y");
+        vs += "    v_currentClip = mul(u_motionCurrentViewProjection, worldPos);\n";
+        vs += "    v_previousClip = mul(u_motionPreviousViewProjection, worldPosPrevious);\n";
+    } else {
+        vs += "    v_shadowPos = mul(u_shadowViewProj, worldPos);\n";
+    }
     vs += "    v_worldPos = worldPos.xyz;\n";
     vs += "    v_objectLocalPos = vec4(a_position, instanceRandom);\n";
     vs += "    v_objectWorldPos = vec4(objectWorldPos, instanceRadius);\n";
     vs += "    v_objectOrientation = vec4(objectOrientation, instanceCustomData);\n";
-    vs += "    v_shadowPos = mul(u_shadowViewProj, worldPos);\n";
     vs += "    v_shadowFlags = vec4(i_data4.w >= 0.0 ? 1.0 : 0.0, instanceFadeAmount, a_texcoord1.x, a_texcoord1.y);\n";
     vs += "    v_normal = vsNormal;\n";
     vs += "    v_tangent = vsTangent;\n";
@@ -1149,6 +1591,18 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     vs += "    v_texcoord0 = materialUv0;\n";
     vs += "    v_color0 = ctx.vertexColor;\n";
     vs += "    v_preSkinnedNormal = preSkinnedNormal;\n";
+    if (MaterialGraphIsDecal(shader)) {
+        // The rows of the box's inverse transform: the cofactors of the model's columns over its determinant.
+        vs += "    vec3 kbDecalRow0 = cross(modelColumn1.xyz, modelColumn2.xyz);\n";
+        vs += "    vec3 kbDecalRow1 = cross(modelColumn2.xyz, modelColumn0.xyz);\n";
+        vs += "    vec3 kbDecalRow2 = cross(modelColumn0.xyz, modelColumn1.xyz);\n";
+        vs += "    float kbDecalInvDet = 1.0 / dot(modelColumn0.xyz, kbDecalRow0);\n";
+        vs += "    v_uv23 = vec4(kbDecalRow0, -dot(kbDecalRow0, modelColumn3.xyz)) * kbDecalInvDet;\n";
+        vs += "    v_uv45 = vec4(kbDecalRow1, -dot(kbDecalRow1, modelColumn3.xyz)) * kbDecalInvDet;\n";
+        vs += "    v_uv67 = vec4(kbDecalRow2, -dot(kbDecalRow2, modelColumn3.xyz)) * kbDecalInvDet;\n";
+    } else if (extraUvs) {
+        vs += "    v_uv23 = a_color1;\n    v_uv45 = a_color2;\n    v_uv67 = a_color3;\n";
+    }
     vs += "}\n";
     return vs;
 }
@@ -1188,8 +1642,12 @@ std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraph
     HashU64(hash, reflection.hasCustomizedUv0 ? 1U : 0U);
     HashU64(hash, reflection.hasDisplacement ? 1U : 0U);
     HashU64(hash, reflection.hasTangentOutput ? 1U : 0U);
+    HashU64(hash, reflection.hasPixelDepthOffset ? 1U : 0U);
+    HashU64(hash, reflection.hasRefraction ? 1U : 0U);
+    HashU64(hash, reflection.writesShadingModelColor ? 1U : 0U);
     // MAT-37: the shading model selects the fragment wrapper lighting branch, so it is part of program identity.
     HashU64(hash, static_cast<std::uint64_t>(reflection.shadingModel));
+    HashU64(hash, static_cast<std::uint64_t>(reflection.domain));
     // MAT-38: the blend mode changes the wrapper (masked clip) and the cooked pass, so it is part of identity.
     HashU64(hash, static_cast<std::uint64_t>(reflection.blendMode));
     HashU64(hash, reflection.usesSceneDepth ? 1U : 0U);
@@ -1215,6 +1673,14 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     if (request.shadercPath.empty() || request.cacheRoot.empty() || !request.shaderPlatform.has_value()) {
         AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
             "Material graph shader cook requires a shaderc tool path, cache root and explicit target platform.");
+        return result;
+    }
+    if (!RenderMaterialGraphCooksScenePass(shader.reflection, request.pass)) {
+        AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+            "Material graph shader cook refused pass '" + request.pass + "': the graph neither moves nor clips its "
+            "surface (no world position offset, displacement, pixel depth offset or Masked blend mode), so the "
+            "motion vector pass draws it with the builtin program.",
+            request.pass);
         return result;
     }
     for (const RenderMaterialGraphShaderBackend backend : backends) {
@@ -1243,10 +1709,18 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     artifact.reflectionHash = ComputeRenderMaterialGraphReflectionHash(shader.reflection);
     artifact.materialTypeVersion = request.materialTypeVersion;
 
-    // Dependency graph: the wrapper includes (e.g. the shared PBR library, varying definitions)
-    // contribute to the artifact identity so editing them invalidates cooked binaries.
+    // Dependency graph: the wrapper includes (e.g. the shared PBR library, varying definitions) and those
+    // of the generated vertex shader contribute to the artifact identity so editing them invalidates
+    // cooked binaries, and they are what the cook compiles against.
+    const bool cooksVertexShader =
+        RenderMaterialGraphRequiresGeneratedVertexShader(shader.reflection) ||
+        MaterialGraphUsesExtraUvs(shader) ||
+        request.pass == kRenderMaterialGraphMotionVectorsPass ||
+        request.pass == kRenderMaterialGraphPostProcessPass ||
+        request.pass == kRenderMaterialGraphUserInterfacePass;
+    const std::string vertexWrapperSource = cooksVertexShader ? BuildGraphVertexWrapperSource(shader, request.pass) : std::string{};
     std::vector<ResolvedShaderDependency> dependencies;
-    if (!CollectShaderDependencies(artifact.wrapperSource, request, dependencies, result.diagnostics)) {
+    if (!CollectShaderDependencies(artifact.wrapperSource + vertexWrapperSource, request, dependencies, result.diagnostics)) {
         return result;
     }
     std::uint64_t dependencyHash = 1469598103934665603ULL;
@@ -1538,13 +2012,9 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     // MAT-67/#54: when the graph drives vertex-domain outputs, cook the generated vertex shader too so the
     // scene program pairs it with the graph fragment shader and moves geometry / rewrites UVs before
     // rasterization. ShadowDepth uses the same generated vertex-domain contract for WPO/displacement.
-    const bool hasVertexDomainOutput =
-        shader.reflection.hasWorldPositionOffset ||
-        shader.reflection.hasCustomizedUv0 ||
-        shader.reflection.hasDisplacement;
-    if (hasVertexDomainOutput) {
+    if (cooksVertexShader) {
         artifact.hasVertexShader = true;
-        artifact.vertexWrapperSource = BuildGraphVertexWrapperSource(shader);
+        artifact.vertexWrapperSource = vertexWrapperSource;
 
         std::uint64_t vsCookKey = 1469598103934665603ULL;
         HashString64(vsCookKey, artifact.vertexWrapperSource);

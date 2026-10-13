@@ -73,9 +73,11 @@ add_executable(kb_editor WIN32
     src/app/EditorParticleDocumentLifecycle.cpp
     src/app/EditorWindowHitTestHandler.cpp
     src/app/EditorPaintDispatcher.cpp
+    src/rendering/MaterialPreviewPresentSettings.cpp
     src/app/EditorPendingTextEditCommitter.cpp
     src/app/EditorPlayModeState.cpp
     src/app/EditorPlayModeSceneSession.cpp
+    src/app/EditorSceneFileCommands.cpp
     src/app/EditorSceneLifecycleGuard.cpp
     src/app/EditorShellInteractionState.cpp
     src/app/EditorPointerDragInteraction.cpp
@@ -357,6 +359,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorPlayModeState.hpp
     src/private/app/EditorPlayModeSceneSession.hpp
     src/private/app/EditorAutomationScenarioRunner.hpp
+    src/private/app/EditorSceneFileCommands.hpp
     src/private/app/EditorSceneLifecycleGuard.hpp
     src/private/app/EditorSelfTest.hpp
     src/private/app/EditorHeadlessAutomation.hpp
@@ -445,6 +448,7 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorChoiceDialog.hpp
     src/private/platform/win32/EditorDebugLogGate.hpp
     src/private/platform/win32/EditorModalMessageLoop.hpp
+    src/private/platform/win32/EditorNewSceneDialog.hpp
     src/private/platform/win32/EditorTextEntryDialog.hpp
     src/private/platform/win32/EditorModalWindowScope.hpp
     src/private/rendering/EditorMaterialThumbnailService.hpp
@@ -533,6 +537,9 @@ add_executable(kb_editor WIN32
     src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/InspectorAudioMixerAssetView.hpp
     src/private/rendering/InspectorSceneAudioView.hpp
+    src/private/rendering/EditorOverlayPopupWindow.hpp
+    src/private/app/EditorHeadlessPopupChecks.hpp
+    src/private/rendering/EditorToolbarMenuOverlayWindow.hpp
     src/private/rendering/InspectorAddComponentOverlayWindow.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/material_graph/EditorMaterialGraphPinPresentation.hpp
@@ -592,7 +599,6 @@ add_executable(kb_editor WIN32
     src/private/rendering/SvgPathFigureBuilder.hpp
     src/private/rendering/SvgPathGdiplusPoint.hpp
     src/private/rendering/SvgPathPoint.hpp
-    src/private/scene/EditorDefaultSceneFactory.hpp
     src/private/scene/EditorHierarchyContentResolver.hpp
     src/private/scene/EditorHierarchyFloatingContentResolver.hpp
     src/private/scene/EditorHierarchyMainContentResolver.hpp
@@ -628,6 +634,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorScriptAssetGateway.hpp
     src/private/scene/EditorScriptEditorState.hpp
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
+    src/private/localization/EditorLocalization.hpp
     src/private/scene/EditorSceneAudioAssetActions.hpp
     src/private/scene/EditorSceneCommandController.hpp
     src/private/scene/EditorAssetErrorMessage.hpp
@@ -694,6 +701,7 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorChoiceDialog.cpp
     src/platform/win32/EditorMaterialParameterValueDialog.cpp
     src/platform/win32/EditorTagNameDialog.cpp
+    src/platform/win32/EditorNewSceneDialog.cpp
     src/platform/win32/EditorTextEntryDialog.cpp
     src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp
@@ -765,6 +773,9 @@ add_executable(kb_editor WIN32
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/InspectorAudioMixerAssetView.cpp
     src/rendering/InspectorSceneAudioView.cpp
+    src/rendering/EditorOverlayPopupWindow.cpp
+    src/app/EditorHeadlessPopupChecks.cpp
+    src/rendering/EditorToolbarMenuOverlayWindow.cpp
     src/rendering/InspectorAddComponentOverlayWindow.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
     src/rendering/EditorMaterialThumbnailService.cpp
@@ -839,12 +850,17 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorAudioTextBuilder.cpp
     src/inspection/InspectorAudioMixerAssetInteraction.cpp
     src/inspection/InspectorAudioMixerAssetModel.cpp
+    src/inspection/InspectorPostProcessProfileModel.cpp
+    src/private/inspection/InspectorPostProcessProfileModel.hpp
     src/inspection/InspectorSceneAudioInteraction.cpp
     src/inspection/InspectorSceneAudioModel.cpp
     src/inspection/InspectorAudioComponentModel.cpp
     src/inspection/InspectorAudioScrubController.cpp
     src/inspection/InspectorColliderTextBuilder.cpp
     src/inspection/InspectorComponentCatalog.cpp
+    src/inspection/InspectorSceneColor.cpp
+    src/localization/EditorLocalization.cpp
+    src/inspection/InspectorSceneColorEdit.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
     src/inspection/InspectorPhysicsModel.cpp
     src/inspection/ui/InspectorUIComponentModel.cpp
@@ -859,7 +875,6 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorMultiSelectionTextBuilder.cpp
     src/inspection/InspectorPanelTextBuilder.cpp
     src/inspection/InspectorRigidbodyTextBuilder.cpp
-    src/scene/EditorDefaultSceneFactory.cpp
     src/scene/EditorAnimationPreviewScene.cpp
     src/scene/EditorHierarchyContentResolver.cpp
     src/scene/EditorHierarchyFloatingContentResolver.cpp
@@ -877,14 +892,13 @@ add_executable(kb_editor WIN32
     src/scene/EditorPluginCatalog.cpp
     src/scene/EditorScriptAssetGateway.cpp
     src/scene/EditorSceneAssetBrowserCommands.cpp
-    src/private/scene/EditorMeshImportArtifacts.hpp
-    src/scene/EditorMeshImportArtifacts.cpp
     src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
     src/scene/ui/EditorUIComponentAuthoring.cpp
     src/private/platform/win32/EditorBundledFontPath.hpp
     src/scene/EditorSceneContextSkeletalMesh.cpp
+    src/scene/EditorSceneContextPostProcess.cpp
     src/scene/EditorSceneBuildGame.cpp
     src/scene/EditorParticleEditorHost.cpp
     src/private/scene/ParticleEditorBakeHostCommand.hpp
@@ -938,6 +952,9 @@ add_executable(kb_editor WIN32
     src/scene/input/EditorInputActionAuthoring.cpp
     src/scene/input/EditorInputMappingContextAuthoring.cpp
     src/scene/audio/EditorAudioMixerAssetGateway.cpp
+    src/scene/postprocess/EditorPostProcessProfileAssets.cpp
+    src/private/scene/postprocess/EditorPostProcessProfileAssets.hpp
+    src/private/platform/win32/EditorPostProcessProfileAssetPickerDialog.hpp
     src/scene/audio/EditorAudioMixerAuthoring.cpp
     src/scene/audio/EditorSceneAudioSettingsService.cpp
     src/windowing/EditorFloatingWindowFrame.cpp
@@ -985,6 +1002,30 @@ target_include_directories(kb_editor
 set_target_properties(kb_editor PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
+
+# The language catalogs are content: a changed translation reaches the editor's folders on the next
+# build whenever a catalog changes, not only when the editor relinks.
+file(GLOB KB_EDITOR_LOCALIZATION_CATALOGS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization/*.kbloc")
+get_property(KB_EDITOR_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(KB_EDITOR_MULTI_CONFIG)
+    set(KB_EDITOR_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+else()
+    set(KB_EDITOR_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bin")
+endif()
+add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_localization.stamp"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Localization"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization"
+        "${KB_EDITOR_RUNTIME_DIR}/Content/EditorShell/Localization"
+    COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_localization.stamp"
+    DEPENDS ${KB_EDITOR_LOCALIZATION_CATALOGS}
+    VERBATIM)
+add_custom_target(kb_editor_localization DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_localization.stamp")
+add_dependencies(kb_editor kb_editor_localization)
 
 add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
@@ -1147,6 +1188,11 @@ if(TARGET kb_21kb_particle_plugin)
     )
 endif()
 
+if(WIN32)
+    # UTF-8 process code page: the interface in any of its 33 languages and names in any letters.
+    target_sources(kb_editor PRIVATE kb_editor.manifest)
+endif()
+
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
 
@@ -1155,6 +1201,7 @@ if(BUILD_TESTING)
         tests/EditorBuildGameTests.cpp
         src/rendering/BuildGamePanelLayout.cpp
         src/rendering/BuildGamePanelModel.cpp
+        src/localization/EditorLocalization.cpp
         src/settings/EditorBuildGameSettingsStore.cpp
         src/packaging/EditorProjectPackageService.cpp
         src/packaging/EditorAndroidSigningBroker.cpp
@@ -1208,6 +1255,7 @@ if(BUILD_TESTING)
         tests/EditorDockingTests.cpp
         tests/EditorProjectTests.cpp
         tests/EditorSettingsTests.cpp
+        tests/EditorLocalizationTests.cpp
         tests/EditorInspectorTests.cpp
         tests/EditorMaterialAssetAuthoringTests.cpp
         tests/EditorMaterialGraphCanvasTests.cpp
@@ -1307,8 +1355,7 @@ if(BUILD_TESTING)
         src/assets/EditorAssetBrowserViewState.cpp
         src/commands/EditorCommandStack.cpp
         src/commands/EditorSceneHistoryCommand.cpp
-        src/scene/EditorDefaultSceneFactory.cpp
-        src/scene/EditorHierarchyExpansionState.cpp
+            src/scene/EditorHierarchyExpansionState.cpp
         src/scene/EditorHierarchyRowBuilder.cpp
         src/scene/EditorHierarchyRowFactory.cpp
         src/scene/EditorHierarchySearchMatcher.cpp
@@ -1320,8 +1367,6 @@ if(BUILD_TESTING)
         src/scene/audio/EditorAudioMixerAssetGateway.cpp
         src/scene/audio/EditorAudioMixerAuthoring.cpp
         src/scene/audio/EditorSceneAudioSettingsService.cpp
-        src/private/scene/EditorMeshImportArtifacts.hpp
-        src/scene/EditorMeshImportArtifacts.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneHierarchyActions.cpp
         src/scene/EditorHierarchyObjectFactory.cpp
@@ -1381,6 +1426,8 @@ if(BUILD_TESTING)
         src/inspection/InspectorAudioComponentModel.cpp
         src/inspection/InspectorAudioScrubController.cpp
         src/inspection/InspectorComponentCatalog.cpp
+        src/inspection/InspectorSceneColor.cpp
+        src/localization/EditorLocalization.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
         src/inspection/InspectorPhysicsModel.cpp
         src/inspection/ui/InspectorUIComponentModel.cpp
@@ -1417,6 +1464,7 @@ if(BUILD_TESTING)
     target_compile_definitions(kb_editor_tests
         PRIVATE
             KB_EDITOR_GRAPH_SHADER_CACHE_DIR="${CMAKE_BINARY_DIR}/editor_graph_cook_tests"
+            KB_EDITOR_LOCALIZATION_DIR="${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Localization"
     )
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
@@ -1453,6 +1501,20 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-World-Partition")
     set_tests_properties(kb_editor_world_partition_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;world" TIMEOUT 180)
+    add_test(NAME kb_editor_post_process_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessPostProcessScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Post-Process")
+    set_tests_properties(kb_editor_post_process_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;rendering" TIMEOUT 180)
+    add_test(NAME kb_editor_material_preview_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessMaterialPreviewScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Material-Preview")
+    set_tests_properties(kb_editor_material_preview_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;rendering;material" TIMEOUT 300)
     add_test(NAME kb_editor_navigation_headless
         COMMAND $<TARGET_FILE:kb_editor>
             --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessNavigationScenario.json"
@@ -1460,6 +1522,22 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Navigation")
     set_tests_properties(kb_editor_navigation_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;navigation" TIMEOUT 180)
+    # File > New Scene: templates, refused names, startup scene, reopening the last scene, Play without saving.
+    add_test(NAME kb_editor_new_scene_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessNewSceneScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-New-Scene")
+    set_tests_properties(kb_editor_new_scene_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;scene" TIMEOUT 180)
+    # Every editor language, one after another: each panel's texts fit where they are drawn.
+    add_test(NAME kb_editor_languages_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessLanguagesScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Languages")
+    set_tests_properties(kb_editor_languages_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;localization" TIMEOUT 600)
 
     add_test(
         NAME kb_editor_headless_automation_scenario
@@ -1508,8 +1586,12 @@ if(BUILD_TESTING)
         src/rendering/material_graph/EditorMaterialGraphPinPresentation.cpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
         src/rendering/material_graph/MaterialGraphCanvas.cpp
-        # The canvas tests check node rects against the panel layout, which owns ResolveLayout.
+        # The canvas tests check node rects against the panel layout, which owns ResolveLayout and
+        # measures its labels with the editor's fonts.
         src/rendering/MaterialEditorPanelLayout.cpp
+        src/rendering/gdi/EditorFontCache.cpp
+        # The panel's labels are in the editor language.
+        src/localization/EditorLocalization.cpp
     )
 
     target_include_directories(kb_editor_material_graph_canvas_tests
