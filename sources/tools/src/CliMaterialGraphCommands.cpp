@@ -150,6 +150,9 @@ struct LoadedProject {
     case kb::render::RenderMaterialParameterType::Texture: {
         const std::string path = material::TexturePath(registry, value.assetId);
         text << (value.assetId == 0U ? std::string{ "none" } : path.empty() ? "missing texture " + std::to_string(value.assetId) : path);
+        if (value.numbers[0] >= 0.5F) {
+            text << "@uv1";  // the slot samples UV1
+        }
         break;
     }
     }
@@ -194,10 +197,17 @@ struct ExposedParameter {
 [[nodiscard]] std::optional<kb::render::RenderMaterialGraphParameterValue> ParameterValue(
     const ExposedParameter& parameter, std::string_view text, const material::TextureResolver& textures, std::string& error) {
     if (parameter.type == kb::render::RenderMaterialParameterType::Texture) {
+        // "<texture>@uv1" (or @uv0) also picks the UV channel the slot samples.
+        float uvChannel = 0.0F;
+        if (text.ends_with("@uv1") || text.ends_with("@uv0")) {
+            uvChannel = text.ends_with("@uv1") ? 1.0F : 0.0F;
+            text.remove_suffix(4U);
+        }
         const std::optional<std::uint64_t> id = textures(text, error);
         if (!id.has_value()) return std::nullopt;
         return kb::render::RenderMaterialGraphParameterValue{
-            .stableId = parameter.stableId, .type = kb::render::RenderMaterialParameterType::Texture, .assetId = *id };
+            .stableId = parameter.stableId, .type = kb::render::RenderMaterialParameterType::Texture,
+            .numbers = { uvChannel, 0.0F, 0.0F, 0.0F }, .assetId = *id };
     }
     const std::size_t channels = parameter.type == kb::render::RenderMaterialParameterType::Color ||
             parameter.type == kb::render::RenderMaterialParameterType::Vec4 ? 4U

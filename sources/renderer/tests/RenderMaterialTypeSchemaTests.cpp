@@ -5463,8 +5463,12 @@ void RunMaterialGraphReflectionUniformAndTextureCountTest() {
     const RenderMaterialGraphCompileResult result = CompileRenderMaterialGraphToShaderSource(
         graph, RenderMaterialGraphBuildContext{ .assetId = 0x0210U, .sourcePath = "/Game/Materials/ReflectionCount.kbmat" });
     Require(result.Succeeded(), "KBMAT-MAT02: Graph with parameter and texture nodes should compile");
-    Require(result.shader.reflection.uniforms.size() == 2U,
-        "KBMAT-MAT02: Reflection must describe both reachable parameter uniforms (color + scalar)");
+    // Color, scalar, and the UV channel of the texture slot (bound from its texture value, UV0 or UV1).
+    Require(result.shader.reflection.uniforms.size() == 3U &&
+            std::ranges::any_of(result.shader.reflection.uniforms, [](const RenderMaterialGraphReflectionUniform& uniform) {
+                return uniform.name == "u_albedoTex_uvChannel" && uniform.stableId == "albedoTex";
+            }),
+        "KBMAT-MAT02: Reflection must describe the reachable parameter uniforms (color, scalar, texture slot UV channel)");
     Require(result.shader.reflection.textures.size() == 1U,
         "KBMAT-MAT02: Reflection must describe the reachable inline TextureSample slot");
     Require(result.shader.reflection.textures[0].stableId == "albedoTex",
@@ -6453,7 +6457,8 @@ void RunMaterialGraphProgramBindingResourceTest() {
     const std::array<RenderMaterialGraphParameterValue, 3U> values{
         RenderMaterialGraphParameterValue{ .stableId = "tint", .type = RenderMaterialParameterType::Color, .numbers = { 0.2F, 0.4F, 0.6F, 1.0F } },
         RenderMaterialGraphParameterValue{ .stableId = "rough", .type = RenderMaterialParameterType::Scalar, .numbers = { 0.25F, 0.0F, 0.0F, 0.0F } },
-        RenderMaterialGraphParameterValue{ .stableId = "albedoTex", .type = RenderMaterialParameterType::Texture, .assetId = 0xAAA1U },
+        // The slot samples UV1 (an instance can set it without recompiling).
+        RenderMaterialGraphParameterValue{ .stableId = "albedoTex", .type = RenderMaterialParameterType::Texture, .numbers = { 1.0F, 0.0F, 0.0F, 0.0F }, .assetId = 0xAAA1U },
     };
     const RenderMaterialGraphProgramBindingResult result = BuildRenderMaterialGraphProgramBinding(0x9911U, 2U, compiled.shader, values);
 
@@ -6463,7 +6468,11 @@ void RunMaterialGraphProgramBindingResourceTest() {
             result.binding.pipelineStateKey == RenderMaterialGraphPipelineStateKey(compiled.shader),
         "KBMAT-MAT66: Binding must carry explicit graph variant and pipeline-state keys");
     Require(result.binding.materialTypeId == 0x9911U && result.binding.materialTypeVersion == 2U, "KBMAT-MAT06: Binding must carry the material type id/version program key");
-    Require(result.binding.uniforms.size() == 2U, "KBMAT-MAT06: Binding must expose one dynamic uniform per reachable parameter");
+    Require(result.binding.uniforms.size() == 3U, "KBMAT-MAT06: Binding must expose one dynamic uniform per reachable parameter and texture slot UV channel");
+    Require(std::ranges::any_of(result.binding.uniforms, [](const RenderMaterialGraphUniformBinding& uniform) {
+                return uniform.name == "u_albedoTex_uvChannel" && NearlyEqual(uniform.value[0], 1.0F);
+            }) && compiled.shader.source.find("mix(ctx.uv0, ctx.uv1, step(0.5, u_albedoTex_uvChannel.x))") != std::string::npos,
+        "Texture slot UV channel: the slot must sample the UV channel its texture value names (UV1)");
     Require(result.binding.textures.size() == 1U, "KBMAT-MAT06: Binding must expose one texture/sampler binding per TextureSample node");
     Require(result.binding.textures[0].stableId == "albedoTex" && result.binding.textures[0].colorSpace == RenderTextureColorSpace::Srgb,
         "KBMAT-MAT06: Texture binding must carry stable id and sRGB color space from reflection");
@@ -6549,7 +6558,8 @@ void RunMaterialGraphProgramBindingDynamicOverrideTest() {
             after.binding.materialTypeId == missing.binding.materialTypeId &&
             after.binding.materialTypeVersion == missing.binding.materialTypeVersion,
         "KBMAT-MAT06: Dynamic override must NOT change the graph program key");
-    Require(NearlyEqual(after.binding.uniforms[0].value[0], 0.1F) && NearlyEqual(after.binding.uniforms[0].value[2], 0.3F),
+    const auto afterTint = std::ranges::find_if(after.binding.uniforms, [](const RenderMaterialGraphUniformBinding& uniform) { return uniform.stableId == "tint"; });
+    Require(afterTint != after.binding.uniforms.end() && NearlyEqual(afterTint->value[0], 0.1F) && NearlyEqual(afterTint->value[2], 0.3F),
         "KBMAT-MAT06: Dynamic override must update the uniform binding value");
     Require(after.binding.textures[0].textureAssetId == 0xBBB2U && after.binding.textures[0].resolved,
         "KBMAT-MAT06: Dynamic override must update the texture binding without recompiling the shader");

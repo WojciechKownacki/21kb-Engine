@@ -121,6 +121,9 @@ void WriteGraphParameterValues(std::ostream& output, const RenderMaterialAssetDa
             break;
         case RenderMaterialParameterType::Texture:
             output << ' ' << value.assetId;
+            if (value.numbers[0] >= 0.5F) {
+                output << " uv=1";
+            }
             break;
         }
         output << '\n';

@@ -4771,6 +4771,40 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
     return false;
 }
 
+namespace {
+
+// "<texture stableId>@uv" names the UV channel a graph texture slot samples: the texture value's numbers[0].
+[[nodiscard]] std::optional<std::string_view> TextureUvChannelSlot(std::string_view stableId) noexcept {
+    return stableId.ends_with("@uv") ? std::optional{ stableId.substr(0U, stableId.size() - 3U) } : std::nullopt;
+}
+
+[[nodiscard]] std::optional<float> ParseTextureUvChannel(std::string_view text) noexcept {
+    if (text == "0" || text == "UV0" || text == "uv0") return 0.0F;
+    if (text == "1" || text == "UV1" || text == "uv1") return 1.0F;
+    return std::nullopt;
+}
+
+// The texture value of `slot` in `values`, copied from `fallback` (the effective document) when absent.
+[[nodiscard]] kb::render::RenderMaterialGraphParameterValue* TextureSlotValue(
+    std::vector<kb::render::RenderMaterialGraphParameterValue>& values,
+    std::string_view slot,
+    const std::vector<kb::render::RenderMaterialGraphParameterValue>& fallback) {
+    const auto matches = [slot](const kb::render::RenderMaterialGraphParameterValue& value) {
+        return value.type == kb::render::RenderMaterialParameterType::Texture && value.stableId == slot;
+    };
+    if (const auto found = std::ranges::find_if(values, matches); found != values.end()) {
+        return &*found;
+    }
+    const auto inherited = std::ranges::find_if(fallback, matches);
+    if (inherited == fallback.end()) {
+        return nullptr;
+    }
+    values.push_back(*inherited);
+    return &values.back();
+}
+
+} // namespace
+
 bool EditorSceneContext::SetMaterialEditorGraphParameterValue(
     kb::assets::AssetId id,
     std::string_view stableId,
@@ -4779,6 +4813,20 @@ bool EditorSceneContext::SetMaterialEditorGraphParameterValue(
     if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value()) {
         console_.Error("Materials", "Open the material in Material Editor before editing graph parameters.");
         return false;
+    }
+    if (const std::optional<std::string_view> slot = TextureUvChannelSlot(stableId)) {
+        const std::optional<float> channel = ParseTextureUvChannel(valueText);
+        kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+        kb::render::RenderMaterialAssetData after = before;
+        kb::render::RenderMaterialGraphParameterValue* value = TextureSlotValue(after.graphParameterValues, *slot, before.graphParameterValues);
+        if (!channel.has_value() || value == nullptr) {
+            console_.Error("Materials", "TextureUvChannelRefused: '" + std::string{ valueText } + "' for slot '" + std::string{ *slot } + "' (UV0 or UV1 of a graph texture slot).");
+            return false;
+        }
+        value->numbers[0] = *channel;
+        const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+        materialEditor_.SetWorkingCopy(std::move(after));
+        return RecordMaterialGraphWorkingCopyEdit(id, "Edit Texture UV Channel", std::move(before), beforeSelectedNodeId);
     }
     if (stableId.empty() || type == kb::render::RenderMaterialParameterType::Texture) {
         console_.Error("Materials", "Material graph parameter cannot be edited as a numeric value.");
@@ -4826,18 +4874,30 @@ bool EditorSceneContext::SetMaterialInstanceEditorGraphParameterValue(
         return false;
     }
 
-    std::optional<kb::render::RenderMaterialGraphParameterValue> value =
-        kb::render::ParseRenderMaterialGraphParameterValue(stableId, type, valueText);
-    if (!value.has_value()) {
-        console_.Error("Materials", "Material instance parameter override value is invalid.");
-        return false;
-    }
-
     kb::render::RenderMaterialInstanceAssetData instance = *materialEditor_.InstanceWorkingCopy();
     const kb::render::RenderMaterialAssetData& parent = *materialEditor_.InstanceParentSnapshot();
     kb::render::EnsureRenderMaterialInstanceOverrideDocument(instance, parent);
-    kb::render::RemoveRenderMaterialGraphParameterValue(instance.overrides, stableId);
-    kb::render::UpsertRenderMaterialGraphParameterValue(instance.overrides, std::move(*value));
+    if (const std::optional<std::string_view> slot = TextureUvChannelSlot(stableId)) {
+        // The slot's texture override carries the channel; the texture is the effective one when not overridden.
+        const std::optional<float> channel = ParseTextureUvChannel(valueText);
+        const kb::render::RenderMaterialAssetData effective = kb::render::BuildEffectiveRenderMaterialInstanceAsset(parent, instance);
+        kb::render::RenderMaterialGraphParameterValue* value =
+            TextureSlotValue(instance.overrides.graphParameterValues, *slot, effective.graphParameterValues);
+        if (!channel.has_value() || value == nullptr) {
+            console_.Error("Materials", "TextureUvChannelRefused: '" + std::string{ valueText } + "' for slot '" + std::string{ *slot } + "' (UV0 or UV1 of a graph texture slot).");
+            return false;
+        }
+        value->numbers[0] = *channel;
+    } else {
+        std::optional<kb::render::RenderMaterialGraphParameterValue> value =
+            kb::render::ParseRenderMaterialGraphParameterValue(stableId, type, valueText);
+        if (!value.has_value()) {
+            console_.Error("Materials", "Material instance parameter override value is invalid.");
+            return false;
+        }
+        kb::render::RemoveRenderMaterialGraphParameterValue(instance.overrides, stableId);
+        kb::render::UpsertRenderMaterialGraphParameterValue(instance.overrides, std::move(*value));
+    }
 
     const kb::render::RenderMaterialInstanceValidationResult validation =
         kb::render::RenderMaterialInstanceAssetLoader::ValidateAgainstParent(instance, parent);
