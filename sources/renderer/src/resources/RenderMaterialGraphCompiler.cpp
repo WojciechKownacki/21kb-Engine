@@ -479,6 +479,10 @@ struct GraphCodegen {
     std::unordered_set<std::uint32_t> emittedCustomFunctions;
     std::vector<std::pair<std::uint32_t, std::string>> functionDefinitions;
     std::string statements;
+    // Unreal's PixelNormalWS: the surface Normal in world space, emitted once per function.
+    std::string pixelNormalTemp;
+    // Set while the Normal (or the attribute set that carries it) compiles: PixelNormalWS cannot feed it.
+    bool compilingMaterialNormal = false;
 };
 
 [[nodiscard]] std::string GraphCodegenGlslType(RenderMaterialGraphPinType type) {
@@ -1265,6 +1269,46 @@ struct TextureCoordinateHint {
     }
 }
 
+// Unreal's PixelNormalWS: the material's Normal (tangent space) taken to world space through the pixel's
+// tangent basis, the same KbGraphBasis* basis the lighting wrappers shade with; the interpolated vertex
+// normal when nothing drives the Normal. Unreal refuses it inside the Normal and in vertex inputs.
+[[nodiscard]] std::string PixelNormalExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
+    if (cg.context.shaderStage == RenderMaterialGraphShaderStage::Vertex) {
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, "value", "PixelNormalWS is a pixel input; it cannot feed World Position Offset, Displacement or Customized UVs.");
+        return "ctx.normal";
+    }
+    if (cg.compilingMaterialNormal) {
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, "value", "Cannot use PixelNormalWS as input to Normal.");
+        return "ctx.normal";
+    }
+    if (!cg.pixelNormalTemp.empty()) {
+        return cg.pixelNormalTemp;
+    }
+    const auto output = std::ranges::find_if(cg.graph.nodes, [](const RenderMaterialGraphNode& candidate) {
+        return candidate.kind == RenderMaterialGraphNodeKind::MaterialOutput;
+    });
+    if (output == cg.graph.nodes.end()) {
+        return "ctx.normal";
+    }
+    std::string tangentNormal;
+    cg.compilingMaterialNormal = true;
+    if (FindInputLink(cg.graph, output->id, "attributes") != nullptr) {
+        tangentNormal = "(" + CompileInputExpression(cg, *output, "attributes", RenderMaterialGraphPinType::MaterialAttributes, "") + ").normal";
+    } else if (FindInputLink(cg.graph, output->id, "normal") != nullptr) {
+        tangentNormal = CompileInputExpression(cg, *output, "normal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)");
+    }
+    cg.compilingMaterialNormal = false;
+    if (tangentNormal.empty()) {
+        return "ctx.normal";
+    }
+    cg.statements += "    vec3 kbPixelNormalTS = normalize(" + tangentNormal + ");\n";
+    cg.statements += "    vec3 kbPixelBasisTangent = KbGraphBasisTangent(ctx.normal, ctx.tangent);\n";
+    cg.statements += "    vec3 kbPixelBasisBitangent = normalize(cross(ctx.normal, kbPixelBasisTangent) * KbGraphBasisHandedness(ctx.normal, kbPixelBasisTangent, ctx.bitangent));\n";
+    cg.statements += "    vec3 kbPixelNormalWS = normalize(kbPixelBasisTangent * kbPixelNormalTS.x + kbPixelBasisBitangent * kbPixelNormalTS.y + ctx.normal * kbPixelNormalTS.z);\n";
+    cg.pixelNormalTemp = "kbPixelNormalWS";
+    return cg.pixelNormalTemp;
+}
+
 std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
     switch (node.kind) {
     case RenderMaterialGraphNodeKind::Reroute:
@@ -1315,6 +1359,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::LightVector:
         return "ctx.lightVector";
     case RenderMaterialGraphNodeKind::PixelNormalWS:
+        return PixelNormalExpression(cg, node);
     case RenderMaterialGraphNodeKind::VertexNormalWS:
         return "ctx.normal";
     case RenderMaterialGraphNodeKind::VertexTangentWS:
@@ -3925,6 +3970,18 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    vec3 irisNormal;\n";
     source += "};\n\n";
 
+    // The pixel's tangent basis: the tangent made orthogonal to the normal (an axis across the normal when
+    // the mesh has none) and the bitangent's side from the interpolated bitangent. PixelNormalWS and the
+    // lighting wrappers (RenderMaterialGraphShaderArtifact) share it.
+    source += "vec3 KbGraphBasisTangent(vec3 normal, vec3 tangent) {\n";
+    source += "    vec3 orthogonal = normalize(tangent - normal * dot(normal, tangent));\n";
+    source += "    vec3 fallbackAxis = abs(normal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n";
+    source += "    return dot(orthogonal, orthogonal) > 0.0001 ? orthogonal : normalize(cross(fallbackAxis, normal));\n";
+    source += "}\n\n";
+    source += "float KbGraphBasisHandedness(vec3 normal, vec3 tangent, vec3 bitangent) {\n";
+    source += "    return dot(cross(normal, tangent), bitangent) < 0.0 ? -1.0 : 1.0;\n";
+    source += "}\n\n";
+
     if (usesHsv) {
         // MAT-50: branchless HSV<->RGB helpers (Sam Hocevar's formulation) shared by the HsvToRgb/RgbToHsv nodes.
         source += "vec3 kbHsvToRgb(vec3 c) {\n";
@@ -4148,12 +4205,16 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     // MAT-36: when a single MaterialAttributes set is wired into MaterialOutput.attributes it drives the
     // whole surface (the "use material attributes" mode); the per-channel pins are bypassed entirely.
     if (useMaterialAttributes) {
+        cg.compilingMaterialNormal = true;
         attributesExpr = compileOutput("attributes", RenderMaterialGraphPinType::MaterialAttributes, "");
+        cg.compilingMaterialNormal = false;
     } else {
         baseColorExpr = compileOutput("baseColor", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)");
         metallicExpr = compileOutput("metallic", RenderMaterialGraphPinType::Float, "0.0");
         roughnessExpr = compileOutput("roughness", RenderMaterialGraphPinType::Float, "1.0");
+        cg.compilingMaterialNormal = true;
         normalExpr = compileOutput("normal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)");
+        cg.compilingMaterialNormal = false;
         occlusionExpr = compileOutput("occlusion", RenderMaterialGraphPinType::Float, "1.0");
         emissiveExpr = compileOutput("emissive", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)");
         alphaExpr = compileOutput("alpha", RenderMaterialGraphPinType::Float, "1.0");

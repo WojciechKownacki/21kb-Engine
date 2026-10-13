@@ -813,11 +813,9 @@ std::string_view GraphShadingModelColorField(const RenderMaterialGraphShaderSour
 // normal of each triangle and facet every curved surface.
 void AppendMaterialGraphTangentBasis(std::string& wrapper) {
     wrapper += "    vec3 basisNormal = normalize(v_normal);\n";
-    wrapper += "    vec3 vertexTangent = normalize(v_tangent - basisNormal * dot(basisNormal, v_tangent));\n";
-    wrapper += "    vec3 fallbackAxis = abs(basisNormal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n";
-    wrapper += "    vec3 fallbackTangent = normalize(cross(fallbackAxis, basisNormal));\n";
-    wrapper += "    vertexTangent = dot(vertexTangent, vertexTangent) > 0.0001 ? vertexTangent : fallbackTangent;\n";
-    wrapper += "    float vertexHandedness = dot(cross(basisNormal, vertexTangent), v_bitangent) < 0.0 ? -1.0 : 1.0;\n";
+    // The graph source's tangent basis, the one PixelNormalWS reads the Normal through.
+    wrapper += "    vec3 vertexTangent = KbGraphBasisTangent(basisNormal, v_tangent);\n";
+    wrapper += "    float vertexHandedness = KbGraphBasisHandedness(basisNormal, vertexTangent, v_bitangent);\n";
     wrapper += "    vec3 vertexBitangent = normalize(cross(basisNormal, vertexTangent) * vertexHandedness);\n";
     wrapper += "    vec3 basisTangent = vertexTangent;\n";
     wrapper += "    vec3 basisBitangent = vertexBitangent;\n";
@@ -1311,7 +1309,7 @@ void AppendGraphVertexEvaluation(std::string& vs, const RenderMaterialGraphShade
     vs += "    vec3 " + name("objectOrientationRaw") + " = mul(" + name("model") + ", vec4(0.0, 0.0, 1.0, 0.0)).xyz;\n";
     vs += "    vec3 " + name("objectOrientation") + " = dot(" + name("objectOrientationRaw") + ", " + name("objectOrientationRaw") +
         ") > 0.0001 ? normalize(" + name("objectOrientationRaw") + ") : vec3(0.0, 0.0, 1.0);\n";
-    vs += "    vec3 " + name("vsNormal") + " = normalize(mul(" + name("model") + ", vec4(a_normal, 0.0)).xyz);\n";
+    vs += "    vec3 " + name("vsNormal") + " = KbModelNormal(" + name("model") + ", a_normal);\n";
     vs += "    vec3 " + name("vsTangent") + " = mul(" + name("model") + ", vec4(a_tangent.xyz, 0.0)).xyz;\n";
     vs += "    vec3 " + name("fallbackAxis") + " = abs(" + name("vsNormal") + ".y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n";
     vs += "    " + name("vsTangent") + " = dot(" + name("vsTangent") + ", " + name("vsTangent") + ") > 0.0001 ? normalize(" +
@@ -1379,12 +1377,14 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
         vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal, v_currentClip, v_previousClip\n\n";
         vs += "#include <bgfx_shader.sh>\n";
         vs += "#include \"motion_vectors.sh\"\n";
+        vs += "#include \"model_normal.sh\"\n";
         vs += "SAMPLER2D(s_motionPreviousModels, 15);\n";
         // x: the material time of the previous frame, y: its delta time.
         vs += "uniform vec4 u_motionPreviousTime;\n";
     } else {
         vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal\n\n";
         vs += "#include <bgfx_shader.sh>\n";
+        vs += "#include \"model_normal.sh\"\n";
         vs += "uniform mat4 u_shadowViewProj;\n";
     }
     vs += "uniform vec4 u_time;\n";
@@ -1527,10 +1527,17 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     artifact.reflectionHash = ComputeRenderMaterialGraphReflectionHash(shader.reflection);
     artifact.materialTypeVersion = request.materialTypeVersion;
 
-    // Dependency graph: the wrapper includes (e.g. the shared PBR library, varying definitions)
-    // contribute to the artifact identity so editing them invalidates cooked binaries.
+    // Dependency graph: the wrapper includes (e.g. the shared PBR library, varying definitions) and those
+    // of the generated vertex shader contribute to the artifact identity so editing them invalidates
+    // cooked binaries, and they are what the cook compiles against.
+    const bool cooksVertexShader =
+        shader.reflection.hasWorldPositionOffset ||
+        shader.reflection.hasCustomizedUv0 ||
+        shader.reflection.hasDisplacement ||
+        request.pass == kRenderMaterialGraphMotionVectorsPass;
+    const std::string vertexWrapperSource = cooksVertexShader ? BuildGraphVertexWrapperSource(shader, request.pass) : std::string{};
     std::vector<ResolvedShaderDependency> dependencies;
-    if (!CollectShaderDependencies(artifact.wrapperSource, request, dependencies, result.diagnostics)) {
+    if (!CollectShaderDependencies(artifact.wrapperSource + vertexWrapperSource, request, dependencies, result.diagnostics)) {
         return result;
     }
     std::uint64_t dependencyHash = 1469598103934665603ULL;
@@ -1822,13 +1829,9 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     // MAT-67/#54: when the graph drives vertex-domain outputs, cook the generated vertex shader too so the
     // scene program pairs it with the graph fragment shader and moves geometry / rewrites UVs before
     // rasterization. ShadowDepth uses the same generated vertex-domain contract for WPO/displacement.
-    const bool hasVertexDomainOutput =
-        shader.reflection.hasWorldPositionOffset ||
-        shader.reflection.hasCustomizedUv0 ||
-        shader.reflection.hasDisplacement;
-    if (hasVertexDomainOutput || request.pass == kRenderMaterialGraphMotionVectorsPass) {
+    if (cooksVertexShader) {
         artifact.hasVertexShader = true;
-        artifact.vertexWrapperSource = BuildGraphVertexWrapperSource(shader, request.pass);
+        artifact.vertexWrapperSource = vertexWrapperSource;
 
         std::uint64_t vsCookKey = 1469598103934665603ULL;
         HashString64(vsCookKey, artifact.vertexWrapperSource);
