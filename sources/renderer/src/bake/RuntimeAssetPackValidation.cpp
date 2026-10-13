@@ -256,8 +256,9 @@ struct MaterialShaderQualifier final {
             return Failure("material shader contains an unsupported pass or stage for " +
                 DescribeAsset(asset));
         }
-        // The motion vector pass always pairs its fragment stage with a generated vertex stage.
-        if (!requiresVertex && shader.pass != kRenderMaterialGraphMotionVectorsPass && shader.stage == "vertex") {
+        // The motion vector and Post Process passes always pair their fragment stage with a generated vertex stage.
+        if (!requiresVertex && shader.pass != kRenderMaterialGraphMotionVectorsPass &&
+            shader.pass != kRenderMaterialGraphPostProcessPass && shader.stage == "vertex") {
             return Failure("material without vertex-domain outputs contains generated vertex shaders: " +
                 DescribeAsset(asset));
         }
@@ -298,7 +299,8 @@ struct MaterialShaderQualifier final {
                     std::string{ kb::assets::bake::ShaderBakeBackendName(backend) } + "): " +
                     DescribeAsset(asset));
             }
-            if ((requiresVertex || pass == kRenderMaterialGraphMotionVectorsPass) && !validateStage("vertex")) {
+            if ((requiresVertex || pass == kRenderMaterialGraphMotionVectorsPass || pass == kRenderMaterialGraphPostProcessPass) &&
+                !validateStage("vertex")) {
                 return Failure("vertex-domain graph material is missing a required vertex shader (" +
                     std::string{ pass } + "/" +
                     std::string{ kb::assets::bake::ShaderBakeBackendName(backend) } + "): " +

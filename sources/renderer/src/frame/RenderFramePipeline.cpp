@@ -179,6 +179,12 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
     case RenderPassKind::PostProcessHdrFinalize:
         pass.Reads(RenderGraphResource::BloomCombine).Writes(RenderGraphResource::PostProcessFinal);
         break;
+    case RenderPassKind::PostProcessMaterial0:
+    case RenderPassKind::PostProcessMaterial1:
+    case RenderPassKind::PostProcessMaterial2:
+    case RenderPassKind::PostProcessMaterial3:
+        pass.Reads(RenderGraphResource::PostProcessFinal).Reads(RenderGraphResource::SceneDepth).Writes(RenderGraphResource::PostProcessFinal);
+        break;
     case RenderPassKind::ScreenUIBlurH:
         pass.Reads(RenderGraphResource::PostProcessFinal).Writes(RenderGraphResource::ScreenUIBlurPing);
         break;

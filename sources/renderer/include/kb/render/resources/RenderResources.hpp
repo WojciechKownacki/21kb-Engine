@@ -442,6 +442,8 @@ struct RenderMaterialGraphProgramBinding {
     bool writesShadingModelColor = false;
     // The material's Max World Position Offset Displacement: the bounds margin of its objects.
     float boundsMargin = 0.0F;
+    // Unreal's Post Process domain: the material draws in the post-process chain, not in the scene passes.
+    bool postProcessDomain = false;
 };
 
 struct RenderMaterialResource {

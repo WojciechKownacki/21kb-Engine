@@ -8,7 +8,11 @@
 
 #include <bgfx/bgfx.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 #include <sstream>
 
 namespace kb::render {
@@ -343,6 +347,49 @@ void SceneRenderer::SubmitMeshPass(
         WriteRendererDebugLog("scene_renderer", message.str());
         WriteRendererMaterialGraphDebugLog("scene", message.str());
     }
+}
+
+bgfx::TextureHandle SceneRenderer::SubmitPostProcessMaterials(const RenderScene& renderScene, const ScenePostProcessMaterialChainDesc& chain) const {
+    std::vector<std::pair<std::uint64_t, const RenderMaterialResource*>> materials;
+    for (const auto& [entityId, proxy] : renderScene.MeshProxies()) {
+        if (!proxy.desc.visible || proxy.desc.materialAssetId == 0U) {
+            continue;
+        }
+        const RenderMaterialResource* material = resources_.FindMaterial(resourceMap_.ResolveMaterial(proxy.desc.materialAssetId));
+        if (material != nullptr && material->graphProgram.active && material->graphProgram.postProcessDomain) {
+            materials.emplace_back(entityId, material);
+        }
+    }
+    std::ranges::sort(materials, [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+    bgfx::TextureHandle current = chain.input;
+    const std::array<float, 16> identity{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+    std::size_t drawn = 0U;
+    for (const auto& [entityId, material] : materials) {
+        if (drawn >= chain.views.size()) {
+            WriteRendererDebugLog("post_process", "PostProcessMaterialLimit: entity " + std::to_string(entityId) +
+                " skipped, the chain draws " + std::to_string(chain.views.size()) + " Post Process materials per view");
+            continue;
+        }
+        // The target that does not hold the current image.
+        const std::size_t target = current.idx == chain.textures[0].idx ? 1U : 0U;
+        const bgfx::ViewId view = chain.views[drawn];
+        bgfx::setViewName(view, "KB Post Process Material");
+        bgfx::setViewFrameBuffer(view, chain.frameBuffers[target]);
+        bgfx::setViewRect(view, 0, 0, chain.width, chain.height);
+        bgfx::setViewClear(view, BGFX_CLEAR_NONE);
+        bgfx::setViewTransform(view, identity.data(), identity.data());
+        if (!meshSubmitter_->SubmitPostProcessMaterial(SceneMeshPostProcessDesc{
+                .viewId = view, .material = *material, .resources = resources_, .resourceMap = resourceMap_,
+                .input = current, .depth = chain.depth, .frameTime = FrameTimeConstants(),
+                .dynamicParameter = DynamicParameterConstants() })) {
+            WriteRendererDebugLog("post_process", "PostProcessMaterialUnavailable: entity " + std::to_string(entityId) +
+                " has no PostProcess program (material not cooked for the pass)");
+            continue;
+        }
+        current = chain.textures[target];
+        ++drawn;
+    }
+    return current;
 }
 
 void SceneRenderer::SetDefaultDrawBudget(SceneRenderDrawBudget drawBudget) noexcept {

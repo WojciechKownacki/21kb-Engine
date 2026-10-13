@@ -1875,6 +1875,16 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcess Submit invalid output");
                 return false;
             }
+            // Unreal's post-process materials (Before Tonemapping): the scene's Post Process materials over the HDR image.
+            scenePostProcessOutput = sceneRenderer_->SubmitPostProcessMaterials(renderScene, ScenePostProcessMaterialChainDesc{
+                .views = viewportPlan.viewIds.postProcessMaterialViews,
+                .frameBuffers = { sampledSceneDesc.postProcess.finalFrameBuffer, sampledSceneDesc.postProcess.combineFrameBuffer },
+                .textures = { sampledSceneDesc.postProcess.finalTexture, sampledSceneDesc.postProcess.combineTexture },
+                .width = static_cast<std::uint16_t>(sampledSceneDesc.target.viewport.extent.width),
+                .height = static_cast<std::uint16_t>(sampledSceneDesc.target.viewport.extent.height),
+                .input = scenePostProcessOutput,
+                .depth = sampledSceneDesc.SceneOverlayDepthTexture(),
+            });
             if (postProcessOutput.temporalAntiAliasingEnabled && overlayCamera != nullptr &&
                 bgfx::isValid(sampledSceneDesc.postProcess.motionVectorFrameBuffer) &&
                 bgfx::isValid(sampledSceneDesc.SceneOverlayDepthTexture())) {

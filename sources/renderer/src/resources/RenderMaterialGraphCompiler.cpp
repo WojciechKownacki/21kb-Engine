@@ -3361,10 +3361,12 @@ struct FunctionSignature {
     RenderMaterialGraphNodeKind kind,
     RenderMaterialGraphRenderPath path) noexcept {
     const RenderMaterialGraphNodeSupport pathSupport = RenderMaterialGraphNodeSupportForPath(kind, path);
+    // A Post Process material reads the chain's input as Scene Color / Scene Depth on every path.
     if (pathSupport == RenderMaterialGraphNodeSupport::Unsupported &&
-        path == RenderMaterialGraphRenderPath::GpuDeferred &&
         IsDeferredSceneBindingNode(kind) &&
-        IsRenderMaterialGraphBlendModeTransparent(ParseRenderMaterialGraphBlendMode(graph.blendMode))) {
+        (ParseRenderMaterialDomain(graph.materialDomain) == RenderMaterialDomain::PostProcess ||
+         (path == RenderMaterialGraphRenderPath::GpuDeferred &&
+          IsRenderMaterialGraphBlendModeTransparent(ParseRenderMaterialGraphBlendMode(graph.blendMode))))) {
         return RenderMaterialGraphNodeSupportStatus(kind);
     }
     return pathSupport;

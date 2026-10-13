@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -806,6 +807,133 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
     return bgfx::createProgram(vertex, fragment, true);
 }
 
+void SceneMeshPassResources::BindGraphMaterialValues(const RenderMaterialResource& material, const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap) const {
+    for (const RenderMaterialGraphUniformBinding& graphUniform : material.graphProgram.uniforms) {
+        std::array<float, 4U> value{
+            graphUniform.value[0],
+            graphUniform.value[1],
+            graphUniform.value[2],
+            graphUniform.value[3],
+        };
+        if (graphUniform.source == RenderMaterialGraphUniformBindingSource::ParameterCollection) {
+            if (const std::optional<RenderMaterialParameterCollectionRuntimeValue> runtimeValue =
+                    GlobalRenderMaterialParameterCollectionStore().Resolve(graphUniform.collectionAssetId, graphUniform.collectionParameterStableId)) {
+                value = runtimeValue->value;
+            }
+        }
+
+        bgfx::UniformHandle& uniform = AcquireGraphUniform(graphUniform.name, false);
+        AppendUniqueValue(usedGraphUniforms_, graphUniform.name);
+        bgfx::setUniform(uniform, value.data());
+    }
+
+    for (const RenderMaterialGraphTextureBinding& graphTexture : material.graphProgram.textures) {
+        const RenderTextureHandle resolved = graphTexture.texture.IsValid()
+            ? graphTexture.texture
+            : resourceMap.ResolveTexture(graphTexture.textureAssetId, graphTexture.colorSpace);
+        const RenderTextureResource* textureResource = resources.FindTexture(resolved);
+        const bool resourceValid = textureResource != nullptr && bgfx::isValid(textureResource->texture);
+        const bool dimensionMatches = resourceValid && textureResource->dimension == graphTexture.dimension;
+        const bool textureValid = resourceValid && dimensionMatches;
+        const bool normalFallback = IsNormalGraphTextureRole(graphTexture.role);
+        const bgfx::TextureHandle fallbackTexture = GraphFallbackTexture(graphTexture.dimension, normalFallback);
+        const bgfx::TextureHandle handle = textureValid ? textureResource->texture : fallbackTexture;
+        {
+            std::ostringstream row;
+            row << "setTexture sampler=" << graphTexture.samplerName
+                << " stableId=" << graphTexture.stableId
+                << " slot=" << graphTexture.slot
+                << " role=" << (graphTexture.role.empty() ? "<empty>" : graphTexture.role)
+                << " assetId=" << graphTexture.textureAssetId
+                << " colorSpace=" << GraphRuntimeColorSpaceName(graphTexture.colorSpace)
+                << " resolvedHandle=" << resolved.value
+                << " textureResource=" << (textureResource != nullptr ? "true" : "false")
+                << " expectedDimension=" << RenderTextureDimensionName(graphTexture.dimension)
+                << " dimensionMatch=" << (dimensionMatches ? "true" : "false")
+                << " bgfxHandle=" << (bgfx::isValid(handle) ? std::to_string(handle.idx) : std::string{ "invalid" })
+                << " fallback=" << (!textureValid ? (normalFallback ? "normal" : "white") : "none")
+                << " fallbackDimension=" << RenderTextureDimensionName(graphTexture.dimension);
+            if (textureResource != nullptr) {
+                row << " resourceSize=" << textureResource->width << 'x' << textureResource->height
+                    << 'x' << textureResource->depth
+                    << " resourceLayers=" << textureResource->layers
+                    << " actualDimension=" << RenderTextureDimensionName(textureResource->dimension)
+                    << " resourceFormat=" << static_cast<int>(textureResource->format)
+                    << " resourceColorSpace=" << GraphRuntimeColorSpaceName(textureResource->colorSpace)
+                    << " resourceVersion=" << textureResource->version;
+            }
+            row << " samplerFlags=" << graphTexture.samplerFlags;
+            WriteRendererMaterialGraphDebugLog("gpu", row.str());
+        }
+
+        bgfx::UniformHandle& sampler = AcquireGraphUniform(graphTexture.samplerName, true);
+        AppendUniqueValue(usedGraphSamplerUniforms_, graphTexture.samplerName);
+        bgfx::setTexture(static_cast<std::uint8_t>(graphTexture.slot), sampler, handle, graphTexture.samplerFlags);
+    }
+}
+
+bool SceneMeshPassResources::SubmitPostProcessMaterial(const SceneMeshPostProcessDesc& desc) const {
+    const RenderMaterialResource& material = desc.material;
+    const std::string pass{ kRenderMaterialGraphPostProcessPass };
+    const std::uint32_t backend = static_cast<std::uint32_t>(bgfx::getRendererType());
+    const MaterialProgramKey key{
+        .materialTypeId = material.graphProgram.materialTypeId,
+        .materialTypeVersion = material.graphProgram.materialTypeVersion,
+        .graphSourceHash = material.graphProgram.graphSourceHash,
+        .variantKey = material.graphProgram.variantKey,
+        .pass = pass,
+        .backend = backend,
+        .binaryRevision = GraphBinaryRevision(graphShaderCacheRoot_, material.graphProgram.graphSourceHash,
+            material.graphProgram.variantKey, pass, backend),
+        .pipelineStateKey = material.graphProgram.pipelineStateKey,
+        .requiresGeneratedVertexShader = true,
+        .graphProgram = true,
+    };
+    bgfx::ProgramHandle program = programRegistry_.Find(key);
+    if (!bgfx::isValid(program)) {
+        program = programRegistry_.Acquire(key);
+    }
+    if (!bgfx::isValid(program)) {
+        return false;
+    }
+    AppendUniqueValue(usedProgramKeys_, key);
+    AppendUniqueValue(residentProgramKeys_, key);
+    // The fullscreen triangle of the post-process chain (ScenePostProcessRenderer).
+    static const bgfx::VertexLayout layout = [] {
+        bgfx::VertexLayout made;
+        made.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float).end();
+        return made;
+    }();
+    if (bgfx::getAvailTransientVertexBuffer(3U, layout) < 3U) {
+        return false;
+    }
+    bgfx::TransientVertexBuffer triangle{};
+    bgfx::allocTransientVertexBuffer(&triangle, 3U, layout);
+    constexpr std::array<float, 15U> vertices{ -1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 3.0F, 1.0F, 0.0F, 2.0F, 0.0F, -1.0F, -3.0F, 0.0F, 0.0F, 2.0F };
+    std::memcpy(triangle.data, vertices.data(), sizeof(vertices));
+    const std::array<float, 4U> materialParams{ 0.0F, 1.0F, 1.0F, 0.5F };
+    const std::array<float, 4U> zero{};
+    bgfx::setUniform(materialParamsUniform_, materialParams.data());
+    bgfx::setUniform(cameraPositionUniform_, zero.data());
+    bgfx::setUniform(renderOriginOffsetUniform_, zero.data());
+    bgfx::setUniform(timeUniform_, desc.frameTime.data());
+    bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
+    BindGraphMaterialValues(material, desc.resources, desc.resourceMap);
+    if (material.graphProgram.usesSceneColor) {
+        bgfx::setTexture(4U, AcquireGraphUniform("s_kbSceneColor", true), desc.input);
+        AppendUniqueValue(usedGraphSamplerUniforms_, std::string{ "s_kbSceneColor" });
+    }
+    if (material.graphProgram.usesSceneDepth && bgfx::isValid(desc.depth)) {
+        bgfx::setTexture(5U, AcquireGraphUniform("s_kbSceneDepth", true), desc.depth);
+        AppendUniqueValue(usedGraphSamplerUniforms_, std::string{ "s_kbSceneDepth" });
+    }
+    bgfx::setVertexBuffer(0U, &triangle);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(desc.viewId, program);
+    return true;
+}
+
 void SceneMeshPassResources::ResetProgramBindStats() const noexcept {
     programBindStats_ = SceneMeshProgramBindStats{};
     lastBoundProgram_ = BGFX_INVALID_HANDLE;
@@ -1173,68 +1301,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         pointShadows_.Set(desc.shadowMap != nullptr ? &desc.shadowMap->point : nullptr, desc.lighting.pointShadowSlot,
             fallbackWhiteTexture_, PointShadowUniforms::kGraphSamplerStage);
 
-        for (const RenderMaterialGraphUniformBinding& graphUniform : material->graphProgram.uniforms) {
-            std::array<float, 4U> value{
-                graphUniform.value[0],
-                graphUniform.value[1],
-                graphUniform.value[2],
-                graphUniform.value[3],
-            };
-            if (graphUniform.source == RenderMaterialGraphUniformBindingSource::ParameterCollection) {
-                if (const std::optional<RenderMaterialParameterCollectionRuntimeValue> runtimeValue =
-                        GlobalRenderMaterialParameterCollectionStore().Resolve(graphUniform.collectionAssetId, graphUniform.collectionParameterStableId)) {
-                    value = runtimeValue->value;
-                }
-            }
-
-            bgfx::UniformHandle& uniform = AcquireGraphUniform(graphUniform.name, false);
-            AppendUniqueValue(usedGraphUniforms_, graphUniform.name);
-            bgfx::setUniform(uniform, value.data());
-        }
-
-        for (const RenderMaterialGraphTextureBinding& graphTexture : material->graphProgram.textures) {
-            const RenderTextureHandle resolved = graphTexture.texture.IsValid()
-                ? graphTexture.texture
-                : desc.resourceMap.ResolveTexture(graphTexture.textureAssetId, graphTexture.colorSpace);
-            const RenderTextureResource* textureResource = desc.resources.FindTexture(resolved);
-            const bool resourceValid = textureResource != nullptr && bgfx::isValid(textureResource->texture);
-            const bool dimensionMatches = resourceValid && textureResource->dimension == graphTexture.dimension;
-            const bool textureValid = resourceValid && dimensionMatches;
-            const bool normalFallback = IsNormalGraphTextureRole(graphTexture.role);
-            const bgfx::TextureHandle fallbackTexture = GraphFallbackTexture(graphTexture.dimension, normalFallback);
-            const bgfx::TextureHandle handle = textureValid ? textureResource->texture : fallbackTexture;
-            {
-                std::ostringstream row;
-                row << "setTexture sampler=" << graphTexture.samplerName
-                    << " stableId=" << graphTexture.stableId
-                    << " slot=" << graphTexture.slot
-                    << " role=" << (graphTexture.role.empty() ? "<empty>" : graphTexture.role)
-                    << " assetId=" << graphTexture.textureAssetId
-                    << " colorSpace=" << GraphRuntimeColorSpaceName(graphTexture.colorSpace)
-                    << " resolvedHandle=" << resolved.value
-                    << " textureResource=" << (textureResource != nullptr ? "true" : "false")
-                    << " expectedDimension=" << RenderTextureDimensionName(graphTexture.dimension)
-                    << " dimensionMatch=" << (dimensionMatches ? "true" : "false")
-                    << " bgfxHandle=" << (bgfx::isValid(handle) ? std::to_string(handle.idx) : std::string{ "invalid" })
-                    << " fallback=" << (!textureValid ? (normalFallback ? "normal" : "white") : "none")
-                    << " fallbackDimension=" << RenderTextureDimensionName(graphTexture.dimension);
-                if (textureResource != nullptr) {
-                    row << " resourceSize=" << textureResource->width << 'x' << textureResource->height
-                        << 'x' << textureResource->depth
-                        << " resourceLayers=" << textureResource->layers
-                        << " actualDimension=" << RenderTextureDimensionName(textureResource->dimension)
-                        << " resourceFormat=" << static_cast<int>(textureResource->format)
-                        << " resourceColorSpace=" << GraphRuntimeColorSpaceName(textureResource->colorSpace)
-                        << " resourceVersion=" << textureResource->version;
-                }
-                row << " samplerFlags=" << graphTexture.samplerFlags;
-                WriteRendererMaterialGraphDebugLog("gpu", row.str());
-            }
-
-            bgfx::UniformHandle& sampler = AcquireGraphUniform(graphTexture.samplerName, true);
-            AppendUniqueValue(usedGraphSamplerUniforms_, graphTexture.samplerName);
-            bgfx::setTexture(static_cast<std::uint8_t>(graphTexture.slot), sampler, handle, graphTexture.samplerFlags);
-        }
+        BindGraphMaterialValues(*material, desc.resources, desc.resourceMap);
 
         if (material->graphProgram.usesSceneColor && bgfx::isValid(desc.sceneColorTexture)) {
             bgfx::UniformHandle& colorSampler = AcquireGraphUniform("s_kbSceneColor", true);

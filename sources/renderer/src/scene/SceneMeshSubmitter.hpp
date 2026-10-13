@@ -80,6 +80,7 @@ public:
         passResources_.EndFrame(frameIndex);
     }
     void SetGraphShaderCacheRoot(std::string root) { passResources_.SetGraphShaderCacheRoot(std::move(root)); }
+    [[nodiscard]] bool SubmitPostProcessMaterial(const SceneMeshPostProcessDesc& desc) const { return passResources_.SubmitPostProcessMaterial(desc); }
     void SetSkinningPaletteAllocator(const RenderSkinningPaletteAllocator* allocator) noexcept { skinningPaletteAllocator_ = allocator; }
 
 private:

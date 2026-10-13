@@ -27,6 +27,18 @@ class SceneMeshSubmitter;
 class ParticleGpuRenderer;
 class RenderScene;
 
+// The post-process chain targets the scene's Post Process materials draw through (Unreal's post-process blendables,
+// before the tonemap): one view per material, ping-ponging between the two colour targets.
+struct ScenePostProcessMaterialChainDesc {
+    std::array<std::uint16_t, 4U> views{};
+    std::array<bgfx::FrameBufferHandle, 2U> frameBuffers{ { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE } };
+    std::array<bgfx::TextureHandle, 2U> textures{ { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE } };
+    std::uint16_t width = 0U;
+    std::uint16_t height = 0U;
+    bgfx::TextureHandle input = BGFX_INVALID_HANDLE;  // one of `textures`
+    bgfx::TextureHandle depth = BGFX_INVALID_HANDLE;
+};
+
 class SceneRenderer {
 public:
     SceneRenderer();
@@ -59,6 +71,9 @@ public:
         std::span<const std::uint64_t> selectedEntityIds = {},
         const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride = nullptr,
         bool terrainLayersOnly = false) const;
+    // Draws the Post Process materials of `renderScene` (Mesh Renderers whose material is of that domain, in entity
+    // order, at most one per view) over `chain.input`; returns the texture holding the result.
+    [[nodiscard]] bgfx::TextureHandle SubmitPostProcessMaterials(const RenderScene& renderScene, const ScenePostProcessMaterialChainDesc& chain) const;
     void SetDefaultDrawBudget(SceneRenderDrawBudget drawBudget) noexcept;
     [[nodiscard]] SceneRenderDrawBudget DefaultDrawBudget() const noexcept;
     void SetDefaultLightingConfig(SceneRenderLightingConfig lightingConfig) noexcept;

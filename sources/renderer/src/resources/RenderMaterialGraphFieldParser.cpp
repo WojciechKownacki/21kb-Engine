@@ -244,7 +244,9 @@ void AddGraphMigrationDiagnostic(
     std::size_t line,
     RenderMaterialGraphDocument& graph,
     std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
-    if (rest != "surface") {
+    // A production domain by its written name (surface, postProcess, ...).
+    const RenderMaterialDomain domain = ParseRenderMaterialDomain(rest);
+    if (rest != RenderMaterialDomainName(domain) || !IsRenderMaterialDomainProduction(domain)) {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphMaterialDomain", "Unsupported material graph domain.", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
     }
