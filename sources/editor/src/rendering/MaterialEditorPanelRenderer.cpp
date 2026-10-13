@@ -654,6 +654,8 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return std::string{ EditorText("materialEditor.node.twoSidedSign", "Two Sided Sign") };
     case kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture:
         return std::string{ EditorText("materialEditor.node.worldAlignedTexture", "World Aligned Texture") };
+    case kb::render::RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+        return std::string{ EditorText("materialEditor.node.parallaxOcclusionMapping", "Parallax Occlusion Mapping") };
     case kb::render::RenderMaterialGraphNodeKind::FlipBook:
         return std::string{ EditorText("materialEditor.node.flipBook", "FlipBook") };
     case kb::render::RenderMaterialGraphNodeKind::Checkerboard:

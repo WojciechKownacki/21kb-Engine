@@ -194,6 +194,7 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     HueShift,
     ChannelMixer,
     RemapValueRange,
+    ParallaxOcclusionMapping,
 };
 
 enum class RenderMaterialGraphRenderPath : std::uint8_t {

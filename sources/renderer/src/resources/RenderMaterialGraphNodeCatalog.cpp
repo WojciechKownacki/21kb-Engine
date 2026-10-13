@@ -314,6 +314,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "LayerStack";
     case RenderMaterialGraphNodeKind::WorldAlignedTexture:
         return "WorldAlignedTexture";
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+        return "ParallaxOcclusionMapping";
     case RenderMaterialGraphNodeKind::FlipBook:
         return "FlipBook";
     case RenderMaterialGraphNodeKind::Checkerboard:
@@ -515,6 +517,7 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::MaterialFunctionCall:
     case RenderMaterialGraphNodeKind::LayerStack:
     case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
     case RenderMaterialGraphNodeKind::FlipBook:
     case RenderMaterialGraphNodeKind::Checkerboard:
     case RenderMaterialGraphNodeKind::PolarCoordinates:
@@ -753,6 +756,7 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::MaterialFunctionCall,
         RenderMaterialGraphNodeKind::LayerStack,
         RenderMaterialGraphNodeKind::WorldAlignedTexture,
+        RenderMaterialGraphNodeKind::ParallaxOcclusionMapping,
         RenderMaterialGraphNodeKind::FlipBook,
         RenderMaterialGraphNodeKind::Checkerboard,
         RenderMaterialGraphNodeKind::PolarCoordinates,

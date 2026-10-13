@@ -6349,6 +6349,30 @@ struct UtilityNodeCase {
             .sourceMarker = "0.577350269190",
         });
     }
+    // Unreal's If: A==B is optional (unconnected, A >= B takes A>B); unconnected A and B are the node's ConstA, ConstB.
+    cases.push_back(UtilityNodeCase{
+        .name = "If without A==B",
+        .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::If }, "value",
+            { { "a", K::ConstantScalar, "0.5" }, { "b", K::ConstantScalar, "0.5" }, { "greater", K::ConstantVector, "0.8 0.8 0.8" },
+              { "less", K::ConstantVector, "0.2 0.2 0.2" } }),
+        .expectations = { UtilityNodeExpectation{ .rgb = { 0.8F, 0.8F, 0.8F } } },
+        .sourceMarker = " >= ",
+    });
+    cases.push_back(UtilityNodeCase{
+        .name = "If with A==B",
+        .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::If }, "value",
+            { { "a", K::ConstantScalar, "0.5" }, { "b", K::ConstantScalar, "0.5" }, { "greater", K::ConstantVector, "0.8 0.8 0.8" },
+              { "less", K::ConstantVector, "0.2 0.2 0.2" }, { "equal", K::ConstantVector, "0.4 0.4 0.4" } }),
+        .expectations = { UtilityNodeExpectation{ .rgb = { 0.4F, 0.4F, 0.4F } } },
+        .sourceMarker = "abs(",
+    });
+    cases.push_back(UtilityNodeCase{
+        .name = "If with ConstA ConstB",
+        .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::If, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.3 0.6" } },
+            "value", { { "greater", K::ConstantVector, "0.8 0.8 0.8" }, { "less", K::ConstantVector, "0.2 0.2 0.2" } }),
+        .expectations = { UtilityNodeExpectation{ .rgb = { 0.2F, 0.2F, 0.2F } } },
+        .sourceMarker = "0.6",
+    });
     cases.push_back(UtilityNodeCase{
         .name = "ChannelMixer",
         .graph = UtilityGraph(RenderMaterialGraphNode{ .kind = K::ChannelMixer }, "value",
@@ -6510,6 +6534,73 @@ void RunForwardGraphUtilityNodeFormulasTest() {
         }
         bgfx::destroy(program);
     }
+    harness.Shutdown();
+}
+
+// Unreal's ParallaxOcclusionMapping on the harness triangle (world position (clip x, clip y, 0), normal +Z,
+// camera at (0, 0, 1)): a white height map is the surface itself and keeps the UVs; a black one is a full layer
+// deep, so the march runs to the bottom and shifts the UVs by -view.xy / view.z * Height Ratio, along x by
+// clip x * ratio. The parallax UVs drive Base Color.
+void RunForwardGraphParallaxOcclusionMappingTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "parallax_occlusion_mapping";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "ParallaxOcclusionMapping: harness vertex shader must cook");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    using K = RenderMaterialGraphNodeKind;
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = "unlit";
+    RenderMaterialGraphNode texture{ .id = 2U, .kind = K::TextureObject };
+    texture.parameter.stableId = "heightMap";
+    texture.parameter.textureRole = "baseColor";
+    texture.parameter.expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb;  // black and white decode to 0 and 1 either way
+    graph.nodes.push_back(texture);
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = K::ParallaxOcclusionMapping });
+    graph.nodes.push_back(UtilityConstant(4U, K::ConstantScalar, "0.1"));
+    graph.links.push_back(MakeLink(K::TextureObject, 2U, "texture", K::ParallaxOcclusionMapping, 3U, "texture"));
+    graph.links.push_back(MakeLink(K::ConstantScalar, 4U, "value", K::ParallaxOcclusionMapping, 3U, "heightRatio"));
+    graph.links.push_back(MakeLink(K::ParallaxOcclusionMapping, 3U, "parallaxUvs", K::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0xA380U });
+    if (!compiled.Succeeded()) {
+        std::fprintf(stderr, "ParallaxOcclusionMapping: %s\n", compiled.diagnostics.empty() ? "" : compiled.diagnostics.front().message.c_str());
+    }
+    Require(compiled.Succeeded() && compiled.shader.reflection.textures.size() == 1U, "ParallaxOcclusionMapping: the graph must compile with one texture");
+    const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(cooked.Succeeded() && cooked.artifact.has_value(), "ParallaxOcclusionMapping: the graph must cook to DXBC");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "ParallaxOcclusionMapping: Direct3D11 device unavailable; cannot read the parallax back\n");
+        Require(false, "ParallaxOcclusionMapping: A real GPU device is required to prove the parallax");
+        return;
+    }
+    const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *cooked.artifact);
+    const bgfx::UniformHandle sampler = bgfx::createUniform(compiled.shader.reflection.textures[0].samplerName.c_str(), bgfx::UniformType::Sampler);
+    Require(bgfx::isValid(program) && bgfx::isValid(sampler), "ParallaxOcclusionMapping: the program must link");
+    const auto render = [&](std::uint32_t texel) {
+        const std::array<std::uint32_t, 4U> texels{ texel, texel, texel, texel };
+        const bgfx::TextureHandle heights = bgfx::createTexture2D(2U, 2U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_POINT,
+            bgfx::copy(texels.data(), sizeof(texels)));
+        std::vector<std::uint8_t> pixels = harness.RenderPixels(program, sampler, heights);
+        bgfx::destroy(heights);
+        return pixels;
+    };
+    const std::vector<std::uint8_t> surface = render(0xffffffffU);
+    const std::vector<std::uint8_t> deep = render(0xff000000U);
+    const float u = HarnessUv(56U);
+    const float clipX = u * 2.0F - 1.0F;
+    const auto red = [](const std::vector<std::uint8_t>& pixels) { return static_cast<float>(ForwardRenderHarness::ProbeAt(pixels, 56U, 32U).r) / 255.0F; };
+    std::fprintf(stderr, "ParallaxOcclusionMapping: u %.3f, white height %.3f, black height %.3f (expected %.3f)\n",
+        u, red(surface), red(deep), u + clipX * 0.1F);
+    Require(std::abs(red(surface) - u) <= 0.02F, "ParallaxOcclusionMapping: a height map at the surface must keep the UVs");
+    Require(std::abs(red(deep) - (u + clipX * 0.1F)) <= 0.02F,
+        "ParallaxOcclusionMapping: a full layer deep height map must shift the UVs by -view.xy / view.z * Height Ratio");
+    bgfx::destroy(sampler);
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -6875,6 +6966,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphNoiseFunctionsTest();
     RunForwardGraphUtilityNodeFormulasTest();
     RunForwardGraphWorldAlignedTextureTest();
+    RunForwardGraphParallaxOcclusionMappingTest();
     RunForwardGraphPixelNormalSmoothSphereTest();
     RunForwardGraphNonUniformScaleNormalTest();
     RunForwardGraphPixelNormalWorldSpaceTest();

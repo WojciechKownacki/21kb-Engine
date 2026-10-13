@@ -451,6 +451,7 @@ RenderMaterialGraphParameterMetadata DefaultRenderMaterialGraphParameterMetadata
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
     case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
     case kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case kb::render::RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
     case kb::render::RenderMaterialGraphNodeKind::FlipBook:
     case kb::render::RenderMaterialGraphNodeKind::Checkerboard:
     case kb::render::RenderMaterialGraphNodeKind::PolarCoordinates:

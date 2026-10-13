@@ -132,6 +132,8 @@ PreferredInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
         return {{"value", std::string{ EditorText("materialEditor.pin.position", "Position") }}};
     case kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture:
         return {{"texture", std::string{ EditorText("materialEditor.pin.textureObject", "Texture Object") }}, {"textureSize", std::string{ EditorText("materialEditor.pin.textureSize", "Texture Size") }}, {"worldPosition", std::string{ EditorText("materialEditor.pin.worldPosition", "World Position") }}, {"projectionTransitionContrast", std::string{ EditorText("materialEditor.pin.projectionTransitionContrast", "Projection Transition Contrast") }}, {"worldSpaceNormal", std::string{ EditorText("materialEditor.pin.worldSpaceNormal", "World Space Normal") }}};
+    case kb::render::RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+        return {{"texture", std::string{ EditorText("materialEditor.pin.heightmapTexture", "Heightmap Texture") }}, {"uv", "UVs"}, {"heightRatio", std::string{ EditorText("materialEditor.pin.heightRatio", "Height Ratio") }}, {"steps", std::string{ EditorText("materialEditor.pin.steps", "Steps") }}};
     case kb::render::RenderMaterialGraphNodeKind::FlipBook:
         return {{"animationPhase", std::string{ EditorText("materialEditor.pin.animationPhase", "Animation Phase") }}, {"numberOfRows", std::string{ EditorText("materialEditor.pin.numberOfRows", "Number of Rows") }}, {"numberOfColumns", std::string{ EditorText("materialEditor.pin.numberOfColumns", "Number of Columns") }}, {"uv", "UVs"}};
     case kb::render::RenderMaterialGraphNodeKind::Checkerboard:
@@ -305,6 +307,8 @@ PreferredOutputPins(kb::render::RenderMaterialGraphNodeKind kind) {
         return {{"value", std::string{ EditorText("materialEditor.pin.value", "Value") }}};
     case kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture:
         return {{"xyzTexture", std::string{ EditorText("materialEditor.pin.xyzTexture", "XYZ Texture") }}, {"xyTexture", std::string{ EditorText("materialEditor.pin.xyTexture", "XY Texture") }}, {"zTexture", std::string{ EditorText("materialEditor.pin.zTexture", "Z Texture") }}};
+    case kb::render::RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+        return {{"parallaxUvs", std::string{ EditorText("materialEditor.pin.parallaxUvs", "Parallax UVs") }}, {"depth", std::string{ EditorText("materialEditor.pin.depth", "Depth") }}};
     case kb::render::RenderMaterialGraphNodeKind::FlipBook:
         return {{"value", "UVs"}};
     case kb::render::RenderMaterialGraphNodeKind::BlendOverlay:

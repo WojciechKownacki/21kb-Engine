@@ -573,6 +573,14 @@ class RenderMaterialGraphPinSchema final {
             visitor("xyTexture", Direction::Output);
             visitor("zTexture", Direction::Output);
             break;
+        case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+            visitor("texture", Direction::Input);
+            visitor("uv", Direction::Input);
+            visitor("heightRatio", Direction::Input);
+            visitor("steps", Direction::Input);
+            visitor("parallaxUvs", Direction::Output);
+            visitor("depth", Direction::Output);
+            break;
         case RenderMaterialGraphNodeKind::FlipBook:
             visitor("animationPhase", Direction::Input);
             visitor("numberOfRows", Direction::Input);

@@ -193,6 +193,7 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateCameraDepthFade,
     CreateDistanceCullFade,
     CreateWorldAlignedTexture,
+    CreateParallaxOcclusionMapping,
     CreateFlipBook,
     CreateCheckerboard,
     CreatePolarCoordinates,
