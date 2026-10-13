@@ -2,6 +2,7 @@ $input a_position, a_normal, a_tangent, a_texcoord0, a_texcoord1, a_color0, i_da
 $output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal
 
 #include <bgfx_shader.sh>
+#include "model_normal.sh"
 
 uniform mat4 u_shadowViewProj;
 
@@ -27,7 +28,7 @@ void main()
     v_shadowPos = mul(u_shadowViewProj, worldPos);
     // .x = shadow flag; .y = fade amount; .zw = second UV set (MAT-73).
     v_shadowFlags = vec4(i_data4.w >= 0.0 ? 1.0 : 0.0, instanceFadeAmount, a_texcoord1.x, a_texcoord1.y);
-    vec3 normal = normalize(mul(model, vec4(a_normal, 0.0)).xyz);
+    vec3 normal = KbModelNormal(model, a_normal);
     vec3 tangent = mul(model, vec4(a_tangent.xyz, 0.0)).xyz;
     vec3 fallbackAxis = abs(normal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     tangent = dot(tangent, tangent) > 0.0001 ? normalize(tangent) : normalize(cross(fallbackAxis, normal));

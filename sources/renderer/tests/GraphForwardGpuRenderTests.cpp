@@ -381,12 +381,13 @@ struct ForwardRenderProbe {
     return request;
 }
 
-// A mesh drawn by the graph's own vertex shader (one identity instance) instead of the harness triangle;
-// viewProjection maps it into the 64x64 target.
+// A mesh drawn by the graph's own vertex shader (one instance with `model`, column-major as the instance
+// buffer packs it) instead of the harness triangle; viewProjection maps it into the 64x64 target.
 struct HarnessMesh {
     bgfx::VertexBufferHandle vertices = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle indices = BGFX_INVALID_HANDLE;
     std::array<float, 16U> viewProjection{};
+    std::array<float, 16U> model{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
 };
 
 class ForwardRenderHarness {
@@ -525,7 +526,7 @@ public:
                 "GPU harness could not allocate the mesh instance");
             bgfx::allocInstanceDataBuffer(&instanceBuffer, 1U, RenderInstanceBuffer::Stride());
             auto* instance = reinterpret_cast<RenderInstanceData*>(instanceBuffer.data);
-            instance->model = identity;
+            instance->model = mesh->model;
             instance->color = { 1.0F, 1.0F, 1.0F, 1.0F };
             bgfx::setVertexBuffer(0, mesh->vertices);
             bgfx::setIndexBuffer(mesh->indices);
@@ -6665,6 +6666,159 @@ void RunForwardGraphNoiseFunctionsTest() {
     }
     harness.Shutdown();
 }
+
+// Unreal and Unity transform normals by the inverse transpose of the model matrix. A sphere scaled 1 x 4 x 1
+// is an ellipsoid whose normal at the sphere point s is normalize(s.x, s.y / 4, s.z); the model matrix itself
+// would give normalize(s.x, 4 s.y, s.z), tilted towards the long axis, and the side light would fall off.
+// The ellipsoid lit from +X is compared with an unscaled sphere at the point that has the same normal.
+void RunForwardGraphNonUniformScaleNormalTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "non_uniform_scale_normal";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    // A dark albedo below white under the 9-unit sun, no specular: N.L shapes the brightness. The zero World
+    // Position Offset makes the cook emit the graph's own vertex shader, which transforms the normals.
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    RenderMaterialGraphNode albedo{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
+    albedo.parameter.defaultValueHint = "0.06 0.06 0.06 1";
+    RenderMaterialGraphNode roughness{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantScalar };
+    roughness.parameter.defaultValueHint = "1";
+    RenderMaterialGraphNode specular{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantScalar };
+    specular.parameter.defaultValueHint = "0";
+    RenderMaterialGraphNode offset{ .id = 5U, .kind = RenderMaterialGraphNodeKind::ConstantVector };
+    offset.parameter.defaultValueHint = "0 0 0";
+    graph.nodes.push_back(albedo);
+    graph.nodes.push_back(roughness);
+    graph.nodes.push_back(specular);
+    graph.nodes.push_back(offset);
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "specular"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantVector, 5U, "xyz", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "worldPositionOffset"));
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0xA500U });
+    Require(compiled.Succeeded(), "Non-uniform scale: the lit graph must compile");
+    const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(cooked.Succeeded() && cooked.artifact.has_value(), "Non-uniform scale: the lit graph must cook");
+    const RenderMaterialGraphShaderBinary* graphVs = cooked.artifact->FindVertexBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(graphVs != nullptr && graphVs->byteSize > 0U, "Non-uniform scale: the graph must cook its own vertex shader");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "Non-uniform scale: Direct3D11 device unavailable; cannot run the scaled sphere proof\n");
+        Require(false, "Non-uniform scale: A real GPU device is required to prove the normal transform");
+        return;
+    }
+    const bgfx::ProgramHandle program = BuildGraphProgram(ReadAllBytes(std::filesystem::path{ graphVs->binaryPath }), *cooked.artifact);
+    const RenderMeshAssetData sphere = ShapeMeshes::Sphere(0.25F, "Preview");
+    const bgfx::VertexBufferHandle vertices = bgfx::createVertexBuffer(
+        bgfx::copy(sphere.tangentVertices.data(), static_cast<std::uint32_t>(sphere.tangentVertices.size() * sizeof(RenderStaticMeshVertexP3N3T4UV2))),
+        RenderStaticMeshVertexLayout(RenderVertexFormat::P3N3T4UV2));
+    const bgfx::IndexBufferHandle indices = bgfx::createIndexBuffer(
+        bgfx::copy(sphere.indices32.data(), static_cast<std::uint32_t>(sphere.indices32.size() * sizeof(std::uint32_t))), BGFX_BUFFER_INDEX32);
+    Require(bgfx::isValid(program) && bgfx::isValid(vertices) && bgfx::isValid(indices), "Non-uniform scale: program and sphere must be created");
+
+    // Orthographic from +Z, depth z 0.5..-0.5 into 0..1. The reference sphere fills the target (x and y by
+    // 3.6); the ellipsoid (radius 0.25 x 1.0 x 0.25) is drawn with y by 0.9 so its whole height fits.
+    HarnessMesh reference{ .vertices = vertices, .indices = indices };
+    reference.viewProjection = { 3.6F, 0.0F, 0.0F, 0.0F, 0.0F, 3.6F, 0.0F, 0.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F, 0.0F, 0.5F, 1.0F };
+    HarnessMesh ellipsoid{ .vertices = vertices, .indices = indices };
+    ellipsoid.viewProjection = { 3.6F, 0.0F, 0.0F, 0.0F, 0.0F, 0.9F, 0.0F, 0.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F, 0.0F, 0.5F, 1.0F };
+    ellipsoid.model = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 4.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+    const auto render = [&](const HarnessMesh& mesh) {
+        return harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, UINT32_MAX, 0x000000ffU,
+            BGFX_STATE_CULL_CCW, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, 0.0F, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, nullptr, true, 1.0F, &mesh);
+    };
+    const std::vector<std::uint8_t> referencePixels = render(reference);
+    const std::vector<std::uint8_t> ellipsoidPixels = render(ellipsoid);
+    const auto pixelOf = [](float clipX, float clipY) {
+        return std::array<std::uint32_t, 2U>{ static_cast<std::uint32_t>((clipX + 1.0F) * 32.0F), static_cast<std::uint32_t>((1.0F - clipY) * 32.0F) };
+    };
+    int checked = 0;
+    for (const std::array<float, 3U>& s : { std::array<float, 3U>{ 0.6F, 0.6F, 0.529F }, std::array<float, 3U>{ 0.7F, -0.5F, 0.51F }, std::array<float, 3U>{ 0.45F, 0.75F, 0.485F } }) {
+        // The ellipsoid point (0.25 s.x, 1.0 s.y, 0.25 s.z) and the sphere point 0.25 n with the same normal n.
+        const float length = std::sqrt(s[0] * s[0] + (s[1] / 4.0F) * (s[1] / 4.0F) + s[2] * s[2]);
+        const std::array<float, 3U> normal{ s[0] / length, (s[1] / 4.0F) / length, s[2] / length };
+        const std::array<std::uint32_t, 2U> onEllipsoid = pixelOf(0.25F * s[0] * 3.6F, s[1] * 0.9F);
+        const std::array<std::uint32_t, 2U> onSphere = pixelOf(0.25F * normal[0] * 3.6F, 0.25F * normal[1] * 3.6F);
+        const int lit = ForwardRenderHarness::ProbeAt(ellipsoidPixels, onEllipsoid[0], onEllipsoid[1]).r;
+        const int expected = ForwardRenderHarness::ProbeAt(referencePixels, onSphere[0], onSphere[1]).r;
+        std::fprintf(stderr, "Non-uniform scale: ellipsoid (%u, %u) red %d, sphere with the same normal (%u, %u) red %d\n",
+            onEllipsoid[0], onEllipsoid[1], lit, onSphere[0], onSphere[1], expected);
+        Require(expected > 60, "Non-uniform scale: the reference sphere point must be lit");
+        Require(std::abs(lit - expected) <= expected / 5,
+            "Non-uniform scale: a 1 x 4 x 1 sphere must light like the surface normal (inverse transpose of the model), not the scaled one");
+        ++checked;
+    }
+    Require(checked == 3, "Non-uniform scale: every probe must be checked");
+
+    bgfx::destroy(indices);
+    bgfx::destroy(vertices);
+    bgfx::destroy(program);
+    harness.Shutdown();
+}
+
+// Unreal's PixelNormalWS is the material's Normal in world space. On the harness triangle (normal +Z,
+// tangent +X, bitangent +Y) a tangent-space Normal of (0.6, 0, 0.8) is the world normal (0.6, 0, 0.8);
+// without a Normal it is the vertex normal. Unreal refuses it inside the Normal and in vertex inputs.
+void RunForwardGraphPixelNormalWorldSpaceTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "pixel_normal_ws";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "PixelNormalWS: harness vertex shader must cook");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    const auto buildGraph = [](bool normalMapped) {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        graph.shadingModel = "unlit";
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::PixelNormalWS });
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::PixelNormalWS, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+        if (normalMapped) {
+            graph.nodes.push_back(UtilityConstant(3U, RenderMaterialGraphNodeKind::ConstantVector, "0.6 0 0.8"));
+            graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantVector, 3U, "xyz", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
+        }
+        return graph;
+    };
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "PixelNormalWS: Direct3D11 device unavailable\n");
+        Require(false, "PixelNormalWS: A real GPU device is required to read the pixel normal back");
+        return;
+    }
+    std::uint32_t assetId = 0xA600U;
+    for (const bool normalMapped : { true, false }) {
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(buildGraph(normalMapped), RenderMaterialGraphBuildContext{ .assetId = assetId++ });
+        Require(compiled.Succeeded(), "PixelNormalWS: the graph must compile");
+        const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+        Require(cooked.Succeeded() && cooked.artifact.has_value(), "PixelNormalWS: the graph must cook");
+        const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *cooked.artifact);
+        Require(bgfx::isValid(program), "PixelNormalWS: the program must link");
+        const ForwardRenderProbe pixel = ForwardRenderHarness::ProbeAt(harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE), 32U, 32U);
+        RequirePixelNear(pixel, normalMapped ? std::array<float, 3U>{ 0.6F, 0.0F, 0.8F } : std::array<float, 3U>{ 0.0F, 0.0F, 1.0F },
+            normalMapped ? "PixelNormalWS with a Normal" : "PixelNormalWS without a Normal");
+        bgfx::destroy(program);
+    }
+    harness.Shutdown();
+
+    RenderMaterialGraphDocument circular = MakeDefaultRenderMaterialGraphDocument();
+    circular.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::PixelNormalWS });
+    circular.links.push_back(MakeLink(RenderMaterialGraphNodeKind::PixelNormalWS, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
+    const RenderMaterialGraphCompileResult refused = CompileRenderMaterialGraphToShaderSource(circular, RenderMaterialGraphBuildContext{ .assetId = 0xA610U });
+    Require(!refused.Succeeded() && !refused.diagnostics.empty() &&
+            refused.diagnostics.front().message.find("Cannot use PixelNormalWS as input to Normal") != std::string::npos,
+        "PixelNormalWS: feeding the Normal must be refused as in Unreal");
+    RenderMaterialGraphDocument vertex = MakeDefaultRenderMaterialGraphDocument();
+    vertex.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::PixelNormalWS });
+    vertex.links.push_back(MakeLink(RenderMaterialGraphNodeKind::PixelNormalWS, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "worldPositionOffset"));
+    const RenderMaterialGraphCompileResult vertexRefused = CompileRenderMaterialGraphToShaderSource(vertex, RenderMaterialGraphBuildContext{ .assetId = 0xA611U });
+    Require(!vertexRefused.Succeeded() && !vertexRefused.diagnostics.empty() &&
+            vertexRefused.diagnostics.front().message.find("PixelNormalWS is a pixel input") != std::string::npos,
+        "PixelNormalWS: feeding World Position Offset must be refused as in Unreal");
+}
 #endif
 
 } // namespace
@@ -6722,6 +6876,8 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphUtilityNodeFormulasTest();
     RunForwardGraphWorldAlignedTextureTest();
     RunForwardGraphPixelNormalSmoothSphereTest();
+    RunForwardGraphNonUniformScaleNormalTest();
+    RunForwardGraphPixelNormalWorldSpaceTest();
     RunForwardGraphSobolRendersTest();
     RunForwardGraphMaterialParameterCollectionRendersTest();
     RunMotionVectorPreviousModelGpuTest();
