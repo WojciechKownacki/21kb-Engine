@@ -618,7 +618,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kCharacterControllerPr
 // JointComponent>/TryGet<JointComponent> (the whole struct, field access is
 // plain C++, not this string-keyed mechanism) - see
 // RunEntityHandlePhysicsComponentAccessTest.
-constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kJointPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 18> kJointPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int, true, kJointTypeNames },
     ScriptSceneComponentPropertyDesc{ "anchor.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "anchor.y", ScriptValueType::Float },
@@ -632,6 +632,11 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kJointPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "minLimit", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "maxLimit", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "enableLimit", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "motor.targetVelocity", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "motor.force", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "spring.spring", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "spring.damper", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "breakForce", ScriptValueType::Float },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kNavAgentPropertyDescs{
@@ -830,7 +835,7 @@ constexpr std::array<FieldBinding, 9> kCharacterControllerFields{
     KB_BOOL(kb::scene::CharacterControllerComponent, useGravity),
 };
 
-constexpr std::array<FieldBinding, 13> kJointFields{
+constexpr std::array<FieldBinding, 18> kJointFields{
     KB_JOINT_TYPE(kb::scene::JointComponent, type),
     KB_NESTED_FLOAT(kb::scene::JointComponent, anchor, x),
     KB_NESTED_FLOAT(kb::scene::JointComponent, anchor, y),
@@ -844,6 +849,11 @@ constexpr std::array<FieldBinding, 13> kJointFields{
     KB_FLOAT(kb::scene::JointComponent, minLimit),
     KB_FLOAT(kb::scene::JointComponent, maxLimit),
     KB_BOOL(kb::scene::JointComponent, enableLimit),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, motor, targetVelocity),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, motor, force),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, spring, spring),
+    KB_NESTED_FLOAT(kb::scene::JointComponent, spring, damper),
+    KB_FLOAT(kb::scene::JointComponent, breakForce),
 };
 
 constexpr std::array<FieldBinding, 11> kNavAgentFields{

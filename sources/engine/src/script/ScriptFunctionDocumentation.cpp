@@ -171,6 +171,8 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Physics.Raycast", "Casts a ray through the active physics world and returns the closest filtered hit." },
     { "Physics.AddForce", "Applies a continuous force to an entity rigid body." },
     { "Physics.AddImpulse", "Applies an instantaneous impulse to an entity rigid body." },
+    { "Physics.AddTorque", "Applies a continuous world-space torque to an entity rigid body." },
+    { "Physics.AddExplosionForce", "Pushes an entity rigid body away from a point, falling off linearly to zero at the radius (a force, or an impulse when impulse is true)." },
     { "Physics.SetVelocity", "Sets the linear velocity of an entity rigid body." },
     { "Physics.GetVelocity", "Reads the linear velocity of an entity rigid body." },
     { "Physics.SetAngularVelocity", "Sets the angular velocity of an entity rigid body." },

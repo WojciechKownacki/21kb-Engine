@@ -3150,7 +3150,7 @@ void RunStreamFocusRuntimeTest() {
 
 void RunEngineLibraryEventSchemaRegistryTest() {
     const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
-    kb::tests::Require(catalog.size() == 18U + kb::scene::SceneUIEventCatalog().size(),
+    kb::tests::Require(catalog.size() == 19U + kb::scene::SceneUIEventCatalog().size(),
         "Engine21kbLibrary event schema registry must catalog every built-in event emitted by the engine");
 
     for (const kb::library::LibraryEventDesc& desc : catalog) {
@@ -3333,7 +3333,8 @@ void RunComponentInspectorDescCatalogTest() {
     // WorldBackdrop grew eleven procedural sky fields (Unity Skybox/Procedural).
     // Particle Effect contributes nine authoring and playback fields.
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
-    kb::tests::Require(fieldsChecked == 666U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (666, including the collision mesh and the compatibility aliases) across all components");
+    // Rigidbody damping adds two; Joint motor, spring and break force add five.
+    kb::tests::Require(fieldsChecked == 673U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (673, including the collision mesh and the compatibility aliases) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

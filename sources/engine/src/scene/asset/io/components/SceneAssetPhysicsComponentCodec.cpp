@@ -100,7 +100,7 @@ void SceneAssetPhysicsComponentCodec::WriteCharacterController(std::vector<std::
     SceneAssetBinaryIO::WriteUInt8(output, characterController.useGravity ? 1U : 0U);
 }
 
-bool SceneAssetPhysicsComponentCodec::ReadJoint(SceneAssetBinaryIO::ByteReader& input, ScenePrefabJointComponent& output) {
+bool SceneAssetPhysicsComponentCodec::ReadJoint(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, ScenePrefabJointComponent& output) {
     std::uint32_t type = 0;
     if (!input.ReadUInt32(type) ||
         type > static_cast<std::uint32_t>(JointType::Point) ||
@@ -111,6 +111,11 @@ bool SceneAssetPhysicsComponentCodec::ReadJoint(SceneAssetBinaryIO::ByteReader& 
         !input.ReadFloat(output.minLimit) ||
         !input.ReadFloat(output.maxLimit) ||
         !input.ReadBool(output.enableLimit)) {
+        return false;
+    }
+    if (fileVersion >= SceneDocument::JointMotorSpringBreakFileVersion &&
+        (!input.ReadFloat(output.motor.targetVelocity) || !input.ReadFloat(output.motor.force) ||
+         !input.ReadFloat(output.spring.spring) || !input.ReadFloat(output.spring.damper) || !input.ReadFloat(output.breakForce))) {
         return false;
     }
     output.type = static_cast<JointType>(type);
@@ -126,6 +131,11 @@ void SceneAssetPhysicsComponentCodec::WriteJoint(std::vector<std::uint8_t>& outp
     SceneAssetBinaryIO::WriteFloat(output, joint.minLimit);
     SceneAssetBinaryIO::WriteFloat(output, joint.maxLimit);
     SceneAssetBinaryIO::WriteUInt8(output, joint.enableLimit ? 1U : 0U);
+    SceneAssetBinaryIO::WriteFloat(output, joint.motor.targetVelocity);
+    SceneAssetBinaryIO::WriteFloat(output, joint.motor.force);
+    SceneAssetBinaryIO::WriteFloat(output, joint.spring.spring);
+    SceneAssetBinaryIO::WriteFloat(output, joint.spring.damper);
+    SceneAssetBinaryIO::WriteFloat(output, joint.breakForce);
 }
 
 } // namespace kb::scene

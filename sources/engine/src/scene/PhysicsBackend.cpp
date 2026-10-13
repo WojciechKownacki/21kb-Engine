@@ -3,9 +3,12 @@
 #include "engine/assets/AssetHandle.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
+#include <cmath>
 #include <filesystem>
 #include <utility>
 
@@ -47,6 +50,29 @@ bool PhysicsBackend::AddForce(Scene& scene, SceneEntity entity, Vec3 force) noex
 bool PhysicsBackend::AddImpulse(Scene& scene, SceneEntity entity, Vec3 impulse) noexcept {
     IPhysicsBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->AddImpulse(entity, impulse);
+}
+
+bool PhysicsBackend::AddTorque(Scene& scene, SceneEntity entity, Vec3 torque) noexcept {
+    IPhysicsBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->AddTorque(entity, torque);
+}
+
+bool PhysicsBackend::AddExplosionForce(Scene& scene, SceneEntity entity, float force, Vec3 center, float radius, bool impulse) noexcept {
+    if (FindBackend(scene) == nullptr || !scene.Entities().IsAlive(entity) || scene.Transforms().TryGet(entity) == nullptr ||
+        !std::isfinite(force) || !std::isfinite(radius) || radius <= 0.0F) {
+        return false;
+    }
+    const kb::math::DVec3 position = scene.Transforms().WorldTranslation(entity);
+    const double dx = position.x - center.x;
+    const double dy = position.y - center.y;
+    const double dz = position.z - center.z;
+    const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const double scale = distance < radius ? force * (1.0 - distance / radius) : 0.0;
+    // A body exactly at the center is pushed up, as Unity does.
+    const Vec3 push = distance > 1e-6
+        ? Vec3{ static_cast<float>(dx / distance * scale), static_cast<float>(dy / distance * scale), static_cast<float>(dz / distance * scale) }
+        : Vec3{ 0.0F, static_cast<float>(scale), 0.0F };
+    return impulse ? AddImpulse(scene, entity, push) : AddForce(scene, entity, push);
 }
 
 bool PhysicsBackend::SetVelocity(Scene& scene, SceneEntity entity, Vec3 velocity) noexcept {
@@ -169,6 +195,10 @@ void PhysicsBackend::OverlapShapeAllPrecise(Scene& scene, const PhysicsShapeDesc
 
 void PhysicsBackend::QueueCollisionEvent(Scene& scene, PendingCollisionEvent event) {
     SceneAccess::State(scene).pendingCollisionEvents.push_back(std::move(event));
+}
+
+void PhysicsBackend::QueueJointBreak(Scene& scene, SceneEntity entity) {
+    SceneAccess::State(scene).pendingJointBreaks.push_back(entity);
 }
 
 void PhysicsBackend::SetCollisionEventConsumer(Scene& scene, bool present) noexcept {

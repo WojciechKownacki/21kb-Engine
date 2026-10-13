@@ -123,6 +123,11 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "joint.minLimit=" << components.joint->minLimit << '\n';
         output << "joint.maxLimit=" << components.joint->maxLimit << '\n';
         output << "joint.enableLimit=" << (components.joint->enableLimit ? 1 : 0) << '\n';
+        output << "joint.motor.targetVelocity=" << components.joint->motor.targetVelocity << '\n';
+        output << "joint.motor.force=" << components.joint->motor.force << '\n';
+        output << "joint.spring.spring=" << components.joint->spring.spring << '\n';
+        output << "joint.spring.damper=" << components.joint->spring.damper << '\n';
+        output << "joint.breakForce=" << components.joint->breakForce << '\n';
     }
 
     output << "tags=" << (components.tags.has_value() ? 1 : 0) << '\n';
