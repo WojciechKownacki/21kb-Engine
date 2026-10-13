@@ -58,7 +58,7 @@ enum class RenderMaterialDomain : std::uint8_t {
 // compilation instead of silently compiling as Surface.
 [[nodiscard]] constexpr bool IsRenderMaterialDomainProduction(RenderMaterialDomain domain) noexcept {
     return domain == RenderMaterialDomain::Surface || domain == RenderMaterialDomain::PostProcess ||
-        domain == RenderMaterialDomain::DeferredDecal;
+        domain == RenderMaterialDomain::DeferredDecal || domain == RenderMaterialDomain::UserInterface;
 }
 
 [[nodiscard]] RenderMaterialDomain ParseRenderMaterialDomain(std::string_view text) noexcept;

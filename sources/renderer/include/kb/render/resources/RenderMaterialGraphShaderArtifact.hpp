@@ -19,6 +19,8 @@ inline constexpr std::uint64_t kRenderMaterialGraphShaderWrapperVersion = 9ULL;
 inline constexpr std::string_view kRenderMaterialGraphMotionVectorsPass = "MotionVectors";
 // A Post Process material's fullscreen pass (the post-process chain, before the tonemap).
 inline constexpr std::string_view kRenderMaterialGraphPostProcessPass = "PostProcess";
+// A User Interface material's pass (a widget's rectangle in the screen UI).
+inline constexpr std::string_view kRenderMaterialGraphUserInterfacePass = "UserInterface";
 
 enum class RenderMaterialGraphShaderBackend : std::uint8_t {
     Dxbc,

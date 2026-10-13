@@ -378,7 +378,7 @@ bgfx::TextureHandle SceneRenderer::SubmitPostProcessMaterials(const RenderScene&
         bgfx::setViewRect(view, 0, 0, chain.width, chain.height);
         bgfx::setViewClear(view, BGFX_CLEAR_NONE);
         bgfx::setViewTransform(view, identity.data(), identity.data());
-        if (!meshSubmitter_->SubmitPostProcessMaterial(SceneMeshPostProcessDesc{
+        if (!meshSubmitter_->SubmitScreenMaterial(SceneMeshScreenMaterialDesc{
                 .viewId = view, .material = *material, .resources = resources_, .resourceMap = resourceMap_,
                 .input = current, .depth = chain.depth, .frameTime = FrameTimeConstants(),
                 .dynamicParameter = DynamicParameterConstants() })) {
@@ -390,6 +390,25 @@ bgfx::TextureHandle SceneRenderer::SubmitPostProcessMaterials(const RenderScene&
         ++drawn;
     }
     return current;
+}
+
+bool SceneRenderer::SubmitUserInterfaceMaterial(bgfx::ViewId viewId, std::uint64_t materialAssetId, const bgfx::TransientVertexBuffer& vertices,
+    const bgfx::TransientIndexBuffer& indices, std::uint32_t firstIndex, std::uint32_t indexCount) const {
+    const RenderMaterialResource* material = resources_.FindMaterial(resourceMap_.ResolveMaterial(materialAssetId));
+    if (material == nullptr || !material->graphProgram.active || !material->graphProgram.userInterfaceDomain) {
+        WriteRendererDebugLog("screen_ui", "UserInterfaceMaterialUnavailable: material " + std::to_string(materialAssetId) +
+            (material == nullptr ? " is not loaded" : " is not a User Interface material"));
+        return false;
+    }
+    if (meshSubmitter_ == nullptr || !meshSubmitter_->SubmitScreenMaterial(SceneMeshScreenMaterialDesc{
+            .viewId = viewId, .material = *material, .resources = resources_, .resourceMap = resourceMap_,
+            .frameTime = FrameTimeConstants(), .dynamicParameter = DynamicParameterConstants(), .uiVertices = &vertices,
+            .uiIndices = &indices, .firstIndex = firstIndex, .indexCount = indexCount })) {
+        WriteRendererDebugLog("screen_ui", "UserInterfaceMaterialUnavailable: material " + std::to_string(materialAssetId) +
+            " has no UserInterface program (material not cooked for the pass)");
+        return false;
+    }
+    return true;
 }
 
 void SceneRenderer::SetDefaultDrawBudget(SceneRenderDrawBudget drawBudget) noexcept {

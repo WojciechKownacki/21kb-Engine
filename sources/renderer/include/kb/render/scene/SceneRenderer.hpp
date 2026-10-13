@@ -74,6 +74,10 @@ public:
     // Draws the Post Process materials of `renderScene` (Mesh Renderers whose material is of that domain, in entity
     // order, at most one per view) over `chain.input`; returns the texture holding the result.
     [[nodiscard]] bgfx::TextureHandle SubmitPostProcessMaterials(const RenderScene& renderScene, const ScenePostProcessMaterialChainDesc& chain) const;
+    // Draws `indexCount` indices of the screen UI's vertices with the User Interface material `materialAssetId`; false
+    // (with a named log line) when the material is not loaded, not of that domain or not cooked for the pass.
+    [[nodiscard]] bool SubmitUserInterfaceMaterial(bgfx::ViewId viewId, std::uint64_t materialAssetId, const bgfx::TransientVertexBuffer& vertices,
+        const bgfx::TransientIndexBuffer& indices, std::uint32_t firstIndex, std::uint32_t indexCount) const;
     void SetDefaultDrawBudget(SceneRenderDrawBudget drawBudget) noexcept;
     [[nodiscard]] SceneRenderDrawBudget DefaultDrawBudget() const noexcept;
     void SetDefaultLightingConfig(SceneRenderLightingConfig lightingConfig) noexcept;

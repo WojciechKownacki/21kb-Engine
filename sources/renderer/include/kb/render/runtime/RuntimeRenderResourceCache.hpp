@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 namespace kb::scene {
+struct SceneUIFrame;
 class Scene;
 }
 
@@ -52,6 +53,8 @@ struct RuntimeRenderResourceEnsureContext {
     std::uint32_t& materialReloadCount;
     std::uint32_t& materialResolverDiagnosticCount;
     std::uint64_t currentFrame = 0;
+    // The screen UI of the frame: its images' User Interface materials are loaded too.
+    const kb::scene::SceneUIFrame* uiFrame = nullptr;
 };
 
 using RuntimeMeshResourceMap = std::unordered_map<RuntimeAssetKey, RuntimeMeshResource, RuntimeAssetKeyHash>;

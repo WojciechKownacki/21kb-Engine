@@ -376,6 +376,7 @@ constexpr std::array kImageProperties{
     KB_BOOL(UIImage, preserveAspect), KB_EDGES(UIImage, nineSlice), KB_COLOR(UIImage, color),
     KB_ENUM(UIImage, fillMethod),     KB_ENUM(UIImage, fillOrigin),  KB_FLOAT(UIImage, fillAmount),
     KB_BOOL(UIImage, fillClockwise),  KB_FLOAT(UIImage, alphaHitThreshold),
+    KB_TYPED_ASSET(UIImage, materialAssetId, Material, "ui.material"),
 };
 constexpr std::array kRawImageProperties{
     KB_TYPED_ASSET(UIRawImage, imageAssetId, Texture, "ui.rawImage"),

@@ -1511,6 +1511,7 @@ void TestWidgetSettingsPersistence() {
     authored.image->fillAmount = 0.4F;
     authored.image->fillClockwise = false;
     authored.image->alphaHitThreshold = 0.2F;
+    authored.image->materialAssetId = 81U;
     authored.text.emplace();
     static_cast<void>(kb::scene::SetUITextLocalizationKey(*authored.text, "hud.title"));
     authored.text->overflow = kb::scene::UITextOverflow::Ellipsis;
@@ -1548,12 +1549,13 @@ void TestWidgetSettingsPersistence() {
     kb::scene::SceneAssetUIComponentCodec::Write(bytes, authored);
     kb::scene::SceneAssetBinaryIO::ByteReader reader{bytes};
     kb::scene::UIComponentSet decoded;
-    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, 39U, decoded) && reader.Exhausted(), "A v39 widget set must load");
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, 45U, decoded) && reader.Exhausted(), "A v45 widget set must load");
     kb::tests::Require(decoded.canvas->renderMode == kb::scene::UICanvasRenderMode::WorldSpace && decoded.canvas->pixelsPerUnit == 50.0F &&
         !decoded.canvas->respectSafeArea && decoded.canvas->player == 2 && !decoded.canvasGroup->visible &&
         decoded.canvasGroup->transitionSeconds == 0.3F && decoded.canvasGroup->hiddenOffset.y == 5.0F && decoded.canvasGroup->hiddenScale == 0.8F &&
         decoded.image->fillMethod == kb::scene::UIImageFillMethod::Radial360 && decoded.image->fillOrigin == kb::scene::UIImageFillOrigin::End &&
         decoded.image->fillAmount == 0.4F && !decoded.image->fillClockwise && decoded.image->alphaHitThreshold == 0.2F &&
+        decoded.image->materialAssetId == 81U &&
         kb::scene::UITextLocalizationKey(*decoded.text) == "hud.title" && decoded.text->overflow == kb::scene::UITextOverflow::Ellipsis &&
         decoded.text->autoSize && decoded.text->minFontSize == 9.0F && decoded.text->maxLines == 2U && decoded.text->characterSpacing == 1.5F &&
         decoded.mask->softness == 6.0F && decoded.selectable->transition == kb::scene::UISelectableTransition::SpriteSwap &&
@@ -1564,7 +1566,7 @@ void TestWidgetSettingsPersistence() {
         decoded.scrollView->elasticity == 0.25F && decoded.scrollView->snapToChildren &&
         decoded.inputField->contentType == kb::scene::UIInputContentType::Pin && kb::scene::UIInputPlaceholder(*decoded.inputField) == "PIN" &&
         decoded.progressBar->direction == kb::scene::UIAxisDirection::TopToBottom && decoded.progressBar->fillRect == 71U,
-        "Every v39 widget setting must round-trip");
+        "Every v45 widget setting must round-trip");
 
     std::vector<std::uint8_t> legacy;
     kb::scene::SceneAssetBinaryIO::WriteUInt64(legacy, 1ULL << static_cast<unsigned>(kb::scene::UIComponentType::Canvas));

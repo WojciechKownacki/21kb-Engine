@@ -35,7 +35,7 @@ enum class UIImageFillOrigin : std::uint8_t {
 
 struct UIImage {
     static constexpr std::string_view StableId = "kb21.ui.image";
-    static constexpr std::uint32_t SchemaVersion = 2U;
+    static constexpr std::uint32_t SchemaVersion = 3U;
 
     std::uint64_t imageAssetId = 0U;
     kb::math::Rect uvRect{0.0F, 0.0F, 1.0F, 1.0F};
@@ -49,6 +49,9 @@ struct UIImage {
     bool fillClockwise = true;
     // A press only lands where the image is at least this opaque; 0 makes the whole rectangle clickable.
     float alphaHitThreshold = 0.0F;
+    // Unreal's UI material: a material of the User Interface domain draws the image's rectangle (its Texture
+    // Coordinate spans it) instead of the image, tinted by `color`.
+    std::uint64_t materialAssetId = 0U;
 };
 
 } // namespace kb::scene

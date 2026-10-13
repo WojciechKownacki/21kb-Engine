@@ -110,9 +110,10 @@ MeshPipelineResolvedMesh MeshPipelineResourceResolver::ResolveMeshBatch(
     SceneRenderDiagnostics* diagnostics,
     std::span<const std::uint64_t> selectedEntityIds,
     std::uint32_t cullingMask) noexcept {
-    // A Post Process material is drawn by the post-process chain (SceneRenderer::SubmitPostProcessMaterials), not here.
+    // A Post Process material is drawn by the post-process chain (SceneRenderer::SubmitPostProcessMaterials) and a User
+    // Interface material by the screen UI, not here.
     if (const RenderMaterialResource* material = resources.FindMaterial(resourceMap.ResolveMaterial(batch.materialAssetId));
-        material != nullptr && material->graphProgram.postProcessDomain) {
+        material != nullptr && (material->graphProgram.postProcessDomain || material->graphProgram.userInterfaceDomain)) {
         return {};
     }
     const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(batch.meshAssetId);

@@ -26,6 +26,7 @@ struct SceneUIFrame;
 namespace kb::render {
 
 class RenderResourceRegistry;
+class SceneRenderer;
 class SceneRenderResourceMap;
 
 struct ScreenUISubmitDesc {
@@ -42,6 +43,8 @@ struct ScreenUISubmitDesc {
     RenderExtent outputExtent{};
     RenderViewportRect outputRect{};
     FullscreenTextureOutputTransform outputTransform{};
+    // Draws the images whose material is a User Interface material.
+    const SceneRenderer* sceneRenderer = nullptr;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

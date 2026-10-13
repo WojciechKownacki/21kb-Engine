@@ -59,8 +59,9 @@ struct SceneMeshPassBindDesc {
 };
 
 // One post-process material over the view (Unreal's post-process blendable, before the tonemap): its PostProcess
-// program reads `input` as Scene Color and `depth` as Scene Depth.
-struct SceneMeshPostProcessDesc {
+// program reads `input` as Scene Color and `depth` as Scene Depth. With `uiVertices` it is a User Interface material
+// drawing those screen UI triangles with its UserInterface program, alpha blended.
+struct SceneMeshScreenMaterialDesc {
     bgfx::ViewId viewId = 0U;
     const RenderMaterialResource& material;
     const RenderResourceRegistry& resources;
@@ -69,6 +70,10 @@ struct SceneMeshPostProcessDesc {
     bgfx::TextureHandle depth = BGFX_INVALID_HANDLE;
     std::array<float, 4> frameTime{};
     std::array<float, 4> dynamicParameter{};
+    const bgfx::TransientVertexBuffer* uiVertices = nullptr;
+    const bgfx::TransientIndexBuffer* uiIndices = nullptr;
+    std::uint32_t firstIndex = 0U;
+    std::uint32_t indexCount = 0U;
 };
 
 struct SceneMeshProgramBindStats {
@@ -107,8 +112,8 @@ public:
     void Shutdown();
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] bgfx::ProgramHandle Bind(const SceneMeshPassBindDesc& desc) const noexcept;
-    // False when the material's PostProcess program is not available (not cooked, or failed to load).
-    [[nodiscard]] bool SubmitPostProcessMaterial(const SceneMeshPostProcessDesc& desc) const;
+    // False when the material's PostProcess / UserInterface program is not available (not cooked, or failed to load).
+    [[nodiscard]] bool SubmitScreenMaterial(const SceneMeshScreenMaterialDesc& desc) const;
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return programRegistry_.Stats(); }
     void EndFrame(std::uint64_t frameIndex) const;
     [[nodiscard]] SceneLightGridResources& LightGrid() const noexcept { return lightGrid_; }

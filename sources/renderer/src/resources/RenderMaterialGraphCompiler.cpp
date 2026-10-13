@@ -3671,16 +3671,19 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         AttachDiagnosticContext(graph, context, result.diagnostics);
         return result;
     }
-    // Unreal's domain outputs: a Post Process material writes Emissive Color only; a Deferred Decal writes the
-    // surface it lands on, with no vertex, depth or refraction outputs.
+    // Unreal's domain outputs: a Post Process material writes Emissive Color only; a User Interface material its
+    // Final Color (Emissive) and Opacity; a Deferred Decal the surface it lands on, with no vertex, depth or
+    // refraction outputs.
     if (requestedDomain != RenderMaterialDomain::Surface) {
         constexpr std::array<std::string_view, 8U> kDecalOutputs{
             "baseColor", "alpha", "emissive", "normal", "metallic", "roughness", "specular", "occlusion" };
         const bool postProcess = requestedDomain == RenderMaterialDomain::PostProcess;
+        const bool userInterface = requestedDomain == RenderMaterialDomain::UserInterface;
         for (const RenderMaterialGraphLink& link : graph.links) {
             const RenderMaterialGraphNode* to = FindRenderMaterialGraphNode(graph, link.toNodeId);
-            const bool written = postProcess ? link.toPin == "emissive"
-                                             : std::ranges::find(kDecalOutputs, link.toPin) != kDecalOutputs.end();
+            const bool written = postProcess     ? link.toPin == "emissive"
+                                 : userInterface ? link.toPin == "emissive" || link.toPin == "alpha"
+                                                 : std::ranges::find(kDecalOutputs, link.toPin) != kDecalOutputs.end();
             if (to != nullptr && to->kind == RenderMaterialGraphNodeKind::MaterialOutput && !written) {
                 result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
                     .severity = RenderMaterialGraphDiagnosticSeverity::Error,
@@ -3689,6 +3692,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
                     .pin = link.toPin,
                     .message = postProcess
                         ? "MaterialDomainOutputRefused: a Post Process material writes Emissive Color only, not '" + link.toPin + "'."
+                        : userInterface
+                        ? "MaterialDomainOutputRefused: a User Interface material writes Final Color (Emissive) and Opacity only, not '" + link.toPin + "'."
                         : "MaterialDomainOutputRefused: a Deferred Decal material writes the surface outputs only, not '" + link.toPin + "'.",
                 });
             }

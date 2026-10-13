@@ -447,6 +447,8 @@ struct RenderMaterialGraphProgramBinding {
     // Unreal's Deferred Decal domain: the material decorates the opaque surfaces inside its box, drawn with the box's
     // back faces behind them in the transparent pass.
     bool decalDomain = false;
+    // Unreal's User Interface domain: the material draws a UI image's rectangle (ScreenUIComposite).
+    bool userInterfaceDomain = false;
 };
 
 struct RenderMaterialResource {
