@@ -193,7 +193,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
             return false;
         }
         ScenePrefabJointComponent joint;
-        if (!SceneAssetPhysicsComponentCodec::ReadJoint(input, joint)) {
+        if (!SceneAssetPhysicsComponentCodec::ReadJoint(input, fileVersion, joint)) {
             return false;
         }
         output.joint = joint;

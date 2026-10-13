@@ -2030,6 +2030,46 @@ int LuaPhysicsAddImpulse(lua_State* state) {
     return 1;
 }
 
+int LuaPhysicsAddTorque(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("torqueX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("torqueY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("torqueZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.AddTorque", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+// Physics.AddExplosionForce(entity, force, centerX, centerY, centerZ, radius [, impulse])
+int LuaPhysicsAddExplosionForce(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("force", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("centerX", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+        Arg("centerY", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+        Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 5)) }),
+        Arg("radius", ScriptValue{ static_cast<float>(luaL_checknumber(state, 6)) }),
+    };
+    if (!lua_isnoneornil(state, 7)) {
+        arguments.push_back(Arg("impulse", ScriptValue{ lua_toboolean(state, 7) != 0 }));
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.AddExplosionForce", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 int LuaPhysicsSetVelocity(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -3443,6 +3483,8 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaPhysicsRaycast,
     &LuaPhysicsAddForce,
     &LuaPhysicsAddImpulse,
+    &LuaPhysicsAddTorque,
+    &LuaPhysicsAddExplosionForce,
     &LuaPhysicsSetVelocity,
     &LuaPhysicsGetVelocity,
     &LuaPhysicsSetAngularVelocity,

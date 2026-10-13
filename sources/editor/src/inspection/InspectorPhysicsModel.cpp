@@ -306,6 +306,11 @@ std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::JointCo
         FloatField(EditorText("inspector.joint.minLimit", "Min Limit"), c.minLimit),
         FloatField(EditorText("inspector.joint.maxLimit", "Max Limit"), c.maxLimit),
         BoolField(EditorText("inspector.joint.enableLimit", "Enable Limit"), c.enableLimit),
+        FloatField(EditorText("inspector.joint.motorTargetVelocity", "Motor Target Velocity"), c.motor.targetVelocity),
+        FloatField(EditorText("inspector.joint.motorForce", "Motor Force"), c.motor.force),
+        FloatField(EditorText("inspector.joint.spring", "Spring"), c.spring.spring),
+        FloatField(EditorText("inspector.joint.springDamper", "Spring Damper"), c.spring.damper),
+        FloatField(EditorText("inspector.joint.breakForce", "Break Force"), c.breakForce),
     };
 }
 
@@ -322,6 +327,11 @@ bool InspectorPhysicsModel::ReadFloat(const kb::scene::JointComponent& c, int in
     case 9: out = c.axis.z; return true;
     case 10: out = c.minLimit; return true;
     case 11: out = c.maxLimit; return true;
+    case 13: out = c.motor.targetVelocity; return true;
+    case 14: out = c.motor.force; return true;
+    case 15: out = c.spring.spring; return true;
+    case 16: out = c.spring.damper; return true;
+    case 17: out = c.breakForce; return true;
     default: return false;
     }
 }
@@ -339,6 +349,11 @@ bool InspectorPhysicsModel::ApplyFloat(kb::scene::JointComponent& c, int index, 
     case 9: c.axis.z = v; return true;
     case 10: c.minLimit = v; return true;
     case 11: c.maxLimit = v; return true;
+    case 13: c.motor.targetVelocity = v; return true;
+    case 14: c.motor.force = v < 0.0F ? 0.0F : v; return true;
+    case 15: c.spring.spring = v < 0.0F ? 0.0F : v; return true;
+    case 16: c.spring.damper = v < 0.0F ? 0.0F : v; return true;
+    case 17: c.breakForce = v < 0.0F ? 0.0F : v; return true;
     default: return false;
     }
 }

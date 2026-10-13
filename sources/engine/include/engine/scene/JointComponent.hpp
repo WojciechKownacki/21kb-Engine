@@ -22,6 +22,20 @@ enum class JointType {
 // Hinge: swing angle in degrees; Distance: min/max separation) - actually
 // constraining simulated bodies from this data is LIB-130's scope, not this
 // component's.
+// Unity's JointMotor: Hinge drives this body about the axis at targetVelocity (deg/s) with
+// at most `force` (Nm). force 0 = no motor.
+struct JointMotor {
+    float targetVelocity = 0.0F;
+    float force = 0.0F;
+};
+
+// Unity's SpringJoint spring: Distance pulls back towards its separation (or limits) with
+// stiffness `spring` (N/m) and `damper` (Ns/m) instead of holding it rigidly. spring 0 = rigid.
+struct JointSpring {
+    float spring = 0.0F;
+    float damper = 0.0F;
+};
+
 struct JointComponent {
     JointType type = JointType::Fixed;
     SceneEntity connectedEntity{};
@@ -31,6 +45,11 @@ struct JointComponent {
     float minLimit = 0.0F;
     float maxLimit = 0.0F;
     bool enableLimit = false;
+    JointMotor motor{};
+    JointSpring spring{};
+    // Force (N) above which the joint breaks and its component is removed, as Unity's
+    // Joint.breakForce. 0 = never breaks.
+    float breakForce = 0.0F;
 };
 
 } // namespace kb::scene

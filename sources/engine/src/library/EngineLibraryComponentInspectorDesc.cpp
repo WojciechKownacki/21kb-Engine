@@ -186,6 +186,11 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "minLimit", "Min Limit", "Lower constraint limit, interpreted per joint type." },
                 LibraryComponentInspectorFieldDesc{ "maxLimit", "Max Limit", "Upper constraint limit, interpreted per joint type." },
                 LibraryComponentInspectorFieldDesc{ "enableLimit", "Enable Limit", "Whether minLimit/maxLimit are enforced." },
+                LibraryComponentInspectorFieldDesc{ "motor.targetVelocity", "Motor Target Velocity", "Hinge motor speed about the axis, degrees per second." },
+                LibraryComponentInspectorFieldDesc{ "motor.force", "Motor Force", "Hinge motor maximum torque (Nm); 0 turns the motor off." },
+                LibraryComponentInspectorFieldDesc{ "spring.spring", "Spring", "Distance spring stiffness (N/m); 0 holds the distance rigidly." },
+                LibraryComponentInspectorFieldDesc{ "spring.damper", "Spring Damper", "Distance spring damping (Ns/m)." },
+                LibraryComponentInspectorFieldDesc{ "breakForce", "Break Force", "Force (N) that breaks the joint and removes it; 0 never breaks." },
             },
         },
         LibraryComponentInspectorDesc{

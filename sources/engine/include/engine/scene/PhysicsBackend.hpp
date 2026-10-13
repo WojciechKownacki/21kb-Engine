@@ -101,6 +101,8 @@ public:
     // silent no-op as a successful command for either of those body types.
     virtual bool AddForce(SceneEntity entity, Vec3 force) noexcept = 0;
     virtual bool AddImpulse(SceneEntity entity, Vec3 impulse) noexcept = 0;
+    // Continuous world-space torque (Nm), as Unity's Rigidbody.AddTorque.
+    virtual bool AddTorque(SceneEntity entity, Vec3 torque) noexcept = 0;
     virtual bool SetVelocity(SceneEntity entity, Vec3 velocity) noexcept = 0;
     [[nodiscard]] virtual PhysicsVectorResult GetVelocity(SceneEntity entity) const noexcept = 0;
     virtual bool SetAngularVelocity(SceneEntity entity, Vec3 angularVelocity) noexcept = 0;
@@ -308,6 +310,11 @@ public:
 
     static bool AddForce(Scene& scene, SceneEntity entity, Vec3 force) noexcept;
     static bool AddImpulse(Scene& scene, SceneEntity entity, Vec3 impulse) noexcept;
+    static bool AddTorque(Scene& scene, SceneEntity entity, Vec3 torque) noexcept;
+    // Unity's AddExplosionForce: pushes the body away from `center` with `force` falling off
+    // linearly to zero at `radius` (measured to the body's position); a force, or an impulse
+    // when `impulse` is set. A body outside the radius gets nothing.
+    static bool AddExplosionForce(Scene& scene, SceneEntity entity, float force, Vec3 center, float radius, bool impulse) noexcept;
     static bool SetVelocity(Scene& scene, SceneEntity entity, Vec3 velocity) noexcept;
     [[nodiscard]] static PhysicsVectorResult GetVelocity(Scene& scene, SceneEntity entity) noexcept;
     static bool SetAngularVelocity(Scene& scene, SceneEntity entity, Vec3 angularVelocity) noexcept;
@@ -341,6 +348,9 @@ public:
     // kb::script::ScriptRuntimeSceneSystem; returns and clears every event
     // queued since the last drain, in the exact order they were queued.
     static void QueueCollisionEvent(Scene& scene, PendingCollisionEvent event);
+    // A physics plugin reports a joint that exceeded its break force; the scene runtime removes
+    // the entity's JointComponent right after the simulation fixed-update phase.
+    static void QueueJointBreak(Scene& scene, SceneEntity entity);
     // Declared by whatever drains the queue; backends skip producing events while it is false.
     static void SetCollisionEventConsumer(Scene& scene, bool present) noexcept;
     [[nodiscard]] static bool HasCollisionEventConsumer(Scene& scene) noexcept;

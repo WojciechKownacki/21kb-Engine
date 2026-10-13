@@ -2909,6 +2909,11 @@ void RunInspectorPhysicsModelTest() {
     kb::editor::tests::Require(InspectorPhysicsModel::CycleEnum(joint, 0) && joint.type == kb::scene::JointType::Hinge, "Cycling Joint type Fixed -> Hinge");
     kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(joint, 10, -1.5F) && joint.minLimit == -1.5F, "Joint Min Limit writes minLimit");
     kb::editor::tests::Require(!joint.enableLimit && InspectorPhysicsModel::ToggleBool(joint, 12) && joint.enableLimit, "Toggling Joint Enable Limit flips it");
+    kb::editor::tests::Require(InspectorPhysicsModel::Fields(joint).size() == 18U, "Joint shows motor, spring and break force fields");
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(joint, 13, 90.0F) && joint.motor.targetVelocity == 90.0F &&
+        InspectorPhysicsModel::ApplyFloat(joint, 14, 100.0F) && joint.motor.force == 100.0F, "Joint Motor fields write motor");
+    kb::editor::tests::Require(InspectorPhysicsModel::ApplyFloat(joint, 15, -3.0F) && joint.spring.spring == 0.0F &&
+        InspectorPhysicsModel::ApplyFloat(joint, 17, 50.0F) && joint.breakForce == 50.0F, "Joint Spring clamps to 0 and Break Force writes breakForce");
 
     kb::editor::tests::Require(InspectorPhysicsModel::KindOf(PhysicsComponentKind::Joint, 0) == PhysicsFieldKind::Enum, "KindOf reports the Joint type field as Enum");
     kb::editor::tests::Require(InspectorPhysicsModel::KindOf(PhysicsComponentKind::Rigidbody, 99) == PhysicsFieldKind::Float, "KindOf returns Float for an out-of-range index");

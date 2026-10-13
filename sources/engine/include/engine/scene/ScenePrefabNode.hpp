@@ -65,6 +65,9 @@ struct ScenePrefabJointComponent {
     float minLimit = 0.0F;
     float maxLimit = 0.0F;
     bool enableLimit = false;
+    JointMotor motor{};
+    JointSpring spring{};
+    float breakForce = 0.0F;
 };
 
 struct ScenePrefabRegionPortalComponent {

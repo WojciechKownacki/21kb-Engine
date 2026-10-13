@@ -757,6 +757,8 @@ public:
     // pendingSceneLifecycleEvents above exactly (see PhysicsBackend.hpp's
     // own doc comment on PendingCollisionEvent for the full contract).
     std::vector<PendingCollisionEvent> pendingCollisionEvents;
+    // Joints a physics plugin broke this fixed step (PhysicsBackend::QueueJointBreak).
+    std::vector<SceneEntity> pendingJointBreaks;
     // True while something drains pendingCollisionEvents (the script runtime). Physics plugins skip
     // contact-event bookkeeping otherwise, so an unconsumed queue cannot grow without bound.
     bool collisionEventConsumer = false;

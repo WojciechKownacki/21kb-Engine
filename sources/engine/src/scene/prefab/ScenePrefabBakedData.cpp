@@ -156,6 +156,9 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
                 .minLimit = prefabJoint.minLimit,
                 .maxLimit = prefabJoint.maxLimit,
                 .enableLimit = prefabJoint.enableLimit,
+                .motor = prefabJoint.motor,
+                .spring = prefabJoint.spring,
+                .breakForce = prefabJoint.breakForce,
             });
         }
         if (node.components.tags.has_value()) {

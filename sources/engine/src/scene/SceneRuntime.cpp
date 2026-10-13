@@ -1,3 +1,4 @@
+#include "scene/SceneComponentMutationService.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/SceneSystem.hpp"
@@ -546,6 +547,9 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
             // before the physics plugin synchronizes its bodies.
             synchronizeTransforms();
             state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::Simulation);
+            for (const SceneEntity broken : std::exchange(state.pendingJointBreaks, {})) {
+                SceneComponentMutationService::RemoveJoint(scene, broken);
+            }
             synchronizeTransforms();
             state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PostSimulation);
             synchronizeTransforms();

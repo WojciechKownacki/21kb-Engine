@@ -510,6 +510,15 @@ template <typename T>
         || !ParseOptionalBool(fields, "joint.enableLimit", joint.enableLimit)) {
         return false;
     }
+    // Absent in prefabs written before joints had a motor, spring and break force.
+    if (fields.contains("joint.breakForce")
+        && (!ParseField(fields, "joint.motor.targetVelocity", joint.motor.targetVelocity)
+            || !ParseField(fields, "joint.motor.force", joint.motor.force)
+            || !ParseField(fields, "joint.spring.spring", joint.spring.spring)
+            || !ParseField(fields, "joint.spring.damper", joint.spring.damper)
+            || !ParseField(fields, "joint.breakForce", joint.breakForce))) {
+        return false;
+    }
 
     joint.type = static_cast<JointType>(type);
     components.joint = joint;

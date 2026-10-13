@@ -245,6 +245,9 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
                 .minLimit = prefabJoint->minLimit,
                 .maxLimit = prefabJoint->maxLimit,
                 .enableLimit = prefabJoint->enableLimit,
+                .motor = prefabJoint->motor,
+                .spring = prefabJoint->spring,
+                .breakForce = prefabJoint->breakForce,
             });
         }
 

@@ -143,6 +143,8 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "Physics", "Raycast", "Physics.Raycast", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Physics", "AddForce", "Physics.AddForce", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "AddImpulse", "Physics.AddImpulse", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "AddTorque", "Physics.AddTorque", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Physics", "AddExplosionForce", "Physics.AddExplosionForce", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "SetVelocity", "Physics.SetVelocity", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "GetVelocity", "Physics.GetVelocity", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Physics", "SetAngularVelocity", "Physics.SetAngularVelocity", ScriptApiCatalogLuaReturnKind::Default, "" },

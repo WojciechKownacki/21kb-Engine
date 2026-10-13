@@ -2188,6 +2188,72 @@ void RunPhysicsUnityDefaultsTest() {
     static_cast<void>(floor);
 }
 
+// Torque, explosion, hinge motor, distance spring and joint breaking (physics comparison F07, F28, F30,
+// F34, F35): the values Unity and UE give.
+void RunPhysicsTorqueJointDriveTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
+        return;
+    }
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Physics.Jolt",
+        .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH,
+        .enabled = true,
+    });
+    kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    const auto makeBody = [&scene](const char* name, kb::scene::Vec3 position, kb::scene::RigidbodyComponent rigidbody, kb::scene::ColliderComponent collider) {
+        const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = name, .transform = kb::scene::TransformComponent{.localPosition = position}});
+        scene.Components().Rigidbodies().Set(object.Entity(), rigidbody);
+        scene.Components().Colliders().Set(object.Entity(), collider);
+        return object;
+    };
+    const kb::scene::RigidbodyComponent floating{.useGravity = false, .linearDamping = 0.0F, .angularDamping = 0.0F};
+    const kb::scene::ColliderComponent ball{.shape = kb::scene::ColliderShape::Sphere};
+    // Sphere r 0.5, 1 kg: I = 0.1, so 1 Nm for 1 s gives 10 rad/s.
+    const auto spinner = makeBody("Spinner", {0.0F, 10.0F, 0.0F}, floating, ball);
+    const auto blasted = makeBody("Blasted", {10.0F, 10.0F, 1.0F}, floating, ball);
+    const auto motorized = makeBody("Motorized", {20.0F, 10.0F, 0.0F}, floating, {.boxSize = {2.0F, 0.2F, 0.5F}});
+    scene.Components().Joints().Set(motorized.Entity(), kb::scene::JointComponent{.type = kb::scene::JointType::Hinge,
+        .connectedAnchor = {20.0F, 10.0F, 0.0F}, .axis = {0.0F, 1.0F, 0.0F}, .motor = {.targetVelocity = 90.0F, .force = 100.0F}});
+    const auto sprung = makeBody("Sprung", {30.0F, 3.0F, 0.0F}, {}, {.shape = kb::scene::ColliderShape::Sphere, .radius = 0.2F});
+    scene.Components().Joints().Set(sprung.Entity(), kb::scene::JointComponent{.type = kb::scene::JointType::Distance,
+        .connectedAnchor = {30.0F, 5.0F, 0.0F}, .spring = {.spring = 100.0F, .damper = 5.0F}});
+    const auto weak = makeBody("Weak", {40.0F, 5.0F, 0.0F}, {.mass = 10.0F}, {.shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F});
+    scene.Components().Joints().Set(weak.Entity(), kb::scene::JointComponent{.type = kb::scene::JointType::Fixed,
+        .connectedAnchor = {40.0F, 5.0F, 0.0F}, .breakForce = 50.0F});
+    const auto strong = makeBody("Strong", {50.0F, 5.0F, 0.0F}, {.mass = 10.0F}, {.shape = kb::scene::ColliderShape::Sphere, .radius = 0.3F});
+    scene.Components().Joints().Set(strong.Entity(), kb::scene::JointComponent{.type = kb::scene::JointType::Fixed,
+        .connectedAnchor = {50.0F, 5.0F, 0.0F}, .breakForce = 500.0F});
+    for (int step = 0; step < 300; ++step) {
+        if (step == 1) {
+            kb::tests::Require(kb::scene::PhysicsBackend::AddExplosionForce(scene, blasted.Entity(), 10.0F, {10.0F, 10.0F, 0.0F}, 3.0F, true),
+                "AddExplosionForce must be accepted for a live body");
+        }
+        if (step < 60) {
+            kb::tests::Require(kb::scene::PhysicsBackend::AddTorque(scene, spinner.Entity(), {0.0F, 1.0F, 0.0F}), "AddTorque must be accepted");
+        }
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        if (step == 59) {
+            kb::tests::Require(std::abs(kb::scene::PhysicsBackend::GetAngularVelocity(scene, spinner.Entity()).value.y - 10.0F) < 0.05F,
+                "1 Nm on I = 0.1 for 1 s must spin the sphere at 10 rad/s");
+        }
+        if (step == 119) {
+            kb::tests::Require(std::abs(kb::scene::PhysicsBackend::GetAngularVelocity(scene, motorized.Entity()).value.y - 1.5708F) < 0.02F,
+                "A hinge motor at 90 deg/s must turn the body at +1.57 rad/s about the axis, as Unity's");
+        }
+    }
+    kb::tests::Require(std::abs(kb::scene::PhysicsBackend::GetVelocity(scene, blasted.Entity()).value.z - 10.0F * (1.0F - 1.0F / 3.0F)) < 0.01F,
+        "An explosion impulse 1 m from the center of a 3 m blast must give 6.67 m/s away from it");
+    const float rest = scene.Transforms().Get(sprung).localPosition.y;
+    kb::tests::Require(rest < 2.95F && rest > 2.85F, "A 100 N/m spring must settle mg/k = 0.098 m below its rest length");
+    kb::tests::Require(scene.Components().Joints().TryGet(weak.Entity()) == nullptr && scene.Transforms().Get(weak).localPosition.y < 0.0F,
+        "A joint loaded above its break force must break, lose its component and let the body fall");
+    kb::tests::Require(scene.Components().Joints().TryGet(strong.Entity()) != nullptr && scene.Transforms().Get(strong).localPosition.y > 4.9F,
+        "A joint below its break force must hold");
+}
+
 void RunPhysicsIdenticalReplayTest() {
     if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
         return;
@@ -2971,6 +3037,7 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsPersistentSleeperTransitionTest();
     RunPhysicsSleepingContactAndDampingTest();
     RunPhysicsUnityDefaultsTest();
+    RunPhysicsTorqueJointDriveTest();
     RunPhysicsPipelinedStepEquivalenceTest();
 }
 
