@@ -1052,13 +1052,48 @@ namespace {
 [[nodiscard]] bool MaterialGraphUsesExtraUvs(const RenderMaterialGraphShaderSource& shader) {
     return std::ranges::find(shader.reflection.requiredVaryings, std::string_view{ "extraUvs" }) != shader.reflection.requiredVaryings.end();
 }
+[[nodiscard]] bool MaterialGraphIsDecal(const RenderMaterialGraphShaderSource& shader) noexcept {
+    return shader.reflection.domain == RenderMaterialDomain::DeferredDecal;
+}
+// A Deferred Decal carries the rows of its box's inverse transform in the same three varyings.
 [[nodiscard]] std::string ExtraUvVaryings(const RenderMaterialGraphShaderSource& shader) {
-    return MaterialGraphUsesExtraUvs(shader) ? ", v_uv23, v_uv45, v_uv67" : "";
+    return MaterialGraphUsesExtraUvs(shader) || MaterialGraphIsDecal(shader) ? ", v_uv23, v_uv45, v_uv67" : "";
+}
+
+// Unreal's Deferred Decal: the opaque surface under this pixel (the scene depth) in the space of the decal's
+// box (v_uv23/45/67 hold the rows of its inverse transform). Only what lies inside the unit box is decorated;
+// the decal projects along the box's Y axis, its X and Z span the texture.
+void AppendMaterialGraphDecalProjection(std::string& wrapper) {
+    wrapper += "    float kbDecalDepth = texture2D(s_kbSceneDepth, ctx.screenPosition).x;\n";
+    wrapper += "#if BGFX_SHADER_LANGUAGE_GLSL\n";
+    wrapper += "    vec3 kbDecalNdc = vec3(ctx.screenPosition * 2.0 - 1.0, kbDecalDepth * 2.0 - 1.0);\n";
+    wrapper += "#else\n";
+    wrapper += "    vec3 kbDecalNdc = vec3(ctx.screenPosition.x * 2.0 - 1.0, 1.0 - ctx.screenPosition.y * 2.0, kbDecalDepth);\n";
+    wrapper += "#endif\n";
+    wrapper += "    vec4 kbDecalClip = mul(u_invViewProj, vec4(kbDecalNdc, 1.0));\n";
+    wrapper += "    vec3 kbDecalPos = kbDecalClip.xyz / kbDecalClip.w;\n";
+    wrapper += "    vec3 kbDecalLocal = vec3(dot(v_uv23, vec4(kbDecalPos, 1.0)), dot(v_uv45, vec4(kbDecalPos, 1.0)), dot(v_uv67, vec4(kbDecalPos, 1.0)));\n";
+    wrapper += "    if (max(max(abs(kbDecalLocal.x), abs(kbDecalLocal.y)), abs(kbDecalLocal.z)) > 0.5)\n    {\n        discard;\n    }\n";
+    wrapper += "    vec3 kbDecalNormal = normalize(cross(dFdx(kbDecalPos), dFdy(kbDecalPos)));\n";
+    wrapper += "    kbDecalNormal = dot(kbDecalNormal, u_cameraPosition.xyz - kbDecalPos) < 0.0 ? -kbDecalNormal : kbDecalNormal;\n";
+    // The texture's X (the box's X axis, or its Z on a surface that faces X) along the surface.
+    wrapper += "    vec3 kbDecalTangent = v_uv23.xyz - kbDecalNormal * dot(kbDecalNormal, v_uv23.xyz);\n";
+    wrapper += "    kbDecalTangent = normalize(dot(kbDecalTangent, kbDecalTangent) > 0.000001 ? kbDecalTangent : v_uv67.xyz - kbDecalNormal * dot(kbDecalNormal, v_uv67.xyz));\n";
+    wrapper += "    ctx.uv0 = kbDecalLocal.xz + 0.5;\n";
+    wrapper += "    ctx.uv1 = ctx.uv0;\n";
+    wrapper += "    ctx.uv23 = vec4_splat(0.0);\n    ctx.uv45 = vec4_splat(0.0);\n    ctx.uv67 = vec4_splat(0.0);\n";
+    wrapper += "    ctx.normal = kbDecalNormal;\n";
+    wrapper += "    ctx.tangent = kbDecalTangent;\n";
+    wrapper += "    ctx.bitangent = cross(kbDecalNormal, kbDecalTangent);\n";
+    wrapper += "    ctx.worldPos = kbDecalPos + u_renderOriginOffset.xyz;\n";
+    wrapper += "    ctx.viewDir = normalize(u_cameraPosition.xyz - kbDecalPos);\n";
+    wrapper += "    ctx.localPosition = kbDecalLocal;\n";
+    wrapper += "    ctx.fragmentDepth = kbDecalDepth;\n";
 }
 
 // The material context of a fragment. The shadow pass has no lighting uniforms, so it uses explicit
 // neutral constants for the view and light inputs; every other pass reads the real camera and light.
-void AppendMaterialGraphFragmentContext(std::string& wrapper, bool shadowPass, bool extraUvs) {
+void AppendMaterialGraphFragmentContext(std::string& wrapper, bool shadowPass, bool extraUvs, bool decal = false) {
     wrapper += "    MaterialGraphContext ctx;\n";
     wrapper += "    ctx.uv0 = v_texcoord0;\n";
     wrapper += "    ctx.uv1 = v_shadowFlags.zw;\n";
@@ -1102,6 +1137,9 @@ void AppendMaterialGraphFragmentContext(std::string& wrapper, bool shadowPass, b
     } else {
         wrapper += "    ctx.cameraPosition = u_cameraPosition.xyz + u_renderOriginOffset.xyz;\n";
         wrapper += "    ctx.lightVector = (u_lightParams.x > 0.5) ? normalize(-u_lightDirKind[0].xyz) : vec3(0.0, 1.0, 0.0);\n";
+    }
+    if (decal) {
+        AppendMaterialGraphDecalProjection(wrapper);
     }
     wrapper += "    MaterialSurface surface = EvaluateMaterialGraph(ctx);\n";
 }
@@ -1165,10 +1203,18 @@ bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& refl
     if (reflection.domain == RenderMaterialDomain::PostProcess) {
         return pass == kRenderMaterialGraphPostProcessPass;
     }
+    if (reflection.domain == RenderMaterialDomain::DeferredDecal) {
+        return pass == "BaseTransparent";
+    }
     if (pass == kRenderMaterialGraphPostProcessPass) {
         return false;
     }
     return pass != kRenderMaterialGraphMotionVectorsPass || RenderMaterialGraphDrawsOwnMotionVectors(reflection);
+}
+
+bool RenderMaterialGraphRequiresGeneratedVertexShader(const RenderMaterialGraphReflection& reflection) noexcept {
+    return reflection.hasWorldPositionOffset || reflection.hasCustomizedUv0 || reflection.hasDisplacement ||
+        reflection.domain == RenderMaterialDomain::DeferredDecal;
 }
 
 namespace {
@@ -1270,7 +1316,23 @@ std::string BuildGraphFragmentWrapperSource(
     wrapper += "\n// pass:" + std::string{ pass } + "\n\n";
     wrapper += shader.source;
     wrapper += "\nvoid main()\n{\n";
-    AppendMaterialGraphFragmentContext(wrapper, shadowPass, MaterialGraphUsesExtraUvs(shader));
+    const bool decal = MaterialGraphIsDecal(shader);
+    AppendMaterialGraphFragmentContext(wrapper, shadowPass, MaterialGraphUsesExtraUvs(shader), decal);
+    if (decal) {
+        // The decorated surface is lit like the forward pass lights a surface; the decal's opacity blends it in.
+        if (shader.reflection.shadingModel == RenderMaterialShadingModel::Unlit) {
+            wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, surface.alpha);\n";
+        } else {
+            wrapper += "    vec3 graphNormal = (u_materialParams.z > 0.0) ? normalize(vec3(surface.normal.xy * u_materialParams.z, surface.normal.z)) : vec3(0.0, 0.0, 1.0);\n";
+            wrapper += "    vec3 worldNormal = normalize(ctx.tangent * graphNormal.x + ctx.bitangent * graphNormal.y + ctx.normal * graphNormal.z);\n";
+            wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, kbDecalPos, surface.baseColor.rgb, clamp(surface.metallic, 0.0, 1.0), "
+                       "clamp(surface.roughness, 0.04, 1.0), clamp(surface.specular, 0.0, 1.0), clamp(surface.occlusion, 0.0, 1.0), " +
+                std::to_string(static_cast<std::uint32_t>(GBufferShadingModelId(shader.reflection.shadingModel))) + ".0, 0.0, 0.0);\n";
+            wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);\n";
+        }
+        wrapper += "}\n";
+        return wrapper;
+    }
     const bool writesDepth = MaterialGraphWritesDepth(shader);
     if (shader.reflection.hasPixelDepthOffset && writesDepth) {
         AppendMaterialGraphPixelDepthOffset(wrapper);
@@ -1402,7 +1464,7 @@ void AppendGraphVertexEvaluation(std::string& vs, const RenderMaterialGraphShade
     vs += "    MaterialGraphContext " + ctx + ";\n";
     vs += "    " + ctx + ".uv0 = a_texcoord0;\n";
     vs += "    " + ctx + ".uv1 = a_texcoord1;\n";
-    vs += MaterialGraphUsesExtraUvs(shader)
+    vs += MaterialGraphUsesExtraUvs(shader) && !MaterialGraphIsDecal(shader)
         ? "    " + ctx + ".uv23 = a_color1;\n    " + ctx + ".uv45 = a_color2;\n    " + ctx + ".uv67 = a_color3;\n"
         : "    " + ctx + ".uv23 = vec4_splat(0.0);\n    " + ctx + ".uv45 = vec4_splat(0.0);\n    " + ctx + ".uv67 = vec4_splat(0.0);\n";
     vs += "    " + ctx + ".normal = " + name("vsNormal") + ";\n";
@@ -1457,7 +1519,7 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     // model, and at the previous frame's time with the previous model (motion_vectors.sh).
     const bool motionVectors = pass == kRenderMaterialGraphMotionVectorsPass;
     std::string vs;
-    const bool extraUvs = MaterialGraphUsesExtraUvs(shader);
+    const bool extraUvs = MaterialGraphUsesExtraUvs(shader) && !MaterialGraphIsDecal(shader);
     vs += std::string{ "$input a_position, a_normal, a_tangent, a_texcoord0, a_texcoord1, a_color0" } +
         (extraUvs ? ", a_color1, a_color2, a_color3" : "") + ", i_data0, i_data1, i_data2, i_data3, i_data4\n";
     if (motionVectors) {
@@ -1509,7 +1571,16 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     vs += "    v_texcoord0 = materialUv0;\n";
     vs += "    v_color0 = ctx.vertexColor;\n";
     vs += "    v_preSkinnedNormal = preSkinnedNormal;\n";
-    if (extraUvs) {
+    if (MaterialGraphIsDecal(shader)) {
+        // The rows of the box's inverse transform: the cofactors of the model's columns over its determinant.
+        vs += "    vec3 kbDecalRow0 = cross(modelColumn1.xyz, modelColumn2.xyz);\n";
+        vs += "    vec3 kbDecalRow1 = cross(modelColumn2.xyz, modelColumn0.xyz);\n";
+        vs += "    vec3 kbDecalRow2 = cross(modelColumn0.xyz, modelColumn1.xyz);\n";
+        vs += "    float kbDecalInvDet = 1.0 / dot(modelColumn0.xyz, kbDecalRow0);\n";
+        vs += "    v_uv23 = vec4(kbDecalRow0, -dot(kbDecalRow0, modelColumn3.xyz)) * kbDecalInvDet;\n";
+        vs += "    v_uv45 = vec4(kbDecalRow1, -dot(kbDecalRow1, modelColumn3.xyz)) * kbDecalInvDet;\n";
+        vs += "    v_uv67 = vec4(kbDecalRow2, -dot(kbDecalRow2, modelColumn3.xyz)) * kbDecalInvDet;\n";
+    } else if (extraUvs) {
         vs += "    v_uv23 = a_color1;\n    v_uv45 = a_color2;\n    v_uv67 = a_color3;\n";
     }
     vs += "}\n";
@@ -1622,9 +1693,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
     // of the generated vertex shader contribute to the artifact identity so editing them invalidates
     // cooked binaries, and they are what the cook compiles against.
     const bool cooksVertexShader =
-        shader.reflection.hasWorldPositionOffset ||
-        shader.reflection.hasCustomizedUv0 ||
-        shader.reflection.hasDisplacement ||
+        RenderMaterialGraphRequiresGeneratedVertexShader(shader.reflection) ||
         MaterialGraphUsesExtraUvs(shader) ||
         request.pass == kRenderMaterialGraphMotionVectorsPass ||
         request.pass == kRenderMaterialGraphPostProcessPass;

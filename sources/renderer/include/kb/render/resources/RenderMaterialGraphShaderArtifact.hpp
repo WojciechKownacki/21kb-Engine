@@ -143,6 +143,9 @@ struct RenderMaterialGraphShaderManifest {
 [[nodiscard]] bool RenderMaterialGraphDrawsOwnMotionVectors(const RenderMaterialGraphReflection& reflection) noexcept;
 // Whether a scene cook produces `pass` (one of kRenderMaterialGraphScenePasses) for a graph.
 [[nodiscard]] bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& reflection, std::string_view pass) noexcept;
+// Whether the graph's scene passes draw with its generated vertex shader instead of the builtin mesh one:
+// vertex-domain outputs move or re-map the surface, and a Deferred Decal carries its box's inverse transform.
+[[nodiscard]] bool RenderMaterialGraphRequiresGeneratedVertexShader(const RenderMaterialGraphReflection& reflection) noexcept;
 
 [[nodiscard]] std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraphReflection& reflection) noexcept;
 [[nodiscard]] std::uint64_t ComputeRenderMaterialGraphVariantKey(const RenderMaterialGraphShaderSource& shader) noexcept;

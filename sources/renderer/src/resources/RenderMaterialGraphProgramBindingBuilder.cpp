@@ -193,12 +193,10 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
     binding.variantKey = RenderMaterialGraphVariantKey(shader);
     binding.pipelineStateKey = RenderMaterialGraphPipelineStateKey(shader);
     binding.requiredVaryings = shader.reflection.requiredVaryings;
-    binding.requiresGeneratedVertexShader =
-        shader.reflection.hasWorldPositionOffset ||
-        shader.reflection.hasCustomizedUv0 ||
-        shader.reflection.hasDisplacement;
+    binding.requiresGeneratedVertexShader = RenderMaterialGraphRequiresGeneratedVertexShader(shader.reflection);
     binding.drawsOwnMotionVectors = RenderMaterialGraphDrawsOwnMotionVectors(shader.reflection);
     binding.postProcessDomain = shader.reflection.domain == RenderMaterialDomain::PostProcess;
+    binding.decalDomain = shader.reflection.domain == RenderMaterialDomain::DeferredDecal;
     binding.usesSceneDepth = shader.reflection.usesSceneDepth;
     binding.usesSceneColor = shader.reflection.usesSceneColor;
     binding.writesShadingModelColor = shader.reflection.writesShadingModelColor;

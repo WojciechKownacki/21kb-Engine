@@ -1749,6 +1749,38 @@ void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
+// Unreal's Material Domain in the Details panel: the production domains are offered, and a Deferred Decal or a
+// Post Process material authored in the editor compiles in its domain.
+void RunMaterialEditorDomainSettingTest() {
+    kb::editor::MaterialEditorState materialEditor;
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    materialEditor.Open(kb::assets::AssetId{ 0x0530U }, material);
+    std::vector<std::string> offered;
+    for (const kb::editor::MaterialEditorGraphNodeProperty& row : materialEditor.MaterialSettingsProperties()) {
+        for (const kb::editor::MaterialEditorGraphNodePropertyOption& option : row.stableId == "material.domain" ? row.options
+                                                                                                         : std::vector<kb::editor::MaterialEditorGraphNodePropertyOption>{}) {
+            offered.push_back(option.value);
+        }
+    }
+    kb::editor::tests::Require(offered == std::vector<std::string>{ "surface", "deferredDecal", "postProcess" },
+        "Material Domain: Details must offer Surface, Deferred Decal and Post Process");
+    std::uint32_t colorNodeId = 0U;
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -300, 40, &colorNodeId) &&
+            materialEditor.ConnectGraphPins(colorNodeId, "rgba", 1U, "emissive"),
+        "Material Domain: the editor should connect a color to Emissive Color");
+    for (const auto& [domain, expected] : { std::pair{ "deferredDecal", kb::render::RenderMaterialDomain::DeferredDecal },
+             std::pair{ "postProcess", kb::render::RenderMaterialDomain::PostProcess } }) {
+        kb::editor::tests::Require(materialEditor.SetGraphMaterialSetting("material.domain", domain) &&
+                materialEditor.WorkingCopy()->graph.materialDomain == domain,
+            "Material Domain: Details should set the domain");
+        const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
+            materialEditor.WorkingCopy()->graph, kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x0530U });
+        kb::editor::tests::Require(compiled.Succeeded() && compiled.shader.reflection.domain == expected,
+            "Material Domain: a material authored in the editor must compile in its domain");
+    }
+}
+
 void RunMaterialEditorVariantSwitchAuthoringTest() {
     kb::editor::MaterialEditorState materialEditor;
     kb::render::RenderMaterialAssetData material{};
@@ -7299,6 +7331,7 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunMaterialEditorWorkingCopySaveRevertUndoRedoTest();
     RunMaterialEditorDocumentHistoryIsolationTest();
     RunMaterialEditorGraphWorkingCopyRuntimeTest();
+    RunMaterialEditorDomainSettingTest();
     RunMaterialEditorVariantSwitchAuthoringTest();
     RunMaterialEditorGraphRuntimeStateTest();
     RunMaterialGraphTextureSemanticTraversalTest();

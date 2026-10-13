@@ -6818,6 +6818,84 @@ void RunPostProcessMaterialPassTest() {
     harness.Shutdown();
 }
 
+// Unreal's Deferred Decal: a unit box (scaled 0.5, its Y axis turned to +Z) drawn by its back faces over a
+// surface at depth 0.5 (z = 0, seen from +Z): the pixels whose surface lies inside the box show the decal with
+// the box's X and Z as its texture coordinates; a surface behind the box (depth 1) is left alone.
+void RunDeferredDecalMaterialTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "deferred_decal";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    using K = RenderMaterialGraphNodeKind;
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.materialDomain = "deferredDecal";
+    graph.shadingModel = "unlit";
+    graph.nodes.push_back(UtilityConstant(2U, K::TextureCoordinate, "1 1 0"));
+    graph.links.push_back(MakeLink(K::TextureCoordinate, 2U, "uv", K::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0xA3B0U });
+    if (!compiled.Succeeded()) {
+        std::fprintf(stderr, "Deferred Decal: %s\n", compiled.diagnostics.empty() ? "" : compiled.diagnostics.front().message.c_str());
+    }
+    Require(compiled.Succeeded() && compiled.shader.reflection.usesSceneDepth &&
+            compiled.shader.reflection.blendMode == RenderMaterialGraphBlendMode::Translucent,
+        "Deferred Decal: the graph must compile translucent, reading the scene depth");
+    Require(RenderMaterialGraphCooksScenePass(compiled.shader.reflection, "BaseTransparent") &&
+            !RenderMaterialGraphCooksScenePass(compiled.shader.reflection, "BaseOpaque") &&
+            !RenderMaterialGraphCooksScenePass(compiled.shader.reflection, "ShadowDepth"),
+        "Deferred Decal: the decal draws in the transparent pass only");
+    RenderMaterialGraphShaderArtifactRequest request = CookRequest(cacheDir.generic_string());
+    request.pass = "BaseTransparent";
+    const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request);
+    if (!cooked.Succeeded()) {
+        std::fprintf(stderr, "Deferred Decal cook: %s\n", cooked.diagnostics.empty() ? "" : cooked.diagnostics.front().message.c_str());
+    }
+    Require(cooked.Succeeded() && cooked.artifact.has_value(), "Deferred Decal: the pass must cook");
+    const RenderMaterialGraphShaderBinary* vs = cooked.artifact->FindVertexBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(vs != nullptr && vs->byteSize > 0U, "Deferred Decal: the pass must cook the vertex shader carrying the box transform");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "Deferred Decal: Direct3D11 device unavailable; cannot read the decal back\n");
+        Require(false, "Deferred Decal: A real GPU device is required to prove the decal");
+        return;
+    }
+    const bgfx::ProgramHandle program = BuildGraphProgram(ReadAllBytes(std::filesystem::path{ vs->binaryPath }), *cooked.artifact);
+    const RenderMeshAssetData box = ShapeMeshes::Box(0.5F, "Decal");
+    const bgfx::VertexBufferHandle vertices = bgfx::createVertexBuffer(
+        bgfx::copy(box.tangentVertices.data(), static_cast<std::uint32_t>(box.tangentVertices.size() * sizeof(RenderStaticMeshVertexP3N3T4UV2))),
+        RenderStaticMeshVertexLayout(RenderVertexFormat::P3N3T4UV2));
+    const bgfx::IndexBufferHandle indices = bgfx::createIndexBuffer(
+        bgfx::copy(box.indices32.data(), static_cast<std::uint32_t>(box.indices32.size() * sizeof(std::uint32_t))), BGFX_BUFFER_INDEX32);
+    Require(bgfx::isValid(program) && bgfx::isValid(vertices) && bgfx::isValid(indices), "Deferred Decal: program and box must be created");
+    HarnessMesh mesh{ .vertices = vertices, .indices = indices };
+    // Orthographic from +Z: clip = (x, y, 0.5 - z). The box's columns: X 0.5 along x, Y 0.5 along z, Z 0.5 along -y.
+    mesh.viewProjection = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F, 0.0F, 0.5F, 1.0F };
+    mesh.model = { 0.5F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.5F, 0.0F, 0.0F, -0.5F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+    const auto render = [&](std::uint32_t depthTexel) {
+        const std::array<std::uint32_t, 4U> texels{ depthTexel, depthTexel, depthTexel, depthTexel };
+        const bgfx::TextureHandle depth = bgfx::createTexture2D(2U, 2U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_POINT,
+            bgfx::copy(texels.data(), sizeof(texels)));
+        std::vector<std::uint8_t> pixels = harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, UINT32_MAX,
+            0x000000ffU, BGFX_STATE_CULL_CW, depth, 0.0F, 0.0F, 0.0F, 0.0F, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, nullptr, false, 1.0F, &mesh);
+        bgfx::destroy(depth);
+        return pixels;
+    };
+    const std::vector<std::uint8_t> onSurface = render(0xff000080U);
+    // Pixel centres: 32.5 is x = 0.016 (box x 0.031, u 0.531); 26.5 is x = -0.17 (box x -0.34, u 0.156); rows likewise
+    // with y = -x (box z = -2 y).
+    RequirePixelNear(ForwardRenderHarness::ProbeAt(onSurface, 32U, 32U), { 0.53125F, 0.53125F, 0.0F }, "Deferred Decal at the box centre");
+    RequirePixelNear(ForwardRenderHarness::ProbeAt(onSurface, 26U, 32U), { 0.15625F, 0.53125F, 0.0F }, "Deferred Decal along the box's X");
+    RequirePixelNear(ForwardRenderHarness::ProbeAt(onSurface, 32U, 26U), { 0.53125F, 0.15625F, 0.0F }, "Deferred Decal along the box's Z");
+    const std::vector<std::uint8_t> behind = render(0xff0000ffU);
+    const ForwardRenderProbe untouched = ForwardRenderHarness::ProbeAt(behind, 32U, 32U);
+    Require(untouched.r < 8U && untouched.g < 8U, "Deferred Decal: a surface behind the box must not be decorated");
+    bgfx::destroy(indices);
+    bgfx::destroy(vertices);
+    bgfx::destroy(program);
+    harness.Shutdown();
+}
+
 // Unreal's Texture Coordinate with Coordinate Index 3: a sphere whose UV3 is (0.25, 0.75) on every vertex (half
 // floats in the vertex); the graph's vertex shader passes UV2..UV7 and the node reads UV3, so Base Color is
 // (0.25, 0.75, 0).
@@ -7085,6 +7163,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphNonUniformScaleNormalTest();
     RunForwardGraphExtraUvSetsTest();
     RunPostProcessMaterialPassTest();
+    RunDeferredDecalMaterialTest();
     RunForwardGraphPixelNormalWorldSpaceTest();
     RunForwardGraphSobolRendersTest();
     RunForwardGraphMaterialParameterCollectionRendersTest();

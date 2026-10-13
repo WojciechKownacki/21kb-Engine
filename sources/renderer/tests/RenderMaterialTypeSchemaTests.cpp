@@ -4585,9 +4585,10 @@ void RunMaterialDomainGatingTest() {
     }
     Require(production[static_cast<std::size_t>(RenderMaterialDomain::Surface)] &&
             production[static_cast<std::size_t>(RenderMaterialDomain::PostProcess)] &&
+            production[static_cast<std::size_t>(RenderMaterialDomain::DeferredDecal)] &&
             !production[static_cast<std::size_t>(RenderMaterialDomain::LightFunction)] &&
             !production[static_cast<std::size_t>(RenderMaterialDomain::Volume)],
-        "KBMAT-MAT34: Surface and Post Process are production; Light Function and Volume are not");
+        "KBMAT-MAT34: Surface, Post Process and Deferred Decal are production; Light Function and Volume are not");
 
     // Unreal's Post Process material: Emissive Color only, drawn in its own pass and in no scene pass.
     RenderMaterialGraphDocument postGraph = MakeDefaultRenderMaterialGraphDocument();
@@ -4608,6 +4609,16 @@ void RunMaterialDomainGatingTest() {
     const RenderMaterialGraphDiagnostic* outputDiag = FindGraphDiagnostic(refusedPost.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain);
     Require(!refusedPost.Succeeded() && outputDiag != nullptr && outputDiag->message.find("MaterialDomainOutputRefused") != std::string::npos,
         "Post Process domain: Base Color must be refused by name");
+
+    // Unreal's Deferred Decal: the surface outputs only; a vertex output is refused by name.
+    RenderMaterialGraphDocument decalGraph = surfaceGraph;
+    decalGraph.materialDomain = "deferredDecal";
+    decalGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantVector, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 1 0" } });
+    decalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 3U, "xyz", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "worldPositionOffset"));
+    const RenderMaterialGraphCompileResult refusedDecal = CompileRenderMaterialGraphToShaderSource(decalGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0344U });
+    const RenderMaterialGraphDiagnostic* decalDiag = FindGraphDiagnostic(refusedDecal.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain);
+    Require(!refusedDecal.Succeeded() && decalDiag != nullptr && decalDiag->message.find("MaterialDomainOutputRefused") != std::string::npos,
+        "Deferred Decal domain: World Position Offset must be refused by name");
 }
 
 void RunMaterialShadingModelGatingTest() {

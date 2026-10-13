@@ -3671,16 +3671,25 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         AttachDiagnosticContext(graph, context, result.diagnostics);
         return result;
     }
-    if (requestedDomain == RenderMaterialDomain::PostProcess) {
+    // Unreal's domain outputs: a Post Process material writes Emissive Color only; a Deferred Decal writes the
+    // surface it lands on, with no vertex, depth or refraction outputs.
+    if (requestedDomain != RenderMaterialDomain::Surface) {
+        constexpr std::array<std::string_view, 8U> kDecalOutputs{
+            "baseColor", "alpha", "emissive", "normal", "metallic", "roughness", "specular", "occlusion" };
+        const bool postProcess = requestedDomain == RenderMaterialDomain::PostProcess;
         for (const RenderMaterialGraphLink& link : graph.links) {
             const RenderMaterialGraphNode* to = FindRenderMaterialGraphNode(graph, link.toNodeId);
-            if (to != nullptr && to->kind == RenderMaterialGraphNodeKind::MaterialOutput && link.toPin != "emissive") {
+            const bool written = postProcess ? link.toPin == "emissive"
+                                             : std::ranges::find(kDecalOutputs, link.toPin) != kDecalOutputs.end();
+            if (to != nullptr && to->kind == RenderMaterialGraphNodeKind::MaterialOutput && !written) {
                 result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
                     .severity = RenderMaterialGraphDiagnosticSeverity::Error,
                     .kind = RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain,
                     .nodeId = to->id,
                     .pin = link.toPin,
-                    .message = "MaterialDomainOutputRefused: a Post Process material writes Emissive Color only, not '" + link.toPin + "'.",
+                    .message = postProcess
+                        ? "MaterialDomainOutputRefused: a Post Process material writes Emissive Color only, not '" + link.toPin + "'."
+                        : "MaterialDomainOutputRefused: a Deferred Decal material writes the surface outputs only, not '" + link.toPin + "'.",
                 });
             }
         }
@@ -3707,7 +3716,12 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
 
     // MAT-38: resolve the blend mode. All seven modes are implemented, so there is no fallback; the value
     // selects the masked clip in the wrapper and the transparent cook/scene blend equation downstream.
-    const RenderMaterialGraphBlendMode resolvedBlendMode = ParseRenderMaterialGraphBlendMode(graph.blendMode);
+    // A Deferred Decal blends over the surface it lands on: an opaque or masked one is drawn Translucent.
+    const RenderMaterialGraphBlendMode authoredBlendMode = ParseRenderMaterialGraphBlendMode(graph.blendMode);
+    const bool deferredDecal = requestedDomain == RenderMaterialDomain::DeferredDecal;
+    const RenderMaterialGraphBlendMode resolvedBlendMode = deferredDecal && !IsRenderMaterialGraphBlendModeTransparent(authoredBlendMode)
+        ? RenderMaterialGraphBlendMode::Translucent
+        : authoredBlendMode;
 
     const RenderMaterialGraphNode* outputNode = nullptr;
     for (const RenderMaterialGraphNode& node : graph.nodes) {
@@ -4010,7 +4024,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         std::any_of(graph.links.begin(), graph.links.end(),
             [](const RenderMaterialGraphLink& link) { return link.toPin == "refraction"; });
     usesSceneColor = usesSceneColor || usesRefraction || usesThinTranslucent || usesSingleLayerWater;
-    usesSceneDepth = usesSceneDepth || usesSingleLayerWater;
+    // A Deferred Decal finds the surface it lands on in the opaque scene depth.
+    usesSceneDepth = usesSceneDepth || usesSingleLayerWater || deferredDecal;
     if (usesSceneColor) {
         // MAT-31: transparent graph materials can sample an opaque scene-color snapshot bound at slot 4.
         source += "SAMPLER2D(s_kbSceneColor, 4);\n";
