@@ -2289,6 +2289,7 @@ text "uiProperty.layoutPriority" "ลำดับความสำคัญเ�
 text "uiProperty.lineSpacing" "ระยะห่างบรรทัด"
 text "uiProperty.localizationKey" "คีย์การแปล"
 text "uiProperty.matchWidthOrHeight" "จับคู่ความกว้างหรือความสูง"
+text "uiProperty.materialAssetId" "Material"
 text "uiProperty.maxLines" "จำนวนบรรทัดสูงสุด (0 = ทั้งหมด)"
 text "uiProperty.maximum" "สูงสุด"
 text "uiProperty.minFontSize" "ขนาดฟอนต์ต่ำสุด"

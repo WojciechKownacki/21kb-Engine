@@ -3,6 +3,8 @@
 
 Deferred Decal: a material of that domain on a Mesh Renderer with the engine Cube colours the ground inside the box
 (projected along the box's Y axis); a vertex output in that domain is refused by name.
+User Interface: a material of that domain on a UI Image (Canvas > Image, authored with component add/set) fills the
+image's rectangle with its Final Color; Base Color in that domain is refused by name.
 Post Process: a material of that domain on a Mesh Renderer (no mesh) is drawn over the whole view before the
 tonemap. The project's game is captured headless (kb_game --headless --screenshot-file) before and after; with
 Scene Color x 0.25 every pixel darkens, and a material writing Base Color in that domain is refused by name.
@@ -69,6 +71,10 @@ def read_png(path):
     return rows
 
 
+def green(rows):
+    return sum(1 for row in rows for r, g, b in row if g > 200 and r < 40 and b < 40)
+
+
 def pink(rows, least):
     return sum(1 for row in rows for r, g, b in row if r > least and b > least and g * 4 < r)
 
@@ -117,6 +123,33 @@ def main():
             fail("the decal must colour the ground inside its box only: %d pink pixels, %d ground pixels left" % (coloured, ground))
         print("OK: Deferred Decal colours the ground inside its box (%d pixels, %d ground pixels untouched)" % (coloured, ground))
 
+        badge = "/Game/Materials/Badge.kbmat"
+        run(cli, "material-new", "--project", str(project), "--name", "Badge")
+        ui = lambda material, *args: run(cli, "material-graph", args[0], "--project", str(project), "--material", material, *args[1:])
+        ui(badge, "setting", "--name", "Domain", "--value", "userInterface")
+        ui(badge, "add-node", "--kind", "Constant3Vector", "--name", "Green", "--value", "0 1 0")
+        ui(badge, "connect", "--from", "Green", "--to", "Output", "--to-pin", "emissive")
+        flat = "/Game/Materials/Flat.kbmat"
+        run(cli, "material-new", "--project", str(project), "--name", "Flat")
+        ui(flat, "setting", "--name", "Domain", "--value", "userInterface")
+        ui(flat, "add-node", "--kind", "Constant3Vector", "--name", "Red", "--value", "1 0 0")
+        refused = ui(flat, "connect", "--from", "Red", "--to", "Output", "--to-pin", "baseColor")
+        if "MaterialDomainOutputRefused" not in refused:
+            fail("Base Color in a User Interface material must be refused by name, got:\n" + refused)
+        component = lambda entity, *args: run(cli, "component", args[0], "--project", str(project), "--entity", entity, "--type", *args[1:])
+        run(cli, "entity", "add", "--project", str(project), "--name", "HUD")
+        component("HUD", "add", "Rect Transform")
+        component("HUD", "add", "Canvas")
+        run(cli, "entity", "add", "--project", str(project), "--name", "Badge", "--parent", "HUD")
+        component("HUD/Badge", "add", "Rect Transform", "--set", "offsetMin.x=100", "--set", "offsetMin.y=40", "--set", "offsetMax.x=140",
+                  "--set", "offsetMax.y=70")
+        component("HUD/Badge", "add", "Image", "--set", "materialAssetId=" + badge)
+        widget = capture(game, project, "ui")
+        if green(baseline) != 0 or not 1000 <= green(widget) <= 1300:
+            fail("the UI material must fill the 40 x 30 image with its Final Color: %d green pixels" % green(widget))
+        print("OK: User Interface material fills its image (%d pixels)" % green(widget))
+        baseline = widget
+
         material = "/Game/Materials/Darken.kbmat"
         run(cli, "material-new", "--project", str(project), "--name", "Darken")
         graph = lambda *args, expect=0: run(cli, "material-graph", args[0], "--project", str(project), "--material", material, *args[1:], expect=expect)
@@ -157,6 +190,7 @@ def main():
         # material is removed first (the cook stops on a graph that does not compile, by name).
         (project / "Assets" / "Materials" / "Wrong.kbmat").unlink()
         (project / "Assets" / "Materials" / "Moving.kbmat").unlink()
+        (project / "Assets" / "Materials" / "Flat.kbmat").unlink()
         pack = work / "Game.kbpack"
         run(bin_dir / "kb_cooker.exe", "--project", str(project), "--target", "Windows.x64", "--output", str(pack))
         for plugin in ("physics_jolt", "audio_miniaudio", "basic_lighting", "21kb_particle"):
@@ -168,9 +202,9 @@ def main():
         for x, y in samples:
             if any(abs(a - b) > 12 for a, b in zip(packaged[y][x], darkened[y][x])):
                 fail("the packaged game must draw the Post Process material like the project: %s vs %s" % (packaged[y][x], darkened[y][x]))
-        if pink(packaged, 30) < 1000:
-            fail("the packaged game must draw the Deferred Decal: %d pink pixels" % pink(packaged, 30))
-        print("OK: the packaged game draws the Deferred Decal and the Post Process material (%s)" % (packaged[samples[0][1]][samples[0][0]],))
+        if pink(packaged, 30) < 1000 or green(packaged) < 1000:
+            fail("the packaged game must draw the Deferred Decal and the UI material: %d pink, %d green pixels" % (pink(packaged, 30), green(packaged)))
+        print("OK: the packaged game draws the Deferred Decal, the UI material and the Post Process material (%s)" % (packaged[samples[0][1]][samples[0][0]],))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

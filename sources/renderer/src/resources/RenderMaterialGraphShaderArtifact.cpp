@@ -1203,10 +1203,13 @@ bool RenderMaterialGraphCooksScenePass(const RenderMaterialGraphReflection& refl
     if (reflection.domain == RenderMaterialDomain::PostProcess) {
         return pass == kRenderMaterialGraphPostProcessPass;
     }
+    if (reflection.domain == RenderMaterialDomain::UserInterface) {
+        return pass == kRenderMaterialGraphUserInterfacePass;
+    }
     if (reflection.domain == RenderMaterialDomain::DeferredDecal) {
         return pass == "BaseTransparent";
     }
-    if (pass == kRenderMaterialGraphPostProcessPass) {
+    if (pass == kRenderMaterialGraphPostProcessPass || pass == kRenderMaterialGraphUserInterfacePass) {
         return false;
     }
     return pass != kRenderMaterialGraphMotionVectorsPass || RenderMaterialGraphDrawsOwnMotionVectors(reflection);
@@ -1221,11 +1224,15 @@ namespace {
 
 // Unreal's post-process material: the graph evaluated for every pixel of the view with Scene Color / Scene Depth
 // reading the chain's input (s_kbSceneColor at stage 4, s_kbSceneDepth at 5); its Emissive Color replaces the
-// colour.
-std::string BuildGraphPostProcessFragmentWrapperSource(const RenderMaterialGraphShaderSource& shader) {
+// colour. Unreal's User Interface material: the graph evaluated over a widget's rectangle (Texture Coordinate
+// spans it); its Final Color (Emissive) and Opacity, times the widget's colour, are blended over the UI.
+std::string BuildGraphScreenFragmentWrapperSource(const RenderMaterialGraphShaderSource& shader, bool userInterface) {
     std::string wrapper;
-    wrapper += "$input v_texcoord0\n\n";
+    wrapper += userInterface ? "$input v_texcoord0, v_screenUILocal, v_screenUIPosition\n\n" : "$input v_texcoord0\n\n";
     wrapper += "#include <bgfx_shader.sh>\n";
+    if (userInterface) {
+        wrapper += "uniform vec4 u_screenUIFillColor;\n";
+    }
     wrapper += "uniform vec4 u_time;\n";
     wrapper += "uniform vec4 u_dynamicParameter;\n";
     wrapper += "uniform vec4 u_materialParams;\n";
@@ -1246,8 +1253,9 @@ std::string BuildGraphPostProcessFragmentWrapperSource(const RenderMaterialGraph
     wrapper += "    ctx.time = u_time.x;\n";
     wrapper += "    ctx.deltaTime = u_time.y;\n";
     wrapper += "    ctx.dynamicParameter = u_dynamicParameter;\n";
-    wrapper += "    ctx.screenPosition = v_texcoord0;\n";
-    wrapper += "    ctx.localPosition = vec3_splat(0.0);\n";
+    wrapper += userInterface ? "    ctx.screenPosition = gl_FragCoord.xy / max(u_viewRect.zw, vec2(1.0, 1.0));\n"
+                             : "    ctx.screenPosition = v_texcoord0;\n";
+    wrapper += userInterface ? "    ctx.localPosition = vec3(v_screenUILocal, 0.0);\n" : "    ctx.localPosition = vec3_splat(0.0);\n";
     wrapper += "    ctx.objectPosition = vec3_splat(0.0);\n";
     wrapper += "    ctx.perInstanceRandom = 0.0;\n";
     wrapper += "    ctx.perInstanceFadeAmount = 0.0;\n";
@@ -1263,7 +1271,8 @@ std::string BuildGraphPostProcessFragmentWrapperSource(const RenderMaterialGraph
     wrapper += "    ctx.twoSidedSign = 1.0;\n";
     wrapper += "    ctx.fragmentDepth = 0.0;\n";
     wrapper += "    MaterialSurface surface = EvaluateMaterialGraph(ctx);\n";
-    wrapper += "    gl_FragColor = vec4(surface.emissive, 1.0);\n";
+    wrapper += userInterface ? "    gl_FragColor = vec4(surface.emissive, clamp(surface.alpha, 0.0, 1.0)) * u_screenUIFillColor;\n"
+                             : "    gl_FragColor = vec4(surface.emissive, 1.0);\n";
     wrapper += "}\n";
     return wrapper;
 }
@@ -1274,6 +1283,14 @@ std::string BuildGraphPostProcessVertexWrapperSource() {
            "    gl_Position = vec4(a_position.xy, 0.0, 1.0);\n    v_texcoord0 = a_texcoord0;\n}\n";
 }
 
+// A widget's quad in UI pixels (vs_screen_ui.sc).
+std::string BuildGraphUserInterfaceVertexWrapperSource() {
+    return "$input a_position, a_texcoord0, a_texcoord1\n$output v_texcoord0, v_screenUILocal, v_screenUIPosition\n\n"
+           "#include <bgfx_shader.sh>\n\nuniform vec4 u_screenUIViewport;\n\nvoid main()\n{\n"
+           "    gl_Position = vec4(a_position.x * u_screenUIViewport.z * 2.0 - 1.0, 1.0 - a_position.y * u_screenUIViewport.w * 2.0, 0.0, 1.0);\n"
+           "    v_texcoord0 = a_texcoord0;\n    v_screenUILocal = a_texcoord1;\n    v_screenUIPosition = a_position.xy;\n}\n";
+}
+
 } // namespace
 
 std::string BuildGraphFragmentWrapperSource(
@@ -1282,8 +1299,8 @@ std::string BuildGraphFragmentWrapperSource(
     if (pass == kRenderMaterialGraphMotionVectorsPass) {
         return BuildGraphMotionVectorFragmentWrapperSource(shader);
     }
-    if (pass == kRenderMaterialGraphPostProcessPass) {
-        return BuildGraphPostProcessFragmentWrapperSource(shader);
+    if (pass == kRenderMaterialGraphPostProcessPass || pass == kRenderMaterialGraphUserInterfacePass) {
+        return BuildGraphScreenFragmentWrapperSource(shader, pass == kRenderMaterialGraphUserInterfacePass);
     }
     const bool shadowPass = pass == "ShadowDepth";
     const bool gbufferPass = pass == "GBuffer";
@@ -1511,6 +1528,9 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     if (pass == kRenderMaterialGraphPostProcessPass) {
         return BuildGraphPostProcessVertexWrapperSource();
     }
+    if (pass == kRenderMaterialGraphUserInterfacePass) {
+        return BuildGraphUserInterfaceVertexWrapperSource();
+    }
     // MAT-67/#54: the instanced mesh vertex shader with graph vertex-domain outputs applied before
     // projection/rasterization. WPO and displacement move real geometry; CustomizedUV0 rewrites the
     // interpolated UV that fragment TextureSample nodes read. Mirrors vs_mesh_instanced.sc.
@@ -1696,7 +1716,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         RenderMaterialGraphRequiresGeneratedVertexShader(shader.reflection) ||
         MaterialGraphUsesExtraUvs(shader) ||
         request.pass == kRenderMaterialGraphMotionVectorsPass ||
-        request.pass == kRenderMaterialGraphPostProcessPass;
+        request.pass == kRenderMaterialGraphPostProcessPass ||
+        request.pass == kRenderMaterialGraphUserInterfacePass;
     const std::string vertexWrapperSource = cooksVertexShader ? BuildGraphVertexWrapperSource(shader, request.pass) : std::string{};
     std::vector<ResolvedShaderDependency> dependencies;
     if (!CollectShaderDependencies(artifact.wrapperSource + vertexWrapperSource, request, dependencies, result.diagnostics)) {

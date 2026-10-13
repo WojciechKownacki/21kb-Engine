@@ -2289,6 +2289,7 @@ text "uiProperty.layoutPriority" "लेआउट प्राथमिकता
 text "uiProperty.lineSpacing" "पंक्ति अंतराल"
 text "uiProperty.localizationKey" "लोकलाइज़ेशन कुंजी"
 text "uiProperty.matchWidthOrHeight" "चौड़ाई या ऊँचाई से मिलाएँ"
+text "uiProperty.materialAssetId" "मटीरियल"
 text "uiProperty.maxLines" "अधिकतम पंक्तियाँ (0 = सभी)"
 text "uiProperty.maximum" "अधिकतम"
 text "uiProperty.minFontSize" "न्यूनतम फ़ॉन्ट आकार"

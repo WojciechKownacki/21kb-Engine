@@ -197,6 +197,7 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
     binding.drawsOwnMotionVectors = RenderMaterialGraphDrawsOwnMotionVectors(shader.reflection);
     binding.postProcessDomain = shader.reflection.domain == RenderMaterialDomain::PostProcess;
     binding.decalDomain = shader.reflection.domain == RenderMaterialDomain::DeferredDecal;
+    binding.userInterfaceDomain = shader.reflection.domain == RenderMaterialDomain::UserInterface;
     binding.usesSceneDepth = shader.reflection.usesSceneDepth;
     binding.usesSceneColor = shader.reflection.usesSceneColor;
     binding.writesShadingModelColor = shader.reflection.writesShadingModelColor;

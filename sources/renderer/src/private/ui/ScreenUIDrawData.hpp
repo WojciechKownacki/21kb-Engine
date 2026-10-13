@@ -12,6 +12,8 @@ enum class ScreenUITextureSource : std::uint8_t {
     ImageAssetLinear,
     FontAtlas,
     BackgroundBlur,
+    // A User Interface material (assetId is the material) draws the batch instead of a texture.
+    Material,
 };
 
 enum class ScreenUIFragmentKind : std::uint8_t {

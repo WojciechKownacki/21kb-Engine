@@ -1,6 +1,7 @@
 #include "private/ui/ScreenUIComposite.hpp"
 
 #include "kb/render/ShaderLoader.hpp"
+#include "kb/render/scene/SceneRenderer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -152,7 +153,7 @@ bool ScreenUIComposite::Submit(const ScreenUICompositeDesc& desc) const {
         bgfx::TextureHandle texture = whiteTexture_;
         std::uint16_t textureWidth = 1U;
         std::uint16_t textureHeight = 1U;
-        if (batch.texture.source != ScreenUITextureSource::None) {
+        if (batch.texture.source != ScreenUITextureSource::None && batch.texture.source != ScreenUITextureSource::Material) {
             const ScreenUIResolvedTexture* resolved = Resolve(desc.textures, batch.texture);
             if (resolved == nullptr || !bgfx::isValid(resolved->texture)) {
                 continue;
@@ -191,6 +192,14 @@ bool ScreenUIComposite::Submit(const ScreenUICompositeDesc& desc) const {
         bgfx::setScissor(ToU16(scissorLeft), ToU16(scissorTop),
                          ToU16(std::ceil(clipRight) - scissorLeft),
                          ToU16(std::ceil(clipBottom) - scissorTop));
+        if (batch.texture.source == ScreenUITextureSource::Material) {
+            if (desc.sceneRenderer == nullptr ||
+                !desc.sceneRenderer->SubmitUserInterfaceMaterial(desc.viewId, batch.texture.assetId, vertices, indices, batch.firstIndex,
+                                                                  batch.indexCount)) {
+                bgfx::discard();
+            }
+            continue;
+        }
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                        BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));
         bgfx::setVertexBuffer(0U, &vertices, 0U, vertexCount);

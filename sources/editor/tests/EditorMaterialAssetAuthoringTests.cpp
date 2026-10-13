@@ -1749,8 +1749,8 @@ void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
-// Unreal's Material Domain in the Details panel: the production domains are offered, and a Deferred Decal or a
-// Post Process material authored in the editor compiles in its domain.
+// Unreal's Material Domain in the Details panel: the production domains are offered, and a Deferred Decal, a Post
+// Process or a User Interface material authored in the editor compiles in its domain.
 void RunMaterialEditorDomainSettingTest() {
     kb::editor::MaterialEditorState materialEditor;
     kb::render::RenderMaterialAssetData material{};
@@ -1763,14 +1763,15 @@ void RunMaterialEditorDomainSettingTest() {
             offered.push_back(option.value);
         }
     }
-    kb::editor::tests::Require(offered == std::vector<std::string>{ "surface", "deferredDecal", "postProcess" },
-        "Material Domain: Details must offer Surface, Deferred Decal and Post Process");
+    kb::editor::tests::Require(offered == std::vector<std::string>{ "surface", "deferredDecal", "postProcess", "userInterface" },
+        "Material Domain: Details must offer Surface, Deferred Decal, Post Process and User Interface");
     std::uint32_t colorNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -300, 40, &colorNodeId) &&
             materialEditor.ConnectGraphPins(colorNodeId, "rgba", 1U, "emissive"),
         "Material Domain: the editor should connect a color to Emissive Color");
     for (const auto& [domain, expected] : { std::pair{ "deferredDecal", kb::render::RenderMaterialDomain::DeferredDecal },
-             std::pair{ "postProcess", kb::render::RenderMaterialDomain::PostProcess } }) {
+             std::pair{ "postProcess", kb::render::RenderMaterialDomain::PostProcess },
+             std::pair{ "userInterface", kb::render::RenderMaterialDomain::UserInterface } }) {
         kb::editor::tests::Require(materialEditor.SetGraphMaterialSetting("material.domain", domain) &&
                 materialEditor.WorkingCopy()->graph.materialDomain == domain,
             "Material Domain: Details should set the domain");

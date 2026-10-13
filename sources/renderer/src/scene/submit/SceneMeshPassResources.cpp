@@ -873,9 +873,10 @@ void SceneMeshPassResources::BindGraphMaterialValues(const RenderMaterialResourc
     }
 }
 
-bool SceneMeshPassResources::SubmitPostProcessMaterial(const SceneMeshPostProcessDesc& desc) const {
+bool SceneMeshPassResources::SubmitScreenMaterial(const SceneMeshScreenMaterialDesc& desc) const {
     const RenderMaterialResource& material = desc.material;
-    const std::string pass{ kRenderMaterialGraphPostProcessPass };
+    const bool userInterface = desc.uiVertices != nullptr && desc.uiIndices != nullptr;
+    const std::string pass{ userInterface ? kRenderMaterialGraphUserInterfacePass : kRenderMaterialGraphPostProcessPass };
     const std::uint32_t backend = static_cast<std::uint32_t>(bgfx::getRendererType());
     const MaterialProgramKey key{
         .materialTypeId = material.graphProgram.materialTypeId,
@@ -899,6 +900,23 @@ bool SceneMeshPassResources::SubmitPostProcessMaterial(const SceneMeshPostProces
     }
     AppendUniqueValue(usedProgramKeys_, key);
     AppendUniqueValue(residentProgramKeys_, key);
+    const std::array<float, 4U> materialParams{ 0.0F, 1.0F, 1.0F, 0.5F };
+    const std::array<float, 4U> zero{};
+    bgfx::setUniform(materialParamsUniform_, materialParams.data());
+    bgfx::setUniform(cameraPositionUniform_, zero.data());
+    bgfx::setUniform(renderOriginOffsetUniform_, zero.data());
+    bgfx::setUniform(timeUniform_, desc.frameTime.data());
+    bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
+    BindGraphMaterialValues(material, desc.resources, desc.resourceMap);
+    if (userInterface) {
+        // The screen UI set its viewport and the widget's colour (u_screenUIViewport, u_screenUIFillColor).
+        bgfx::setVertexBuffer(0U, desc.uiVertices);
+        bgfx::setIndexBuffer(desc.uiIndices, desc.firstIndex, desc.indexCount);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                       BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));
+        bgfx::submit(desc.viewId, program);
+        return true;
+    }
     // The fullscreen triangle of the post-process chain (ScenePostProcessRenderer).
     static const bgfx::VertexLayout layout = [] {
         bgfx::VertexLayout made;
@@ -912,14 +930,6 @@ bool SceneMeshPassResources::SubmitPostProcessMaterial(const SceneMeshPostProces
     bgfx::allocTransientVertexBuffer(&triangle, 3U, layout);
     constexpr std::array<float, 15U> vertices{ -1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 3.0F, 1.0F, 0.0F, 2.0F, 0.0F, -1.0F, -3.0F, 0.0F, 0.0F, 2.0F };
     std::memcpy(triangle.data, vertices.data(), sizeof(vertices));
-    const std::array<float, 4U> materialParams{ 0.0F, 1.0F, 1.0F, 0.5F };
-    const std::array<float, 4U> zero{};
-    bgfx::setUniform(materialParamsUniform_, materialParams.data());
-    bgfx::setUniform(cameraPositionUniform_, zero.data());
-    bgfx::setUniform(renderOriginOffsetUniform_, zero.data());
-    bgfx::setUniform(timeUniform_, desc.frameTime.data());
-    bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
-    BindGraphMaterialValues(material, desc.resources, desc.resourceMap);
     if (material.graphProgram.usesSceneColor) {
         bgfx::setTexture(4U, AcquireGraphUniform("s_kbSceneColor", true), desc.input);
         AppendUniqueValue(usedGraphSamplerUniforms_, std::string{ "s_kbSceneColor" });

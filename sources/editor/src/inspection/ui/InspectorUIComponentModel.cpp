@@ -115,6 +115,7 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
     if (name == "layoutPriority") return std::string{ EditorText("uiProperty.layoutPriority", "Layout Priority") };
     if (name == "lineSpacing") return std::string{ EditorText("uiProperty.lineSpacing", "Line Spacing") };
     if (name == "localizationKey") return std::string{ EditorText("uiProperty.localizationKey", "Localization Key") };
+    if (name == "materialAssetId") return std::string{ EditorText("uiProperty.materialAssetId", "Material") };
     if (name == "matchWidthOrHeight") return std::string{ EditorText("uiProperty.matchWidthOrHeight", "Match Width Or Height") };
     if (name == "maxLines") return std::string{ EditorText("uiProperty.maxLines", "Max Lines (0 = All)") };
     if (name == "maximum") return std::string{ EditorText("uiProperty.maximum", "Maximum") };

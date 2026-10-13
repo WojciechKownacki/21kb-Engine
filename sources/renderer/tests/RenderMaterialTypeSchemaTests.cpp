@@ -4586,9 +4586,10 @@ void RunMaterialDomainGatingTest() {
     Require(production[static_cast<std::size_t>(RenderMaterialDomain::Surface)] &&
             production[static_cast<std::size_t>(RenderMaterialDomain::PostProcess)] &&
             production[static_cast<std::size_t>(RenderMaterialDomain::DeferredDecal)] &&
+            production[static_cast<std::size_t>(RenderMaterialDomain::UserInterface)] &&
             !production[static_cast<std::size_t>(RenderMaterialDomain::LightFunction)] &&
             !production[static_cast<std::size_t>(RenderMaterialDomain::Volume)],
-        "KBMAT-MAT34: Surface, Post Process and Deferred Decal are production; Light Function and Volume are not");
+        "KBMAT-MAT34: Surface, Post Process, Deferred Decal and User Interface are production; Light Function and Volume are not");
 
     // Unreal's Post Process material: Emissive Color only, drawn in its own pass and in no scene pass.
     RenderMaterialGraphDocument postGraph = MakeDefaultRenderMaterialGraphDocument();
@@ -4619,6 +4620,14 @@ void RunMaterialDomainGatingTest() {
     const RenderMaterialGraphDiagnostic* decalDiag = FindGraphDiagnostic(refusedDecal.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain);
     Require(!refusedDecal.Succeeded() && decalDiag != nullptr && decalDiag->message.find("MaterialDomainOutputRefused") != std::string::npos,
         "Deferred Decal domain: World Position Offset must be refused by name");
+
+    // Unreal's User Interface material: Final Color (Emissive) and Opacity only.
+    RenderMaterialGraphDocument uiGraph = surfaceGraph;
+    uiGraph.materialDomain = "userInterface";
+    const RenderMaterialGraphCompileResult refusedUi = CompileRenderMaterialGraphToShaderSource(uiGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0345U });
+    const RenderMaterialGraphDiagnostic* uiDiag = FindGraphDiagnostic(refusedUi.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain);
+    Require(!refusedUi.Succeeded() && uiDiag != nullptr && uiDiag->message.find("MaterialDomainOutputRefused") != std::string::npos,
+        "User Interface domain: Base Color must be refused by name");
 }
 
 void RunMaterialShadingModelGatingTest() {

@@ -1205,6 +1205,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         .materialReloadCount = lastMaterialReloadCount_,
         .materialResolverDiagnosticCount = lastMaterialResolverDiagnosticCount_,
         .currentFrame = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
+        .uiFrame = &screenUIFrame,
     });
     if (RendererDebugLogEnabled("renderer")) {
         std::ostringstream message;
@@ -1960,6 +1961,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                     .outputExtent = desc.finalComposite.extent,
                     .outputRect = desc.finalComposite.outputRect,
                     .outputTransform = uiOutputTransform,
+                    .sceneRenderer = sceneRenderer_.get(),
                 })) {
                 WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport screen UI submit failed");
                 return false;
@@ -2006,6 +2008,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                  .tonemap = SceneDisplayTonemapOperator::None,
                  .colorGradingLutStrength = 0.0F,
              },
+             .sceneRenderer = sceneRenderer_.get(),
          }))) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport screen UI submit failed noFinalComposite");
         return false;

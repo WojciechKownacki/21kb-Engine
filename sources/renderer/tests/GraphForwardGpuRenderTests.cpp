@@ -8,6 +8,7 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderToolchain.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/ShapeMeshes.hpp"
@@ -6818,6 +6819,81 @@ void RunPostProcessMaterialPassTest() {
     harness.Shutdown();
 }
 
+// Unreal's User Interface material: a widget quad from (16, 16) to (48, 48) of a 64 x 64 UI; the graph's Texture
+// Coordinate spans the quad, Final Color (Emissive) = (u, v, 0) and Opacity 0.5, times the widget colour.
+void RunUserInterfaceMaterialTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "user_interface_material";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    using K = RenderMaterialGraphNodeKind;
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.materialDomain = "userInterface";
+    graph.nodes.push_back(UtilityConstant(2U, K::TextureCoordinate, "1 1 0"));
+    graph.nodes.push_back(UtilityConstant(3U, K::ConstantScalar, "0.5"));
+    graph.links.push_back(MakeLink(K::TextureCoordinate, 2U, "uv", K::MaterialOutput, 1U, "emissive"));
+    graph.links.push_back(MakeLink(K::ConstantScalar, 3U, "value", K::MaterialOutput, 1U, "alpha"));
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0xA3C0U });
+    if (!compiled.Succeeded()) {
+        std::fprintf(stderr, "User Interface: %s\n", compiled.diagnostics.empty() ? "" : compiled.diagnostics.front().message.c_str());
+    }
+    Require(compiled.Succeeded() && compiled.shader.reflection.domain == RenderMaterialDomain::UserInterface, "User Interface: the graph must compile");
+    for (const std::string_view pass : kRenderMaterialGraphScenePasses) {
+        Require(RenderMaterialGraphCooksScenePass(compiled.shader.reflection, pass) == (pass == kRenderMaterialGraphUserInterfacePass),
+            "User Interface: the material cooks its UserInterface pass only");
+    }
+    RenderMaterialGraphShaderArtifactRequest request = CookRequest(cacheDir.generic_string());
+    request.pass = std::string{ kRenderMaterialGraphUserInterfacePass };
+    const RenderMaterialGraphShaderArtifactResult cooked = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request);
+    if (!cooked.Succeeded()) {
+        std::fprintf(stderr, "User Interface cook: %s\n", cooked.diagnostics.empty() ? "" : cooked.diagnostics.front().message.c_str());
+    }
+    Require(cooked.Succeeded() && cooked.artifact.has_value(), "User Interface: the pass must cook");
+    const RenderMaterialGraphShaderBinary* vs = cooked.artifact->FindVertexBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(vs != nullptr && vs->byteSize > 0U, "User Interface: the pass must cook the widget vertex shader");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "User Interface: Direct3D11 device unavailable; cannot read the widget back\n");
+        Require(false, "User Interface: A real GPU device is required to prove the material");
+        return;
+    }
+    const bgfx::ProgramHandle program = BuildGraphProgram(ReadAllBytes(std::filesystem::path{ vs->binaryPath }), *cooked.artifact);
+    bgfx::VertexLayout layout;
+    layout.begin()
+        .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord1, 2, bgfx::AttribType::Float)
+        .end();
+    const std::array<float, 24U> quad{ 16.0F, 16.0F, 0.0F, 0.0F, 0.0F, 0.0F, 48.0F, 16.0F, 1.0F, 0.0F, 1.0F, 0.0F,
+                                       48.0F, 48.0F, 1.0F, 1.0F, 1.0F, 1.0F, 16.0F, 48.0F, 0.0F, 1.0F, 0.0F, 1.0F };
+    const std::array<std::uint16_t, 6U> order{ 0U, 1U, 2U, 0U, 2U, 3U };
+    HarnessMesh mesh{ .vertices = bgfx::createVertexBuffer(bgfx::copy(quad.data(), sizeof(quad)), layout),
+                      .indices = bgfx::createIndexBuffer(bgfx::copy(order.data(), sizeof(order))) };
+    const bgfx::UniformHandle viewport = bgfx::createUniform("u_screenUIViewport", bgfx::UniformType::Vec4);
+    const bgfx::UniformHandle fill = bgfx::createUniform("u_screenUIFillColor", bgfx::UniformType::Vec4);
+    Require(bgfx::isValid(program) && bgfx::isValid(mesh.vertices), "User Interface: program and quad must be created");
+    const std::array<float, 4U> viewportValue{ 64.0F, 64.0F, 1.0F / 64.0F, 1.0F / 64.0F };
+    const std::array<float, 4U> fillValue{ 1.0F, 1.0F, 1.0F, 1.0F };
+    bgfx::setUniform(viewport, viewportValue.data());
+    bgfx::setUniform(fill, fillValue.data());
+    const std::vector<std::uint8_t> pixels = harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, UINT32_MAX, 0x000000ffU,
+        0U, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, 0.0F, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, nullptr, false, 1.0F, &mesh);
+    // Pixel centre 24.5 is u = (24.5 - 16) / 32 = 0.266; row 40.5 is v = 0.766.
+    const ForwardRenderProbe inside = ForwardRenderHarness::ProbeAt(pixels, 24U, 40U);
+    RequirePixelNear(inside, { 0.265625F, 0.765625F, 0.0F }, "User Interface Final Color across the widget");
+    Require(inside.a >= 124U && inside.a <= 131U, "User Interface: Opacity must reach the widget's alpha");
+    const ForwardRenderProbe outside = ForwardRenderHarness::ProbeAt(pixels, 8U, 8U);
+    Require(outside.r == 0U && outside.g == 0U, "User Interface: nothing is drawn outside the widget");
+    bgfx::destroy(fill);
+    bgfx::destroy(viewport);
+    bgfx::destroy(mesh.indices);
+    bgfx::destroy(mesh.vertices);
+    bgfx::destroy(program);
+    harness.Shutdown();
+}
+
 // Unreal's Deferred Decal: a unit box (scaled 0.5, its Y axis turned to +Z) drawn by its back faces over a
 // surface at depth 0.5 (z = 0, seen from +Z): the pixels whose surface lies inside the box show the decal with
 // the box's X and Z as its texture coordinates; a surface behind the box (depth 1) is left alone.
@@ -7164,6 +7240,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphExtraUvSetsTest();
     RunPostProcessMaterialPassTest();
     RunDeferredDecalMaterialTest();
+    RunUserInterfaceMaterialTest();
     RunForwardGraphPixelNormalWorldSpaceTest();
     RunForwardGraphSobolRendersTest();
     RunForwardGraphMaterialParameterCollectionRendersTest();

@@ -16,6 +16,10 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/scene/SceneUIComponents.hpp"
+#include "engine/ui/UIComponentCatalog.hpp"
+#include "engine/ui/UIComponentPropertyCatalog.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptValue.hpp"
 
@@ -295,6 +299,25 @@ void ListProperties(std::string_view component, std::ostream& out) {
         return true;
     }
 
+    // A UI asset reference (an image, a font, a material) by its path, as the Mesh Renderer's.
+    if (const kb::scene::UIComponentDescriptor* ui = kb::scene::FindUIComponentDescriptor(component); ui != nullptr) {
+        const kb::scene::UIComponentPropertyDescriptor* property = kb::scene::FindUIComponentProperty(ui->type, name);
+        if (property != nullptr && property->type == kb::scene::UIComponentPropertyType::Asset && value.starts_with('/')) {
+            const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(value));
+            if (metadata == nullptr) {
+                io.err << "error: " << component << '.' << name << " '" << value << "' is not an asset of the project\n";
+                return false;
+            }
+            const auto set = kb::script::ScriptSceneComponentApi::SetProperty(scene, entity, component, name,
+                kb::script::ScriptValue{ metadata->id.value, kb::script::ScriptValueType::Hash });
+            if (!set.succeeded) {
+                io.err << "error: " << component << '.' << name << ": " << set.error << '\n';
+                return false;
+            }
+            return true;
+        }
+    }
+
     if (component == "Transform" && name == "rotation") {
         const std::optional<std::vector<float>> degrees = ParseFloats(value, 3U);
         if (!degrees.has_value()) {
@@ -510,6 +533,22 @@ void ListProperties(std::string_view component, std::ostream& out) {
     const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *entityName, io);
     if (!entity.has_value()) return 1;
 
+    // UI components (Rect Transform, Canvas, Image, ...) by their names, as the editor's Add Component adds them.
+    if (const kb::scene::UIComponentDescriptor* ui = kb::scene::FindUIComponentDescriptor(*type); ui != nullptr && action != "remove") {
+        kb::scene::UIComponentSet components = kb::scene::CaptureSceneUIComponents(scene.Components().UI(), *entity);
+        if (action == "add" && !kb::scene::AddUIComponent(components, ui->type)) {
+            io.err << "error: " << ui->displayName << " could not be added to '" << *entityName
+                   << "' (it is there already, or it needs a Rect Transform first)\n";
+            return 1;
+        }
+        if (action == "set" && !kb::scene::HasUIComponent(components, ui->type)) {
+            io.err << "error: '" << *entityName << "' has no " << ui->displayName << " (use component add)\n";
+            return 1;
+        }
+        kb::scene::SynchronizeSceneUIComponents(scene.Components().UI(), *entity, components);
+        if (!ApplySettings(scene, *entity, *type, arguments, io)) return 1;
+        return Saved(*session, (action == "add" ? "added " : "updated ") + std::string{ ui->displayName } + " on '" + *entityName + "'", io);
+    }
     if (action == "add") {
         const kb::scene::SceneComponentAddResult added =
             kb::scene::SceneComponentAuthoring::Add(scene, *entity, *type, session->descriptor);
