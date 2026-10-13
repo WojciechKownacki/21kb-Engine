@@ -5365,11 +5365,12 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
             groups[0].group == kb::editor::MaterialEditorParameterGroup::Surface &&
             groups[0].expanded &&
             groups[0].activeOverrideCount == 0U &&
-            groups[0].totalParameterCount == 3U &&
-            groups[0].parameters.size() == 3U &&
+            groups[0].totalParameterCount == 4U &&
+            groups[0].parameters.size() == 4U &&
             groups[0].parameters[0].stableId == "tint" &&
             groups[0].parameters[1].stableId == "roughness" &&
-            groups[0].parameters[2].stableId == "paint",
+            groups[0].parameters[2].stableId == "paint" &&
+            groups[0].parameters[3].stableId == "paint@uv",
         "KBMAT-MAT60: Instance override groups must be sorted by editor order and expanded by default");
     kb::editor::tests::Require(!editor.ToggleInstanceOverrideGroup(kb::editor::MaterialEditorParameterGroup::Surface),
         "KBMAT-MAT60: Instance override group toggle must collapse an expanded group");
@@ -5377,7 +5378,7 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
     kb::editor::tests::Require(groups.size() == 1U &&
             !groups[0].expanded &&
             groups[0].parameters.empty() &&
-            groups[0].totalParameterCount == 3U,
+            groups[0].totalParameterCount == 4U,
         "KBMAT-MAT60: Collapsed instance override group must retain counts but hide rows");
     kb::editor::tests::Require(editor.ToggleInstanceOverrideGroup(kb::editor::MaterialEditorParameterGroup::Surface),
         "KBMAT-MAT60: Instance override group toggle must expand a collapsed group");
@@ -5404,6 +5405,7 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
     edited.overrides.graphParameterValues.push_back(kb::render::RenderMaterialGraphParameterValue{
         .stableId = "paint",
         .type = kb::render::RenderMaterialParameterType::Texture,
+        .numbers = { 1.0F, 0.0F, 0.0F, 0.0F },  // the slot samples UV1
         .assetId = 4242U,
     });
     editor.SetInstanceWorkingCopy(edited, kb::render::BuildEffectiveRenderMaterialInstanceAsset(parent, edited));
@@ -5417,11 +5419,14 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
         "MAT-40 instance editor should show override tint value and parent default");
     kb::editor::tests::Require(textureAfter != nullptr && textureAfter->overrideActive && textureAfter->value.assetId == 4242U,
         "MAT-40 instance editor should expose texture parameter overrides");
+    const kb::editor::MaterialEditorParameter* textureUv = findParameter("paint@uv");
+    kb::editor::tests::Require(textureUv != nullptr && textureUv->value.text == "UV1",
+        "Texture slot UV channel: the instance's Details must show the slot's UV channel");
 
     groups = editor.InstanceOverrideGroups();
     kb::editor::tests::Require(groups.size() == 1U &&
             groups[0].activeOverrideCount == 2U &&
-            groups[0].totalParameterCount == 3U,
+            groups[0].totalParameterCount == 4U,
         "KBMAT-MAT60: Instance override groups must count active color/texture overrides");
 
     const kb::render::RenderMaterialInstanceAssetData overrideSnapshot = *editor.InstanceWorkingCopy();
@@ -5528,7 +5533,7 @@ void RunMaterialInstanceEditorOverrideModelAndSaveTest() {
             saved->staticParameterOverrides[0].stableId == "useBlue" &&
             saved->staticParameterOverrides[0].value == "true" &&
             savedText.str().find("graphParameterValue tint") != std::string::npos &&
-            savedText.str().find("graphParameterValue paint") != std::string::npos &&
+            savedText.str().find("graphParameterValue paint Texture 4242 uv=1") != std::string::npos &&
             savedText.str().find("graphParameterValue roughness") == std::string::npos,
         "MAT-40 instance editor command should persist only explicit graph parameter override lines plus static switch overrides");
     const kb::render::RenderMaterialAssetData effective = kb::render::BuildEffectiveRenderMaterialInstanceAsset(parent, *saved);

@@ -800,6 +800,12 @@ void AddShaderGenerationDiagnostic(
     }
 }
 
+// A 2D Texture Sample with its own texture slot (no Texture Object input) and no UV input.
+[[nodiscard]] bool TextureSlotChoosesUvChannel(const RenderMaterialGraphDocument& graph, const RenderMaterialGraphNode& node) {
+    return node.kind == RenderMaterialGraphNodeKind::TextureSample && FindInputLink(graph, node.id, "texture") == nullptr &&
+        FindInputLink(graph, node.id, "uv") == nullptr;
+}
+
 [[nodiscard]] bool IsTextureSampleNode(RenderMaterialGraphNodeKind kind) noexcept {
     switch (kind) {
     case RenderMaterialGraphNodeKind::TextureSample:
@@ -2409,10 +2415,15 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::ObjectBounds:
         return "ctx.objectBounds";
     case RenderMaterialGraphNodeKind::TextureSample:
+        // A texture slot of its own with no UV input samples the UV channel of its value (UV0 or UV1, set by the
+        // material or an instance without recompiling).
         return "texture2D(" +
             CompileTextureInputExpression(cg.graph, node, cg.diagnostics) +
             ", " +
-            CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") +
+            CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2,
+                TextureSlotChoosesUvChannel(cg.graph, node)
+                    ? "mix(ctx.uv0, ctx.uv1, step(0.5, " + ParameterUniformName(node, "_uvChannel") + ".x))"
+                    : std::string{ "ctx.uv0" }) +
             ")";
     case RenderMaterialGraphNodeKind::TextureSampleCube:
         return "textureCube(" +
@@ -3828,6 +3839,12 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         case RenderMaterialGraphNodeKind::TextureSample:
         case RenderMaterialGraphNodeKind::TextureSampleVolume:
         case RenderMaterialGraphNodeKind::TextureSample2DArray:
+            if (TextureSlotChoosesUvChannel(graph, node)) {
+                // Bound from the slot's texture value (numbers[0] = UV channel), like a scalar parameter.
+                uniformEntries.push_back({ ParameterUniformName(node, "_uvChannel"), StableParameterId(node),
+                    RenderMaterialGraphNodeKind::ParameterScalar, RenderMaterialGraphReflectionUniformSource::MaterialParameter,
+                    0U, {}, { 0.0F, 0.0F, 0.0F, 0.0F } });
+            }
             if (!HasInputLink(graph, node.id, "texture")) {
                 const std::string textureRole = EffectiveTextureRoleForNode(graph, node);
                 textureEntries.push_back({

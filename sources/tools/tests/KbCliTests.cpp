@@ -3512,6 +3512,21 @@ void RunMaterialAuthoringCommandTests() {
     const std::optional<kb::render::RenderMaterialGraphParameterValue> red = parameterValue(effective, "color");
     Require(red.has_value() && red->numbers[0] == 1.0F && red->numbers[1] == 0.0F, "the effective instance colour must be the override");
 
+    // A texture slot of the graph samples the UV channel its value names: the instance picks UV1 with "@uv1".
+    const CommandRun decal = graph({ "add-node", "--kind", "TextureSample", "--name", "Decal", "--value", "/Game/Textures/Paint.png" });
+    Require(decal.exitCode == 0, "add-node TextureSample failed: " + decal.output);
+    Require(graph({ "connect", "--from", "Decal", "--to", "Output", "--to-pin", "emissive" }).exitCode == 0, "Decal link failed");
+    const CommandRun uvChannel = Run(&kb::cli::RunMaterialInstanceSetCommand, { "--project", project,
+        "--instance", "/Game/Materials/CarRed.kbmatinst", "--set", "Decal=/Game/Textures/Paint.png@uv1" });
+    Require(uvChannel.exitCode == 0 && Contains(uvChannel.output, "/Game/Textures/Paint.png@uv1 (override)"),
+        "material-instance-set did not set the texture slot's UV channel: " + uvChannel.output);
+    const std::optional<kb::render::RenderMaterialInstanceAssetData> withUv = kb::render::RenderMaterialInstanceAssetLoader::LoadInstance(
+        std::filesystem::path{ project } / "Assets" / "Materials" / "CarRed.kbmatinst");
+    Require(withUv.has_value() && std::ranges::any_of(withUv->overrides.graphParameterValues, [](const kb::render::RenderMaterialGraphParameterValue& value) {
+                return value.type == kb::render::RenderMaterialParameterType::Texture && value.numbers[0] == 1.0F;
+            }),
+        "the instance must save the texture slot's UV channel");
+
     Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--create", "Cube", "--name", "Car" }).exitCode == 0,
         "entity add Cube failed");
     const CommandRun assigned = Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Car",

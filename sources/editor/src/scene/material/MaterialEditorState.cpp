@@ -4173,6 +4173,23 @@ std::vector<MaterialEditorParameter> MaterialEditorState::BuildParameters(
             .enabled = parameter.runtimeSupport == kb::render::RenderMaterialFeatureSupport::Supported,
             .sortOrder = parameter.editorOrder,
         });
+        // A graph texture slot also names the UV channel it samples ("<stableId>@uv": UV0 or UV1).
+        if (parameter.type == kb::render::RenderMaterialParameterType::Texture) {
+            for (const kb::render::RenderMaterialGraphParameterValue& value : document.graphParameterValues) {
+                if (value.type == kb::render::RenderMaterialParameterType::Texture && value.stableId == parameter.name) {
+                    parameters.push_back(MaterialEditorParameter{
+                        .stableId = value.stableId + "@uv",
+                        .type = kb::render::RenderMaterialParameterType::Enum,
+                        .group = EditorGroupFor(parameter.group),
+                        .displayName = DisplayNameOrStableId(parameter.displayName, parameter.name) + " UV",
+                        .value = EnumValue(value.numbers[0] >= 0.5F ? "UV1" : "UV0"),
+                        .defaultValue = EnumValue("UV0"),
+                        .overrideEnabled = parameter.overrideSupported,
+                        .sortOrder = parameter.editorOrder,
+                    });
+                }
+            }
+        }
     }
 
     for (const kb::render::RenderMaterialTextureSlotSchema& slot : schema.textureSlots) {

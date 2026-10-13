@@ -133,7 +133,17 @@ namespace {
         }
         return HasNoTrailingToken(stream);
     case RenderMaterialParameterType::Texture:
-        return (stream >> token) && ParseUInt64(token, output.assetId) && HasNoTrailingToken(stream);
+        if (!(stream >> token) || !ParseUInt64(token, output.assetId)) {
+            return false;
+        }
+        // The UV channel the texture slot samples (numbers[0]): uv=0 (default) or uv=1.
+        if (stream >> token) {
+            if (token != "uv=0" && token != "uv=1") {
+                return false;
+            }
+            output.numbers[0] = token == "uv=1" ? 1.0F : 0.0F;
+        }
+        return HasNoTrailingToken(stream);
     }
     return false;
 }
