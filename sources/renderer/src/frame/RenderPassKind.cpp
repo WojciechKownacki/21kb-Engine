@@ -22,6 +22,10 @@ constexpr std::array<RenderPassKind, RenderPassKindCount> kRequiredRenderPassKin
     RenderPassKind::PostProcessBloomBlurV,
     RenderPassKind::PostProcessHdrCombine,
     RenderPassKind::PostProcessHdrFinalize,
+    RenderPassKind::PostProcessMaterial0,
+    RenderPassKind::PostProcessMaterial1,
+    RenderPassKind::PostProcessMaterial2,
+    RenderPassKind::PostProcessMaterial3,
     RenderPassKind::ScreenUIBlurH,
     RenderPassKind::ScreenUIBlurV,
     RenderPassKind::FinalComposite,
@@ -64,6 +68,14 @@ const char* RenderPassKindName(RenderPassKind kind) noexcept {
         return "PostProcessHdrCombine";
     case RenderPassKind::PostProcessHdrFinalize:
         return "PostProcessHdrFinalize";
+    case RenderPassKind::PostProcessMaterial0:
+        return "PostProcessMaterial0";
+    case RenderPassKind::PostProcessMaterial1:
+        return "PostProcessMaterial1";
+    case RenderPassKind::PostProcessMaterial2:
+        return "PostProcessMaterial2";
+    case RenderPassKind::PostProcessMaterial3:
+        return "PostProcessMaterial3";
     case RenderPassKind::EditorSceneOverlays:
         return "EditorSceneOverlays";
     case RenderPassKind::ScreenUIBlurH:

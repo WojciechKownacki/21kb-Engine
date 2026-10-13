@@ -244,6 +244,10 @@ void FramePipelineBuildsCanonicalPassOrder() {
         RenderPassKind::PostProcessBloomBlurV,
         RenderPassKind::PostProcessHdrCombine,
         RenderPassKind::PostProcessHdrFinalize,
+        RenderPassKind::PostProcessMaterial0,
+        RenderPassKind::PostProcessMaterial1,
+        RenderPassKind::PostProcessMaterial2,
+        RenderPassKind::PostProcessMaterial3,
         RenderPassKind::ScreenUIBlurH,
         RenderPassKind::ScreenUIBlurV,
         RenderPassKind::FinalComposite,
@@ -303,6 +307,10 @@ void FramePipelineBuildsCanonicalPassOrder() {
         ViewId::PostProcessBloomMipBlurVStart + 4U,
         ViewId::PostProcessHdrCombine,
         ViewId::PostProcessHdrFinalize,
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + 0U),
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + 1U),
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + 2U),
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + 3U),
         ViewId::ScreenUIBlurH,
         ViewId::ScreenUIBlurV,
         ViewId::FinalComposite,
@@ -355,7 +363,7 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
     Require(state.IsActive(), "RenderFrameState became inactive during viewport registration");
     Require(state.FrameIndex() == frame.frameIndex, "RenderFrameState has the wrong frame index");
 
-    constexpr std::array<std::uint16_t, 73U> expectedBaseViewOrder{
+    constexpr std::array<std::uint16_t, 81U> expectedBaseViewOrder{
         ViewId::ShadowDepth,
         ViewId::GpuCompute,
         ViewId::Scene3D,
@@ -387,6 +395,10 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
         ViewId::PostProcessBloomMipBlurVStart + 4U,
         ViewId::PostProcessHdrCombine,
         ViewId::PostProcessHdrFinalize,
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + 0U),
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + 1U),
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + 2U),
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + 3U),
         ViewId::ScreenUIBlurH,
         ViewId::ScreenUIBlurV,
         ViewId::FinalComposite,
@@ -423,6 +435,10 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
         ViewId::DetachedViewportStart + 31U,
         ViewId::DetachedViewportStart + 12U,
         ViewId::DetachedViewportStart + 13U,
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + ViewId::PostProcessMaterialViewsPerViewport + 0U),
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + ViewId::PostProcessMaterialViewsPerViewport + 1U),
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + ViewId::PostProcessMaterialViewsPerViewport + 2U),
+        static_cast<std::uint16_t>(ViewId::PostProcessMaterialStart + ViewId::PostProcessMaterialViewsPerViewport + 3U),
         ViewId::DetachedViewportStart + 33U,
         ViewId::DetachedViewportStart + 34U,
         ViewId::DetachedViewportStart + 15U,
@@ -496,9 +512,13 @@ void FrameStateBuildsCompleteBgfxRemapWhenSwitchingToDetachedViewport() {
         Require(remap[viewId] == viewId,
             "Detached-only frame retained a stale primary viewport remap");
     }
+    // The viewport's order fills the slots of its own view ids, lowest first (the post-process material views of a
+    // viewport sit in the high range, so its last views run there).
+    std::vector<std::uint16_t> detachedSlots = detachedPlan.viewports[0].viewOrder;
+    std::ranges::sort(detachedSlots);
     for (std::size_t index = 0U; index < detachedPlan.viewports[0].viewOrder.size(); ++index) {
         Require(
-            remap[ViewId::DetachedViewportStart + index] ==
+            remap[detachedSlots[index]] ==
                 detachedPlan.viewports[0].viewOrder[index],
             "Detached viewport order was written at the wrong bgfx remap offset");
     }

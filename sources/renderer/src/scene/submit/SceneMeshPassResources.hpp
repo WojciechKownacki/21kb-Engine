@@ -58,6 +58,19 @@ struct SceneMeshPassBindDesc {
     std::array<float, 4> renderOriginOffset{};
 };
 
+// One post-process material over the view (Unreal's post-process blendable, before the tonemap): its PostProcess
+// program reads `input` as Scene Color and `depth` as Scene Depth.
+struct SceneMeshPostProcessDesc {
+    bgfx::ViewId viewId = 0U;
+    const RenderMaterialResource& material;
+    const RenderResourceRegistry& resources;
+    const SceneRenderResourceMap& resourceMap;
+    bgfx::TextureHandle input = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle depth = BGFX_INVALID_HANDLE;
+    std::array<float, 4> frameTime{};
+    std::array<float, 4> dynamicParameter{};
+};
+
 struct SceneMeshProgramBindStats {
     std::uint32_t totalBindCount = 0U;
     std::uint32_t graphProgramBindCount = 0U;
@@ -94,6 +107,8 @@ public:
     void Shutdown();
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] bgfx::ProgramHandle Bind(const SceneMeshPassBindDesc& desc) const noexcept;
+    // False when the material's PostProcess program is not available (not cooked, or failed to load).
+    [[nodiscard]] bool SubmitPostProcessMaterial(const SceneMeshPostProcessDesc& desc) const;
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return programRegistry_.Stats(); }
     void EndFrame(std::uint64_t frameIndex) const;
     [[nodiscard]] SceneLightGridResources& LightGrid() const noexcept { return lightGrid_; }
@@ -122,6 +137,9 @@ private:
     };
 
     [[nodiscard]] bgfx::ProgramHandle LoadProgramForKey(const MaterialProgramKey& key) const;
+    // The graph material's own uniforms and textures (its parameters, collections and texture slots).
+    void BindGraphMaterialValues(const RenderMaterialResource& material, const RenderResourceRegistry& resources,
+        const SceneRenderResourceMap& resourceMap) const;
     [[nodiscard]] bgfx::TextureHandle GraphFallbackTexture(
         RenderTextureDimension dimension,
         bool normal) const noexcept;

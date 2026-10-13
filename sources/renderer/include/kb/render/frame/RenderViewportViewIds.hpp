@@ -37,6 +37,8 @@ struct RenderViewportViewIds {
     std::array<std::uint16_t, kBloomPyramidExtraMipCount> postProcessBloomMipBlurVViews{};
     std::uint16_t postProcessHdrCombine = ViewId::Invalid;
     std::uint16_t postProcessHdrFinalize = ViewId::Invalid;
+    std::array<std::uint16_t, ViewId::PostProcessMaterialViewsPerViewport> postProcessMaterialViews{
+        ViewId::Invalid, ViewId::Invalid, ViewId::Invalid, ViewId::Invalid };
     std::uint16_t sceneOverlays = ViewId::Invalid;
     std::uint16_t screenUIBlurH = ViewId::Invalid;
     std::uint16_t screenUIBlurV = ViewId::Invalid;
@@ -78,6 +80,14 @@ struct RenderViewportViewIds {
             return postProcessHdrCombine;
         case RenderPassKind::PostProcessHdrFinalize:
             return postProcessHdrFinalize;
+        case RenderPassKind::PostProcessMaterial0:
+            return postProcessMaterialViews[0];
+        case RenderPassKind::PostProcessMaterial1:
+            return postProcessMaterialViews[1];
+        case RenderPassKind::PostProcessMaterial2:
+            return postProcessMaterialViews[2];
+        case RenderPassKind::PostProcessMaterial3:
+            return postProcessMaterialViews[3];
         case RenderPassKind::EditorSceneOverlays:
             return sceneOverlays;
         case RenderPassKind::ScreenUIBlurH:
@@ -109,6 +119,7 @@ struct RenderViewportViewIds {
                ViewId::IsValid(postProcessBloomBlurV) && BloomMipViewsAreValid(postProcessBloomDownsampleViews) &&
                BloomMipViewsAreValid(postProcessBloomMipBlurHViews) && BloomMipViewsAreValid(postProcessBloomMipBlurVViews) &&
                ViewId::IsValid(postProcessHdrCombine) && ViewId::IsValid(postProcessHdrFinalize) &&
+               ViewId::IsValid(postProcessMaterialViews[0]) && ViewId::IsValid(postProcessMaterialViews[3]) &&
                ViewId::IsValid(sceneOverlays) && ViewId::IsValid(screenUIBlurH) && ViewId::IsValid(screenUIBlurV) &&
                ViewId::IsValid(finalComposite) && ViewId::IsValid(screenUIComposite) && ViewId::IsValid(editorUiComposite) &&
                ViewId::IsValid(editorGizmoOverlay) && ViewId::IsValid(giResolve);
@@ -153,6 +164,7 @@ public:
                 .postProcessBloomMipBlurVViews = BloomMipViews(ViewId::PostProcessBloomMipBlurVStart),
                 .postProcessHdrCombine = ViewId::PostProcessHdrCombine,
                 .postProcessHdrFinalize = ViewId::PostProcessHdrFinalize,
+                .postProcessMaterialViews = PostProcessMaterialViews(0U),
                 .sceneOverlays = ViewId::Overlay,
                 .screenUIBlurH = ViewId::ScreenUIBlurH,
                 .screenUIBlurV = ViewId::ScreenUIBlurV,
@@ -187,6 +199,7 @@ public:
             .postProcessBloomMipBlurVViews = BloomMipViews(base + 27U),
             .postProcessHdrCombine = static_cast<std::uint16_t>(base + 12U),
             .postProcessHdrFinalize = static_cast<std::uint16_t>(base + 13U),
+            .postProcessMaterialViews = PostProcessMaterialViews(viewportIndex),
             .sceneOverlays = static_cast<std::uint16_t>(base + 14U),
             .screenUIBlurH = static_cast<std::uint16_t>(base + 33U),
             .screenUIBlurV = static_cast<std::uint16_t>(base + 34U),
@@ -199,6 +212,16 @@ public:
     }
 
 private:
+    [[nodiscard]] static constexpr std::array<std::uint16_t, ViewId::PostProcessMaterialViewsPerViewport> PostProcessMaterialViews(
+        std::uint32_t viewportIndex) noexcept {
+        std::array<std::uint16_t, ViewId::PostProcessMaterialViewsPerViewport> views{};
+        for (std::size_t index = 0; index < views.size(); ++index) {
+            views[index] = static_cast<std::uint16_t>(
+                ViewId::PostProcessMaterialStart + viewportIndex * ViewId::PostProcessMaterialViewsPerViewport + index);
+        }
+        return views;
+    }
+
     [[nodiscard]] static constexpr std::array<std::uint16_t, ViewId::PointShadowViewCount> PointShadowViews(std::uint32_t start) noexcept {
         std::array<std::uint16_t, ViewId::PointShadowViewCount> views{};
         for (std::size_t index = 0; index < views.size(); ++index) {

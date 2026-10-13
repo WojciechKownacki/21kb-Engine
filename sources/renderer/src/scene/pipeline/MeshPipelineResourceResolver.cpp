@@ -110,6 +110,11 @@ MeshPipelineResolvedMesh MeshPipelineResourceResolver::ResolveMeshBatch(
     SceneRenderDiagnostics* diagnostics,
     std::span<const std::uint64_t> selectedEntityIds,
     std::uint32_t cullingMask) noexcept {
+    // A Post Process material is drawn by the post-process chain (SceneRenderer::SubmitPostProcessMaterials), not here.
+    if (const RenderMaterialResource* material = resources.FindMaterial(resourceMap.ResolveMaterial(batch.materialAssetId));
+        material != nullptr && material->graphProgram.postProcessDomain) {
+        return {};
+    }
     const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(batch.meshAssetId);
     if (!meshHandle.IsValid()) {
         stats.visibleMeshCount += passInstanceCount;

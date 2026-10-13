@@ -1,3 +1,4 @@
+#include "kb/render/resources/RenderMaterialGraphShaderToolchain.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
@@ -90,9 +91,8 @@ namespace {
         !ParseNonZeroU64(fields[1]) || fields[4] != expectedPlatform) {
         return false;
     }
-    const bool validPass = fields[2] == "BaseOpaque" || fields[2] == "GBuffer" ||
-        fields[2] == "ShadowDepth" || fields[2] == "BaseTransparent" ||
-        fields[2] == kRenderMaterialGraphMotionVectorsPass;
+    // One of the passes a graph material cooks (the scene passes and a domain's own pass).
+    const bool validPass = std::ranges::find(kRenderMaterialGraphScenePasses, fields[2]) != kRenderMaterialGraphScenePasses.end();
     kb::assets::bake::ShaderBakePlatform platform{};
     if (!kb::assets::bake::TryParseShaderBakePlatform(fields[4], platform)) {
         return false;
