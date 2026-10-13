@@ -14,6 +14,7 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
@@ -317,6 +318,28 @@ void ListProperties(std::string_view component, std::ostream& out) {
             }
             return true;
         }
+    }
+
+    // The other body of a joint, by its name (empty = the world), as the editor's Connected Body.
+    if (component == "Joint" && name == "connectedEntity") {
+        kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(entity);
+        if (joint == nullptr) {
+            io.err << "error: the entity has no Joint to connect\n";
+            return false;
+        }
+        kb::scene::SceneEntity other{};
+        if (!value.empty()) {
+            const std::optional<kb::scene::SceneEntity> found = FindEntity(scene, value, io);
+            if (!found.has_value()) return false;
+            if (*found == entity) {
+                io.err << "error: a joint cannot connect an entity to itself\n";
+                return false;
+            }
+            other = *found;
+        }
+        joint->connectedEntity = other;
+        scene.Components().Joints().MarkModified(entity);
+        return true;
     }
 
     if (component == "Transform" && name == "rotation") {

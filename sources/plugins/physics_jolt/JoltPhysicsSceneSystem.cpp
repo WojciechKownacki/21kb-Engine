@@ -515,9 +515,11 @@ struct JointRecord {
         settings.mNormalAxis1 = normalAxis;
         settings.mNormalAxis2 = normalAxis;
         if (joint.enableLimit) {
-            // Jolt's own documented range: mLimitsMin in [-pi, 0], mLimitsMax in [0, pi].
-            settings.mLimitsMin = kb::math::Clamp(JPH::DegreesToRadians(joint.minLimit), -JPH::JPH_PI, 0.0F);
-            settings.mLimitsMax = kb::math::Clamp(JPH::DegreesToRadians(joint.maxLimit), 0.0F, JPH::JPH_PI);
+            // Jolt's own documented range: mLimitsMin in [-pi, 0], mLimitsMax in [0, pi]. Jolt
+            // measures the angle of body2 (connected) relative to body1 (owner); the component's
+            // limits are the owner's rotation about the axis, as Unity's HingeJoint - so negated.
+            settings.mLimitsMin = kb::math::Clamp(-JPH::DegreesToRadians(joint.maxLimit), -JPH::JPH_PI, 0.0F);
+            settings.mLimitsMax = kb::math::Clamp(-JPH::DegreesToRadians(joint.minLimit), 0.0F, JPH::JPH_PI);
         }
         return settings.Create(body1, body2);
     }
@@ -1130,6 +1132,18 @@ public:
         }
         physicsSystem_.Init(MaxBodies, NumBodyMutexes, MaxBodyPairs, MaxContactConstraints, broadPhaseLayers_, objectVsBroadPhaseFilter_, objectLayerPairFilter_);
         physicsSystem_.SetGravity(JPH::Vec3(0.0F, -9.81F, 0.0F));
+        // Unity/UE defaults instead of Jolt's: materials combine by average (Jolt: friction
+        // sqrt(a*b), restitution max), and bodies may sink only 1 mm (Jolt: 2 cm - a 1 cm
+        // object would rest fully inside the floor).
+        physicsSystem_.SetCombineFriction([](const JPH::Body& a, const JPH::SubShapeID&, const JPH::Body& b, const JPH::SubShapeID&) {
+            return 0.5F * (a.GetFriction() + b.GetFriction());
+        });
+        physicsSystem_.SetCombineRestitution([](const JPH::Body& a, const JPH::SubShapeID&, const JPH::Body& b, const JPH::SubShapeID&) {
+            return 0.5F * (a.GetRestitution() + b.GetRestitution());
+        });
+        JPH::PhysicsSettings joltSettings = physicsSystem_.GetPhysicsSettings();
+        joltSettings.mPenetrationSlop = 0.001F;
+        physicsSystem_.SetPhysicsSettings(joltSettings);
         // LIB-127: only a single ContactListener can be registered per
         // PhysicsSystem (Jolt's own doc comment) - this Impl owns the one
         // instance for its own PhysicsSystem, exactly like it owns
@@ -1208,10 +1222,12 @@ public:
         PublishPendingStep(context);
         RefreshCollisionMeshes(context.GetScene());
         SynchronizeBodies(context);
+        pendingPushes_.clear();  // queued for a body this synchronization did not create
         std::erase_if(collisionMeshes_, [](const auto& entry) { return entry.second.shape->GetRefCount() == 1; });
         ApplyPendingRigidbodyRootMotion(context);
         SynchronizeJoints(context);
         SynchronizeCharacters(context);
+        pendingCharacterMoves_.clear();  // queued for a character this synchronization did not create
         UpdateCharacters(context);
         const bool contactEvents = kb::scene::PhysicsBackend::HasCollisionEventConsumer(context.GetScene());
         if (contactListener_.Enabled() != contactEvents) {
@@ -1326,8 +1342,11 @@ public:
     bool AddForce(SceneEntity entity, Vec3 force) noexcept override {
         JoinStep();
         const BodyRecord* body = FindDynamicBody(entity);
-        if (body == nullptr || !IsFinite(force)) {
+        if (!IsFinite(force)) {
             return false;
+        }
+        if (body == nullptr) {
+            return QueueForBodyCreation(entity, force, Vec3{});
         }
         physicsSystem_.GetBodyInterface().AddForce(body->bodyId, ToJolt(force));
         return true;
@@ -1336,10 +1355,29 @@ public:
     bool AddImpulse(SceneEntity entity, Vec3 impulse) noexcept override {
         JoinStep();
         const BodyRecord* body = FindDynamicBody(entity);
-        if (body == nullptr || !IsFinite(impulse)) {
+        if (!IsFinite(impulse)) {
             return false;
         }
+        if (body == nullptr) {
+            return QueueForBodyCreation(entity, Vec3{}, impulse);
+        }
         physicsSystem_.GetBodyInterface().AddImpulse(body->bodyId, ToJolt(impulse));
+        return true;
+    }
+
+    // A Dynamic Rigidbody whose Jolt body is created by the next synchronization (the first
+    // fixed step runs scripts before it, as Start in Unity runs before the first physics step):
+    // the force/impulse is applied to the body as soon as it exists.
+    bool QueueForBodyCreation(SceneEntity entity, Vec3 force, Vec3 impulse) {
+        const RigidbodyComponent* rigidbody = scene_ != nullptr && scene_->Entities().IsAlive(entity)
+            ? scene_->Components().Rigidbodies().TryGet(entity) : nullptr;
+        if (rigidbody == nullptr || rigidbody->bodyType != RigidbodyBodyType::Dynamic ||
+            scene_->Components().Colliders().TryGet(entity) == nullptr) {
+            return false;
+        }
+        PendingPush& pending = pendingPushes_[entity.Id()];
+        pending.force = Vec3{pending.force.x + force.x, pending.force.y + force.y, pending.force.z + force.z};
+        pending.impulse = Vec3{pending.impulse.x + impulse.x, pending.impulse.y + impulse.y, pending.impulse.z + impulse.z};
         return true;
     }
 
@@ -1432,7 +1470,14 @@ public:
         JoinStep();
         CharacterRecord* record = FindCharacterRecord(entity);
         if (record == nullptr) {
-            return false;
+            // The character is created by the next synchronization (the first fixed step runs
+            // scripts before it): it starts with this move.
+            if (scene_ == nullptr || !scene_->Entities().IsAlive(entity) ||
+                scene_->Components().CharacterControllers().TryGet(entity) == nullptr || !IsFinite(horizontalVelocity)) {
+                return false;
+            }
+            pendingCharacterMoves_[entity.Id()] = horizontalVelocity;
+            return true;
         }
         record->moveInput = horizontalVelocity;
         return true;
@@ -1805,6 +1850,11 @@ public:
             .synchronizedPosition = worldPosition, .synchronizedRotation = transform.worldRotation, .seenEpoch = bodySyncEpoch_ });
         bodySyncCache_[cacheIndex].body = &inserted.first->second;
         entityByBodyId_.emplace(bodyId, entity);
+        if (const auto pending = pendingPushes_.find(entity.Id()); pending != pendingPushes_.end()) {
+            physicsSystem_.GetBodyInterface().AddForce(bodyId, ToJolt(pending->second.force));
+            physicsSystem_.GetBodyInterface().AddImpulse(bodyId, ToJolt(pending->second.impulse));
+            pendingPushes_.erase(pending);
+        }
         if (rigidbody.bodyType == RigidbodyBodyType::Static && wakeSurvivingDynamicBodies) {
             const JPH::AABox bounds = BodyNeighborhood(bodyId);
             if (bounds.IsValid()) physicsSystem_.GetBodyInterface().ActivateBodiesInAABox(bounds, {}, {});
@@ -2193,6 +2243,10 @@ private:
         // reset in practice, only real velocity carries over explicitly below.
         Vec3 moveInput{};
         float pendingJumpSpeed = 0.0F;
+        if (const auto pending = pendingCharacterMoves_.find(entity.Id()); pending != pendingCharacterMoves_.end()) {
+            moveInput = pending->second;
+            pendingCharacterMoves_.erase(pending);
+        }
         if (existing != characters_.end()) {
             moveInput = existing->second.moveInput;
             pendingJumpSpeed = existing->second.pendingJumpSpeed;
@@ -2274,7 +2328,18 @@ private:
             // passing a nonzero Y through CharacterMove instead (ScriptPhysicsApi.cpp's
             // Physics.CharacterMove pins do not even accept a Y value).
             const JPH::Vec3 desiredVelocity = ToJolt(record.moveInput);
-            newVelocity += desiredVelocity - desiredVelocity.Dot(up) * up;
+            JPH::Vec3 horizontalVelocity = desiredVelocity - desiredVelocity.Dot(up) * up;
+            // On walkable ground the move follows the slope keeping its horizontal speed (as
+            // Unity's CharacterController and UE's walking mode); Jolt alone would project it
+            // onto the slope and walk slower uphill.
+            if (character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround) {
+                const JPH::Vec3 groundNormal = SurfaceBelow(*character, characterLayer);
+                const float normalUp = groundNormal.Dot(up);
+                if (normalUp > 1.0e-3F) {
+                    horizontalVelocity += up * (-groundNormal.Dot(horizontalVelocity) / normalUp);
+                }
+            }
+            newVelocity += horizontalVelocity;
 
             const auto rootMotion = pendingCharacterRootMotion_.find(entityId);
             if (rootMotion != pendingCharacterRootMotion_.end()) {
@@ -2380,6 +2445,21 @@ private:
             event.normal = Vec3{ -event.normal.x, -event.normal.y, -event.normal.z };
             kb::scene::PhysicsBackend::QueueCollisionEvent(*scene_, event);
         }
+    }
+
+    // Normal of the surface straight below the character - the slope it walks on. Jolt's ground
+    // contact normal at a step edge points diagonally and would lift the character over the step.
+    [[nodiscard]] JPH::Vec3 SurfaceBelow(const JPH::CharacterVirtual& character, JPH::ObjectLayer layer) const {
+        const JPH::Vec3 up = character.GetUp();
+        const float reach = character.GetShape()->GetLocalBounds().GetExtent().GetY() + 0.5F;
+        const JPH::RRayCast ray(character.GetPosition(), -up * reach);
+        JPH::RayCastResult hit;
+        if (!physicsSystem_.GetNarrowPhaseQuery().CastRay(ray, hit, physicsSystem_.GetDefaultBroadPhaseLayerFilter(layer),
+                physicsSystem_.GetDefaultLayerFilter(layer))) {
+            return up;
+        }
+        const JPH::BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), hit.mBodyID);
+        return lock.Succeeded() ? lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, ray.GetPointOnRay(hit.mFraction)) : up;
     }
 
     void WriteBackCharacters(SceneSystemContext& context) {
@@ -2511,6 +2591,9 @@ private:
         bodySettings.mLinearVelocity = ToJolt(rigidbody.linearVelocity);
         bodySettings.mAngularVelocity = ToJolt(rigidbody.angularVelocity);
         bodySettings.mGravityFactor = rigidbody.useGravity ? rigidbody.gravityScale : 0.0F;
+        // No hidden speed cap (Jolt: 500 m/s); angular cap as Unity's default 50 rad/s.
+        bodySettings.mMaxLinearVelocity = 1.0e5F;
+        bodySettings.mMaxAngularVelocity = 50.0F;
         bodySettings.mLinearDamping = rigidbody.linearDamping;
         bodySettings.mAngularDamping = rigidbody.angularDamping;
         // LIB-133: fast mover / tunneling - Jolt's own default (Discrete) can tunnel a
@@ -2961,6 +3044,12 @@ private:
     bool stepAwaitingWriteBack_ = false;
     float pendingLaunchSeconds_ = 0.0F; // a pipelined step decided in a fixed update, started at the end of the update
     std::unordered_map<std::uint64_t, BodyRecord> bodies_;
+    struct PendingPush {
+        Vec3 force{};
+        Vec3 impulse{};
+    };
+    std::unordered_map<std::uint64_t, PendingPush> pendingPushes_;
+    std::unordered_map<std::uint64_t, Vec3> pendingCharacterMoves_;
     std::uint32_t bodySyncEpoch_ = 0U;
     struct BodySyncCacheEntry {
         SceneEntity entity{};

@@ -2420,6 +2420,7 @@ int LuaPhysicsOverlapSphere(lua_State* state) {
             Arg("centerZ", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
             Arg("radius", ScriptValue{ static_cast<float>(luaL_optnumber(state, 4, 0.5)) }),
             Arg("layerMask", ScriptValue{ static_cast<int>(luaL_optinteger(state, 5, PushShapeQueryLayerMaskDefault())) }),
+            Arg("skip", ScriptValue{ static_cast<int>(luaL_optinteger(state, 6, 0)) }),
         };
     }
     const ScriptFunctionCallResult result = context->CallFunction("Physics.OverlapSphere", arguments);

@@ -288,8 +288,15 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     });
     scene.Components().Rigidbodies().Set(beforeFirstSync.Entity(), kb::scene::RigidbodyComponent{});
     scene.Components().Colliders().Set(beforeFirstSync.Entity(), kb::scene::ColliderComponent{});
-    requireNoLiveBodyControls(beforeFirstSync.Entity(),
-        "PhysicsBackend controls must reject an authored Dynamic body before its first fixed-step synchronization");
+    // Force and impulse wait for the body (Unity's Start runs before the first physics step);
+    // every other control still needs the live body.
+    kb::tests::Require(kb::scene::PhysicsBackend::AddForce(scene, beforeFirstSync.Entity(), kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }) &&
+            kb::scene::PhysicsBackend::AddImpulse(scene, beforeFirstSync.Entity(), kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
+        "AddForce/AddImpulse on an authored Dynamic body before its first synchronization must wait for the body");
+    kb::tests::Require(!kb::scene::PhysicsBackend::SetAngularVelocity(scene, beforeFirstSync.Entity(), kb::scene::Vec3{ 0.0F, 1.0F, 0.0F }) &&
+            !kb::scene::PhysicsBackend::GetVelocity(scene, beforeFirstSync.Entity()).found &&
+            !kb::scene::PhysicsBackend::Sleep(scene, beforeFirstSync.Entity()),
+        "PhysicsBackend controls other than force/impulse must reject an authored Dynamic body before its first fixed-step synchronization");
     scene.Entities().Destroy(beforeFirstSync.Entity());
 
     const kb::scene::SceneObject removedCollider = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
@@ -315,8 +322,11 @@ void RunPhysicsSceneSystemFallingBodyTest() {
         .shape = kb::scene::ColliderShape::Box,
         .boxSize = kb::scene::Vec3{ 2.0F, 2.0F, 2.0F },
     });
-    requireNoLiveBodyControls(rebuiltBody.Entity(),
-        "PhysicsBackend controls must reject a stale Jolt body immediately after a Collider rebuild request");
+    // The rebuilt body takes a queued force/impulse; nothing reaches the stale one.
+    kb::tests::Require(kb::scene::PhysicsBackend::AddImpulse(scene, rebuiltBody.Entity(), kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }) &&
+            !kb::scene::PhysicsBackend::GetVelocity(scene, rebuiltBody.Entity()).found &&
+            !kb::scene::PhysicsBackend::SetVelocity(scene, rebuiltBody.Entity(), kb::scene::Vec3{ 1.0F, 0.0F, 0.0F }),
+        "PhysicsBackend controls must reject a stale Jolt body immediately after a Collider rebuild request (impulse waits for the new body)");
     scene.Entities().Destroy(rebuiltBody.Entity());
 
     const kb::scene::SceneObject destroyed = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
@@ -2101,6 +2111,83 @@ void RunPhysicsSleepingContactAndDampingTest() {
     kb::tests::Require(dampedSpeed < 2.0F, "Linear damping 1 must slow the body down");
 }
 
+// Physics comparison scene (Unity/UE defaults): a push queued before the body exists, no hidden
+// speed cap, a 1 cm sphere resting on the floor, materials combined by average, hinge limits in
+// Unity's direction and a character keeping its horizontal speed up a slope.
+void RunPhysicsUnityDefaultsTest() {
+    if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
+        return;
+    }
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Physics.Jolt",
+        .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH,
+        .enabled = true,
+    });
+    kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    const auto makeBody = [&scene](const char* name, kb::scene::Vec3 position, kb::scene::RigidbodyComponent rigidbody, kb::scene::ColliderComponent collider) {
+        const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = name, .transform = kb::scene::TransformComponent{.localPosition = position}});
+        scene.Components().Rigidbodies().Set(object.Entity(), rigidbody);
+        scene.Components().Colliders().Set(object.Entity(), collider);
+        return object;
+    };
+    const kb::scene::ColliderComponent ball{.shape = kb::scene::ColliderShape::Sphere};
+    const auto pushed = makeBody("Pushed", {0.0F, 50.0F, 0.0F}, {.useGravity = false}, ball);
+    kb::tests::Require(kb::scene::PhysicsBackend::AddImpulse(scene, pushed.Entity(), {5.0F, 0.0F, 0.0F}),
+        "AddImpulse on a Rigidbody whose body is created by the next step must be accepted");
+    const auto fast = makeBody("Fast", {0.0F, 50.0F, 10.0F}, {.linearVelocity = {1000.0F, 0.0F, 0.0F}, .useGravity = false}, ball);
+    const auto floor = makeBody("Floor", {200.0F, -0.5F, 0.0F}, {.bodyType = kb::scene::RigidbodyBodyType::Static},
+        {.boxSize = {20.0F, 1.0F, 20.0F}, .friction = 0.0F, .restitution = 0.0F});
+    const auto grain = makeBody("Grain", {195.0F, 0.5F, 0.0F}, {.mass = 0.001F}, {.shape = kb::scene::ColliderShape::Sphere, .radius = 0.01F});
+    const auto crate = makeBody("Crate", {200.0F, 0.5F, -5.0F}, {.linearVelocity = {0.0F, 0.0F, 5.0F}}, {.friction = 1.0F});
+    const auto bouncer = makeBody("Bouncer", {205.0F, 5.0F, 0.0F}, {}, {.shape = kb::scene::ColliderShape::Sphere, .restitution = 1.0F});
+    // Pendulum on a world hinge about X, limit 0..30 deg: falls towards -Y/+Z and stops at 30 deg.
+    const auto pendulum = makeBody("Pendulum", {300.0F, 5.0F, 2.0F}, {}, {.shape = kb::scene::ColliderShape::Sphere, .radius = 0.2F});
+    scene.Components().Joints().Set(pendulum.Entity(), kb::scene::JointComponent{
+        .type = kb::scene::JointType::Hinge, .anchor = {0.0F, 0.0F, -2.0F}, .connectedAnchor = {300.0F, 5.0F, 0.0F},
+        .axis = {1.0F, 0.0F, 0.0F}, .minLimit = 0.0F, .maxLimit = 30.0F, .enableLimit = true});
+    // Ramp rising 30 deg towards +X (rotation about Z) and a character walking up it at 3 m/s.
+    const float halfAngle = 0.5F * 0.5235988F;
+    const auto ramp = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Ramp",
+        .transform = kb::scene::TransformComponent{.localPosition = {400.0F + 0.25F, -0.433F, 0.0F},
+            .localRotation = {0.0F, 0.0F, std::sin(halfAngle), std::cos(halfAngle)}}});
+    scene.Components().Colliders().Set(ramp.Entity(), kb::scene::ColliderComponent{.boxSize = {16.0F, 1.0F, 4.0F}});
+    const auto climber = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Climber",
+        .transform = kb::scene::TransformComponent{.localPosition = {396.0F, 1.05F - 4.0F * 0.57735F, 0.0F}}});
+    scene.Components().CharacterControllers().Set(climber.Entity(), kb::scene::CharacterControllerComponent{});
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterMove(scene, climber.Entity(), {3.0F, 0.0F, 0.0F}),
+        "CharacterMove before the character exists must be accepted (it starts with this move)");
+    float climbStart = 0.0F;
+    float maxBounce = 0.0F;
+    for (int step = 0; step < 120; ++step) {
+        if (step == 30) climbStart = scene.Transforms().Get(climber).localPosition.y;
+        if (step == 90) {
+            // 60 steps at 3 m/s horizontally up 30 deg: 3 tan30 = 1.73 m (projected onto the slope: 1.5 m).
+            kb::tests::Require(scene.Transforms().Get(climber).localPosition.y - climbStart > 1.62F,
+                "A character walking up a 30 deg slope must keep its horizontal speed as in Unity and UE");
+        }
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        if (step == 0) {
+            kb::tests::Require(kb::tests::NearlyEqual(kb::scene::PhysicsBackend::GetVelocity(scene, pushed.Entity()).value.x, 5.0F),
+                "An impulse queued before the body existed must act in the first step");
+        }
+        if (step > 60) maxBounce = std::max(maxBounce, scene.Transforms().Get(bouncer).localPosition.y);
+    }
+    kb::tests::Require(kb::scene::PhysicsBackend::GetVelocity(scene, fast.Entity()).value.x > 999.0F,
+        "A 1000 m/s body must keep its speed (no hidden 500 m/s cap)");
+    kb::tests::Require(scene.Transforms().Get(grain).localPosition.y > 0.008F, "A 1 cm sphere must rest on the floor, not sink into it");
+    kb::tests::Require(scene.Transforms().Get(crate).localPosition.z < -2.0F,
+        "Friction 1 on a friction 0 floor must combine by average (0.5) and stop the crate");
+    kb::tests::Require(maxBounce < 3.0F && maxBounce > 0.8F,
+        "Restitution 1 on a restitution 0 floor must combine by average (0.5), not max");
+    const kb::scene::Vec3 swing = scene.Transforms().Get(pendulum).localPosition;
+    kb::tests::Require(swing.y < 4.4F && swing.y > 3.7F,
+        "A hinge limited to 0..30 deg must let the body swing down to 30 deg as in Unity");
+    static_cast<void>(floor);
+}
+
 void RunPhysicsIdenticalReplayTest() {
     if (std::filesystem::path{KB_PHYSICS_JOLT_PLUGIN_PATH}.empty()) {
         return;
@@ -2883,6 +2970,7 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsSceneSystemFallingBodyTest();
     RunPhysicsPersistentSleeperTransitionTest();
     RunPhysicsSleepingContactAndDampingTest();
+    RunPhysicsUnityDefaultsTest();
     RunPhysicsPipelinedStepEquivalenceTest();
 }
 
