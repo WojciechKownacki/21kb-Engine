@@ -495,6 +495,13 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (outputPin && pin == "xyTexture") return RenderMaterialGraphPinType::Color;
         if (outputPin && pin == "zTexture") return RenderMaterialGraphPinType::Color;
         return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+        if (!outputPin && pin == "texture") return RenderMaterialGraphPinType::Texture2D;
+        if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
+        if (!outputPin && (pin == "heightRatio" || pin == "steps")) return RenderMaterialGraphPinType::Float;
+        if (outputPin && pin == "parallaxUvs") return RenderMaterialGraphPinType::Float2;
+        if (outputPin && pin == "depth") return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::FlipBook:
         if (!outputPin && pin == "animationPhase") return RenderMaterialGraphPinType::Float;
         if (!outputPin && pin == "numberOfRows") return RenderMaterialGraphPinType::Float;

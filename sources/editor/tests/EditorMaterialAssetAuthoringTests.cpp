@@ -7177,8 +7177,9 @@ void RunMaterialEditorUtilityNodePaletteTest() {
         const std::vector<Command>* category;
         std::string_view english;
     };
-    const std::array<Entry, 22U> entries{ {
+    const std::array<Entry, 23U> entries{ {
         { Command::CreateWorldAlignedTexture, Kind::WorldAlignedTexture, &textures, "World Aligned Texture" },
+        { Command::CreateParallaxOcclusionMapping, Kind::ParallaxOcclusionMapping, &textures, "Parallax Occlusion Mapping" },
         { Command::CreateFlipBook, Kind::FlipBook, &textures, "FlipBook" },
         { Command::CreateRemapValueRange, Kind::RemapValueRange, &math, "Remap Value Range" },
         { Command::CreateCheckerboard, Kind::Checkerboard, &utility, "Checkerboard" },
@@ -7223,6 +7224,7 @@ void RunMaterialEditorUtilityNodePaletteTest() {
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateNoise, "voronoi") &&
             kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateNoise, "simplex") &&
             kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateWorldAlignedTexture, "triplanar") &&
+            kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateParallaxOcclusionMapping, "pom") &&
             kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateBlendOverlay, "blend") &&
             kb::editor::MaterialEditorGraphPaletteCommandMatches(Command::CreateRemapValueRange, "remap"),
         "Utility nodes: palette search must find Noise by its functions and the new nodes by their Unreal names");

@@ -566,6 +566,14 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (outputPin && pin == "xyTexture") return PinId(nodeKind, direction, 2U);
         if (outputPin && pin == "zTexture") return PinId(nodeKind, direction, 3U);
         return 0U;
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+        if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "uv") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "heightRatio") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "steps") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "parallaxUvs") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "depth") return PinId(nodeKind, direction, 2U);
+        return 0U;
     case RenderMaterialGraphNodeKind::FlipBook:
         if (!outputPin && pin == "animationPhase") return PinId(nodeKind, direction, 1U);
         if (!outputPin && pin == "numberOfRows") return PinId(nodeKind, direction, 2U);

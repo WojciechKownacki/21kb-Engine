@@ -538,6 +538,8 @@ struct GraphCodegen {
         return RenderMaterialGraphPinDataType(kind, "normal", true);
     case RenderMaterialGraphNodeKind::WorldAlignedTexture:
         return RenderMaterialGraphPinDataType(kind, "xyzTexture", true);
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+        return RenderMaterialGraphPinDataType(kind, "parallaxUvs", true);
     default:
         return RenderMaterialGraphPinDataType(kind, "value", true);
     }
@@ -579,6 +581,7 @@ struct GraphCodegen {
     // Noise and WorldAlignedTexture keep their own temporaries (emittedTemp).
     case RenderMaterialGraphNodeKind::Noise:
     case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
@@ -1934,6 +1937,55 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.emittedTemp.emplace(node.id, xyz);
         return xyz;
     }
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping: {
+        // Unreal's ParallaxOcclusionMapping: the height map (channel = setting 0..3, red by default) ray marched
+        // along the tangent-space view from the top layer down, the hit refined between the two layers around it.
+        // Outputs the parallax UVs and the depth reached (0..1). Gradients from the input UVs keep the samples in the
+        // loop filtered.
+        if (const auto it = cg.emittedTemp.find(node.id); it != cg.emittedTemp.end()) {
+            return it->second;
+        }
+        if (FindInputLink(cg.graph, node.id, "texture") == nullptr) {
+            AddShaderGenerationDiagnostic(cg.diagnostics, node, "texture", "ParallaxOcclusionMapping needs a height map Texture Object.");
+            return DefaultExpressionForType(RenderMaterialGraphPinType::Float2);
+        }
+        const std::string texture = CompileTextureInputExpression(cg.graph, node, cg.diagnostics);
+        const std::vector<float> settings = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        static constexpr std::array<const char*, 4U> kChannels{ "r", "g", "b", "a" };
+        const char* channel = kChannels[settings.empty() ? 0U : static_cast<std::size_t>(std::clamp(settings[0], 0.0F, 3.0F))];
+        const std::string id = std::to_string(node.id);
+        const auto v = [&id](const char* name) { return std::string{ "pom" } + name + id; };
+        const auto height = [&](const std::string& uv) {
+            return "(1.0 - texture2DGrad(" + texture + ", " + uv + ", " + v("Dx") + ", " + v("Dy") + ")." + channel + ")";
+        };
+        std::string& s = cg.statements;
+        s += "    vec2 " + v("Uv") + " = " + CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") + ";\n";
+        s += "    vec2 " + v("Dx") + " = dFdx(" + v("Uv") + ");\n";
+        s += "    vec2 " + v("Dy") + " = dFdy(" + v("Uv") + ");\n";
+        s += "    vec3 " + v("Tangent") + " = KbGraphBasisTangent(ctx.normal, ctx.tangent);\n";
+        s += "    vec3 " + v("Bitangent") + " = normalize(cross(ctx.normal, " + v("Tangent") + ") * KbGraphBasisHandedness(ctx.normal, " + v("Tangent") + ", ctx.bitangent));\n";
+        s += "    vec3 " + v("View") + " = vec3(dot(ctx.viewDir, " + v("Tangent") + "), dot(ctx.viewDir, " + v("Bitangent") + "), dot(ctx.viewDir, ctx.normal));\n";
+        s += "    vec2 " + v("March") + " = -" + v("View") + ".xy / max(abs(" + v("View") + ".z), 0.05) * (" +
+            CompileInputExpression(cg, node, "heightRatio", RenderMaterialGraphPinType::Float, "0.05") + ");\n";
+        s += "    float " + v("Layers") + " = clamp(floor(" + CompileInputExpression(cg, node, "steps", RenderMaterialGraphPinType::Float, "16.0") + "), 2.0, 64.0);\n";
+        s += "    float " + v("Step") + " = 1.0 / " + v("Layers") + ";\n";
+        s += "    vec2 " + v("Current") + " = " + v("Uv") + ";\n";
+        s += "    float " + v("Depth") + " = 0.0;\n";
+        s += "    float " + v("Surface") + " = " + height(v("Current")) + ";\n";
+        s += "    for (int " + v("I") + " = 0; " + v("I") + " < 64; ++" + v("I") + ") {\n";
+        s += "        if (float(" + v("I") + ") >= " + v("Layers") + " || " + v("Depth") + " >= " + v("Surface") + ") { break; }\n";
+        s += "        " + v("Current") + " += " + v("March") + " * " + v("Step") + ";\n";
+        s += "        " + v("Surface") + " = " + height(v("Current")) + ";\n";
+        s += "        " + v("Depth") + " += " + v("Step") + ";\n";
+        s += "    }\n";
+        s += "    vec2 " + v("Previous") + " = " + v("Current") + " - " + v("March") + " * " + v("Step") + ";\n";
+        s += "    float " + v("After") + " = " + v("Surface") + " - " + v("Depth") + ";\n";
+        s += "    float " + v("Before") + " = " + height(v("Previous")) + " - (" + v("Depth") + " - " + v("Step") + ");\n";
+        s += "    vec2 " + v("Result") + " = mix(" + v("Current") + ", " + v("Previous") + ", clamp(" + v("After") + " / (" + v("After") + " - " + v("Before") + " + 1e-6), 0.0, 1.0));\n";
+        cg.customOutputTemps[CustomCodeOutputTempKey(node.id, "depth")] = v("Depth");
+        cg.emittedTemp.emplace(node.id, v("Result"));
+        return v("Result");
+    }
     case RenderMaterialGraphNodeKind::FlipBook: {
         // Unreal's FlipBook: frame floor(frac(phase) * rows * columns), read left to right and top to bottom.
         const std::string id = std::to_string(node.id);
@@ -2206,12 +2258,20 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::If: {
-        const std::string lhs = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float, "0.0");
-        const std::string rhs = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float, "0.0");
+        // Unreal's If: settings "ConstA ConstB EqualsThreshold" (unconnected A and B; 0 0 0.00001). The A==B input
+        // is optional: unconnected, A >= B takes A>B.
+        const std::vector<float> settings = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const auto setting = [&](std::size_t index, float fallback) { return settings.size() > index ? settings[index] : fallback; };
+        const std::string lhs = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float, FloatLiteral(setting(0U, 0.0F)));
+        const std::string rhs = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float, FloatLiteral(setting(1U, 0.0F)));
         const std::string less = CompileInputExpression(cg, node, "less", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
-        const std::string equal = CompileInputExpression(cg, node, "equal", RenderMaterialGraphPinType::Float4, "vec4_splat(0.5)");
         const std::string greater = CompileInputExpression(cg, node, "greater", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)");
-        return "((" + lhs + " > " + rhs + ") ? " + greater + " : ((abs(" + lhs + " - " + rhs + ") <= 0.0001) ? " + equal + " : " + less + "))";
+        const std::string ordered = "((" + lhs + " >= " + rhs + ") ? " + greater + " : " + less + ")";
+        if (FindInputLink(cg.graph, node.id, "equal") == nullptr) {
+            return ordered;
+        }
+        const std::string equal = CompileInputExpression(cg, node, "equal", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
+        return "((abs(" + lhs + " - " + rhs + ") > " + FloatLiteral(setting(2U, 0.00001F)) + ") ? " + ordered + " : " + equal + ")";
     }
     case RenderMaterialGraphNodeKind::RuntimeSwitch:
         return "kbSwitch4(" +
@@ -2485,6 +2545,15 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
         }
         AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "WorldAlignedTexture output pin was not emitted.");
         return DefaultExpressionForType(RenderMaterialGraphPinType::Color);
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
+        if (outputPin == "parallaxUvs") {
+            return baseRef;
+        }
+        if (const auto it = cg.customOutputTemps.find(CustomCodeOutputTempKey(node.id, outputPin)); it != cg.customOutputTemps.end()) {
+            return it->second;
+        }
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "ParallaxOcclusionMapping output pin was not emitted.");
+        return DefaultExpressionForType(RenderMaterialGraphPinType::Float);
     case RenderMaterialGraphNodeKind::CustomCode:
         if (outputPin == "value") {
             return baseRef;
@@ -2630,6 +2699,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
     case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
     case RenderMaterialGraphNodeKind::FlipBook:
     case RenderMaterialGraphNodeKind::Checkerboard:
     case RenderMaterialGraphNodeKind::PolarCoordinates:
@@ -2872,6 +2942,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
     case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
     case RenderMaterialGraphNodeKind::FlipBook:
     case RenderMaterialGraphNodeKind::Checkerboard:
     case RenderMaterialGraphNodeKind::PolarCoordinates:
@@ -3054,6 +3125,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
     case RenderMaterialGraphNodeKind::WorldAlignedTexture:
+    case RenderMaterialGraphNodeKind::ParallaxOcclusionMapping:
     case RenderMaterialGraphNodeKind::FlipBook:
     case RenderMaterialGraphNodeKind::Checkerboard:
     case RenderMaterialGraphNodeKind::PolarCoordinates:
@@ -4615,6 +4687,11 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
         }
         if (node.kind == RenderMaterialGraphNodeKind::CustomCode) {
             ValidateCustomCodeNode(node, diagnostics);
+        }
+        if (node.kind == RenderMaterialGraphNodeKind::ParallaxOcclusionMapping && !HasInputLink(graph, node.id, "texture")) {
+            AddGraphDiagnostic(diagnostics, RenderMaterialGraphDiagnosticSeverity::Error, RenderMaterialGraphDiagnosticKind::MissingTexture,
+                node.id, 0U, "texture",
+                "ParallaxOcclusionMapping node " + std::to_string(node.id) + " needs a height map Texture Object connected to its Heightmap Texture input.");
         }
         if (node.kind == RenderMaterialGraphNodeKind::WorldAlignedTexture && !HasInputLink(graph, node.id, "texture")) {
             // Unreal reports a missing TextureObject on WorldAlignedTexture; it has no local texture slot.

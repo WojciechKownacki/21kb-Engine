@@ -2910,7 +2910,7 @@ inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t i
 inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMenuCommands(std::size_t index) {
     switch (index) {
     case 0U:
-        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject, MaterialEditorGraphMenuCommand::CreateTextureSampleCube, MaterialEditorGraphMenuCommand::CreateTextureObjectCube, MaterialEditorGraphMenuCommand::CreateTextureSampleVolume, MaterialEditorGraphMenuCommand::CreateTextureObjectVolume, MaterialEditorGraphMenuCommand::CreateTextureSample2DArray, MaterialEditorGraphMenuCommand::CreateTextureObject2DArray, MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture, MaterialEditorGraphMenuCommand::CreateFlipBook };
+        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject, MaterialEditorGraphMenuCommand::CreateTextureSampleCube, MaterialEditorGraphMenuCommand::CreateTextureObjectCube, MaterialEditorGraphMenuCommand::CreateTextureSampleVolume, MaterialEditorGraphMenuCommand::CreateTextureObjectVolume, MaterialEditorGraphMenuCommand::CreateTextureSample2DArray, MaterialEditorGraphMenuCommand::CreateTextureObject2DArray, MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture, MaterialEditorGraphMenuCommand::CreateParallaxOcclusionMapping, MaterialEditorGraphMenuCommand::CreateFlipBook };
     case 1U:
         return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateDeltaTime, MaterialEditorGraphMenuCommand::CreateDynamicParameter, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreatePixelPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount, MaterialEditorGraphMenuCommand::CreateDistanceCullFade, MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition, MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateTwoSidedSign, MaterialEditorGraphMenuCommand::CreateSceneColor, MaterialEditorGraphMenuCommand::CreateSceneTexture, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreatePixelDepth, MaterialEditorGraphMenuCommand::CreateCameraDepthFade, MaterialEditorGraphMenuCommand::CreateDepthFade };
     case 2U:
@@ -3181,6 +3181,7 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount: return EditorText("materialEditor.palette.createPerInstanceFadeAmount", "Per Instance Fade Amount");
     case MaterialEditorGraphMenuCommand::CreateDistanceCullFade: return EditorText("materialEditor.palette.createDistanceCullFade", "Distance Cull Fade");
     case MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture: return EditorText("materialEditor.palette.createWorldAlignedTexture", "World Aligned Texture");
+    case MaterialEditorGraphMenuCommand::CreateParallaxOcclusionMapping: return EditorText("materialEditor.palette.createParallaxOcclusionMapping", "Parallax Occlusion Mapping");
     case MaterialEditorGraphMenuCommand::CreateFlipBook: return EditorText("materialEditor.palette.createFlipBook", "FlipBook");
     case MaterialEditorGraphMenuCommand::CreateCheckerboard: return EditorText("materialEditor.palette.createCheckerboard", "Checkerboard");
     case MaterialEditorGraphMenuCommand::CreatePolarCoordinates: return EditorText("materialEditor.palette.createPolarCoordinates", "Polar Coordinates");
@@ -3443,6 +3444,7 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount: return kb::render::RenderMaterialGraphNodeKind::PerInstanceFadeAmount;
     case MaterialEditorGraphMenuCommand::CreateDistanceCullFade: return kb::render::RenderMaterialGraphNodeKind::DistanceCullFade;
     case MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture: return kb::render::RenderMaterialGraphNodeKind::WorldAlignedTexture;
+    case MaterialEditorGraphMenuCommand::CreateParallaxOcclusionMapping: return kb::render::RenderMaterialGraphNodeKind::ParallaxOcclusionMapping;
     case MaterialEditorGraphMenuCommand::CreateFlipBook: return kb::render::RenderMaterialGraphNodeKind::FlipBook;
     case MaterialEditorGraphMenuCommand::CreateCheckerboard: return kb::render::RenderMaterialGraphNodeKind::Checkerboard;
     case MaterialEditorGraphMenuCommand::CreatePolarCoordinates: return kb::render::RenderMaterialGraphNodeKind::PolarCoordinates;
@@ -3618,6 +3620,9 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
     }
     if (command == MaterialEditorGraphMenuCommand::CreateWorldAlignedTexture) {
         haystack += " triplanar tri planar world aligned box projection worldalignedtexture";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateParallaxOcclusionMapping) {
+        haystack += " pom parallax occlusion height map relief bump offset";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateFlipBook) {
         haystack += " flipbook flip book sprite sheet subuv animation frames";

@@ -492,6 +492,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "WorldAlignedTexture") || EqualsIgnoreCase(text, "Triplanar")) {
         return RenderMaterialGraphNodeKind::WorldAlignedTexture;
     }
+    if (EqualsIgnoreCase(text, "ParallaxOcclusionMapping") || EqualsIgnoreCase(text, "ParallaxOcclusion")) {
+        return RenderMaterialGraphNodeKind::ParallaxOcclusionMapping;
+    }
     if (EqualsIgnoreCase(text, "FlipBook")) {
         return RenderMaterialGraphNodeKind::FlipBook;
     }
