@@ -16,6 +16,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -2344,6 +2345,37 @@ void RunEntityComponentCommandTests() {
     Require(Run(&kb::cli::RunEntityCommand, { "rename", "--project", project, "--name", "Sun/Cube", "--to", "Crate" }).exitCode == 0 &&
             Run(&kb::cli::RunEntityCommand, { "remove", "--project", project, "--name", "Crate" }).exitCode == 0,
         "entity rename failed");
+
+    // A joint by type name, connected to another entity by its name (the world when empty).
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--name", "Door" }).exitCode == 0 &&
+            Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Door", "--type", "Joint",
+                "--set", "type=Hinge" }).exitCode == 0,
+        "a Joint type must be accepted by name");
+    const CommandRun badType = Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Door", "--type", "Joint",
+        "--set", "type=Hinged" });
+    Require(badType.exitCode != 0 && Contains(badType.output, "Fixed, Hinge, Distance, Point"),
+        "an unknown Joint type name must be refused with the accepted names: " + badType.output);
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Door", "--type", "Joint",
+                "--set", "connectedEntity=Sun" }).exitCode == 0,
+        "a Joint must connect to another entity by name");
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Door", "--type", "Joint",
+                "--set", "connectedEntity=Nobody" }).exitCode != 0,
+        "a Joint connection to a missing entity must be refused");
+    {
+        kb::scene::Scene jointScene;
+        Require(kb::scene::SceneDocumentService::LoadFileIntoScene(jointScene,
+                    std::filesystem::path{ project } / "Assets" / "Scenes" / "Main.21kbscene"),
+            "the scene with the joint must load");
+        kb::scene::SceneEntity door{};
+        kb::scene::SceneEntity sun{};
+        for (const kb::scene::SceneEntity entity : jointScene.Hierarchy().RootEntities()) {
+            if (jointScene.Entities().Name(entity) == "Door") door = entity;
+            if (jointScene.Entities().Name(entity) == "Sun") sun = entity;
+        }
+        const kb::scene::JointComponent* joint = jointScene.Components().Joints().TryGet(door);
+        Require(joint != nullptr && joint->type == kb::scene::JointType::Hinge && joint->connectedEntity == sun,
+            "the saved Joint must be a Hinge connected to Sun");
+    }
 
     // A project command never writes into another project.
     Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Obcy", "--template", "Empty" }).exitCode == 0,

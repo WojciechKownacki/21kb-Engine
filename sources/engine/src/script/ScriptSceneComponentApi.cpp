@@ -319,8 +319,21 @@ constexpr std::array<std::string_view, 36> kComponentNames{
     "Echo soczewki",
 };
 
+// Value names of Int enum properties, in value order (tools accept them in place of numbers).
+constexpr std::array<std::string_view, 3> kRigidbodyBodyTypeNames{ "Static", "Dynamic", "Kinematic" };
+constexpr std::array<std::string_view, 4> kJointTypeNames{ "Fixed", "Hinge", "Distance", "Point" };
+constexpr std::array<std::string_view, 2> kCameraProjectionNames{ "Perspective", "Orthographic" };
+constexpr std::array<std::string_view, 5> kRegionShapeKindNames{ "Circle2D", "Rectangle2D", "Sphere", "Box", "Capsule" };
+constexpr std::array<std::string_view, 5> kContentInstanceKindNames{ "Prefab", "Subscene", "WorldFragment", "PartitionedWorld", "NavigationMesh" };
+constexpr std::array<std::string_view, 2> kContentInstanceLifetimeNames{ "Owner", "Persistent" };
+constexpr std::array<std::string_view, 3> kNavLinkKindNames{ "Jump", "Ladder", "Walk" };
+constexpr std::array<std::string_view, 3> kCameraClearModeNames{ "SolidColor", "DepthOnly", "DontClear" };
+constexpr std::array<std::string_view, 6> kLightKindNames{ "Directional", "Point", "Spot", "AreaRect", "AreaDisk", "Tube" };
+constexpr std::array<std::string_view, 6> kTickGroupNames{ "Input", "Gameplay", "Physics", "Animation", "Camera", "Presentation" };
+constexpr std::array<std::string_view, 4> kColliderShapeNames{ "Box", "Sphere", "Capsule", "Mesh" };
+
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int, true, kRegionShapeKindNames },
     ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "center.z", ScriptValueType::Float },
@@ -341,8 +354,8 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kGuideCurvePropertyDes
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kContentInstancePropertyDescs{
     ScriptSceneComponentPropertyDesc{ "assetId", ScriptValueType::Hash },
-    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int },
-    ScriptSceneComponentPropertyDesc{ "lifetime", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int, true, kContentInstanceKindNames },
+    ScriptSceneComponentPropertyDesc{ "lifetime", ScriptValueType::Int, true, kContentInstanceLifetimeNames },
     ScriptSceneComponentPropertyDesc{ "active", ScriptValueType::Bool },
 };
 
@@ -500,7 +513,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kVisibilityPropertyDes
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kCameraPropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "projection", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "projection", ScriptValueType::Int, true, kCameraProjectionNames },
     ScriptSceneComponentPropertyDesc{ "verticalFovDegrees", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "orthographicHeight", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "nearClip", ScriptValueType::Float },
@@ -509,14 +522,14 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kCameraPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "viewportId", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "cullingMask", ScriptValueType::Int },
-    ScriptSceneComponentPropertyDesc{ "clearMode", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "clearMode", ScriptValueType::Int, true, kCameraClearModeNames },
     ScriptSceneComponentPropertyDesc{ "clearColor.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "clearColor.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "clearColor.z", ScriptValueType::Float },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 16> kLightPropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int, true, kLightKindNames },
     ScriptSceneComponentPropertyDesc{ "color.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "color.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "color.z", ScriptValueType::Float },
@@ -545,12 +558,9 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kMeshRendererPropertyD
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
-    ScriptSceneComponentPropertyDesc{ "tickGroup", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "tickGroup", ScriptValueType::Int, true, kTickGroupNames },
     ScriptSceneComponentPropertyDesc{ "executionOrder", ScriptValueType::Int },
 };
-
-constexpr std::array<std::string_view, 3> kRigidbodyBodyTypeNames{ "Static", "Dynamic", "Kinematic" };
-constexpr std::array<std::string_view, 4> kColliderShapeNames{ "Box", "Sphere", "Capsule", "Mesh" };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 14> kRigidbodyPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "bodyType", ScriptValueType::Int, true, kRigidbodyBodyTypeNames },
@@ -609,7 +619,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kCharacterControllerPr
 // plain C++, not this string-keyed mechanism) - see
 // RunEntityHandlePhysicsComponentAccessTest.
 constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kJointPropertyDescs{
-    ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int, true, kJointTypeNames },
     ScriptSceneComponentPropertyDesc{ "anchor.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "anchor.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "anchor.z", ScriptValueType::Float },
@@ -658,7 +668,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kNavLinkPropertyDescs
     ScriptSceneComponentPropertyDesc{ "end.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "end.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
-    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int, true, kNavLinkKindNames },
     ScriptSceneComponentPropertyDesc{ "area", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "bidirectional", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },

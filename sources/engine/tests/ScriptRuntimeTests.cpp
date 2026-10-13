@@ -6726,6 +6726,8 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
     backend.castHitMask = 0x1U;
     backend.overlapHitMask = 0x4U;
     backend.closestPointHitMask = 0x8U;
+    const kb::scene::SceneEntity secondOverlap{ object.Entity().Id() + 1U };
+    backend.overlapAllEntities = { object.Entity(), secondOverlap };
     kb::scene::PhysicsBackend::RegisterBackend(scene, backend);
 
     // SphereCast: default layerMask (kPhysicsAllLayers) intersects
@@ -6808,6 +6810,12 @@ void RunScriptPhysicsCastOverlapClosestPointApiTest() {
     const kb::script::ScriptFunctionCallResult overlapSphere = host.Functions().Call("Physics.OverlapSphere", matchedOverlapSphereArgs, context);
     kb::tests::Require(overlapSphere.Output("overlapping")->AsBool() && overlapSphere.Output("entity")->AsUInt64() == object.Entity().Id(),
         "Physics.OverlapSphere with a matching layerMask must overlap the known entity");
+    kb::tests::Require(overlapSphere.Output("count")->AsInt() == 2,
+        "Physics.OverlapSphere must count every overlapping collider (Unity returns them all)");
+    std::vector<kb::script::ScriptFunctionArgument> secondOverlapArgs = matchedOverlapSphereArgs;
+    secondOverlapArgs.push_back(kb::script::ScriptFunctionArgument{ .name = "skip", .value = kb::script::ScriptValue{ 1 } });
+    kb::tests::Require(host.Functions().Call("Physics.OverlapSphere", secondOverlapArgs, context).Output("entity")->AsUInt64() == secondOverlap.Id(),
+        "Physics.OverlapSphere skip=1 must return the second overlapping collider");
 
     const std::vector<kb::script::ScriptFunctionArgument> overlapBoxArgs{
         kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ 0.0F } },
