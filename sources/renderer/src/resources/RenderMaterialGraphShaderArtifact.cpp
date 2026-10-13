@@ -1048,12 +1048,22 @@ const RenderMaterialGraphShaderManifestEntry* RenderMaterialGraphShaderManifest:
 
 namespace {
 
+// UV2..UV7 travel as three extra varyings, only for a graph that reads them.
+[[nodiscard]] bool MaterialGraphUsesExtraUvs(const RenderMaterialGraphShaderSource& shader) {
+    return std::ranges::find(shader.reflection.requiredVaryings, std::string_view{ "extraUvs" }) != shader.reflection.requiredVaryings.end();
+}
+[[nodiscard]] std::string ExtraUvVaryings(const RenderMaterialGraphShaderSource& shader) {
+    return MaterialGraphUsesExtraUvs(shader) ? ", v_uv23, v_uv45, v_uv67" : "";
+}
+
 // The material context of a fragment. The shadow pass has no lighting uniforms, so it uses explicit
 // neutral constants for the view and light inputs; every other pass reads the real camera and light.
-void AppendMaterialGraphFragmentContext(std::string& wrapper, bool shadowPass) {
+void AppendMaterialGraphFragmentContext(std::string& wrapper, bool shadowPass, bool extraUvs) {
     wrapper += "    MaterialGraphContext ctx;\n";
     wrapper += "    ctx.uv0 = v_texcoord0;\n";
     wrapper += "    ctx.uv1 = v_shadowFlags.zw;\n";
+    wrapper += extraUvs ? "    ctx.uv23 = v_uv23;\n    ctx.uv45 = v_uv45;\n    ctx.uv67 = v_uv67;\n"
+                        : "    ctx.uv23 = vec4_splat(0.0);\n    ctx.uv45 = vec4_splat(0.0);\n    ctx.uv67 = vec4_splat(0.0);\n";
     wrapper += "    ctx.normal = normalize(v_normal);\n";
     wrapper += "    ctx.tangent = normalize(v_tangent);\n";
     wrapper += "    ctx.bitangent = normalize(v_bitangent);\n";
@@ -1108,7 +1118,7 @@ std::string BuildGraphMotionVectorFragmentWrapperSource(const RenderMaterialGrap
     const bool masked = shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked;
     const bool pixelDepthOffset = shader.reflection.hasPixelDepthOffset && MaterialGraphWritesDepth(shader);
     std::string wrapper;
-    wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal, v_currentClip, v_previousClip\n\n";
+    wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal, v_currentClip, v_previousClip" + ExtraUvVaryings(shader) + "\n\n";
     wrapper += "#include <bgfx_shader.sh>\n";
     wrapper += "#include \"motion_vectors.sh\"\n";
     wrapper += "SAMPLER2D(s_sceneDepth, 0);\n";
@@ -1124,7 +1134,7 @@ std::string BuildGraphMotionVectorFragmentWrapperSource(const RenderMaterialGrap
     wrapper += "\nvoid main()\n{\n";
     wrapper += "    float kbMotionDepth = gl_FragCoord.z;\n";
     if (masked || pixelDepthOffset) {
-        AppendMaterialGraphFragmentContext(wrapper, false);
+        AppendMaterialGraphFragmentContext(wrapper, false, MaterialGraphUsesExtraUvs(shader));
     }
     if (pixelDepthOffset) {
         AppendMaterialGraphPixelDepthOffsetDepth(wrapper);
@@ -1164,7 +1174,7 @@ std::string BuildGraphFragmentWrapperSource(
     const bool gbufferPass = pass == "GBuffer";
 
     std::string wrapper;
-    wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal\n\n";
+    wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal" + ExtraUvVaryings(shader) + "\n\n";
     wrapper += "#include <bgfx_shader.sh>\n";
     if (!shadowPass) {
         wrapper += "#include \"pbr_graph_forward.sh\"\n";
@@ -1191,7 +1201,7 @@ std::string BuildGraphFragmentWrapperSource(
     wrapper += "\n// pass:" + std::string{ pass } + "\n\n";
     wrapper += shader.source;
     wrapper += "\nvoid main()\n{\n";
-    AppendMaterialGraphFragmentContext(wrapper, shadowPass);
+    AppendMaterialGraphFragmentContext(wrapper, shadowPass, MaterialGraphUsesExtraUvs(shader));
     const bool writesDepth = MaterialGraphWritesDepth(shader);
     if (shader.reflection.hasPixelDepthOffset && writesDepth) {
         AppendMaterialGraphPixelDepthOffset(wrapper);
@@ -1323,6 +1333,9 @@ void AppendGraphVertexEvaluation(std::string& vs, const RenderMaterialGraphShade
     vs += "    MaterialGraphContext " + ctx + ";\n";
     vs += "    " + ctx + ".uv0 = a_texcoord0;\n";
     vs += "    " + ctx + ".uv1 = a_texcoord1;\n";
+    vs += MaterialGraphUsesExtraUvs(shader)
+        ? "    " + ctx + ".uv23 = a_color1;\n    " + ctx + ".uv45 = a_color2;\n    " + ctx + ".uv67 = a_color3;\n"
+        : "    " + ctx + ".uv23 = vec4_splat(0.0);\n    " + ctx + ".uv45 = vec4_splat(0.0);\n    " + ctx + ".uv67 = vec4_splat(0.0);\n";
     vs += "    " + ctx + ".normal = " + name("vsNormal") + ";\n";
     vs += "    " + ctx + ".tangent = " + name("vsTangent") + ";\n";
     vs += "    " + ctx + ".bitangent = " + name("vsBitangent") + ";\n";
@@ -1372,9 +1385,11 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     // model, and at the previous frame's time with the previous model (motion_vectors.sh).
     const bool motionVectors = pass == kRenderMaterialGraphMotionVectorsPass;
     std::string vs;
-    vs += "$input a_position, a_normal, a_tangent, a_texcoord0, a_texcoord1, a_color0, i_data0, i_data1, i_data2, i_data3, i_data4\n";
+    const bool extraUvs = MaterialGraphUsesExtraUvs(shader);
+    vs += std::string{ "$input a_position, a_normal, a_tangent, a_texcoord0, a_texcoord1, a_color0" } +
+        (extraUvs ? ", a_color1, a_color2, a_color3" : "") + ", i_data0, i_data1, i_data2, i_data3, i_data4\n";
     if (motionVectors) {
-        vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal, v_currentClip, v_previousClip\n\n";
+        vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal, v_currentClip, v_previousClip" + ExtraUvVaryings(shader) + "\n\n";
         vs += "#include <bgfx_shader.sh>\n";
         vs += "#include \"motion_vectors.sh\"\n";
         vs += "#include \"model_normal.sh\"\n";
@@ -1382,7 +1397,7 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
         // x: the material time of the previous frame, y: its delta time.
         vs += "uniform vec4 u_motionPreviousTime;\n";
     } else {
-        vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal\n\n";
+        vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal" + ExtraUvVaryings(shader) + "\n\n";
         vs += "#include <bgfx_shader.sh>\n";
         vs += "#include \"model_normal.sh\"\n";
         vs += "uniform mat4 u_shadowViewProj;\n";
@@ -1422,6 +1437,9 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     vs += "    v_texcoord0 = materialUv0;\n";
     vs += "    v_color0 = ctx.vertexColor;\n";
     vs += "    v_preSkinnedNormal = preSkinnedNormal;\n";
+    if (extraUvs) {
+        vs += "    v_uv23 = a_color1;\n    v_uv45 = a_color2;\n    v_uv67 = a_color3;\n";
+    }
     vs += "}\n";
     return vs;
 }
@@ -1534,6 +1552,7 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         shader.reflection.hasWorldPositionOffset ||
         shader.reflection.hasCustomizedUv0 ||
         shader.reflection.hasDisplacement ||
+        MaterialGraphUsesExtraUvs(shader) ||
         request.pass == kRenderMaterialGraphMotionVectorsPass;
     const std::string vertexWrapperSource = cooksVertexShader ? BuildGraphVertexWrapperSource(shader, request.pass) : std::string{};
     std::vector<ResolvedShaderDependency> dependencies;

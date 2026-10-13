@@ -60,6 +60,8 @@ struct RenderStaticMeshVertexP3N3T4UV2 {
     float g = 1.0F;
     float b = 1.0F;
     float a = 1.0F;
+    // UV2..UV7 (u2, v2, u3, v3, ...) as half floats, Unreal's default UV precision; 0 when the source has none.
+    std::uint16_t uv2to7[12]{};
 };
 
 struct RenderStaticMeshVertexSkinned {

@@ -934,7 +934,7 @@ void RunBakedMeshFormatSelfCheckTest() {
     const BakedMeshView view = ViewBakedMesh(output.primaryBlock);
     // If any of these disagree, every offset arithmetic in this file is aimed at the wrong
     // bytes and every fixture below would be patching something other than what it names.
-    Require(view.formatVersion == 3U, "The baked mesh format version this suite reads is not the one baked");
+    Require(view.formatVersion == 4U, "The baked mesh format version this suite reads is not the one baked");
     Require(view.vertexFormat == 1U, "A mesh with tangents did not bake as the tangent vertex layout");
     Require(view.vertexStride == sizeof(RenderStaticMeshVertexP3N3T4UV2),
         "The baked vertex stride is not the stride of the layout the header names");
@@ -2114,7 +2114,7 @@ void RunBakedMeshReaderRefusesTamperedPayloadTest() {
         std::uint32_t after;
     };
     std::vector<PrimaryTamper> tampers;
-    tampers.push_back(PrimaryTamper{ "the format version", 8U, 3U, 4U });
+    tampers.push_back(PrimaryTamper{ "the format version", 8U, 4U, 5U });
     tampers.push_back(PrimaryTamper{ "material metadata bytes with no payload", 68U, 0U, 1U });
     tampers.push_back(PrimaryTamper{ "the vertex layout", 12U, 1U, 5U });
     tampers.push_back(PrimaryTamper{ "the vertex stride", 16U, view.vertexStride, view.vertexStride + 4U });

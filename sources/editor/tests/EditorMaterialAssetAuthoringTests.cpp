@@ -4098,6 +4098,13 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             textureCoordinateUvProperty != textureCoordinateProperties.end() &&
             textureCoordinateUvProperty->value.text == "1",
         "KBMAT-MAT81: TextureCoordinate UV Set enum should preserve tiling while selecting UV1");
+    // Unreal's Coordinate Index reaches UV7: eight options, UV5 kept in the hint.
+    kb::editor::tests::Require(textureCoordinateUvProperty->options.size() == 8U && textureCoordinateUvProperty->options[7].label == "UV7" &&
+            materialEditor.SetGraphNodeEnumValue(textureCoordinateNodeId, "uvSet", "5"),
+        "TextureCoordinate UV Set should offer UV0..UV7");
+    textureCoordinateNode = kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, textureCoordinateNodeId);
+    kb::editor::tests::Require(textureCoordinateNode != nullptr && textureCoordinateNode->parameter.defaultValueHint == "2 3 5",
+        "TextureCoordinate UV5 should persist in the hint");
 
     kb::editor::MaterialEditorState tiledTextureCoordinateEditor;
     kb::render::RenderMaterialAssetData tiledTextureCoordinateAsset{};

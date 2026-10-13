@@ -1169,7 +1169,7 @@ void AppendCustomCodeFunctionDefinitions(
 struct TextureCoordinateHint {
     float uTile = 1.0F;
     float vTile = 1.0F;
-    bool useUv1 = false;
+    std::uint32_t set = 0U;  // Unreal's Coordinate Index, UV0..UV7
 };
 
 [[nodiscard]] TextureCoordinateHint ParseTextureCoordinateHint(std::string_view hint) {
@@ -1178,7 +1178,7 @@ struct TextureCoordinateHint {
         return result;
     }
     if (EqualsIgnoreCase(hint, "1") || EqualsIgnoreCase(hint, "uv1")) {
-        result.useUv1 = true;
+        result.set = 1U;
         return result;
     }
 
@@ -1186,7 +1186,7 @@ struct TextureCoordinateHint {
     if (!values.empty()) {
         result.uTile = values[0];
         result.vTile = values.size() > 1U ? values[1] : result.uTile;
-        result.useUv1 = values.size() > 2U && values[2] >= 0.5F;
+        result.set = values.size() > 2U ? static_cast<std::uint32_t>(std::clamp(std::lround(values[2]), 0L, 7L)) : 0U;
     }
     return result;
 }
@@ -1347,7 +1347,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         // MAT-45/MAT-81: tiling-scaled UV from a selectable coordinate set. Legacy hints "0"/"1"
         // mean UV0/UV1; extended hints use "uTile vTile set".
         const TextureCoordinateHint hint = ParseTextureCoordinateHint(node.parameter.defaultValueHint);
-        return std::string{ hint.useUv1 ? "ctx.uv1" : "ctx.uv0" } + " * vec2(" + FloatLiteral(hint.uTile) + ", " + FloatLiteral(hint.vTile) + ")";
+        static constexpr std::array<const char*, 8U> kSets{ "ctx.uv0", "ctx.uv1", "ctx.uv23.xy", "ctx.uv23.zw", "ctx.uv45.xy", "ctx.uv45.zw", "ctx.uv67.xy", "ctx.uv67.zw" };
+        return std::string{ kSets[hint.set] } + " * vec2(" + FloatLiteral(hint.uTile) + ", " + FloatLiteral(hint.vTile) + ")";
     }
     case RenderMaterialGraphNodeKind::ViewportUV:
         // MAT-45: the normalised viewport coordinate (same source as ScreenPosition).
@@ -3740,6 +3741,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     bool usesPerInstanceCustomData = false;
     bool usesPreSkinnedPosition = false;
     bool usesPreSkinnedNormal = false;
+    bool usesExtraUvs = false;
 
     for (const RenderMaterialGraphNode& node : graph.nodes) {
         if (std::find(reachable.begin(), reachable.end(), node.id) == reachable.end()) {
@@ -3887,8 +3889,10 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         case RenderMaterialGraphNodeKind::PreSkinnedNormal:
             usesPreSkinnedNormal = true;
             break;
-        case RenderMaterialGraphNodeKind::Uv:
         case RenderMaterialGraphNodeKind::TextureCoordinate:
+            usesExtraUvs = usesExtraUvs || ParseTextureCoordinateHint(node.parameter.defaultValueHint).set >= 2U;
+            [[fallthrough]];
+        case RenderMaterialGraphNodeKind::Uv:
         case RenderMaterialGraphNodeKind::Panner:
         case RenderMaterialGraphNodeKind::Rotator:
         case RenderMaterialGraphNodeKind::BumpOffset:
@@ -3986,6 +3990,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "struct MaterialGraphContext {\n";
     source += "    vec2 uv0;\n";
     source += "    vec2 uv1;\n";
+    source += "    vec4 uv23;\n";
+    source += "    vec4 uv45;\n";
+    source += "    vec4 uv67;\n";
     source += "    vec3 normal;\n";
     source += "    vec3 tangent;\n";
     source += "    vec3 bitangent;\n";
@@ -4443,6 +4450,10 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     }
     if (usesPreSkinnedNormal) {
         reflection.requiredVaryings.push_back("preSkinnedNormal");
+    }
+    // UV2..UV7: the graph's own vertex shader passes them (RenderMaterialGraphShaderArtifact).
+    if (usesExtraUvs) {
+        reflection.requiredVaryings.push_back("extraUvs");
     }
     reflection.hasWorldPositionOffset = hasWorldPositionOffset;
     reflection.hasCustomizedUv0 = hasCustomizedUv0;

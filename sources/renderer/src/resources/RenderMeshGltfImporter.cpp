@@ -6,6 +6,7 @@
 
 #include "engine/assets/GltfExternalResources.hpp"
 
+#include <bx/math.h>
 #include <cgltf/cgltf.h>
 
 #include <array>
@@ -79,6 +80,7 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
     const cgltf_accessor* tangents = nullptr;
     const cgltf_accessor* texCoords = nullptr;
     const cgltf_accessor* texCoords1 = nullptr;
+    std::array<const cgltf_accessor*, 6U> extraTexCoords{};  // TEXCOORD_2..7
     const cgltf_accessor* colors = nullptr;
     bool hasSkinningAttributes = false;
     for (cgltf_size attributeIndex = 0U; attributeIndex < primitive.attributes_count; ++attributeIndex) {
@@ -94,6 +96,8 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
             texCoords = attribute.data;
         } else if (attribute.type == cgltf_attribute_type_texcoord && attribute.index == 1) {
             texCoords1 = attribute.data;
+        } else if (attribute.type == cgltf_attribute_type_texcoord && attribute.index >= 2 && attribute.index <= 7) {
+            extraTexCoords[static_cast<std::size_t>(attribute.index - 2)] = attribute.data;
         } else if (attribute.type == cgltf_attribute_type_color && attribute.index == 0) {
             colors = attribute.data;
         } else if (attribute.type == cgltf_attribute_type_joints || attribute.type == cgltf_attribute_type_weights) {
@@ -129,7 +133,17 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
     if (texCoordData.has_value() && texCoordData->elementCount != positionData->elementCount) {
         return false;
     }
-    if (tangentData.has_value()) {
+    std::array<std::optional<GltfAccessorFloats>, 6U> extraTexCoordData;
+    bool hasExtraTexCoords = false;
+    for (std::size_t set = 0U; set < extraTexCoords.size(); ++set) {
+        extraTexCoordData[set] = UnpackFloats(extraTexCoords[set], 2U);
+        if (extraTexCoordData[set].has_value() && extraTexCoordData[set]->elementCount != positionData->elementCount) {
+            return false;
+        }
+        hasExtraTexCoords = hasExtraTexCoords || extraTexCoordData[set].has_value();
+    }
+    // UV2..UV7 live in the tangent vertex format only.
+    if (tangentData.has_value() || hasExtraTexCoords) {
         RenderMeshAssetFinalizer::EnsureTangentVertexStorage(asset);
     }
 
@@ -200,6 +214,13 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
                 .b = cb,
                 .a = ca,
             });
+            for (std::size_t set = 0U; set < extraTexCoordData.size(); ++set) {
+                if (extraTexCoordData[set].has_value()) {
+                    const float extraV = AccessorValue(*extraTexCoordData[set], vertexIndex, 1U);
+                    asset.tangentVertices.back().uv2to7[set * 2U] = bx::halfFromFloat(AccessorValue(*extraTexCoordData[set], vertexIndex, 0U));
+                    asset.tangentVertices.back().uv2to7[set * 2U + 1U] = bx::halfFromFloat(desc.flipV ? 1.0F - extraV : extraV);
+                }
+            }
         } else {
             asset.vertices.push_back(RenderStaticMeshVertexP3N3UV2{
                 .x = position[0],
