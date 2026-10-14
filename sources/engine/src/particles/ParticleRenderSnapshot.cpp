@@ -34,7 +34,7 @@ template <typename Enum>
         if (emitter.instanceId == 0U || emitter.effectAssetId == 0U || emitter.emitterId == 0U ||
             emitter.assetGeneration == 0U || emitter.materialAssetId == 0U ||
             emitter.liveParticleCount != emitter.particleCount || emitter.firstParticle != expectedFirst ||
-            !EnumAtMost(emitter.output, ParticleRenderOutput::Volumetric) ||
+            !EnumAtMost(emitter.output, ParticleRenderOutput::Decal) ||
             !EnumAtMost(emitter.blend, ParticleRenderBlendMode::Premultiplied) ||
             !EnumAtMost(emitter.depth, ParticleRenderDepthMode::ReadWrite) ||
             !EnumAtMost(emitter.sort, ParticleRenderSortMode::Age) ||

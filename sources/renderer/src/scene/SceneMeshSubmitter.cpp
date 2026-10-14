@@ -529,7 +529,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
                 if (!particleResult.succeeded) ++stats.failedParticleBatchCount;
             }
             if (entry.source == TransparentDrawSource::ParticleStrip && stripBuild.Usable()) {
-                const ParticleStripSubmitResult stripResult = particleRenderer->SubmitStripDraw(viewId, entry.sourceIndex);
+                const ParticleStripSubmitResult stripResult = particleRenderer->SubmitStripDraw(
+                    viewId, entry.sourceIndex, resources, resourceMap);
                 stats.submittedParticleStripSegmentCount += stripResult.submittedIndices / 6U;
                 stats.submittedParticleDrawCallCount += stripResult.drawCalls;
                 if (!stripResult.succeeded) {

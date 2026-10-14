@@ -7,6 +7,7 @@
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/ParticleEffectAssetMigration.hpp"
+#include "engine/scene/ParticleEffectAssetValidation.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -2673,6 +2674,324 @@ void TestPlayModeDiscoversComponentAddedAfterSystemCreation() {
 
 // A GPU-preferring effect with closed-form motion is routed to the GPU emitter queue once a renderer
 // has declared itself consumer: spawns become 32-byte birth records and no CPU particle is kept.
+// The spawn shapes put every birth where the shape is, and the radial velocity points away from its centre.
+void TestSpawnShapesAndVelocityModes() {
+    const auto sample = [](const kb::scene::ParticleSpawnShapeAsset& shape, kb::scene::ParticleVelocityMode mode,
+                           float speed, kb::math::Vec3 added) {
+        auto effect = Fixture::MakeEffect(0.0F, 64U);
+        auto& emitter = effect.emitters[0];
+        emitter.spawn.shape = shape;
+        emitter.spawn.velocityMode = mode;
+        emitter.spawn.speedMin = speed;
+        emitter.spawn.speedMax = speed;
+        emitter.spawn.addedVelocity = added;
+        Fixture fixture(std::move(effect));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+                backend.Emit(fixture.scene, created.instanceId, 32U).Succeeded(),
+            "spawn shape fixture setup failed");
+        Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "spawn shape step failed");
+        return CopyBackendStates(backend, fixture, created.instanceId);
+    };
+    const auto length = [](kb::math::Vec3 v) { return std::sqrt(kb::math::Dot(v, v)); };
+
+    const auto sphere = sample({.type = kb::scene::ParticleSpawnShape::Sphere, .radius = 2.0F, .surfaceOnly = true},
+        kb::scene::ParticleVelocityMode::Cone, 0.0F, {});
+    Require(sphere.size() == 32U && std::all_of(sphere.begin(), sphere.end(), [&](const auto& state) {
+                return std::abs(length(state.position) - 2.0F) < 0.001F;
+            }),
+        "a sphere surface birth was not on the sphere");
+    const auto circle = sample({.type = kb::scene::ParticleSpawnShape::Circle, .radius = 3.0F},
+        kb::scene::ParticleVelocityMode::Cone, 0.0F, {});
+    Require(std::all_of(circle.begin(), circle.end(), [&](const auto& state) {
+                return std::abs(state.position.y) < 0.001F && std::abs(length(state.position) - 3.0F) < 0.001F;
+            }),
+        "a circle birth was not on the horizontal circle");
+    const auto box = sample({.type = kb::scene::ParticleSpawnShape::Box, .boxSize = {2.0F, 4.0F, 6.0F}},
+        kb::scene::ParticleVelocityMode::Cone, 0.0F, {});
+    Require(std::all_of(box.begin(), box.end(), [](const auto& state) {
+                return std::abs(state.position.x) <= 1.0F && std::abs(state.position.y) <= 2.0F &&
+                    std::abs(state.position.z) <= 3.0F;
+            }) && std::any_of(box.begin(), box.end(), [](const auto& state) { return std::abs(state.position.z) > 1.0F; }),
+        "a box birth was outside the box or the box was not filled");
+    const auto line = sample({.type = kb::scene::ParticleSpawnShape::Line, .lineStart = {-1.0F, 0.0F, 0.0F},
+                                 .lineEnd = {1.0F, 0.0F, 0.0F}},
+        kb::scene::ParticleVelocityMode::Cone, 0.0F, {});
+    Require(std::all_of(line.begin(), line.end(), [](const auto& state) {
+                return std::abs(state.position.y) < 0.001F && std::abs(state.position.z) < 0.001F &&
+                    std::abs(state.position.x) <= 1.0F;
+            }),
+        "a line birth was off the line");
+    const auto radial = sample({.type = kb::scene::ParticleSpawnShape::Sphere, .radius = 1.0F, .surfaceOnly = true},
+        kb::scene::ParticleVelocityMode::Radial, 5.0F, {});
+    Require(std::all_of(radial.begin(), radial.end(), [&](const auto& state) {
+                return std::abs(length(state.velocity) - 5.0F) < 0.001F &&
+                    kb::math::Dot(state.velocity, state.position) / (length(state.velocity) * length(state.position)) > 0.999F;
+            }),
+        "a radial velocity did not point away from the shape's centre");
+    const auto added = sample({}, kb::scene::ParticleVelocityMode::Cone, 0.0F, {0.0F, 3.0F, 0.0F});
+    Require(std::all_of(added.begin(), added.end(), [](const auto& state) {
+                return std::abs(state.velocity.y - 3.0F) < 0.001F && std::abs(state.velocity.x) < 0.001F;
+            }),
+        "the added velocity was not added to the start velocity");
+}
+
+// The emitter's own clock: nothing before its start delay, then a burst at the start of every cycle.
+void TestEmitterStartDelayAndCycle() {
+    auto effect = Fixture::MakeEffect(0.0F, 64U);
+    effect.looping = false;
+    effect.durationSeconds = 0.0F;
+    auto& emitter = effect.emitters[0];
+    emitter.spawn.bursts = {{.timeSeconds = 0.0F, .count = 3U}};
+    emitter.spawn.lifetimeMin = 0.2F;
+    emitter.spawn.lifetimeMax = 0.2F;
+    emitter.spawn.speedMin = 0.0F;
+    emitter.spawn.speedMax = 0.0F;
+    emitter.spawn.startDelaySeconds = 0.5F;
+    emitter.spawn.cycleSeconds = 1.0F;
+    emitter.spawn.cycleLooping = true;
+    Fixture fixture(std::move(effect));
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded(), "cycle fixture setup failed");
+    const auto liveAfter = [&](int steps) {
+        for (int step = 0; step < steps; ++step) {
+            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "cycle step failed");
+        }
+        return backend.Query(fixture.scene, created.instanceId).liveParticleCount;
+    };
+    Require(liveAfter(24) == 0U, "the burst fired before the emitter's start delay");      // 0.4 s
+    Require(liveAfter(9) == 3U, "the burst did not fire when the start delay ended");       // 0.55 s
+    Require(liveAfter(24) == 0U, "the burst's particles outlived their lifetime");          // 0.95 s
+    Require(liveAfter(36) == 3U, "the burst did not repeat at the start of the next cycle"); // 1.55 s
+}
+
+// A beam birth is segments + 1 points from the beam's start to its end.
+void TestBeamBirthSpansTheBeam() {
+    auto effect = Fixture::MakeEffect(0.0F, 64U);
+    auto& emitter = effect.emitters[0];
+    emitter.spawn.speedMin = 0.0F;
+    emitter.spawn.speedMax = 0.0F;
+    emitter.spawn.beam = {.enabled = true, .ends = kb::scene::ParticleBeamEnds::Fixed, .segments = 4U,
+                          .start = {0.0F, 0.0F, 0.0F}, .end = {0.0F, 4.0F, 0.0F}, .noise = 0.0F};
+    emitter.output.type = kb::scene::ParticleOutputType::Ribbon;
+    emitter.output.payload = kb::scene::ParticleRibbonOutput{};
+    Fixture fixture(std::move(effect));
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+            backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded() &&
+            backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "beam fixture setup failed");
+    auto states = CopyBackendStates(backend, fixture, created.instanceId);
+    std::sort(states.begin(), states.end(), [](const auto& lhs, const auto& rhs) { return lhs.position.y < rhs.position.y; });
+    Require(states.size() == 5U, "a beam birth was not segments + 1 points");
+    for (std::size_t index = 0U; index < states.size(); ++index) {
+        Require(std::abs(states[index].position.y - static_cast<float>(index)) < 0.001F &&
+                std::abs(states[index].position.x) < 0.001F && std::abs(states[index].position.z) < 0.001F,
+            "a beam point was not on the beam");
+    }
+}
+
+// The field modules: a turn about an axis, a pull toward a point, curl noise and the ring of a torus.
+void TestFieldModules() {
+    const auto run = [](auto addModule, kb::math::Vec3 start, int steps) {
+        auto effect = Fixture::MakeEffect(0.0F, 4U);
+        auto& emitter = effect.emitters[0];
+        emitter.spawn.lifetimeMin = 10.0F;
+        emitter.spawn.lifetimeMax = 10.0F;
+        emitter.spawn.speedMin = 0.0F;
+        emitter.spawn.speedMax = 0.0F;
+        emitter.spawn.shape = {.type = kb::scene::ParticleSpawnShape::Line, .lineStart = start, .lineEnd = start};
+        addModule(emitter);
+        Fixture fixture(std::move(effect));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+                backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(),
+            "field module fixture setup failed");
+        for (int step = 0; step < steps; ++step) {
+            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "field step failed");
+        }
+        return CopyBackendStates(backend, fixture, created.instanceId).front();
+    };
+    const auto turned = run([](auto& emitter) {
+        AddModule(emitter, 1U, kb::scene::ParticleModuleType::AxisRotation,
+            kb::scene::ParticleAxisRotationModule{.axis = {0.0F, 1.0F, 0.0F}, .degreesPerSecond = 90.0F});
+    }, {1.0F, 0.0F, 0.0F}, 60);
+    Require(std::abs(turned.position.x) < 0.05F && std::abs(std::abs(turned.position.z) - 1.0F) < 0.05F &&
+            std::abs(turned.position.y) < 0.001F,
+        "one second at 90 degrees per second did not turn the particle a quarter turn about Y");
+    const auto pulled = run([](auto& emitter) {
+        AddModule(emitter, 1U, kb::scene::ParticleModuleType::Attraction,
+            kb::scene::ParticleAttractionModule{.point = {0.0F, 0.0F, 5.0F}, .strength = 2.0F, .radius = 0.0F});
+    }, {0.0F, 0.0F, 0.0F}, 30);
+    Require(std::abs(pulled.velocity.z - 1.0F) < 0.05F && pulled.position.z > 0.1F &&
+            std::abs(pulled.velocity.x) < 0.001F,
+        "an attraction without a radius did not pull at its strength toward its point");
+    const auto stirred = run([](auto& emitter) {
+        AddModule(emitter, 1U, kb::scene::ParticleModuleType::Noise,
+            kb::scene::ParticleNoiseModule{.strength = 3.0F, .frequency = 0.4F});
+    }, {0.3F, 1.7F, -0.6F}, 30);
+    const auto stirredAgain = run([](auto& emitter) {
+        AddModule(emitter, 1U, kb::scene::ParticleModuleType::Noise,
+            kb::scene::ParticleNoiseModule{.strength = 3.0F, .frequency = 0.4F});
+    }, {0.3F, 1.7F, -0.6F}, 30);
+    Require(kb::math::Dot(stirred.velocity, stirred.velocity) > 0.01F &&
+            stirred.velocity.x == stirredAgain.velocity.x && stirred.velocity.y == stirredAgain.velocity.y,
+        "curl noise did not move a resting particle the same way every run");
+    const auto rolled = run([](auto& emitter) {
+        AddModule(emitter, 1U, kb::scene::ParticleModuleType::TorusSwirl,
+            kb::scene::ParticleTorusSwirlModule{.center = {0.0F, 2.0F, 0.0F}, .radius = 1.0F, .degreesPerSecond = 90.0F});
+    }, {2.0F, 2.0F, 0.0F}, 60);
+    // On the ring's tangent plane the particle rolls a quarter turn about the ring point (1, 2, 0).
+    const kb::math::Vec3 fromRing{rolled.position.x - 1.0F, rolled.position.y - 2.0F, rolled.position.z};
+    Require(std::abs(std::sqrt(kb::math::Dot(fromRing, fromRing)) - 1.0F) < 0.05F && std::abs(rolled.position.y - 2.0F) > 0.9F,
+        "a torus swirl did not roll the particle about its ring");
+}
+
+// A collision plane that kills on contact removes the particle where it struck.
+void TestCollisionKillOnContact() {
+    const auto liveAfterFall = [](bool kill) {
+        auto effect = Fixture::MakeEffect(0.0F, 4U);
+        auto& emitter = effect.emitters[0];
+        emitter.localPosition = {0.0F, 0.1F, 0.0F};
+        emitter.spawn.direction = {0.0F, -1.0F, 0.0F};
+        emitter.spawn.speedMin = 12.0F;
+        emitter.spawn.speedMax = 12.0F;
+        emitter.spawn.randomization = 0.0F;
+        emitter.spawn.spreadDegrees = 0.0F;
+        AddModule(emitter, 1U, kb::scene::ParticleModuleType::CollisionPlane,
+            kb::scene::ParticleCollisionPlaneModule{.normal = {0.0F, 1.0F, 0.0F}, .distance = 0.0F, .restitution = 0.5F,
+                                                    .friction = 0.0F, .maxEventsPerStep = 4U, .killOnContact = kill});
+        Fixture fixture(std::move(effect));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+                backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(),
+            "kill on contact fixture setup failed");
+        for (int step = 0; step < 3; ++step) {
+            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "kill step failed");
+        }
+        return backend.Query(fixture.scene, created.instanceId).liveParticleCount;
+    };
+    Require(liveAfterFall(true) == 0U, "a particle striking a killing plane survived");
+    Require(liveAfterFall(false) == 1U, "a particle bouncing off a plane died");
+}
+
+// A WhileAlive binding gives birth at its rate at every live particle of its source emitter.
+void TestWhileAliveBinding() {
+    auto effect = Fixture::MakeEffect(0.0F, 64U);
+    effect.emitters[0].spawn.lifetimeMin = 5.0F;
+    effect.emitters[0].spawn.lifetimeMax = 5.0F;
+    auto target = effect.emitters[0];
+    target.emitterId = 2U;
+    target.authoringOrder = 1U;
+    target.name = "Trail Smoke";
+    target.maxParticles = 256U;
+    effect.emitters.push_back(target);
+    effect.eventBindings.push_back({.sourceEmitterId = 1U, .trigger = kb::scene::ParticleEventTrigger::WhileAlive,
+                                    .targetEmitterId = 2U, .count = 1U, .maxDepth = 1U, .ratePerSecond = 30.0F});
+    Fixture fixture(std::move(effect));
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+            backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(),
+        "while-alive fixture setup failed");
+    for (int step = 0; step < 60; ++step) {
+        Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "while-alive step failed");
+    }
+    const std::uint32_t live = backend.Query(fixture.scene, created.instanceId).liveParticleCount;
+    // The source and 30 a second of its children for one second.
+    Require(live >= 30U && live <= 32U, "a WhileAlive binding did not give birth at its rate");
+}
+
+// The output's colour intensity, particle light and decal depth reach the render record.
+void TestRenderRecordCarriesOutputFields() {
+    auto effect = Fixture::MakeEffect(60.0F, 64U);
+    auto& emitter = effect.emitters[0];
+    emitter.output.material.assetId = 72U;
+    emitter.output.type = kb::scene::ParticleOutputType::Decal;
+    emitter.output.blend = kb::scene::ParticleBlendMode::Add;
+    emitter.output.payload = kb::scene::ParticleDecalOutput{.depth = 1.5F};
+    emitter.output.colorIntensity = 2.5F;
+    emitter.output.lightEnabled = true;
+    emitter.output.lightRadius = 3.0F;
+    emitter.output.lightIntensity = 1.25F;
+    emitter.output.lightMaxCount = 4U;
+    Fixture fixture(std::move(effect));
+    fixture.scene.Components().ParticleEffects().Set(fixture.owner, {.effectAssetId = fixture.effectAssetId});
+    kb::particle_plugin::ParticleSceneSystem system;
+    kb::scene::SceneSystemContext context{fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    system.OnCreate(context);
+    system.OnFixedUpdate(context);
+    const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+    Require(snapshot && snapshot->Emitters().size() == 1U, "the output fields fixture published no emitter");
+    const auto& record = snapshot->Emitters()[0];
+    Require(record.output == kb::particles::ParticleRenderOutput::Decal && record.colorIntensity == 2.5F &&
+            record.decalDepth == 1.5F && record.lightRadius == 3.0F && record.lightIntensity == 1.25F &&
+            record.lightMaxCount == 4U,
+        "the render record lost the output's colour intensity, light or decal depth");
+    system.OnDestroy(context);
+}
+
+// A GPU emitter takes its fields along (noise, turn, pull) and the field's origin and axis with every step;
+// a GPU effect's burst may exceed the CPU's spawns per step.
+void TestGpuEmitterFieldsAndLargeBursts() {
+    auto effect = Fixture::MakeEffect(0.0F, 200'000U);
+    effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    auto& emitter = effect.emitters[0];
+    emitter.localPosition = {0.0F, 3.0F, 0.0F};
+    emitter.spawn.bursts = {{.timeSeconds = 0.0F, .count = 100'000U}};
+    AddModule(emitter, 7U, kb::scene::ParticleModuleType::Noise, kb::scene::ParticleNoiseModule{.strength = 3.0F, .frequency = 0.4F});
+    AddModule(emitter, 8U, kb::scene::ParticleModuleType::AxisRotation,
+        kb::scene::ParticleAxisRotationModule{.axis = {0.0F, 1.0F, 0.0F}, .degreesPerSecond = 90.0F});
+    AddModule(emitter, 9U, kb::scene::ParticleModuleType::Attraction,
+        kb::scene::ParticleAttractionModule{.point = {0.0F, 1.0F, 0.0F}, .strength = 4.0F, .radius = 0.0F});
+    Require(kb::scene::ParticleEffectAssetValidator::ValidateStructure(effect).Succeeded(),
+        "a GPU effect's burst above the CPU spawns per step was refused");
+    auto cpuEffect = effect;
+    cpuEffect.backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
+    cpuEffect.emitters[0].maxParticles = 64U;
+    Require(!kb::scene::ParticleEffectAssetValidator::ValidateStructure(cpuEffect).Succeeded(),
+        "a CPU effect's burst above the spawns per step was accepted");
+    Fixture fixture{effect};
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, true);
+    const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded(), "GPU field fixture setup failed");
+    Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "GPU field step failed");
+    std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+    kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+    std::size_t spawned = 0U;
+    bool params = false;
+    bool field = false;
+    for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
+        spawned += command.spawns.size();
+        if (command.hasParams) {
+            params = command.params.noiseStrength == 3.0F && command.params.noiseFrequency == 0.4F &&
+                command.params.noiseSeed == 7U && std::abs(command.params.axisRadiansPerSecond - 1.5707963F) < 0.0001F &&
+                command.params.attractionStrength == 4.0F && command.params.NeedsState();
+        }
+        if (command.hasField) {
+            field = std::abs(command.fieldOrigin.y - 3.0F) < 0.0001F && std::abs(command.fieldAxis.y - 1.0F) < 0.0001F &&
+                std::abs(command.attractionTarget.y - 4.0F) < 0.0001F;
+        }
+    }
+    Require(spawned == 100'000U, "a GPU burst was cut to the CPU's spawns per step");
+    Require(params && field, "a GPU emitter's fields did not travel with its commands");
+    Require(backend.Query(fixture.scene, created.instanceId).liveParticleCount == 0U, "a GPU burst made CPU particles");
+}
+
 void TestGpuEmitterRouting() {
     auto effect = Fixture::MakeEffect(600.0F, 200'000U);
     effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
@@ -3023,6 +3342,14 @@ int main() {
         TestComponentBindingCapacityIsAtomic();
         TestComponentCreateFailureIsExplicitAndPreservesLiveInstance();
         TestActiveReloadContracts();
+        TestSpawnShapesAndVelocityModes();
+        TestEmitterStartDelayAndCycle();
+        TestBeamBirthSpansTheBeam();
+        TestFieldModules();
+        TestCollisionKillOnContact();
+        TestWhileAliveBinding();
+        TestRenderRecordCarriesOutputFields();
+        TestGpuEmitterFieldsAndLargeBursts();
         std::cout << "21kb Particle System CPU backend tests passed\n";
         return 0;
     } catch (const std::exception& error) {

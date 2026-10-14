@@ -17,7 +17,8 @@ namespace {
     return output == kb::particles::ParticleRenderOutput::Billboard ||
         output == kb::particles::ParticleRenderOutput::StretchedBillboard ||
         output == kb::particles::ParticleRenderOutput::PointSprite ||
-        output == kb::particles::ParticleRenderOutput::Volumetric;
+        output == kb::particles::ParticleRenderOutput::Volumetric ||
+        output == kb::particles::ParticleRenderOutput::Decal;
 }
 
 [[nodiscard]] bool BatchCompatible(
@@ -35,7 +36,8 @@ namespace {
         lhs.volumetricDensity == rhs.volumetricDensity &&
         lhs.volumetricRadiusScale == rhs.volumetricRadiusScale &&
         lhs.volumetricLowQualitySteps == rhs.volumetricLowQualitySteps &&
-        lhs.volumetricHighQualitySteps == rhs.volumetricHighQualitySteps;
+        lhs.volumetricHighQualitySteps == rhs.volumetricHighQualitySteps &&
+        lhs.colorIntensity == rhs.colorIntensity && lhs.decalDepth == rhs.decalDepth;
 }
 
 [[nodiscard]] std::array<float, 3> CameraPosition(const SceneRenderCamera& camera) noexcept {
@@ -65,16 +67,19 @@ namespace {
     return dx * dx + dy * dy + dz * dz;
 }
 
-[[nodiscard]] ParticleGpuInstance Pack(const kb::particles::ParticleRenderRecord& source, kb::math::Vec3 offset) noexcept {
-    const auto color = [&](unsigned shift) noexcept {
+// The packed colour is LDR; the emitter's colour intensity lifts it to HDR (alpha stays as it is).
+[[nodiscard]] ParticleGpuInstance Pack(
+    const kb::particles::ParticleRenderRecord& source, kb::math::Vec3 offset, float intensity) noexcept {
+    const auto channel = [&](unsigned shift) noexcept {
         return static_cast<float>((source.packedColor >> shift) & 0xFFU) / 255.0F;
     };
+    const auto color = [&](unsigned shift) noexcept { return channel(shift) * intensity; };
     return {
         .positionSize = {source.position.x + offset.x, source.position.y + offset.y, source.position.z + offset.z, source.size},
         .previousPositionRotation = {source.previousPosition.x + offset.x, source.previousPosition.y + offset.y,
             source.previousPosition.z + offset.z, source.rotationRadians},
         .velocityStretch = {source.velocity.x, source.velocity.y, source.velocity.z, source.stretch},
-        .color = {color(0U), color(8U), color(16U), color(24U)},
+        .color = {color(0U), color(8U), color(16U), channel(24U)},
         .frameAgeIdentity = {
             static_cast<float>(source.frame),
             static_cast<float>(source.normalizedAgeUnorm) / 65'535.0F,
@@ -219,7 +224,7 @@ ParticleRenderBatchBuildResult ParticleRenderBatcher::Build(
             const std::uint32_t drawCount = std::min(remaining, kParticleGpuInstancesPerDraw);
             const std::uint32_t firstInstance = static_cast<std::uint32_t>(instanceScratch_.size());
             for (std::uint32_t index = 0U; index < drawCount; ++index) {
-                instanceScratch_.push_back(Pack(particles[orderScratch_[orderOffset + index]], renderOffset));
+                instanceScratch_.push_back(Pack(particles[orderScratch_[orderOffset + index]], renderOffset, emitter.colorIntensity));
             }
             const float batchViewDepth = drawCount == 0U ? 0.0F :
                 ViewDepth(camera, particles[orderScratch_[orderOffset]]);

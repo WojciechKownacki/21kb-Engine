@@ -7,7 +7,9 @@ namespace kb::scene {
 
 bool IsRepeatableParticleModule(ParticleModuleType type) noexcept {
     return type == ParticleModuleType::Wind || type == ParticleModuleType::Drag ||
-           type == ParticleModuleType::SubEmitter;
+           type == ParticleModuleType::SubEmitter || type == ParticleModuleType::Noise ||
+           type == ParticleModuleType::AxisRotation || type == ParticleModuleType::Attraction ||
+           type == ParticleModuleType::TorusSwirl;
 }
 
 bool IsValidParticleEffectUtf8(std::string_view text) noexcept {
@@ -79,6 +81,14 @@ ParticleModulePayload DefaultParticleModulePayload(ParticleModuleType type) {
         return ParticleCollisionPlaneModule{};
     case ParticleModuleType::SubEmitter:
         return ParticleSubEmitterModule{};
+    case ParticleModuleType::Noise:
+        return ParticleNoiseModule{};
+    case ParticleModuleType::AxisRotation:
+        return ParticleAxisRotationModule{};
+    case ParticleModuleType::Attraction:
+        return ParticleAttractionModule{};
+    case ParticleModuleType::TorusSwirl:
+        return ParticleTorusSwirlModule{};
     }
     throw std::invalid_argument{"particle module type is invalid"};
 }
@@ -101,6 +111,8 @@ ParticleOutputPayload DefaultParticleOutputPayload(ParticleOutputType type) {
         return ParticleBeamOutput{};
     case ParticleOutputType::Volumetric:
         return ParticleVolumetricOutput{};
+    case ParticleOutputType::Decal:
+        return ParticleDecalOutput{};
     }
     throw std::invalid_argument{"particle output type is invalid"};
 }

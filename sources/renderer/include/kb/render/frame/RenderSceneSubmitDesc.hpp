@@ -35,6 +35,9 @@ struct RenderSceneTargetBinding {
     // and decode the captured bytes. Count = unknown - captures against such a binding
     // honestly fail instead of guessing.
     bgfx::TextureFormat::Enum colorFormat = bgfx::TextureFormat::Count;
+    // The depth texture's format, for the copy the forward transparent pass samples (the depth itself is its
+    // depth attachment then). Count = unknown: that pass then has no scene depth to sample.
+    bgfx::TextureFormat::Enum depthFormat = bgfx::TextureFormat::Count;
 
     [[nodiscard]] constexpr bool IsValid() const noexcept {
         return viewport.IsValid();

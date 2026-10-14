@@ -488,7 +488,9 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_post_exposure_luminance.sc
     fs_post_motion_vectors.sc
     fs_post_taa_resolve.sc
+    fs_particle_decal.sc
     fs_particle_instanced.sc
+    fs_particle_strip.sc
     fs_present_tex.sc
     fs_screen_ui.sc
     vs_editor_gizmo.sc
@@ -507,7 +509,9 @@ set(KB_RENDERER_SHADER_MANIFEST
     vs_mesh_skinned_instanced.sc
     vs_mesh_skinned_motion_vectors_instanced.sc
     vs_present.sc
+    vs_particle_decal.sc
     vs_particle_instanced.sc
+    vs_particle_strip.sc
     vs_screen_ui.sc
 )
 
@@ -547,6 +551,8 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_skinned_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_present.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_instanced.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_strip.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_decal.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_gizmo.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_screen_ui.sc
@@ -594,6 +600,8 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_present_tex.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_particle_instanced.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_particle_strip.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_particle_decal.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_prefilter.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_blur.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_combine.sc

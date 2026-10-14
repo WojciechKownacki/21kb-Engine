@@ -229,6 +229,7 @@ public:
                 .viewportIndex = 0U,
             },
             .colorFormat = bgfx::TextureFormat::RGBA8,
+            .depthFormat = bgfx::TextureFormat::D24S8,
         };
     }
 
@@ -8066,6 +8067,99 @@ void RunRendererMillionParticleFileTest() {
 }
 #endif
 
+// A decal particle projects its texture onto the floor under it (in the forward path, through the copy of the
+// scene depth the transparent pass samples): the floor at the particle turns green, the floor away from it does not.
+[[nodiscard]] std::array<int, 2> ParticleDecalOnFloor(bool decal) {
+    constexpr std::uint16_t kSize = 64U;
+    SceneRenderLightingConfig lighting{};
+    lighting.lightingPath = SceneRenderLightingPath::Forward;
+    SnapshotBackend backend;
+    kb::particles::ParticleRenderEmitterRecord emitter{};
+    emitter.instanceId = 1U;
+    emitter.effectAssetId = 2U;
+    emitter.emitterId = 3U;
+    emitter.assetGeneration = 1U;
+    emitter.materialAssetId = 1U;
+    emitter.particleCount = 1U;
+    emitter.liveParticleCount = 1U;
+    emitter.output = kb::particles::ParticleRenderOutput::Decal;
+    emitter.blend = kb::particles::ParticleRenderBlendMode::Add;
+    emitter.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+    emitter.status = kb::particles::ParticleRenderEmitterStatus::Playing;
+    emitter.decalDepth = 2.0F;
+    emitter.boundsMinimum = {-3.0F, -1.0F, 2.0F};
+    emitter.boundsMaximum = {3.0F, 1.0F, 8.0F};
+    const std::array emitters{emitter};
+    const std::array particles{kb::particles::ParticleRenderRecord{
+        .position = {0.0F, 0.0F, 5.0F}, .size = 4.0F, .particleId = 11U, .packedColor = 0xFF00FF00U}};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame == 0) {
+            Require(kb::particles::ParticlePlayback::RegisterBackend(scene, backend).Succeeded() &&
+                    kb::particles::ParticlePlayback::WarmupRenderSnapshots(scene).Succeeded(),
+                "Decal test could not initialize its snapshot channel");
+        }
+        if (!decal) return;
+        Require(kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, backend, {
+                    .revision = static_cast<std::uint64_t>(frame) + 1U, .fixedStepIndex = static_cast<std::uint64_t>(frame) + 1U,
+                    .emitters = emitters, .particles = particles}).Succeeded(),
+            "Decal test could not publish its snapshot");
+    };
+    const auto pixels = RenderScreenSpaceScene({SsBox{{0.0F, -0.5F, 5.0F}, {20.0F, 1.0F, 20.0F}}}, {},
+        bx::Vec3{0.0F, 6.0F, -1.0F}, bx::Vec3{0.0F, 0.0F, 5.0F}, 40.0F, lighting, 3, kSize,
+        SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    const auto green = [&](std::size_t x, std::size_t y) { return static_cast<int>(pixels[(y * kSize + x) * 4U + 1U]); };
+    return {green(32U, 32U), green(4U, 60U)};
+}
+
+void RunRendererProjectsParticleDecalsTest() {
+    const std::array<int, 2> with = ParticleDecalOnFloor(true);
+    const std::array<int, 2> without = ParticleDecalOnFloor(false);
+    std::fprintf(stderr, "particle_decal centre=%d edge=%d without centre=%d edge=%d%c", with[0], with[1], without[0], without[1], 10);
+    Require(with[0] > without[0] + 60, "Decal test: the floor under the decal particle did not take its colour");
+    Require(std::abs(with[1] - without[1]) < 8, "Decal test: the decal reached the floor outside its box");
+}
+
+// A GPU emitter with a turning field is integrated by the stateful kernel: a particle born at (2, 0, 5) and
+// turned half a turn about the view axis through (0, 0, 5) is drawn on the left, without the turn on the right.
+[[nodiscard]] std::array<int, 2> GpuParticleTurnedByField(bool turn) {
+    constexpr std::uint16_t kSize = 64U;
+    SceneRenderLightingConfig lighting{};
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame != 1) return;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = {1U, 1U};
+        command.simTime = 1.0;
+        command.hasParams = true;
+        command.params.capacity = 4U;
+        command.params.output = kb::particles::ParticleRenderOutput::Billboard;
+        command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+        command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+        command.params.color.fill({1.0F, 1.0F, 1.0F, 1.0F});
+        command.params.size.fill(0.6F);
+        // The first visit integrates a quarter second at most (born half a second ago, drawn in that one frame):
+        // 720 degrees a second turn it half a turn.
+        command.params.axisRadiansPerSecond = turn ? 4.0F * 3.14159265F : 0.0F;
+        command.hasField = true;
+        command.fieldOrigin = {0.0F, 0.0F, 5.0F};
+        command.fieldAxis = {0.0F, 0.0F, 1.0F};
+        command.spawns.push_back(kb::particles::ParticleGpuSpawn{
+            .position = {2.0F, 0.0F, 5.0F}, .birthTime = 0.5F, .velocity = {0.0F, 0.0F, 0.0F}, .lifetime = 20.0F});
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{0.0F, 0.0F, -10.0F}, bx::Vec3{0.0F, 0.0F, 5.0F}, 30.0F,
+        lighting, 2, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    const auto at = [&](std::size_t x) { return static_cast<int>(pixels[(32U * kSize + x) * 4U]); };
+    return {at(48U), at(16U)}; // right (x = 2), left (x = -2)
+}
+
+void RunRendererTurnsGpuParticlesByFieldTest() {
+    const std::array<int, 2> turned = GpuParticleTurnedByField(true);
+    const std::array<int, 2> still = GpuParticleTurnedByField(false);
+    std::fprintf(stderr, "gpu_particle_field turned=%d,%d still=%d,%d%c", turned[0], turned[1], still[0], still[1], 10);
+    Require(still[0] > 150 && still[1] < 30, "GPU field test: without a field the particle must stay where it was born");
+    Require(turned[1] > 150 && turned[0] < 30, "GPU field test: the turning field did not carry the particle half a turn");
+}
+
 void RunRendererCollidesGpuParticlesTest() {
     const SceneRenderLightingPath forward = SceneRenderLightingPath::Forward;
     const SceneRenderLightingPath deferred = SceneRenderLightingPath::Deferred;
@@ -8300,6 +8394,8 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererShadowsVoxelGiBounceTest();
     RunVoxelGridFollowsMeshGeometryTest();
     RunRendererCollidesGpuParticlesTest();
+    RunRendererTurnsGpuParticlesByFieldTest();
+    RunRendererProjectsParticleDecalsTest();
     RunRendererSortsAlphaGpuParticlesTest();
     RunRendererDrawsGpuMeshParticlesTest();
     RunRendererSpinsGpuMeshParticlesTest();

@@ -2286,6 +2286,39 @@ void RunEntityComponentCommandTests() {
         "--set", "mesh=/Engine/Shapes/Plane" }).exitCode == 0, "an engine shape could not be assigned");
     Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "MeshRenderer",
         "--set", "mesh=/Game/NoSuch.obj" }).exitCode != 0, "a missing mesh must be refused");
+    // A particle effect is given by its path, as a mesh is.
+    {
+        std::ofstream effect(parent / "Scena" / "Assets" / "Sparks.kbvfx", std::ios::binary);
+        effect << "21kb ParticleEffect 2\neffect.formatVersion 2\neffect.id 1\neffect.displayName \"Sparks\"\n"
+                  "effect.recipeCategory \"\"\neffect.determinismSeed 1\neffect.durationSeconds 1\neffect.looping true\n"
+                  "effect.backendPolicy CpuDeterministic\neffect.gpuCatchupPolicy RestartFromSeed\neffect.emitterCount 0\n"
+                  "effect.eventBindingCount 0\n";
+    }
+    Require(Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--name", "Sparks" }).exitCode == 0,
+        "entity add of the effect owner failed");
+    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sparks", "--type", "Particle Effect",
+        "--set", "effectAssetId=/Game/Sparks.kbvfx" }).exitCode == 0, "a particle effect could not be assigned by its path");
+    {
+        kb::scene::Scene withEffect;
+        const kb::scene::SceneDocumentLoadResult document =
+            kb::scene::SceneDocumentService::Load(parent / "Scena" / "Assets" / "Scenes" / "Main.21kbscene");
+        Require(document.succeeded && kb::scene::SceneDocumentService::LoadIntoScene(withEffect, document.document),
+            "the scene with the particle effect could not be reloaded");
+        bool found = false;
+        for (const kb::scene::SceneEntity entity : withEffect.Hierarchy().RootEntities()) {
+            const kb::scene::ParticleEffectComponent* effect = withEffect.Components().ParticleEffects().TryGet(entity);
+            if (effect == nullptr) continue;
+            found = true;
+            // Choosing the effect enables the component, as the editor's asset field does.
+            Require(effect->enabled && effect->effectAssetId == kb::assets::MakeAssetId("/Game/Sparks.kbvfx:ParticleEffect").value,
+                "the particle effect chosen by its path must be the component's, and enable it");
+        }
+        Require(found, "the Particle Effect component was not saved");
+    }
+    Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sparks", "--type", "Particle Effect",
+        "--set", "effectAssetId=/Game/NoSuch.kbvfx" }).exitCode != 0, "a missing particle effect must be refused");
+    Require(Run(&kb::cli::RunEntityCommand, { "remove", "--project", project, "--name", "Sparks" }).exitCode == 0,
+        "entity remove of the effect owner failed");
     // Procedural sky settings with Unity's Skybox/Procedural ranges.
     Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "WorldBackdrop",
         "--set", "mode=3", "--set", "sunDisk=1", "--set", "sunSize=0.1", "--set", "skyTint=0.5,0.2,0.1", "--set", "exposure=2" }).exitCode == 0,

@@ -83,8 +83,23 @@ struct ParticleGpuEmitterParams {
     kb::math::Vec3 spinMax{};
     kb::math::Vec3 spinRateMin{};
     kb::math::Vec3 spinRateMax{};
+    // Fields the stateful kernel integrates like the CPU modules (a strength of 0 is off): curl noise (strength,
+    // frequency in cycles per metre, the module's seed), a turn about an axis through the field origin, and a
+    // pull toward a point (radius 0 = everywhere). Axis, field origin and point arrive with every step
+    // (ParticleGpuEmitterCommand::hasField), in the frame of the birth records.
+    float noiseStrength = 0.0F;
+    float noiseFrequency = 1.0F;
+    std::uint32_t noiseSeed = 0U;
+    float axisRadiansPerSecond = 0.0F;
+    float attractionStrength = 0.0F;
+    float attractionRadius = 0.0F;
 
     [[nodiscard]] constexpr bool HasCollision() const noexcept { return hasPlane || sceneDepthCollision; }
+    [[nodiscard]] constexpr bool HasForces() const noexcept {
+        return noiseStrength != 0.0F || axisRadiansPerSecond != 0.0F || attractionStrength != 0.0F;
+    }
+    // Collisions and the fields make the motion depend on its history: the stateful kernel integrates it.
+    [[nodiscard]] constexpr bool NeedsState() const noexcept { return HasCollision() || HasForces(); }
 };
 
 struct ParticleGpuEmitterKey {
@@ -112,6 +127,12 @@ struct ParticleGpuEmitterCommand {
     bool hasOrientation = false;
     std::array<float, 4> orientation{ 0.0F, 0.0F, 0.0F, 1.0F };
     std::array<float, 3> origin{ 0.0F, 0.0F, 0.0F };
+    // Where the fields of an emitter with forces are this step, in the frame of its birth records: the
+    // emitter's origin, the turning axis (unit) and the point particles are pulled toward.
+    bool hasField = false;
+    kb::math::Vec3 fieldOrigin{};
+    kb::math::Vec3 fieldAxis{ 0.0F, 1.0F, 0.0F };
+    kb::math::Vec3 attractionTarget{};
     std::vector<ParticleGpuSpawn> spawns;
     // The simulation origin (ParticlePlayback::SimulationOrigin) the positions, world matrix and collision plane
     // of this command are relative to.

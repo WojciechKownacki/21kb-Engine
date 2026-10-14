@@ -10,31 +10,30 @@ uniform vec4 u_particleVolumetricParams;
 
 void main()
 {
+    // The texture modulated by the particle colour (HDR); additive output is premultiplied.
     vec4 tex = texture2D(s_particleAtlas, v_texcoord0);
-    float energy = max(tex.a, max(tex.r, max(tex.g, tex.b)));
+    float particleAlpha = clamp(v_color0.a, 0.0, 1.0);
+    float coverage = tex.a;
     bool volumetric = u_particleFeatureParams.y > 6.5 && u_particleFeatureParams.y < 7.5;
     float sceneDepth = 0.0;
-    if (energy < 0.002 && !volumetric) {
+    if (coverage < 0.002 && !volumetric) {
         discard;
     }
 
-    vec3 tint = v_color0.rgb;
-    float particleAlpha = clamp(v_color0.a, 0.0, 1.0);
-    float core = energy * energy;
-    vec3 shaded = mix(tint, vec3(1.0, 1.0, 1.0), core);
+    vec3 shaded = tex.rgb * v_color0.rgb;
     bool additive = u_particleFeatureParams.z > 0.5;
     vec4 color;
     if (additive) {
-        color = vec4(shaded * energy * particleAlpha, energy * particleAlpha);
+        color = vec4(shaded * coverage * particleAlpha, coverage * particleAlpha);
     } else {
-        color = vec4(shaded, energy * particleAlpha);
+        color = vec4(shaded, coverage * particleAlpha);
     }
 
     if (u_particleFeatureParams.x > 0.5) {
-        float coverageWidth = fwidth(energy);
-        float coverage = smoothstep(0.0, max(coverageWidth, 0.0001), energy);
-        color.rgb *= coverage;
-        color.a *= coverage;
+        float edgeWidth = fwidth(coverage);
+        float edge = smoothstep(0.0, max(edgeWidth, 0.0001), coverage);
+        color.rgb *= edge;
+        color.a *= edge;
     }
     if (u_particleDepthParams.w > 0.5) {
         vec2 screenUv = v_shadowPos.xy / max(abs(v_shadowPos.w), 0.000001) * 0.5 + 0.5;

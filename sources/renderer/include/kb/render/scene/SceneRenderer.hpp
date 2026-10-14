@@ -56,6 +56,8 @@ public:
     // Runs the emitter simulation for the frame in `viewId`, which must not bind the scene depth as a render target.
     void DispatchGpuParticleEmitters(bgfx::ViewId viewId, const SceneRenderCamera& camera, std::uint32_t viewportWidth, std::uint32_t viewportHeight);
     void ReleaseParticleScene(std::uint64_t sceneId) noexcept;
+    // Registers the GPU particle consumer of the scene ahead of its first frame (Renderer::PrepareParticleScene).
+    void PrepareGpuParticleConsumer(kb::scene::Scene& scene) noexcept;
     void ReleaseAllParticleScenes() noexcept;
     void Submit(bgfx::ViewId viewId, const RenderScene& renderScene, std::uint32_t viewportWidth, std::uint32_t viewportHeight, const SceneRenderCamera* cameraOverride = nullptr, SceneRenderDrawBudget drawBudget = {}, SceneRenderLightingConfig lightingConfig = {}) const;
     void SubmitMeshPass(

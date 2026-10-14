@@ -15,6 +15,7 @@
 #include <span>
 #include <string_view>
 #include <variant>
+#include <string>
 #include <vector>
 
 namespace kb::particle_plugin {
@@ -38,6 +39,8 @@ public:
 
     void Warmup();
     [[nodiscard]] bool IsWarmedUp() const noexcept;
+    // Why the last effect could not be loaded or compiled (its load error or compile diagnostics).
+    [[nodiscard]] const std::string& LastEffectFailure() const noexcept { return lastEffectFailure_; }
     [[nodiscard]] std::size_t LiveInstanceCount() const noexcept;
     [[nodiscard]] std::size_t ParticleCapacity() const noexcept;
     [[nodiscard]] static constexpr std::size_t CommandCapacity() noexcept {
@@ -165,6 +168,8 @@ private:
         std::array<std::uint8_t, kb::scene::kParticleEffectMaxEmitters> nextBurst{};
         std::array<std::uint32_t, kb::scene::kParticleEffectMaxEmitters> liveParticles{};
         std::array<std::uint32_t, kb::scene::kParticleEffectMaxEventBindings> bindingEventsThisStep{};
+        kb::math::Vec3 beamStart{};  // ends of the beam being born (SpawnExact)
+        kb::math::Vec3 beamEnd{};
     };
 
     struct InternalEvent {
@@ -191,6 +196,7 @@ private:
         std::uint64_t effectAssetId,
         kb::particles::ParticleRuntimeStatus& failureStatus);
     void ReleaseCompiledEffect(std::uint32_t index) noexcept;
+    std::string lastEffectFailure_;
     void RefreshCompiledEffects(kb::scene::Scene& scene);
     [[nodiscard]] static bool TopologyCompatible(
         const CompiledEffect& previous,
@@ -265,6 +271,18 @@ private:
     [[nodiscard]] kb::math::Vec3 SampleInitialVelocity(
         const CompiledEmitter& emitter,
         InstanceRuntime& runtime) noexcept;
+    // A point of the emitter's spawn shape (emitter space) and the shape normal there.
+    [[nodiscard]] kb::math::Vec3 SampleShape(const CompiledEmitter& emitter, InstanceRuntime& runtime,
+                                             kb::math::Vec3& normal) noexcept;
+    // Start velocity of a birth (emitter space) from the shape normal at its point.
+    [[nodiscard]] kb::math::Vec3 SampleStartVelocity(const CompiledEmitter& emitter, InstanceRuntime& runtime,
+                                                     std::uint8_t emitterIndex, kb::math::Vec3 normal) noexcept;
+    // Where the emitter is now (simulation space): the owner's position plus the emitter's offset, or
+    // its absolute position.
+    [[nodiscard]] kb::math::Vec3 EmitterOrigin(std::uint32_t denseIndex, const CompiledEmitter& emitter) const noexcept;
+    // Births of the WhileAlive event bindings: every live source particle spawns its target at the
+    // binding's rate (smoke behind debris).
+    void EmitWhileAlive(float fixedDeltaSeconds, std::uint32_t& remainingSpawnBudget) noexcept;
 
     bool warmedUp_ = false;
     kb::math::DVec3 simulationOrigin_{};
@@ -314,6 +332,7 @@ private:
     std::vector<float> particleLifetimes_;
     std::vector<kb::math::Color> particleColors_;
     std::vector<float> particleSizes_;
+    std::vector<float> particleSizeScales_;  // 1 - sizeRandom x r, fixed at birth
     std::vector<kb::math::Vec3> particleSpins_;     // angles at birth (radians), per axis
     std::vector<kb::math::Vec3> particleSpinRates_; // angular velocities (radians per second), per axis
     std::vector<std::uint8_t> particleEventDepths_;

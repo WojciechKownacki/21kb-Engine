@@ -22,6 +22,7 @@ enum class ParticleRenderOutput : std::uint8_t {
     Ribbon,
     Beam,
     Volumetric,
+    Decal,
 };
 
 enum class ParticleRenderBlendMode : std::uint8_t {
@@ -175,6 +176,13 @@ struct ParticleRenderEmitterRecord {
     float volumetricRadiusScale = 1.0F;
     std::uint32_t volumetricLowQualitySteps = 8U;
     std::uint32_t volumetricHighQualitySteps = 24U;
+    // HDR multiplier of the particle colours, particle lights (lightMaxCount 0 = none) and the
+    // decal box height.
+    float colorIntensity = 1.0F;
+    float lightRadius = 0.0F;
+    float lightIntensity = 0.0F;
+    std::uint16_t lightMaxCount = 0U;
+    float decalDepth = 1.0F;
     kb::math::Vec3 outputOrigin{};
     kb::math::Vec3 beamEnd{};
     kb::math::Vec3 boundsMinimum{};
@@ -192,7 +200,7 @@ struct ParticleRenderEmitterRecord {
 static_assert(std::is_trivially_copyable_v<ParticleRenderEmitterRecord>);
 // The bounded record carries all authored output contracts while remaining a
 // compact, fixed-stride GPU upload payload.
-static_assert(sizeof(ParticleRenderEmitterRecord) <= 240U);
+static_assert(sizeof(ParticleRenderEmitterRecord) <= 264U);
 
 struct ParticleRenderSnapshotHeader {
     std::uint64_t revision = 0U;
