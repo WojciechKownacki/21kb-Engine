@@ -175,16 +175,30 @@ KB_PARTICLE_ENUM_NAMES(ParticleModuleType, {ParticleModuleType::InitialVelocity,
                        {ParticleModuleType::SizeOverLife, "SizeOverLife"},
                        {ParticleModuleType::AlphaOverLife, "AlphaOverLife"},
                        {ParticleModuleType::CollisionPlane, "CollisionPlane"},
-                       {ParticleModuleType::SubEmitter, "SubEmitter"});
+                       {ParticleModuleType::SubEmitter, "SubEmitter"}, {ParticleModuleType::Noise, "Noise"},
+                       {ParticleModuleType::AxisRotation, "AxisRotation"},
+                       {ParticleModuleType::Attraction, "Attraction"},
+                       {ParticleModuleType::TorusSwirl, "TorusSwirl"});
 KB_PARTICLE_ENUM_NAMES(ParticleEventTrigger, {ParticleEventTrigger::Birth, "Birth"},
-                       {ParticleEventTrigger::Death, "Death"}, {ParticleEventTrigger::Collision, "Collision"});
+                       {ParticleEventTrigger::Death, "Death"}, {ParticleEventTrigger::Collision, "Collision"},
+                       {ParticleEventTrigger::WhileAlive, "WhileAlive"});
+KB_PARTICLE_ENUM_NAMES(ParticleSpawnShape, {ParticleSpawnShape::Point, "Point"}, {ParticleSpawnShape::Sphere, "Sphere"},
+                       {ParticleSpawnShape::Box, "Box"}, {ParticleSpawnShape::Cone, "Cone"},
+                       {ParticleSpawnShape::Circle, "Circle"}, {ParticleSpawnShape::Disc, "Disc"},
+                       {ParticleSpawnShape::Line, "Line"}, {ParticleSpawnShape::Spiral, "Spiral"});
+KB_PARTICLE_ENUM_NAMES(ParticleVelocityMode, {ParticleVelocityMode::Cone, "Cone"},
+                       {ParticleVelocityMode::Radial, "Radial"}, {ParticleVelocityMode::Spiral2D, "Spiral2D"});
+KB_PARTICLE_ENUM_NAMES(ParticleBeamEnds, {ParticleBeamEnds::Fixed, "Fixed"},
+                       {ParticleBeamEnds::ShapeOffset, "ShapeOffset"},
+                       {ParticleBeamEnds::ShapeToEmitter, "ShapeToEmitter"});
 KB_PARTICLE_ENUM_NAMES(ParticleEventAction, {ParticleEventAction::EmitTargetEmitter, "EmitTargetEmitter"},
                        {ParticleEventAction::EmitEffectAsset, "EmitEffectAsset"});
 KB_PARTICLE_ENUM_NAMES(ParticleOutputType, {ParticleOutputType::Billboard, "Billboard"},
                        {ParticleOutputType::StretchedBillboard, "StretchedBillboard"},
                        {ParticleOutputType::PointSprite, "PointSprite"}, {ParticleOutputType::Mesh, "Mesh"},
                        {ParticleOutputType::Trail, "Trail"}, {ParticleOutputType::Ribbon, "Ribbon"},
-                       {ParticleOutputType::Beam, "Beam"}, {ParticleOutputType::Volumetric, "Volumetric"});
+                       {ParticleOutputType::Beam, "Beam"}, {ParticleOutputType::Volumetric, "Volumetric"},
+                       {ParticleOutputType::Decal, "Decal"});
 KB_PARTICLE_ENUM_NAMES(ParticleBlendMode, {ParticleBlendMode::Opaque, "Opaque"}, {ParticleBlendMode::Alpha, "Alpha"},
                        {ParticleBlendMode::Add, "Add"}, {ParticleBlendMode::Multiply, "Multiply"},
                        {ParticleBlendMode::Subtract, "Subtract"}, {ParticleBlendMode::Premultiplied, "Premultiplied"});
@@ -487,6 +501,8 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
         reader.Required(IndexPath(emitterIndex, "maxParticles"), emitter.maxParticles, ParseUInt<std::uint32_t>);
         reader.Required(IndexPath(emitterIndex, "simulationSpace"), emitter.simulationSpace,
                         ParseEnum<ParticleSimulationSpace>, ParticleEffectDiagnosticCode::InvalidEnum);
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "absolutePosition"), emitter.absolutePosition,
+                                          ParseBool));
         reader.Required(IndexPath(emitterIndex, "spawn.mode"), emitter.spawn.mode, ParseEnum<ParticleSpawnMode>,
                         ParticleEffectDiagnosticCode::InvalidEnum);
         ReadCurve(reader, IndexPath(emitterIndex, "spawn.rate"), emitter.spawn.rateOverTime);
@@ -519,6 +535,40 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
                                           emitter.spawn.angularVelocityMinDegrees, ParseVec3));
         static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.angularVelocityMaxDegrees"),
                                           emitter.spawn.angularVelocityMaxDegrees, ParseVec3));
+        {
+            ParticleSpawnAsset& s = emitter.spawn;
+            const auto opt = [&](std::string_view key, auto& value, auto parse) {
+                static_cast<void>(reader.Optional(IndexPath(emitterIndex, key), value, parse));
+            };
+            opt("spawn.sizeRandom", s.sizeRandom, ParseFloat);
+            opt("spawn.startDelaySeconds", s.startDelaySeconds, ParseFloat);
+            opt("spawn.cycleSeconds", s.cycleSeconds, ParseFloat);
+            opt("spawn.cycleLooping", s.cycleLooping, ParseBool);
+            static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.shape.type"), s.shape.type,
+                                              ParseEnum<ParticleSpawnShape>, ParticleEffectDiagnosticCode::InvalidEnum));
+            opt("spawn.shape.radius", s.shape.radius, ParseFloat);
+            opt("spawn.shape.boxSize", s.shape.boxSize, ParseVec3);
+            opt("spawn.shape.coneAngleDegrees", s.shape.coneAngleDegrees, ParseFloat);
+            opt("spawn.shape.surfaceOnly", s.shape.surfaceOnly, ParseBool);
+            opt("spawn.shape.upperHalfOnly", s.shape.upperHalfOnly, ParseBool);
+            opt("spawn.shape.lineStart", s.shape.lineStart, ParseVec3);
+            opt("spawn.shape.lineEnd", s.shape.lineEnd, ParseVec3);
+            opt("spawn.shape.spiralArms", s.shape.spiralArms, ParseFloat);
+            opt("spawn.shape.spiralTwist", s.shape.spiralTwist, ParseFloat);
+            opt("spawn.shape.spiralThickness", s.shape.spiralThickness, ParseFloat);
+            static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.velocityMode"), s.velocityMode,
+                                              ParseEnum<ParticleVelocityMode>, ParticleEffectDiagnosticCode::InvalidEnum));
+            opt("spawn.spiralArms", s.spiralArms, ParseFloat);
+            opt("spawn.spiralTurnDegreesPerSecond", s.spiralTurnDegreesPerSecond, ParseFloat);
+            opt("spawn.addedVelocity", s.addedVelocity, ParseVec3);
+            opt("spawn.beam.enabled", s.beam.enabled, ParseBool);
+            static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.beam.ends"), s.beam.ends,
+                                              ParseEnum<ParticleBeamEnds>, ParticleEffectDiagnosticCode::InvalidEnum));
+            opt("spawn.beam.segments", s.beam.segments, ParseUInt<std::uint32_t>);
+            opt("spawn.beam.start", s.beam.start, ParseVec3);
+            opt("spawn.beam.end", s.beam.end, ParseVec3);
+            opt("spawn.beam.noise", s.beam.noise, ParseFloat);
+        }
         std::uint32_t moduleCount = 0U;
         reader.RequiredBoundedCount(IndexPath(emitterIndex, "moduleCount"), moduleCount,
                                     kParticleEffectMaxModulesPerEmitter);
@@ -563,6 +613,21 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
                         reader.Required(base + ".restitution", payload.restitution, ParseFloat);
                         reader.Required(base + ".friction", payload.friction, ParseFloat);
                         reader.Required(base + ".maxEventsPerStep", payload.maxEventsPerStep, ParseUInt<std::uint32_t>);
+                        static_cast<void>(reader.Optional(base + ".killOnContact", payload.killOnContact, ParseBool));
+                    } else if constexpr (std::is_same_v<T, ParticleNoiseModule>) {
+                        reader.Required(base + ".strength", payload.strength, ParseFloat);
+                        reader.Required(base + ".frequency", payload.frequency, ParseFloat);
+                    } else if constexpr (std::is_same_v<T, ParticleAxisRotationModule>) {
+                        reader.Required(base + ".axis", payload.axis, ParseVec3);
+                        reader.Required(base + ".degreesPerSecond", payload.degreesPerSecond, ParseFloat);
+                    } else if constexpr (std::is_same_v<T, ParticleAttractionModule>) {
+                        reader.Required(base + ".point", payload.point, ParseVec3);
+                        reader.Required(base + ".strength", payload.strength, ParseFloat);
+                        reader.Required(base + ".radius", payload.radius, ParseFloat);
+                    } else if constexpr (std::is_same_v<T, ParticleTorusSwirlModule>) {
+                        reader.Required(base + ".center", payload.center, ParseVec3);
+                        reader.Required(base + ".radius", payload.radius, ParseFloat);
+                        reader.Required(base + ".degreesPerSecond", payload.degreesPerSecond, ParseFloat);
                     } else if constexpr (std::is_same_v<T, ParticleSubEmitterModule>) {
                         reader.Required(base + ".targetEmitterId", payload.targetEmitterId, ParseUInt<std::uint64_t>);
                         reader.Required(base + ".trigger", payload.trigger, ParseEnum<ParticleEventTrigger>,
@@ -589,6 +654,14 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
         reader.Required(IndexPath(emitterIndex, "output.antiAliasing"), output.antiAliasing, ParseBool);
         reader.Required(IndexPath(emitterIndex, "output.alignment"), output.alignment, ParseEnum<ParticleAlignment>,
                         ParticleEffectDiagnosticCode::InvalidEnum);
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "output.colorIntensity"), output.colorIntensity,
+                                          ParseFloat));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "output.lightEnabled"), output.lightEnabled, ParseBool));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "output.lightRadius"), output.lightRadius, ParseFloat));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "output.lightIntensity"), output.lightIntensity,
+                                          ParseFloat));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "output.lightMaxCount"), output.lightMaxCount,
+                                          ParseUInt<std::uint32_t>));
         output.payload = DefaultParticleOutputPayload(output.type);
         const std::string base = IndexPath(emitterIndex, "output.payload");
         std::visit(
@@ -628,6 +701,8 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
                     reader.Required(base + ".radiusScale", payload.radiusScale, ParseFloat);
                     reader.Required(base + ".lowQualitySteps", payload.lowQualitySteps, ParseUInt<std::uint32_t>);
                     reader.Required(base + ".highQualitySteps", payload.highQualitySteps, ParseUInt<std::uint32_t>);
+                } else if constexpr (std::is_same_v<T, ParticleDecalOutput>) {
+                    reader.Required(base + ".depth", payload.depth, ParseFloat);
                 }
             },
             output.payload);
@@ -650,6 +725,7 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
         reader.Required(EventPath(index, "count"), event.count, ParseUInt<std::uint32_t>);
         reader.Required(EventPath(index, "maxDepth"), event.maxDepth, ParseUInt<std::uint32_t>);
         reader.Required(EventPath(index, "perStepBudget"), event.perStepBudget, ParseUInt<std::uint32_t>);
+        static_cast<void>(reader.Optional(EventPath(index, "ratePerSecond"), event.ratePerSecond, ParseFloat));
     }
     reader.Finish();
     if (asset.formatVersion != kParticleEffectFormatVersion)
@@ -1059,6 +1135,7 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
         VecLine(out, IndexPath(ei, "localScale"), e.localScale);
         Line(out, IndexPath(ei, "maxParticles"), std::to_string(e.maxParticles));
         Line(out, IndexPath(ei, "simulationSpace"), EnumText(e.simulationSpace));
+        if (e.absolutePosition) BoolLine(out, IndexPath(ei, "absolutePosition"), true);
         Line(out, IndexPath(ei, "spawn.mode"), EnumText(e.spawn.mode));
         WriteCurve(out, IndexPath(ei, "spawn.rate"), e.spawn.rateOverTime);
         Line(out, IndexPath(ei, "spawn.burstCount"), std::to_string(e.spawn.bursts.size()));
@@ -1085,6 +1162,46 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
             VecLine(out, IndexPath(ei, "spawn.initialRotationMaxDegrees"), e.spawn.initialRotationMaxDegrees);
             VecLine(out, IndexPath(ei, "spawn.angularVelocityMinDegrees"), e.spawn.angularVelocityMinDegrees);
             VecLine(out, IndexPath(ei, "spawn.angularVelocityMaxDegrees"), e.spawn.angularVelocityMaxDegrees);
+        }
+        {
+            const ParticleSpawnAsset& s = e.spawn;
+            const ParticleSpawnAsset d{};
+            if (s.sizeRandom != d.sizeRandom) Line(out, IndexPath(ei, "spawn.sizeRandom"), Float(s.sizeRandom));
+            if (s.startDelaySeconds != d.startDelaySeconds || s.cycleSeconds != d.cycleSeconds ||
+                s.cycleLooping != d.cycleLooping) {
+                Line(out, IndexPath(ei, "spawn.startDelaySeconds"), Float(s.startDelaySeconds));
+                Line(out, IndexPath(ei, "spawn.cycleSeconds"), Float(s.cycleSeconds));
+                BoolLine(out, IndexPath(ei, "spawn.cycleLooping"), s.cycleLooping);
+            }
+            if (s.shape.type != ParticleSpawnShape::Point) {
+                Line(out, IndexPath(ei, "spawn.shape.type"), EnumText(s.shape.type));
+                Line(out, IndexPath(ei, "spawn.shape.radius"), Float(s.shape.radius));
+                VecLine(out, IndexPath(ei, "spawn.shape.boxSize"), s.shape.boxSize);
+                Line(out, IndexPath(ei, "spawn.shape.coneAngleDegrees"), Float(s.shape.coneAngleDegrees));
+                BoolLine(out, IndexPath(ei, "spawn.shape.surfaceOnly"), s.shape.surfaceOnly);
+                BoolLine(out, IndexPath(ei, "spawn.shape.upperHalfOnly"), s.shape.upperHalfOnly);
+                VecLine(out, IndexPath(ei, "spawn.shape.lineStart"), s.shape.lineStart);
+                VecLine(out, IndexPath(ei, "spawn.shape.lineEnd"), s.shape.lineEnd);
+                Line(out, IndexPath(ei, "spawn.shape.spiralArms"), Float(s.shape.spiralArms));
+                Line(out, IndexPath(ei, "spawn.shape.spiralTwist"), Float(s.shape.spiralTwist));
+                Line(out, IndexPath(ei, "spawn.shape.spiralThickness"), Float(s.shape.spiralThickness));
+            }
+            if (s.velocityMode != d.velocityMode || s.spiralArms != d.spiralArms ||
+                s.spiralTurnDegreesPerSecond != d.spiralTurnDegreesPerSecond) {
+                Line(out, IndexPath(ei, "spawn.velocityMode"), EnumText(s.velocityMode));
+                Line(out, IndexPath(ei, "spawn.spiralArms"), Float(s.spiralArms));
+                Line(out, IndexPath(ei, "spawn.spiralTurnDegreesPerSecond"), Float(s.spiralTurnDegreesPerSecond));
+            }
+            if (s.addedVelocity.x != 0.0F || s.addedVelocity.y != 0.0F || s.addedVelocity.z != 0.0F)
+                VecLine(out, IndexPath(ei, "spawn.addedVelocity"), s.addedVelocity);
+            if (s.beam.enabled) {
+                BoolLine(out, IndexPath(ei, "spawn.beam.enabled"), true);
+                Line(out, IndexPath(ei, "spawn.beam.ends"), EnumText(s.beam.ends));
+                Line(out, IndexPath(ei, "spawn.beam.segments"), std::to_string(s.beam.segments));
+                VecLine(out, IndexPath(ei, "spawn.beam.start"), s.beam.start);
+                VecLine(out, IndexPath(ei, "spawn.beam.end"), s.beam.end);
+                Line(out, IndexPath(ei, "spawn.beam.noise"), Float(s.beam.noise));
+            }
         }
         Line(out, IndexPath(ei, "moduleCount"), std::to_string(e.modules.size()));
         for (std::size_t mi = 0; mi < e.modules.size(); ++mi) {
@@ -1121,6 +1238,21 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
                         Line(out, base + ".restitution", Float(p.restitution));
                         Line(out, base + ".friction", Float(p.friction));
                         Line(out, base + ".maxEventsPerStep", std::to_string(p.maxEventsPerStep));
+                        if (p.killOnContact) BoolLine(out, base + ".killOnContact", true);
+                    } else if constexpr (std::is_same_v<T, ParticleNoiseModule>) {
+                        Line(out, base + ".strength", Float(p.strength));
+                        Line(out, base + ".frequency", Float(p.frequency));
+                    } else if constexpr (std::is_same_v<T, ParticleAxisRotationModule>) {
+                        VecLine(out, base + ".axis", p.axis);
+                        Line(out, base + ".degreesPerSecond", Float(p.degreesPerSecond));
+                    } else if constexpr (std::is_same_v<T, ParticleAttractionModule>) {
+                        VecLine(out, base + ".point", p.point);
+                        Line(out, base + ".strength", Float(p.strength));
+                        Line(out, base + ".radius", Float(p.radius));
+                    } else if constexpr (std::is_same_v<T, ParticleTorusSwirlModule>) {
+                        VecLine(out, base + ".center", p.center);
+                        Line(out, base + ".radius", Float(p.radius));
+                        Line(out, base + ".degreesPerSecond", Float(p.degreesPerSecond));
                     } else if constexpr (std::is_same_v<T, ParticleSubEmitterModule>) {
                         Line(out, base + ".targetEmitterId", std::to_string(p.targetEmitterId));
                         Line(out, base + ".trigger", EnumText(p.trigger));
@@ -1142,6 +1274,13 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
         BoolLine(out, IndexPath(ei, "output.softParticles"), o.softParticles);
         BoolLine(out, IndexPath(ei, "output.antiAliasing"), o.antiAliasing);
         Line(out, IndexPath(ei, "output.alignment"), EnumText(o.alignment));
+        if (o.colorIntensity != 1.0F) Line(out, IndexPath(ei, "output.colorIntensity"), Float(o.colorIntensity));
+        if (o.lightEnabled) {
+            BoolLine(out, IndexPath(ei, "output.lightEnabled"), true);
+            Line(out, IndexPath(ei, "output.lightRadius"), Float(o.lightRadius));
+            Line(out, IndexPath(ei, "output.lightIntensity"), Float(o.lightIntensity));
+            Line(out, IndexPath(ei, "output.lightMaxCount"), std::to_string(o.lightMaxCount));
+        }
         auto base = IndexPath(ei, "output.payload");
         std::visit(
             [&](const auto& p) {
@@ -1179,6 +1318,8 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
                     Line(out, base + ".radiusScale", Float(p.radiusScale));
                     Line(out, base + ".lowQualitySteps", std::to_string(p.lowQualitySteps));
                     Line(out, base + ".highQualitySteps", std::to_string(p.highQualitySteps));
+                } else if constexpr (std::is_same_v<T, ParticleDecalOutput>) {
+                    Line(out, base + ".depth", Float(p.depth));
                 }
             },
             o.payload);
@@ -1195,6 +1336,7 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
         Line(out, EventPath(i, "count"), std::to_string(e.count));
         Line(out, EventPath(i, "maxDepth"), std::to_string(e.maxDepth));
         Line(out, EventPath(i, "perStepBudget"), std::to_string(e.perStepBudget));
+        if (e.ratePerSecond != 0.0F) Line(out, EventPath(i, "ratePerSecond"), Float(e.ratePerSecond));
     }
     if (out.size() > kParticleEffectMaxSourceBytes) {
         diagnostics.push_back({.code = ParticleEffectDiagnosticCode::SourceTooLarge,

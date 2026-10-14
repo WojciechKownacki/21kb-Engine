@@ -73,7 +73,7 @@ void TestCompactAuthoringMetrics() {
 }
 
 void TestHitTestingScrollAndSelectionFocus() {
-    const auto rows = Rows(8U);
+    const auto rows = Rows(kb::scene::kParticleEffectMaxEmitters);
     const RECT content{0, 0, 900, 300};
     const auto unscrolled = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
         kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, rows, 0, 96U));
@@ -88,7 +88,7 @@ void TestHitTestingScrollAndSelectionFocus() {
     Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(*unscrolled, add.x, add.y).action ==
             kb::editor::ParticleEditorPanelAction::None,
         "full emitter list did not disable the add hit target");
-    const auto availableRows = Rows(7U);
+    const auto availableRows = Rows(kb::scene::kParticleEffectMaxEmitters - 1U);
     const auto available = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
         kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, availableRows, 0, 96U));
     Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(*available, add.x, add.y).action ==

@@ -6,6 +6,7 @@
 #include "kb/render/particles/ParticleStripGeometryBuilder.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/RenderScene.hpp"
+#include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
 #include "kb/render/scene/TransparentDepthKey.hpp"
 
 #include <array>
@@ -734,6 +735,109 @@ void operator delete[](void* memory) noexcept { std::free(memory); }
 void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
 
+// Strips carry the colour of their points (times the emitter's colour intensity) and a texture coordinate
+// running along the whole strip; a trail fades out toward its oldest sample.
+void TestStripColourIntensityAndTextureCoordinates() {
+    auto emitter = Emitter(0U, 3U, kb::particles::ParticleRenderSortMode::None);
+    emitter.output = kb::particles::ParticleRenderOutput::Ribbon;
+    emitter.ribbonMaxSegments = 8U;
+    emitter.ribbonWidth = 0.25F;
+    emitter.ribbonBreakOnDeath = true;
+    emitter.colorIntensity = 2.0F;
+    std::array particles{Particle(21U, 0.0F, 0.0F, 0U), Particle(22U, 1.0F, 0.0F, 0U), Particle(23U, 2.0F, 0.0F, 0U)};
+    particles[0].packedColor = 0xFF0000FFU; // red, opaque
+    particles[1].packedColor = 0xFF00FF00U; // green
+    particles[2].packedColor = 0x80FF0000U; // blue, half transparent
+    for (std::uint32_t index = 0U; index < particles.size(); ++index) particles[index].spawnOrdinal = index;
+    kb::render::ParticleStripGeometryBuilder builder;
+    builder.Warmup();
+    const auto ribbonSnapshot = Snapshot(std::span{&emitter, 1U}, particles);
+    const auto ribbon = builder.Build(*ribbonSnapshot, IdentityCamera());
+    Require(ribbon.Succeeded() && ribbon.vertices.size() == 8U && ribbon.draws.size() == 1U &&
+            ribbon.draws[0].textureAtlasAssetId == 6U,
+        "a three-point ribbon did not build two textured segments");
+    const auto& v = ribbon.vertices;
+    Require(v[0].u == 0.0F && v[2].u == 0.5F && v[4].u == 0.5F && v[6].u == 1.0F && v[0].v == 0.0F && v[1].v == 1.0F,
+        "the ribbon's texture coordinate did not run along the whole strip");
+    Require(v[0].r == 2.0F && v[0].g == 0.0F && v[2].g == 2.0F && v[6].b == 2.0F &&
+            std::abs(v[6].a - 128.0F / 255.0F) < 0.0001F && v[0].a == 1.0F,
+        "the ribbon's points did not keep their colour times the colour intensity and their alpha");
+
+    auto trailEmitter = Emitter(0U, 1U, kb::particles::ParticleRenderSortMode::None);
+    trailEmitter.output = kb::particles::ParticleRenderOutput::Trail;
+    trailEmitter.trailSampleIntervalSeconds = 1.0F / 60.0F;
+    trailEmitter.trailMinimumDistance = 0.0F;
+    trailEmitter.trailMaxSamplesPerParticle = 3U;
+    trailEmitter.trailWidth = 0.5F;
+    std::array head{Particle(31U, 0.0F, 0.0F, 0U)};
+    head[0].packedColor = 0xFFFFFFFFU;
+    kb::particles::ParticleRenderSnapshotChannel channel;
+    Require(channel.Warmup(141U).Succeeded(), "trail fade snapshot warmup failed");
+    kb::render::ParticleStripGeometryBuilder trailBuilder;
+    trailBuilder.Warmup();
+    kb::render::ParticleStripBuildResult trail{};
+    for (std::uint64_t step = 1U; step <= 3U; ++step) {
+        head[0].position.x = static_cast<float>(step);
+        Require(channel.Publish(1U, {.revision = step, .fixedStepIndex = step,
+                    .emitters = std::span{&trailEmitter, 1U}, .particles = head}).Succeeded(),
+            "trail fade snapshot publication failed");
+        trail = trailBuilder.Build(*channel.Read(), IdentityCamera());
+    }
+    Require(trail.Succeeded() && trail.vertices.size() == 8U && trail.vertices[0].a == 0.0F &&
+            std::abs(trail.vertices[2].a - 0.5F) < 0.0001F && trail.vertices[6].a == 1.0F && trail.vertices[6].r == 1.0F,
+        "the trail did not take its particle's colour fading out toward the oldest sample");
+}
+
+// Billboards and mesh particles draw their colour times the emitter's colour intensity, alpha unchanged.
+void TestColourIntensityReachesBillboardsAndMeshes() {
+    auto emitter = Emitter(0U, 1U, kb::particles::ParticleRenderSortMode::None, kb::particles::ParticleRenderBlendMode::Add);
+    emitter.colorIntensity = 3.0F;
+    std::array particles{Particle(41U, 0.0F, 0.0F, 0U)};
+    particles[0].packedColor = 0x80FF0000U;
+    const auto snapshot = Snapshot(std::span{&emitter, 1U}, particles);
+    kb::render::ParticleRenderBatcher batcher;
+    batcher.Warmup(8U);
+    const auto built = batcher.Build(*snapshot, IdentityCamera());
+    Require(built.Succeeded() && built.instances.size() == 1U && built.instances[0].color[2] == 3.0F &&
+            std::abs(built.instances[0].color[3] - 128.0F / 255.0F) < 0.0001F,
+        "a billboard's colour was not multiplied by its emitter's colour intensity");
+
+    auto meshEmitter = emitter;
+    meshEmitter.output = kb::particles::ParticleRenderOutput::Mesh;
+    meshEmitter.meshAssetId = 77U;
+    const auto meshSnapshot = Snapshot(std::span{&meshEmitter, 1U}, particles);
+    kb::render::ParticleMeshBatchBuilder meshes;
+    meshes.Warmup(8U);
+    const kb::render::SceneRenderCamera camera = IdentityCamera();
+    meshes.Build(*meshSnapshot, &camera);
+    Require(meshes.Batches().size() == 1U && meshes.Batches()[0].instances.size() == 1U &&
+            meshes.Batches()[0].instances[0].color[2] == 3.0F,
+        "a mesh particle's colour was not multiplied by its emitter's colour intensity");
+}
+
+// The lit particles of an emitter become point lights of their colour (alpha scales the intensity), and
+// lights of particles no longer lit go away.
+void TestParticleLightsFollowTheSnapshot() {
+    auto emitter = Emitter(0U, 3U, kb::particles::ParticleRenderSortMode::None, kb::particles::ParticleRenderBlendMode::Add);
+    emitter.lightMaxCount = 2U;
+    emitter.lightRadius = 3.0F;
+    emitter.lightIntensity = 2.0F;
+    std::array particles{Particle(51U, 1.0F, 0.0F, 0U), Particle(52U, 2.0F, 0.0F, 0U), Particle(53U, 3.0F, 0.0F, 0U)};
+    particles[0].packedColor = 0x8000FF00U; // green, half alpha
+    kb::render::RenderScene renderScene;
+    std::vector<std::uint64_t> lightIds;
+    kb::render::SyncParticleLights(Snapshot(std::span{&emitter, 1U}, particles).get(), renderScene, lightIds);
+    Require(lightIds.size() == 2U && renderScene.LightProxyCount() == 2U, "a particle light count other than lightMaxCount was made");
+    const kb::render::LightRenderProxy* light = renderScene.FindLightByEntity(lightIds[0]);
+    Require(light != nullptr && light->desc.kind == kb::render::RenderLightKind::Point && light->desc.position[0] == 1.0F &&
+            light->desc.color[1] == 1.0F && light->desc.color[0] == 0.0F && light->desc.range == 3.0F &&
+            std::abs(light->desc.intensity - 2.0F * 128.0F / 255.0F) < 0.0001F && !light->desc.castsShadow,
+        "a particle light did not take its particle's position, colour, alpha and the emitter's radius and intensity");
+    emitter.lightMaxCount = 0U;
+    kb::render::SyncParticleLights(Snapshot(std::span{&emitter, 1U}, particles).get(), renderScene, lightIds);
+    Require(lightIds.empty() && renderScene.LightProxyCount() == 0U, "the lights of particles no longer lit stayed in the scene");
+}
+
 int main() {
     try {
         TestGpuParticleProgramLoadsThroughRendererInitialization();
@@ -745,6 +849,9 @@ int main() {
         TestStripGeometryHistoryOrderAndFixedStepDeterminism();
         TestStripGeometryCapacityIsHardAndDiagnostic();
         TestTrailHistoryCapacityIsHardAndDiagnostic();
+        TestStripColourIntensityAndTextureCoordinates();
+        TestColourIntensityReachesBillboardsAndMeshes();
+        TestParticleLightsFollowTheSnapshot();
         std::cout << "21kb Particle System GPU renderer tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

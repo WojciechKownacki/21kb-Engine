@@ -526,6 +526,7 @@ int RunGame(const GameOptions& options) {
         }
     };
     kb::game::RuntimeSceneFrameSync renderSceneSync;
+    renderer.PrepareParticleScene(scene);
     auto previousTick = std::chrono::steady_clock::now();
     while (window.PumpMessages() && !scene.Runtime().ShouldQuit()) {
         if (window.Width() == 0U || window.Height() == 0U) {

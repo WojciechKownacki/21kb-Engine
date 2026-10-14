@@ -2,17 +2,25 @@
 
 #include "kb/render/ShaderLoader.hpp"
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
-#include "kb/render/resources/RenderResources.hpp"
+
+#include <array>
 
 namespace kb::render {
 
 bool ParticleStripRenderer::Initialize() {
     if (IsInitialized()) return true;
     geometryBuilder_.Warmup();
-    const bgfx::VertexLayout layout = RenderStaticMeshVertexLayout(RenderVertexFormat::P3C3);
+    bgfx::VertexLayout layout;
+    layout.begin()
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .end();
     vertexBuffer_ = bgfx::createDynamicVertexBuffer(kParticleStripVertexBudget, layout);
     indexBuffer_ = bgfx::createDynamicIndexBuffer(kParticleStripIndexBudget);
-    program_ = ShaderLoader::LoadProgram("vs_mesh.sc", "fs_mesh.sc");
+    program_ = ShaderLoader::LoadProgram("vs_particle_strip.sc", "fs_particle_strip.sc");
+    textureSampler_ = bgfx::createUniform("s_particleAtlas", bgfx::UniformType::Sampler);
+    featureParamsUniform_ = bgfx::createUniform("u_particleFeatureParams", bgfx::UniformType::Vec4);
     if (!IsInitialized()) {
         Shutdown();
         return false;
@@ -21,6 +29,10 @@ bool ParticleStripRenderer::Initialize() {
 }
 
 void ParticleStripRenderer::Shutdown() noexcept {
+    if (bgfx::isValid(featureParamsUniform_)) bgfx::destroy(featureParamsUniform_);
+    if (bgfx::isValid(textureSampler_)) bgfx::destroy(textureSampler_);
+    featureParamsUniform_ = BGFX_INVALID_HANDLE;
+    textureSampler_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(program_)) bgfx::destroy(program_);
     if (bgfx::isValid(indexBuffer_)) bgfx::destroy(indexBuffer_);
     if (bgfx::isValid(vertexBuffer_)) bgfx::destroy(vertexBuffer_);
@@ -34,7 +46,8 @@ void ParticleStripRenderer::ReleaseScene(std::uint64_t sceneId) noexcept { geome
 void ParticleStripRenderer::ReleaseAllScenes() noexcept { geometryBuilder_.ReleaseAllScenes(); }
 
 bool ParticleStripRenderer::IsInitialized() const noexcept {
-    return bgfx::isValid(vertexBuffer_) && bgfx::isValid(indexBuffer_) && bgfx::isValid(program_);
+    return bgfx::isValid(vertexBuffer_) && bgfx::isValid(indexBuffer_) && bgfx::isValid(program_) &&
+        bgfx::isValid(textureSampler_) && bgfx::isValid(featureParamsUniform_);
 }
 
 const ParticleStripBuildResult& ParticleStripRenderer::Build(
@@ -50,10 +63,16 @@ const ParticleStripBuildResult& ParticleStripRenderer::Build(
     return lastBuild_;
 }
 
-ParticleStripSubmitResult ParticleStripRenderer::SubmitDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept {
+ParticleStripSubmitResult ParticleStripRenderer::SubmitDraw(
+    bgfx::ViewId viewId, std::uint32_t drawIndex, bgfx::TextureHandle texture) noexcept {
     ParticleStripSubmitResult result{.droppedSegments = lastBuild_.droppedSegmentCount};
-    if (!IsInitialized() || !lastBuild_.Usable() || drawIndex >= lastBuild_.draws.size()) return result;
+    if (!IsInitialized() || !lastBuild_.Usable() || drawIndex >= lastBuild_.draws.size() ||
+        !bgfx::isValid(texture)) return result;
     const ParticleStripDraw& draw = lastBuild_.draws[drawIndex];
+    const std::array<float, 4> featureParams{
+        0.0F, 0.0F, draw.blend == kb::particles::ParticleRenderBlendMode::Add ? 1.0F : 0.0F, 0.0F};
+    bgfx::setUniform(featureParamsUniform_, featureParams.data());
+    bgfx::setTexture(0U, textureSampler_, texture);
     bgfx::setVertexBuffer(0U, vertexBuffer_, 0U, static_cast<std::uint32_t>(lastBuild_.vertices.size()));
     bgfx::setIndexBuffer(indexBuffer_, draw.firstIndex, draw.indexCount);
     bgfx::setState(ParticleBlendState(draw.blend, draw.depth));

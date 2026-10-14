@@ -117,6 +117,7 @@ public:
                 .viewportIndex = viewportIndex,
             },
             .colorFormat = bgfx::TextureFormat::RGBA8,
+            .depthFormat = bgfx::TextureFormat::D24S8,
         };
     }
 
@@ -215,6 +216,7 @@ public:
                 .viewportIndex = viewportIndex,
             },
             .colorFormat = bgfx::TextureFormat::RGBA8,
+            .depthFormat = bgfx::TextureFormat::D24S8,
         };
     }
 

@@ -60,9 +60,9 @@ void WriteParticleSprite(
             energy = std::clamp(energy, 0.0F, 1.0F);
             const std::size_t pixel = (static_cast<std::size_t>(y) * width + x) * 4U;
             const std::uint8_t byte = static_cast<std::uint8_t>(energy * 255.0F + 0.5F);
-            pixels[pixel] = byte;
-            pixels[pixel + 1U] = byte;
-            pixels[pixel + 2U] = byte;
+            pixels[pixel] = 255U;
+            pixels[pixel + 1U] = 255U;
+            pixels[pixel + 2U] = 255U;
             pixels[pixel + 3U] = byte;
         }
     }
@@ -78,6 +78,21 @@ void WriteParticleSprite(
         bgfx::copy(pixels.data(), static_cast<std::uint32_t>(pixels.size())));
 }
 
+// A unit box (-0.5..0.5); decals draw its back faces (the front ones culled), so the box still covers the
+// screen with the camera inside it.
+void CreateDecalBox(bgfx::VertexBufferHandle& vertices, bgfx::IndexBufferHandle& indices) {
+    static constexpr std::array<float, 24> kCorners{
+        -0.5F, -0.5F, -0.5F, 0.5F, -0.5F, -0.5F, 0.5F, 0.5F, -0.5F, -0.5F, 0.5F, -0.5F,
+        -0.5F, -0.5F, 0.5F, 0.5F, -0.5F, 0.5F, 0.5F, 0.5F, 0.5F, -0.5F, 0.5F, 0.5F};
+    static constexpr std::array<std::uint16_t, 36> kFaces{
+        0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4,
+        3, 7, 6, 3, 6, 2, 0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5};
+    bgfx::VertexLayout layout;
+    layout.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).end();
+    vertices = bgfx::createVertexBuffer(bgfx::makeRef(kCorners.data(), sizeof(kCorners)), layout);
+    indices = bgfx::createIndexBuffer(bgfx::makeRef(kFaces.data(), sizeof(kFaces)));
+}
+
 } // namespace
 
 bool ParticleGpuRenderer::Initialize() {
@@ -91,6 +106,10 @@ bool ParticleGpuRenderer::Initialize() {
     localBasisUniform_ = bgfx::createUniform("u_particleLocalBasis", bgfx::UniformType::Vec4);
     depthParamsUniform_ = bgfx::createUniform("u_particleDepthParams", bgfx::UniformType::Vec4);
     volumetricParamsUniform_ = bgfx::createUniform("u_particleVolumetricParams", bgfx::UniformType::Vec4);
+    decalProgram_ = ShaderLoader::LoadProgram("vs_particle_decal.sc", "fs_particle_decal.sc");
+    decalParamsUniform_ = bgfx::createUniform("u_particleDecalParams", bgfx::UniformType::Vec4);
+    cameraPositionUniform_ = bgfx::createUniform("u_particleCameraPosition", bgfx::UniformType::Vec4);
+    CreateDecalBox(decalBoxVertices_, decalBoxIndices_);
     whiteTexture_ = CreateParticleSprite(256U, 256U, ParticleSpriteKind::EnergyGlow);
     streakTexture_ = CreateParticleSprite(256U, 256U, ParticleSpriteKind::VelocityStreak);
     {
@@ -117,6 +136,16 @@ void ParticleGpuRenderer::Shutdown() noexcept {
     gpuEmitters_.Shutdown();
     visualSimulation_.Shutdown();
     stripRenderer_.Shutdown();
+    if (bgfx::isValid(decalBoxIndices_)) bgfx::destroy(decalBoxIndices_);
+    if (bgfx::isValid(decalBoxVertices_)) bgfx::destroy(decalBoxVertices_);
+    if (bgfx::isValid(cameraPositionUniform_)) bgfx::destroy(cameraPositionUniform_);
+    if (bgfx::isValid(decalParamsUniform_)) bgfx::destroy(decalParamsUniform_);
+    if (bgfx::isValid(decalProgram_)) bgfx::destroy(decalProgram_);
+    decalBoxIndices_ = BGFX_INVALID_HANDLE;
+    decalBoxVertices_ = BGFX_INVALID_HANDLE;
+    cameraPositionUniform_ = BGFX_INVALID_HANDLE;
+    decalParamsUniform_ = BGFX_INVALID_HANDLE;
+    decalProgram_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(solidTexture_)) bgfx::destroy(solidTexture_);
     if (bgfx::isValid(streakTexture_)) bgfx::destroy(streakTexture_);
     if (bgfx::isValid(whiteTexture_)) bgfx::destroy(whiteTexture_);
@@ -153,7 +182,10 @@ bool ParticleGpuRenderer::IsInitialized() const noexcept {
         bgfx::isValid(cameraBasisUniform_) && bgfx::isValid(emitterParamsUniform_) &&
         bgfx::isValid(featureParamsUniform_) && bgfx::isValid(localBasisUniform_) &&
         bgfx::isValid(depthParamsUniform_) && bgfx::isValid(volumetricParamsUniform_) &&
-        bgfx::isValid(whiteTexture_) && bgfx::isValid(streakTexture_) && stripRenderer_.IsInitialized();
+        bgfx::isValid(whiteTexture_) && bgfx::isValid(streakTexture_) && bgfx::isValid(solidTexture_) &&
+        bgfx::isValid(decalProgram_) && bgfx::isValid(decalParamsUniform_) &&
+        bgfx::isValid(cameraPositionUniform_) && bgfx::isValid(decalBoxVertices_) &&
+        bgfx::isValid(decalBoxIndices_) && stripRenderer_.IsInitialized();
 }
 
 ParticleGpuSubmitResult ParticleGpuRenderer::Submit(
@@ -235,9 +267,13 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
     ParticleGpuSubmitResult result{.status = lastBuild_.status};
     if (!IsInitialized() || !lastBuild_.Succeeded() || batchIndex >= lastBuild_.batches.size()) return result;
 
+    const ParticleRenderBatch& batch = lastBuild_.batches[batchIndex];
+    const auto& emitter = snapshot.Emitters()[batch.emitterRecordIndex];
+    // Decals draw the renderer's own box; the other outputs the built-in particle quad.
+    const bool decal = emitter.output == kb::particles::ParticleRenderOutput::Decal;
     const RenderMeshHandle quadHandle = resourceMap.ResolveMesh(BuiltInParticleQuadMeshAssetId().value);
     const RenderMeshResource* quad = resources.FindMesh(quadHandle);
-    if (quad == nullptr || !bgfx::isValid(quad->vertexBuffer) || !bgfx::isValid(quad->indexBuffer)) return result;
+    if (!decal && (quad == nullptr || !bgfx::isValid(quad->vertexBuffer) || !bgfx::isValid(quad->indexBuffer))) return result;
 
     const std::array<float, 12> cameraBasis{
         camera.view[0], camera.view[4], camera.view[8], 0.0F,
@@ -245,9 +281,7 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
         camera.view[2], camera.view[6], camera.view[10], 0.0F,
     };
     bgfx::setUniform(cameraBasisUniform_, cameraBasis.data(), 3U);
-    const ParticleRenderBatch& batch = lastBuild_.batches[batchIndex];
-        const auto& emitter = snapshot.Emitters()[batch.emitterRecordIndex];
-        if (emitter.output == kb::particles::ParticleRenderOutput::Volumetric &&
+        if ((emitter.output == kb::particles::ParticleRenderOutput::Volumetric || decal) &&
             !bgfx::isValid(sceneDepthTexture)) return result;
         const bool useVisualSimulation = visualSimulation_.HasPreparedView(
             viewId, snapshot.SceneId(), snapshot.FixedStepIndex());
@@ -267,8 +301,13 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
             std::copy(source.begin(), source.end(), reinterpret_cast<ParticleGpuInstance*>(buffer.data));
             bgfx::setInstanceDataBuffer(&buffer, 0U, available);
         }
-        bgfx::setVertexBuffer(0U, quad->vertexBuffer);
-        bgfx::setIndexBuffer(quad->indexBuffer);
+        if (decal) {
+            bgfx::setVertexBuffer(0U, decalBoxVertices_);
+            bgfx::setIndexBuffer(decalBoxIndices_);
+        } else {
+            bgfx::setVertexBuffer(0U, quad->vertexBuffer);
+            bgfx::setIndexBuffer(quad->indexBuffer);
+        }
 
         const std::array<float, 4> emitterParams{
             static_cast<float>(emitter.FlipbookColumns()), static_cast<float>(emitter.FlipbookRows()),
@@ -301,6 +340,12 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
         bgfx::setUniform(volumetricParamsUniform_, volumetricParams.data());
         bgfx::setUniform(localBasisUniform_, localBasis.data());
         bgfx::setUniform(depthParamsUniform_, depthParams.data());
+        if (decal) {
+            const std::array<float, 4> decalParams{0.0F, emitter.decalDepth, 0.0F, 0.0F};
+            const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(&camera);
+            bgfx::setUniform(decalParamsUniform_, decalParams.data());
+            bgfx::setUniform(cameraPositionUniform_, cameraPosition.data());
+        }
 
         bgfx::TextureHandle atlas =
             emitter.output == kb::particles::ParticleRenderOutput::StretchedBillboard &&
@@ -314,8 +359,14 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
         }
         bgfx::setTexture(0U, atlasSampler_, atlas);
         bgfx::setTexture(1U, sceneDepthSampler_, bgfx::isValid(sceneDepthTexture) ? sceneDepthTexture : whiteTexture_);
-        bgfx::setState(ParticleBlendState(batch.blend, batch.depth));
-        bgfx::submit(viewId, program_);
+        if (decal) {
+            // The box's back faces, unoccluded: the fragment itself finds the scene surface inside the box.
+            bgfx::setState(ParticleBlendState(batch.blend, kb::particles::ParticleRenderDepthMode::Disabled) |
+                BGFX_STATE_CULL_CW);
+        } else {
+            bgfx::setState(ParticleBlendState(batch.blend, batch.depth));
+        }
+        bgfx::submit(viewId, decal ? decalProgram_ : program_);
         result.submittedParticles += available;
         if (emitter.output == kb::particles::ParticleRenderOutput::Volumetric) {
             result.submittedVolumetricParticles += available;
@@ -461,8 +512,20 @@ const ParticleStripBuildResult& ParticleGpuRenderer::BuildStrips(
     return stripRenderer_.Build(snapshot, camera, renderOffset);
 }
 
-ParticleStripSubmitResult ParticleGpuRenderer::SubmitStripDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept {
-    return stripRenderer_.SubmitDraw(viewId, drawIndex);
+ParticleStripSubmitResult ParticleGpuRenderer::SubmitStripDraw(
+    bgfx::ViewId viewId,
+    std::uint32_t drawIndex,
+    const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap) noexcept {
+    const ParticleStripBuildResult& build = stripRenderer_.LastBuild();
+    bgfx::TextureHandle texture = solidTexture_;
+    if (drawIndex < build.draws.size() && build.draws[drawIndex].textureAtlasAssetId != 0U) {
+        const RenderTextureHandle handle = resourceMap.ResolveTexture(
+            build.draws[drawIndex].textureAtlasAssetId, RenderTextureColorSpace::Srgb);
+        if (const RenderTextureResource* resolved = resources.FindTexture(handle);
+            resolved != nullptr && bgfx::isValid(resolved->texture)) texture = resolved->texture;
+    }
+    return stripRenderer_.SubmitDraw(viewId, drawIndex, texture);
 }
 
 void ParticleGpuRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {

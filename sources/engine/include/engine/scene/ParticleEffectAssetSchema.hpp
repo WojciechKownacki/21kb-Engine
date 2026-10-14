@@ -14,7 +14,7 @@ namespace kb::scene {
 inline constexpr std::uint32_t kParticleEffectFormatVersion = 2U;
 inline constexpr std::size_t kParticleEffectMaxSourceBytes = 512U * 1024U;
 inline constexpr std::size_t kParticleEffectMaxInstancesPerScene = 256U;
-inline constexpr std::size_t kParticleEffectMaxEmitters = 8U;
+inline constexpr std::size_t kParticleEffectMaxEmitters = 16U;
 inline constexpr std::size_t kParticleEffectMaxModulesPerEmitter = 16U;
 inline constexpr std::size_t kParticleEffectMaxEventBindings = 32U;
 inline constexpr std::size_t kParticleEffectMaxCurveKeys = 64U;
@@ -88,8 +88,20 @@ enum class ParticleModuleType : std::uint8_t {
     AlphaOverLife,
     CollisionPlane,
     SubEmitter,
+    Noise,
+    AxisRotation,
+    Attraction,
+    TorusSwirl,
 };
-enum class ParticleEventTrigger : std::uint8_t { Birth, Death, Collision };
+// WhileAlive: every live particle of the source keeps emitting the target at the binding's rate
+// (smoke behind debris; Niagara's spawn per particle).
+enum class ParticleEventTrigger : std::uint8_t { Birth, Death, Collision, WhileAlive };
+// Where a particle is born (Unity's Shape module, Niagara's shape location), around the emitter's
+// position and turned by its rotation.
+enum class ParticleSpawnShape : std::uint8_t { Point, Sphere, Box, Cone, Circle, Disc, Line, Spiral };
+// Start velocity: Cone around the direction (speed range, spread), Radial along the shape's normal at
+// the birth point, Spiral2D along one of spiralArms directions in the XY plane turning with time.
+enum class ParticleVelocityMode : std::uint8_t { Cone, Radial, Spiral2D };
 enum class ParticleEventAction : std::uint8_t { EmitTargetEmitter, EmitEffectAsset };
 enum class ParticleOutputType : std::uint8_t {
     Billboard,
@@ -99,7 +111,8 @@ enum class ParticleOutputType : std::uint8_t {
     Trail,
     Ribbon,
     Beam,
-    Volumetric
+    Volumetric,
+    Decal
 };
 enum class ParticleBlendMode : std::uint8_t { Opaque, Alpha, Add, Multiply, Subtract, Premultiplied };
 enum class ParticleSortMode : std::uint8_t { None, BackToFront, FrontToBack, Distance, Age };
@@ -117,6 +130,34 @@ struct ParticleAssetReference {
 struct ParticleBurstAsset {
     float timeSeconds = 0.0F;
     std::uint32_t count = 1U;
+};
+
+struct ParticleSpawnShapeAsset {
+    ParticleSpawnShape type = ParticleSpawnShape::Point;
+    float radius = 0.0F;                 // Sphere, Cone, Circle, Disc, Spiral
+    kb::math::Vec3 boxSize{};            // Box: size around the emitter
+    float coneAngleDegrees = 0.0F;       // Cone: the normal leans outward up to this at the rim
+    bool surfaceOnly = false;            // Sphere: on its surface
+    bool upperHalfOnly = false;          // Sphere: the upper half only
+    kb::math::Vec3 lineStart{};          // Line
+    kb::math::Vec3 lineEnd{};
+    float spiralArms = 1.0F;             // Spiral: galaxy arms
+    float spiralTwist = 0.0F;            // radians per metre from the centre
+    float spiralThickness = 0.0F;        // metres
+};
+
+// A beam per birth (lightning): the emitter's every birth is beamSegments + 1 particles from
+// beamStart to beamEnd (emitter space), pushed sideways up to beamNoise metres (most at the middle),
+// all in one ribbon group. Ends: fixed; both moved by a point of the spawn shape (in XZ); from a point
+// of the spawn shape to the emitter.
+enum class ParticleBeamEnds : std::uint8_t { Fixed, ShapeOffset, ShapeToEmitter };
+struct ParticleBeamSpawnAsset {
+    bool enabled = false;
+    ParticleBeamEnds ends = ParticleBeamEnds::Fixed;
+    std::uint32_t segments = 8U;
+    kb::math::Vec3 start{};
+    kb::math::Vec3 end{};
+    float noise = 0.0F;
 };
 
 struct ParticleSpawnAsset {
@@ -141,6 +182,20 @@ struct ParticleSpawnAsset {
     kb::math::Vec3 initialRotationMaxDegrees{};
     kb::math::Vec3 angularVelocityMinDegrees{};
     kb::math::Vec3 angularVelocityMaxDegrees{};
+    // Each particle's size at birth is startSize x (1 - sizeRandom x r), r random in [0, 1].
+    float sizeRandom = 0.0F;
+    // The emitter's own clock (Unity's per-system Start Delay, Duration and Looping): nothing before
+    // startDelaySeconds; with cycleSeconds > 0 the rate runs and the bursts repeat every cycle while
+    // cycleLooping, or run one cycle only; 0 = the effect's duration and looping.
+    float startDelaySeconds = 0.0F;
+    float cycleSeconds = 0.0F;
+    bool cycleLooping = true;
+    ParticleSpawnShapeAsset shape;
+    ParticleVelocityMode velocityMode = ParticleVelocityMode::Cone;
+    float spiralArms = 1.0F;                  // Spiral2D
+    float spiralTurnDegreesPerSecond = 0.0F;  // Spiral2D
+    kb::math::Vec3 addedVelocity{};           // added after the emitter rotation
+    ParticleBeamSpawnAsset beam;
 };
 
 struct ParticleInitialVelocityModule {
@@ -175,6 +230,30 @@ struct ParticleCollisionPlaneModule {
     float restitution = 0.5F;
     float friction = 0.0F;
     std::uint32_t maxEventsPerStep = 64U;
+    bool killOnContact = false;  // the particle dies where it struck, after its collision event
+};
+// Curl noise (divergence-free swirl): acceleration strength x curl of gradient noise at position x frequency.
+struct ParticleNoiseModule {
+    float strength = 1.0F;
+    float frequency = 1.0F;
+};
+// Positions and velocities turn about an axis through the emitter (Niagara's rotate around point).
+struct ParticleAxisRotationModule {
+    kb::math::Vec3 axis{0.0F, 1.0F, 0.0F};
+    float degreesPerSecond = 90.0F;
+};
+// Pull toward a point of the emitter's space; radius 0 = the same pull at any distance, else fading
+// to zero at the radius.
+struct ParticleAttractionModule {
+    kb::math::Vec3 point{};
+    float strength = 5.0F;
+    float radius = 0.0F;
+};
+// Every particle rolls around the nearest point of a horizontal ring (the cap of a mushroom cloud).
+struct ParticleTorusSwirlModule {
+    kb::math::Vec3 center{};
+    float radius = 2.0F;
+    float degreesPerSecond = 180.0F;
 };
 struct ParticleSubEmitterModule {
     ParticleStableId targetEmitterId = 0U;
@@ -186,7 +265,8 @@ struct ParticleSubEmitterModule {
 using ParticleModulePayload =
     std::variant<ParticleInitialVelocityModule, ParticleGravityModule, ParticleWindModule, ParticleDragModule,
                  ParticleColorOverLifeModule, ParticleSizeOverLifeModule, ParticleAlphaOverLifeModule,
-                 ParticleCollisionPlaneModule, ParticleSubEmitterModule>;
+                 ParticleCollisionPlaneModule, ParticleSubEmitterModule, ParticleNoiseModule,
+                 ParticleAxisRotationModule, ParticleAttractionModule, ParticleTorusSwirlModule>;
 
 struct ParticleModuleAsset {
     ParticleStableId moduleId = 0U;
@@ -243,10 +323,16 @@ struct ParticleVolumetricOutput {
     std::uint32_t lowQualitySteps = 8U;
     std::uint32_t highQualitySteps = 24U;
 };
+// Every particle projects the texture atlas onto the scene below it: a box size wide and deep,
+// `depth` metres tall, turned by the particle's rotation about the vertical.
+struct ParticleDecalOutput {
+    float depth = 1.0F;
+};
 
 using ParticleOutputPayload = std::variant<ParticleBillboardOutput, ParticleStretchedBillboardOutput,
                                            ParticlePointSpriteOutput, ParticleMeshOutput, ParticleTrailOutput,
-                                           ParticleRibbonOutput, ParticleBeamOutput, ParticleVolumetricOutput>;
+                                           ParticleRibbonOutput, ParticleBeamOutput, ParticleVolumetricOutput,
+                                           ParticleDecalOutput>;
 
 struct ParticleOutputAsset {
     ParticleOutputType type = ParticleOutputType::Billboard;
@@ -261,6 +347,15 @@ struct ParticleOutputAsset {
     bool antiAliasing = false;
     ParticleAlignment alignment = ParticleAlignment::CameraFacing;
     ParticleOutputPayload payload = ParticleBillboardOutput{};
+    // HDR multiplier of the particle colour (Niagara's emissive colour above 1): the gradient stays
+    // in [0, 1], the drawn colour is gradient x colorIntensity.
+    float colorIntensity = 1.0F;
+    // Particle lights (Niagara's light renderer): the first lightMaxCount particles of the emitter
+    // light the scene as point lights of their colour x alpha x lightIntensity, lightRadius metres.
+    bool lightEnabled = false;
+    float lightRadius = 4.0F;
+    float lightIntensity = 1.0F;
+    std::uint32_t lightMaxCount = 16U;
 };
 
 struct ParticleEmitterAsset {
@@ -273,6 +368,9 @@ struct ParticleEmitterAsset {
     kb::math::Vec3 localScale{1.0F, 1.0F, 1.0F};
     std::uint32_t maxParticles = 256U;
     ParticleSimulationSpace simulationSpace = ParticleSimulationSpace::World;
+    // World space: localPosition is a point of the world; the emitter stays there while its owner moves
+    // (the crater at the end of a meteor's flight).
+    bool absolutePosition = false;
     ParticleSpawnAsset spawn;
     std::vector<ParticleModuleAsset> modules;
     ParticleOutputAsset output;
@@ -288,6 +386,7 @@ struct ParticleEventBindingAsset {
     std::uint32_t count = 1U;
     std::uint32_t maxDepth = 1U;
     std::uint32_t perStepBudget = 64U;
+    float ratePerSecond = 0.0F;  // WhileAlive: births a second at every live source particle
 };
 
 [[nodiscard]] bool IsRepeatableParticleModule(ParticleModuleType type) noexcept;

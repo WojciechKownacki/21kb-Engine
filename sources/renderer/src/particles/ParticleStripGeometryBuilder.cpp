@@ -30,11 +30,22 @@ namespace {
     return camera.view[2] * position.x + camera.view[6] * position.y + camera.view[10] * position.z + camera.view[14];
 }
 
-[[nodiscard]] ParticleStripVertex Vertex(kb::math::Vec3 position, std::uint32_t packedColor) noexcept {
-    return {position.x, position.y, position.z,
-        static_cast<float>(packedColor & 0xFFU) / 255.0F,
-        static_cast<float>((packedColor >> 8U) & 0xFFU) / 255.0F,
-        static_cast<float>((packedColor >> 16U) & 0xFFU) / 255.0F};
+struct StripColor {
+    float r = 1.0F;
+    float g = 1.0F;
+    float b = 1.0F;
+    float a = 1.0F;
+};
+
+[[nodiscard]] StripColor Unpack(std::uint32_t packedColor, float intensity, float alphaScale = 1.0F) noexcept {
+    return {static_cast<float>(packedColor & 0xFFU) / 255.0F * intensity,
+        static_cast<float>((packedColor >> 8U) & 0xFFU) / 255.0F * intensity,
+        static_cast<float>((packedColor >> 16U) & 0xFFU) / 255.0F * intensity,
+        static_cast<float>((packedColor >> 24U) & 0xFFU) / 255.0F * alphaScale};
+}
+
+[[nodiscard]] ParticleStripVertex Vertex(kb::math::Vec3 position, StripColor color, float u, float v) noexcept {
+    return {position.x, position.y, position.z, color.r, color.g, color.b, color.a, u, v};
 }
 
 } // namespace
@@ -87,8 +98,9 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
         trailHistoryRevision_ = snapshot.Revision();
     }
 
-    const auto appendSegment = [&](kb::math::Vec3 start, kb::math::Vec3 end, float width,
-                                   std::uint32_t color, std::uint32_t& dropped) noexcept {
+    // U runs along the whole strip (0 at its oldest point, 1 at its newest), V across it.
+    const auto appendSegment = [&](kb::math::Vec3 start, kb::math::Vec3 end, float width, StripColor startColor,
+                                   StripColor endColor, float uStart, float uEnd, std::uint32_t& dropped) noexcept {
         if (vertexScratch_.size() + 4U > kParticleStripVertexBudget ||
             indexScratch_.size() + 6U > kParticleStripIndexBudget) { ++dropped; return; }
         const kb::math::Vec3 direction = NormalizeOr(Subtract(end, start), {0.0F, 1.0F, 0.0F});
@@ -96,10 +108,10 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
         const kb::math::Vec3 cameraRight = NormalizeOr({camera.view[0], camera.view[4], camera.view[8]}, {1.0F, 0.0F, 0.0F});
         const kb::math::Vec3 side = Multiply(NormalizeOr(kb::math::Cross(cameraForward, direction), cameraRight), width * 0.5F);
         const std::uint16_t base = static_cast<std::uint16_t>(vertexScratch_.size());
-        vertexScratch_.push_back(Vertex(Add(Subtract(start, side), renderOffset), color));
-        vertexScratch_.push_back(Vertex(Add(Add(start, side), renderOffset), color));
-        vertexScratch_.push_back(Vertex(Add(Add(end, side), renderOffset), color));
-        vertexScratch_.push_back(Vertex(Add(Subtract(end, side), renderOffset), color));
+        vertexScratch_.push_back(Vertex(Add(Subtract(start, side), renderOffset), startColor, uStart, 0.0F));
+        vertexScratch_.push_back(Vertex(Add(Add(start, side), renderOffset), startColor, uStart, 1.0F));
+        vertexScratch_.push_back(Vertex(Add(Add(end, side), renderOffset), endColor, uEnd, 1.0F));
+        vertexScratch_.push_back(Vertex(Add(Subtract(end, side), renderOffset), endColor, uEnd, 0.0F));
         indexScratch_.insert(indexScratch_.end(), {base, static_cast<std::uint16_t>(base + 1U), static_cast<std::uint16_t>(base + 2U),
             base, static_cast<std::uint16_t>(base + 2U), static_cast<std::uint16_t>(base + 3U)});
     };
@@ -111,6 +123,7 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
             emitter.output != kb::particles::ParticleRenderOutput::Ribbon &&
             emitter.output != kb::particles::ParticleRenderOutput::Beam) continue;
         const std::size_t firstIndex = indexScratch_.size();
+        const float intensity = emitter.colorIntensity;
         if (emitter.output == kb::particles::ParticleRenderOutput::Trail) {
             const std::uint64_t cadence = std::max<std::uint64_t>(1U, static_cast<std::uint64_t>(std::ceil(
                 emitter.trailSampleIntervalSeconds * static_cast<float>(kb::scene::kParticleEffectFixedStepsPerSecond))));
@@ -138,6 +151,7 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
                 }
                 history.lastSeenRevision = snapshot.Revision();
                 history.emitterRecordIndex = emitterIndex;
+                history.packedColor = particle.packedColor;
                 if (history.sampleCount == 0U || snapshot.FixedStepIndex() >= history.lastSampleStep + cadence) {
                     if (history.sampleCount == emitter.trailMaxSamplesPerParticle) {
                         history.firstSample = static_cast<std::uint8_t>((history.firstSample + 1U) % emitter.trailMaxSamplesPerParticle);
@@ -158,10 +172,14 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
                 if (history.sceneId != snapshot.SceneId() || history.backendEpoch != snapshot.BackendEpoch() ||
                     history.lastSeenRevision != snapshot.Revision() ||
                     history.emitterRecordIndex != emitterIndex) continue;
+                // The trail takes its particle's colour and fades out toward the oldest sample.
+                const float span = static_cast<float>(std::max<std::uint8_t>(1U, history.sampleCount - 1U));
                 for (std::uint8_t sample = 1U; sample < history.sampleCount; ++sample) {
                     appendSegment(history.samples[(history.firstSample + sample - 1U) % emitter.trailMaxSamplesPerParticle],
                         history.samples[(history.firstSample + sample) % emitter.trailMaxSamplesPerParticle], emitter.trailWidth,
-                        0xFFFFFFFFU, dropped);
+                        Unpack(history.packedColor, intensity, static_cast<float>(sample - 1U) / span),
+                        Unpack(history.packedColor, intensity, static_cast<float>(sample) / span),
+                        static_cast<float>(sample - 1U) / span, static_cast<float>(sample) / span, dropped);
                 }
             }
         } else if (emitter.output == kb::particles::ParticleRenderOutput::Ribbon) {
@@ -171,15 +189,25 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
                 const auto& a = particles[lhs]; const auto& b = particles[rhs];
                 return a.ribbonGroup != b.ribbonGroup ? a.ribbonGroup < b.ribbonGroup : a.spawnOrdinal < b.spawnOrdinal;
             });
+            const auto at = [&](std::size_t index) noexcept -> const kb::particles::ParticleRenderRecord& {
+                return particles[*(begin + static_cast<std::ptrdiff_t>(index))];
+            };
             std::uint32_t segments = 0U;
-            for (std::size_t index = 1U; index < emitter.particleCount; ++index) {
-                const auto& previous = particles[*(begin + static_cast<std::ptrdiff_t>(index - 1U))];
-                const auto& current = particles[*(begin + static_cast<std::ptrdiff_t>(index))];
-                if (previous.ribbonGroup != current.ribbonGroup ||
-                    (emitter.ribbonBreakOnDeath && current.spawnOrdinal != previous.spawnOrdinal + 1U)) continue;
-                if (segments == emitter.ribbonMaxSegments) { ++dropped; continue; }
-                appendSegment(previous.position, current.position, emitter.ribbonWidth, current.packedColor, dropped);
-                ++segments;
+            for (std::size_t groupBegin = 0U; groupBegin < emitter.particleCount;) {
+                std::size_t groupEnd = groupBegin + 1U;
+                while (groupEnd < emitter.particleCount && at(groupEnd).ribbonGroup == at(groupBegin).ribbonGroup) ++groupEnd;
+                const float span = static_cast<float>(std::max<std::size_t>(1U, groupEnd - groupBegin - 1U));
+                for (std::size_t index = groupBegin + 1U; index < groupEnd; ++index) {
+                    const auto& previous = at(index - 1U);
+                    const auto& current = at(index);
+                    if (emitter.ribbonBreakOnDeath && current.spawnOrdinal != previous.spawnOrdinal + 1U) continue;
+                    if (segments == emitter.ribbonMaxSegments) { ++dropped; continue; }
+                    appendSegment(previous.position, current.position, emitter.ribbonWidth,
+                        Unpack(previous.packedColor, intensity), Unpack(current.packedColor, intensity),
+                        static_cast<float>(index - 1U - groupBegin) / span, static_cast<float>(index - groupBegin) / span, dropped);
+                    ++segments;
+                }
+                groupBegin = groupEnd;
             }
         } else {
             const std::uint32_t segments = emitter.beamSegments;
@@ -191,12 +219,14 @@ ParticleStripBuildResult ParticleStripGeometryBuilder::Build(
                     const float phase = static_cast<float>(snapshot.FixedStepIndex()) * emitter.beamNoiseFrequency + t * 31.0F;
                     return Add(linear, {0.0F, std::sin(phase) * emitter.beamNoiseAmplitude, 0.0F});
                 };
-                appendSegment(point(a), point(b), emitter.beamWidth, 0xFFFFFFFFU, dropped);
+                const StripColor white = Unpack(0xFFFFFFFFU, intensity);
+                appendSegment(point(a), point(b), emitter.beamWidth, white, white, a, b, dropped);
             }
         }
         const std::uint32_t count = static_cast<std::uint32_t>(indexScratch_.size() - firstIndex);
         if (count != 0U) drawScratch_.push_back({.emitterRecordIndex = emitterIndex,
-            .firstIndex = static_cast<std::uint32_t>(firstIndex), .indexCount = count, .blend = emitter.blend,
+            .firstIndex = static_cast<std::uint32_t>(firstIndex), .indexCount = count,
+            .textureAtlasAssetId = emitter.textureAtlasAssetId, .blend = emitter.blend,
             .depth = emitter.depth, .transparentDepthBucket = QuantizeTransparentViewDepth(ViewDepth(camera, emitter.outputOrigin))});
     }
     return {.status = dropped == 0U ? ParticleStripBuildStatus::Success : ParticleStripBuildStatus::CapacityExceeded,

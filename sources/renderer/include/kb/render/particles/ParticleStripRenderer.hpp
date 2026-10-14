@@ -21,11 +21,14 @@ public:
     void ReleaseScene(std::uint64_t sceneId) noexcept;
     void ReleaseAllScenes() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
+    [[nodiscard]] const ParticleStripBuildResult& LastBuild() const noexcept { return lastBuild_; }
     [[nodiscard]] const ParticleStripBuildResult& Build(
         const kb::particles::ParticleRenderSnapshot& snapshot,
         const SceneRenderCamera& camera,
         kb::math::Vec3 renderOffset = {}) noexcept;
-    [[nodiscard]] ParticleStripSubmitResult SubmitDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept;
+    // The draw is textured with `texture` (the emitter's atlas, or a plain white one).
+    [[nodiscard]] ParticleStripSubmitResult SubmitDraw(
+        bgfx::ViewId viewId, std::uint32_t drawIndex, bgfx::TextureHandle texture) noexcept;
 
 private:
     ParticleStripGeometryBuilder geometryBuilder_;
@@ -33,6 +36,8 @@ private:
     bgfx::DynamicVertexBufferHandle vertexBuffer_ = BGFX_INVALID_HANDLE;
     bgfx::DynamicIndexBufferHandle indexBuffer_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle textureSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle featureParamsUniform_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace kb::render

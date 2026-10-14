@@ -102,9 +102,14 @@ private:
         // Columns of the rotation matrix mesh particles are oriented by (identity until the owner's orientation arrives).
         std::array<float, 3> origin{};
         std::array<float, 12> basis{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F };
+        // Fields of an emitter with forces, in the frame of its records (ParticleGpuEmitterCommand::hasField).
+        kb::math::Vec3 fieldOrigin{};
+        kb::math::Vec3 fieldAxis{ 0.0F, 1.0F, 0.0F };
+        kb::math::Vec3 attractionTarget{};
         bgfx::DynamicVertexBufferHandle spawns = BGFX_INVALID_HANDLE;
         bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;
-        // Per-slot position/velocity record of the colliding kernel; only created for colliding emitters.
+        // Per-slot position/velocity record of the stateful kernel; only created for emitters that need it
+        // (collisions, forces).
         bgfx::DynamicVertexBufferHandle state = BGFX_INVALID_HANDLE;
         // Alpha-blended emitters only: sort keys (distance, slot) padded to a power of two, and the
         // instance records in back-to-front order, which is what gets drawn.
@@ -174,6 +179,8 @@ private:
     bgfx::UniformHandle outputUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle spinUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle basisUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle forcesUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle noiseOriginUniform_ = BGFX_INVALID_HANDLE;
     std::unordered_map<Key, Emitter, KeyHash> emitters_;
     std::unordered_map<std::uint64_t, SceneClock> scenes_;
     std::uint64_t allocatedBytes_ = 0U;

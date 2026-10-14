@@ -222,15 +222,19 @@ set_target_properties(kb_game PROPERTIES
 )
 
 # The particle provider is the one project plugin that is not discoverable from
-# a sibling build directory, so it is staged beside the runtime executable.
+# a sibling build directory, so it is staged beside the runtime executable - on
+# every build, so a rebuilt provider replaces the copy even when kb_game does not relink.
 add_dependencies(kb_game kb_21kb_particle_plugin)
 if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
-    add_custom_command(TARGET kb_game POST_BUILD
+    add_custom_target(kb_game_stage_particle_plugin
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:kb_game>
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:kb_21kb_particle_plugin>
             $<TARGET_FILE_DIR:kb_game>
         VERBATIM
     )
+    add_dependencies(kb_game_stage_particle_plugin kb_21kb_particle_plugin)
+    add_dependencies(kb_game kb_game_stage_particle_plugin)
 endif()
 
 kb_apply_quality_gates(kb_game)

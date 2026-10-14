@@ -36,6 +36,65 @@ static_assert(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds ==
     return { .status = status, .instanceId = instanceId, .gpuVisualAvailability = gpuVisualAvailability };
 }
 
+// Turns v about the unit axis by angle radians (Rodrigues).
+[[nodiscard]] kb::math::Vec3 RotateAbout(kb::math::Vec3 v, kb::math::Vec3 axis, float angle) noexcept {
+    const float c = std::cos(angle), s = std::sin(angle);
+    return v * c + kb::math::Cross(axis, v) * s + axis * (kb::math::Dot(axis, v) * (1.0F - c));
+}
+
+// Gradient noise with a quintic fade and its exact derivative, and its curl: a divergence-free field
+// (Bridson's curl noise), the same construction the other engines' curl noise force uses.
+[[nodiscard]] std::uint32_t HashCorner(int x, int y, int z, std::uint32_t seed) noexcept {
+    std::uint32_t h = seed * 0x9E3779B9U;
+    h ^= static_cast<std::uint32_t>(x) * 0x85EBCA6BU;
+    h ^= static_cast<std::uint32_t>(y) * 0xC2B2AE35U;
+    h ^= static_cast<std::uint32_t>(z) * 0x27D4EB2FU;
+    h ^= h >> 15U; h *= 0x2C1B3C6DU;
+    h ^= h >> 12U; h *= 0x297A2D39U;
+    h ^= h >> 15U;
+    return h;
+}
+[[nodiscard]] kb::math::Vec3 NoiseGradient(kb::math::Vec3 p, std::uint32_t seed) noexcept {
+    static constexpr float kEdges[12][3] = {{1, 1, 0}, {-1, 1, 0}, {1, -1, 0}, {-1, -1, 0}, {1, 0, 1}, {-1, 0, 1},
+                                            {1, 0, -1}, {-1, 0, -1}, {0, 1, 1}, {0, -1, 1}, {0, 1, -1}, {0, -1, -1}};
+    const float fx = std::floor(p.x), fy = std::floor(p.y), fz = std::floor(p.z);
+    const int ix = static_cast<int>(fx), iy = static_cast<int>(fy), iz = static_cast<int>(fz);
+    const float f[3] = {p.x - fx, p.y - fy, p.z - fz};
+    float u[3], du[3];
+    for (int a = 0; a < 3; ++a) {
+        u[a] = f[a] * f[a] * f[a] * (f[a] * (f[a] * 6.0F - 15.0F) + 10.0F);
+        du[a] = 30.0F * f[a] * f[a] * (f[a] * (f[a] - 2.0F) + 1.0F);
+    }
+    kb::math::Vec3 g[8];
+    float v[8];
+    for (int c = 0; c < 8; ++c) {
+        const int ox = c & 1, oy = (c >> 1) & 1, oz = (c >> 2) & 1;
+        const float* e = kEdges[HashCorner(ix + ox, iy + oy, iz + oz, seed) % 12U];
+        g[c] = {e[0], e[1], e[2]};
+        v[c] = e[0] * (f[0] - static_cast<float>(ox)) + e[1] * (f[1] - static_cast<float>(oy)) +
+               e[2] * (f[2] - static_cast<float>(oz));
+    }
+    const float k1 = v[1] - v[0], k2 = v[2] - v[0], k3 = v[4] - v[0];
+    const float k4 = v[0] - v[1] - v[2] + v[3];
+    const float k5 = v[0] - v[2] - v[4] + v[6];
+    const float k6 = v[0] - v[1] - v[4] + v[5];
+    const float k7 = -v[0] + v[1] + v[2] - v[3] + v[4] - v[5] - v[6] + v[7];
+    kb::math::Vec3 d = g[0] + (g[1] - g[0]) * u[0] + (g[2] - g[0]) * u[1] + (g[4] - g[0]) * u[2] +
+                       (g[0] - g[1] - g[2] + g[3]) * (u[0] * u[1]) + (g[0] - g[2] - g[4] + g[6]) * (u[1] * u[2]) +
+                       (g[0] - g[1] - g[4] + g[5]) * (u[2] * u[0]) +
+                       (g[1] + g[2] - g[3] + g[4] - g[5] - g[6] + g[7] - g[0]) * (u[0] * u[1] * u[2]);
+    d.x += du[0] * (k1 + u[1] * k4 + u[2] * k6 + u[1] * u[2] * k7);
+    d.y += du[1] * (k2 + u[2] * k5 + u[0] * k4 + u[2] * u[0] * k7);
+    d.z += du[2] * (k3 + u[0] * k6 + u[1] * k5 + u[0] * u[1] * k7);
+    return d;
+}
+[[nodiscard]] kb::math::Vec3 CurlNoise(kb::math::Vec3 p, std::uint32_t seed) noexcept {
+    const kb::math::Vec3 p1 = NoiseGradient(p, seed);
+    const kb::math::Vec3 p2 = NoiseGradient(p + kb::math::Vec3{31.416F, -47.853F, 12.793F}, seed + 1U);
+    const kb::math::Vec3 p3 = NoiseGradient(p + kb::math::Vec3{-19.123F, 33.301F, -57.456F}, seed + 2U);
+    return {p3.y - p2.z, p1.z - p3.x, p2.x - p1.y};
+}
+
 [[nodiscard]] kb::math::Vec3 Scale(kb::math::Vec3 value, kb::math::Vec3 scale) noexcept {
     return {value.x * scale.x, value.y * scale.y, value.z * scale.z};
 }
@@ -89,6 +148,7 @@ static_assert(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds ==
     case Source::Ribbon: return Target::Ribbon;
     case Source::Beam: return Target::Beam;
     case Source::Volumetric: return Target::Volumetric;
+    case Source::Decal: return Target::Decal;
     }
     std::terminate();
 }
@@ -215,6 +275,7 @@ void CpuParticleBackend::Warmup() {
     particleSizes_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleSpins_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleSpinRates_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
+    particleSizeScales_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleEventDepths_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particlePrewarmGroups_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     renderEmitterScratch_.resize(kb::particles::kParticleRenderSnapshotMaxEmitterRecords);
@@ -658,6 +719,7 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     }
     AdvanceParticleAges(fixedDeltaSeconds);
     ExecuteForcesAndIntegrate(fixedDeltaSeconds);
+    EmitWhileAlive(fixedDeltaSeconds, remainingSpawnBudget);
     static_cast<void>(ProcessInternalEvents(remainingSpawnBudget));
     FlushGpuSpawns();
     ProcessOwnerLifecycle(scene);
@@ -822,6 +884,7 @@ void CpuParticleBackend::RemoveParticles(std::uint64_t instanceId) noexcept {
         particleSizes_[index] = particleSizes_[last];
         particleSpins_[index] = particleSpins_[last];
         particleSpinRates_[index] = particleSpinRates_[last];
+        particleSizeScales_[index] = particleSizeScales_[last];
         particleEventDepths_[index] = particleEventDepths_[last];
         particlePrewarmGroups_[index] = particlePrewarmGroups_[last];
         particleInstanceIds_.pop_back();
@@ -838,6 +901,7 @@ void CpuParticleBackend::RemoveParticles(std::uint64_t instanceId) noexcept {
         particleSizes_.pop_back();
         particleSpins_.pop_back();
         particleSpinRates_.pop_back();
+        particleSizeScales_.pop_back();
         particleEventDepths_.pop_back();
         particlePrewarmGroups_.pop_back();
     }
@@ -863,10 +927,18 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
 
     const auto asset = manager.Load<kb::scene::ParticleEffectAsset>(assetId);
     const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetId);
-    if (!asset.IsLoaded() || metadata == nullptr) return kInvalidDenseIndex;
+    if (!asset.IsLoaded() || metadata == nullptr) {
+        lastEffectFailure_ = manager.LastError();
+        return kInvalidDenseIndex;
+    }
 
     const ParticleCompileResult compiled = ParticleEffectCompiler::Compile(*asset, *metadata, manager.Registry());
     if (!compiled.Succeeded()) {
+        lastEffectFailure_.clear();
+        for (const kb::scene::ParticleEffectDiagnostic& diagnostic : compiled.diagnostics) {
+            if (!lastEffectFailure_.empty()) lastEffectFailure_ += "; ";
+            lastEffectFailure_ += diagnostic.propertyPath + ": " + diagnostic.message;
+        }
         failureStatus = std::any_of(compiled.diagnostics.begin(), compiled.diagnostics.end(), [](const auto& diagnostic) {
             return diagnostic.code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability;
         }) ? kb::particles::ParticleRuntimeStatus::UnsupportedOutput
@@ -1161,6 +1233,90 @@ kb::math::Vec3 CpuParticleBackend::SampleInitialVelocity(
     return direction * speed;
 }
 
+kb::math::Vec3 CpuParticleBackend::SampleShape(const CompiledEmitter& emitter, InstanceRuntime& runtime,
+                                               kb::math::Vec3& normal) noexcept {
+    const float twoPi = 2.0F * kb::math::kPi;
+    const kb::scene::ParticleSpawnShapeAsset& shape = emitter.shape;
+    kb::math::Vec3 point{};
+    normal = {0.0F, 1.0F, 0.0F};
+    switch (shape.type) {
+    case kb::scene::ParticleSpawnShape::Point:
+        break;
+    case kb::scene::ParticleSpawnShape::Sphere: {
+        const float u = NextRandom01(runtime) * 2.0F - 1.0F, a = NextRandom01(runtime) * twoPi;
+        const float s = std::sqrt(std::max(0.0F, 1.0F - u * u));
+        normal = {s * std::cos(a), shape.upperHalfOnly ? std::abs(u) : u, s * std::sin(a)};
+        point = normal * (shape.surfaceOnly ? shape.radius : shape.radius * std::cbrt(NextRandom01(runtime)));
+        break;
+    }
+    case kb::scene::ParticleSpawnShape::Box:
+        point = {(NextRandom01(runtime) - 0.5F) * shape.boxSize.x, (NextRandom01(runtime) - 0.5F) * shape.boxSize.y,
+                 (NextRandom01(runtime) - 0.5F) * shape.boxSize.z};
+        if (kb::math::Dot(point, point) > 1.0e-10F) normal = kb::math::Normalize(point);
+        break;
+    case kb::scene::ParticleSpawnShape::Cone: {
+        // Base disc; the normal leans outward with the distance from the axis, up to the angle at the rim.
+        const float a = NextRandom01(runtime) * twoPi, rr = std::sqrt(NextRandom01(runtime)) * shape.radius;
+        const float angle = shape.coneAngleDegrees * 0.017453292F;
+        point = {std::cos(a) * rr, 0.0F, std::sin(a) * rr};
+        const float lean = shape.radius > 1.0e-4F ? rr / shape.radius : 0.0F;
+        normal = kb::math::Normalize(kb::math::Vec3{std::cos(a) * std::sin(angle) * lean, std::cos(angle),
+                                                    std::sin(a) * std::sin(angle) * lean});
+        break;
+    }
+    case kb::scene::ParticleSpawnShape::Circle: {
+        const float a = NextRandom01(runtime) * twoPi;
+        normal = {std::cos(a), 0.0F, std::sin(a)};
+        point = normal * shape.radius;
+        break;
+    }
+    case kb::scene::ParticleSpawnShape::Disc: {
+        const float a = NextRandom01(runtime) * twoPi;
+        normal = {std::cos(a), 0.0F, std::sin(a)};
+        point = normal * (std::sqrt(NextRandom01(runtime)) * shape.radius);
+        break;
+    }
+    case kb::scene::ParticleSpawnShape::Line:
+        point = shape.lineStart + (shape.lineEnd - shape.lineStart) * NextRandom01(runtime);
+        break;
+    case kb::scene::ParticleSpawnShape::Spiral: {
+        const float arms = std::max(1.0F, shape.spiralArms);
+        const float d = std::pow(NextRandom01(runtime), 0.7F) * shape.radius;
+        const float arm = std::floor(NextRandom01(runtime) * arms);
+        const float a = arm * twoPi / arms + d * shape.spiralTwist + (NextRandom01(runtime) - 0.5F) * 0.6F;
+        point = {std::cos(a) * d, (NextRandom01(runtime) - 0.5F) * shape.spiralThickness, std::sin(a) * d};
+        if (kb::math::Dot(point, point) > 1.0e-10F) normal = kb::math::Normalize(point);
+        break;
+    }
+    }
+    return point;
+}
+
+kb::math::Vec3 CpuParticleBackend::SampleStartVelocity(const CompiledEmitter& emitter, InstanceRuntime& runtime,
+                                                       std::uint8_t emitterIndex, kb::math::Vec3 normal) noexcept {
+    switch (emitter.velocityMode) {
+    case kb::scene::ParticleVelocityMode::Radial: {
+        const kb::scene::ParticleInitialVelocityModule& v = emitter.initialVelocity;
+        return normal * (v.speedMin + (v.speedMax - v.speedMin) * NextRandom01(runtime));
+    }
+    case kb::scene::ParticleVelocityMode::Spiral2D: {
+        // One of the arms in the XY plane (the screen of a 2D game), the arms turning with the emitter's time.
+        const float a = std::floor(NextRandom01(runtime) * emitter.spiralArms) * 2.0F * kb::math::kPi / emitter.spiralArms +
+            runtime.elapsedSeconds[emitterIndex] * emitter.spiralTurnRadians;
+        return kb::math::Vec3{std::cos(a), std::sin(a), 0.0F} * emitter.initialVelocity.speedMin;
+    }
+    case kb::scene::ParticleVelocityMode::Cone:
+        break;
+    }
+    return SampleInitialVelocity(emitter, runtime);
+}
+
+kb::math::Vec3 CpuParticleBackend::EmitterOrigin(std::uint32_t denseIndex, const CompiledEmitter& emitter) const noexcept {
+    if (emitter.absolutePosition) return emitter.localPosition - kb::math::ToVec3(simulationOrigin_);
+    const kb::scene::WorldTransform& owner = ownerTransforms_[denseIndex];
+    return owner.position + TransformDirection(owner, Scale(emitter.localPosition, owner.scale));
+}
+
 bool CpuParticleBackend::SpawnExact(
     std::uint32_t denseIndex,
     std::uint8_t emitterIndex,
@@ -1180,9 +1336,11 @@ bool CpuParticleBackend::SpawnExact(
     const std::uint32_t instanceLive = LiveParticleCount(
         MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]));
     const std::uint32_t instanceLimit = InstanceParticleLimit(denseIndex);
-    if (count > emitter.maxParticles - runtime.liveParticles[emitterIndex] ||
-        instanceLive >= instanceLimit || count > instanceLimit - instanceLive ||
-        count > kb::scene::kParticleEffectMaxCpuParticlesPerScene - particleInstanceIds_.size()) {
+    // A beam birth is all its points.
+    const std::uint32_t points = count * (emitter.beam.enabled ? emitter.beam.segments + 1U : 1U);
+    if (points > emitter.maxParticles - runtime.liveParticles[emitterIndex] ||
+        instanceLive >= instanceLimit || points > instanceLimit - instanceLive ||
+        points > kb::scene::kParticleEffectMaxCpuParticlesPerScene - particleInstanceIds_.size()) {
         return false;
     }
     const std::uint64_t instanceId = MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]);
@@ -1208,20 +1366,67 @@ bool CpuParticleBackend::SpawnExact(
     const kb::scene::WorldTransform& ownerTransform = ownerTransforms_[denseIndex];
     const kb::math::Vec3 emitterOffset = TransformDirection(ownerTransform,
         Scale(emitter.localPosition, ownerTransform.scale));
-    for (std::uint32_t index = 0U; index < count; ++index) {
+    // The emitter's frame: the owner's rotation, then the emitter's own (shapes and start velocities).
+    const kb::math::Quat frame = ownerTransform.rotation * emitter.localRotation;
+    const kb::math::Vec3 birthOrigin = emitter.absolutePosition ? EmitterOrigin(denseIndex, emitter)
+        : eventPosition != nullptr ? *eventPosition + emitterOffset : ownerTransform.position + emitterOffset;
+    // Shape point and start velocity of a birth, emitter space (SampleShape, SampleStartVelocity).
+    const auto sampleShape = [&](kb::math::Vec3& point, kb::math::Vec3& normal) noexcept {
+        point = SampleShape(emitter, runtime, normal);
+    };
+    const auto sampleVelocity = [&](kb::math::Vec3 normal) noexcept -> kb::math::Vec3 {
+        return SampleStartVelocity(emitter, runtime, emitterIndex, normal);
+    };
+    const std::uint32_t perBirth = emitter.beam.enabled ? emitter.beam.segments + 1U : 1U;
+    for (std::uint32_t index = 0U; index < count * perBirth; ++index) {
+        const std::uint32_t pointOfBeam = index % perBirth;
         const float lifetime = emitter.lifetimeMin +
             (emitter.lifetimeMax - emitter.lifetimeMin) * NextRandom01(runtime);
         particleInstanceIds_.push_back(instanceId);
         particleIds_.push_back(nextParticleId_++);
         if (nextParticleId_ == 0U) nextParticleId_ = 1U;
         particleSpawnOrdinals_.push_back(runtime.spawnOrdinals[emitterIndex]);
-        particleRibbonGroups_.push_back(0U);
+        // A beam's points share its ribbon group (one beam, one ribbon).
+        particleRibbonGroups_.push_back(emitter.beam.enabled
+            ? static_cast<std::uint32_t>(runtime.spawnOrdinals[emitterIndex] / perBirth) : 0U);
         particleEmitterIndices_.push_back(emitterIndex);
-        particlePositions_.push_back(eventPosition != nullptr
-            ? *eventPosition + emitterOffset
-            : ownerTransform.position + emitterOffset);
-        particlePreviousPositions_.push_back(particlePositions_.back());
-        particleVelocities_.push_back(TransformDirection(ownerTransform, SampleInitialVelocity(emitter, runtime)));
+        if (emitter.beam.enabled) {
+            // Beam point: from the beam's start to its end, pushed sideways (most at the middle).
+            if (pointOfBeam == 0U) {
+                kb::math::Vec3 from = emitter.beam.start, to = emitter.beam.end;
+                if (emitter.beam.ends != kb::scene::ParticleBeamEnds::Fixed) {
+                    kb::math::Vec3 point, normal;
+                    sampleShape(point, normal);
+                    point = kb::math::Rotate(frame, point);
+                    if (emitter.beam.ends == kb::scene::ParticleBeamEnds::ShapeToEmitter) {
+                        from = point;
+                        to = {};
+                    } else {
+                        from = from + kb::math::Vec3{point.x, 0.0F, point.z};
+                        to = to + kb::math::Vec3{point.x, 0.0F, point.z};
+                    }
+                }
+                runtime.beamStart = birthOrigin + from;
+                runtime.beamEnd = birthOrigin + to;
+            }
+            const kb::math::Vec3 d = runtime.beamEnd - runtime.beamStart;
+            const kb::math::Vec3 axis = kb::math::Dot(d, d) > 1.0e-10F ? kb::math::Normalize(d) : kb::math::Vec3{0, 1, 0};
+            const kb::math::Vec3 b1 = kb::math::Normalize(std::abs(axis.y) < 0.99F
+                ? kb::math::Cross(axis, kb::math::Vec3{0.0F, 1.0F, 0.0F}) : kb::math::Cross(axis, kb::math::Vec3{1.0F, 0.0F, 0.0F}));
+            const kb::math::Vec3 b2 = kb::math::Cross(axis, b1);
+            const float t = static_cast<float>(pointOfBeam) / static_cast<float>(emitter.beam.segments);
+            const float w = std::sin(t * kb::math::kPi) * 2.0F * emitter.beam.noise;
+            particlePositions_.push_back(runtime.beamStart + d * t + b1 * ((NextRandom01(runtime) - 0.5F) * w) +
+                                         b2 * ((NextRandom01(runtime) - 0.5F) * w));
+            particlePreviousPositions_.push_back(particlePositions_.back());
+            particleVelocities_.push_back({});
+        } else {
+            kb::math::Vec3 point, normal;
+            sampleShape(point, normal);
+            particlePositions_.push_back(birthOrigin + kb::math::Rotate(frame, point));
+            particlePreviousPositions_.push_back(particlePositions_.back());
+            particleVelocities_.push_back(kb::math::Rotate(frame, sampleVelocity(normal)) + emitter.addedVelocity);
+        }
         particleAges_.push_back(0.0F);
         particleLifetimes_.push_back(lifetime);
         particleColors_.push_back(EvaluateGradient(emitter.colorOverLife, 0.0F));
@@ -1245,6 +1450,8 @@ bool CpuParticleBackend::SpawnExact(
         spinRate.z = drawAxis(emitter.spinRateMinRadians.z, emitter.spinRateMaxRadians.z);
         particleSpins_.push_back(spin);
         particleSpinRates_.push_back(spinRate);
+        // Drawn last, only from a real range, like the spin.
+        particleSizeScales_.push_back(emitter.sizeRandom > 0.0F ? 1.0F - emitter.sizeRandom * NextRandom01(runtime) : 1.0F);
         static_cast<void>(QueueInternalEvent({
             .instanceId = instanceId,
             .sourceEmitterIndex = emitterIndex,
@@ -1255,7 +1462,7 @@ bool CpuParticleBackend::SpawnExact(
         }));
         ++runtime.spawnOrdinals[emitterIndex];
     }
-    runtime.liveParticles[emitterIndex] += count;
+    runtime.liveParticles[emitterIndex] += count * perBirth;
     return true;
 }
 
@@ -1266,26 +1473,31 @@ void CpuParticleBackend::SpawnRequested(
     std::uint32_t& remainingSpawnBudget,
     std::uint8_t prewarmGroup) noexcept {
     stepTelemetry_.requestedSpawns += count;
+    if (count == 0U) return;
+    if (GpuEligible(denseIndex, emitterIndex, prewarmGroup)) {
+        // GPU births are birth records the renderer's ring holds (as many as the emitter's capacity); they
+        // do not take the CPU particles' spawns per step.
+        SpawnGpu(denseIndex, emitterIndex, count, nullptr);
+        stepTelemetry_.spawned += count;
+        return;
+    }
     const std::uint32_t withinBudget = std::min(count, remainingSpawnBudget);
     stepTelemetry_.rejectedByStepBudget += count - withinBudget;
     renderRejectedBySpawnBudget_[RenderGroupIndex(denseIndex, emitterIndex)] += count - withinBudget;
     remainingSpawnBudget -= withinBudget;
     if (withinBudget == 0U) return;
-    if (GpuEligible(denseIndex, emitterIndex, prewarmGroup)) {
-        SpawnGpu(denseIndex, emitterIndex, withinBudget, nullptr);
-        stepTelemetry_.spawned += withinBudget;
-        return;
-    }
     InstanceRuntime& runtime = instanceRuntime_[denseIndex];
     const CompiledEmitter& emitter = compiledEffects_[runtime.compiledEffectIndex].effect->emitters[emitterIndex];
-    const std::uint32_t emitterSpace = emitter.maxParticles - runtime.liveParticles[emitterIndex];
+    // Capacities count points; a beam birth takes segments + 1 of them.
+    const std::uint32_t perBirth = emitter.beam.enabled ? emitter.beam.segments + 1U : 1U;
+    const std::uint32_t emitterSpace = (emitter.maxParticles - runtime.liveParticles[emitterIndex]) / perBirth;
     const std::uint64_t instanceId = MakeInstanceId(
         denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]);
     const std::uint32_t instanceLive = LiveParticleCount(instanceId);
     const std::uint32_t instanceLimit = InstanceParticleLimit(denseIndex);
-    const std::uint32_t instanceSpace = instanceLimit > instanceLive ? instanceLimit - instanceLive : 0U;
+    const std::uint32_t instanceSpace = (instanceLimit > instanceLive ? instanceLimit - instanceLive : 0U) / perBirth;
     const std::uint32_t sceneSpace = static_cast<std::uint32_t>(
-        kb::scene::kParticleEffectMaxCpuParticlesPerScene - particleInstanceIds_.size());
+        kb::scene::kParticleEffectMaxCpuParticlesPerScene - particleInstanceIds_.size()) / perBirth;
     const std::uint32_t accepted = std::min({withinBudget, emitterSpace, instanceSpace, sceneSpace});
     stepTelemetry_.rejectedByCapacity += withinBudget - accepted;
     renderRejectedByCapacity_[RenderGroupIndex(denseIndex, emitterIndex)] += withinBudget - accepted;
@@ -1332,14 +1544,33 @@ void CpuParticleBackend::StepEmitter(
         ? std::min(fixedDeltaSeconds, std::max(0.0F, effect.durationSeconds - previous))
         : fixedDeltaSeconds;
     if (activeDelta <= 0.0F) return;
-    float localPrevious = previous;
-    float localCurrent = previous + activeDelta;
+    // The emitter's own clock: nothing before its start delay; its cycle (the effect's duration and
+    // looping unless the emitter has one) repeats the rate and the bursts, or runs once.
+    const float cycle = emitter.cycleSeconds > 0.0F ? emitter.cycleSeconds
+        : (effect.looping && effect.durationSeconds > 0.0F ? effect.durationSeconds : 0.0F);
+    const bool cycleLoops = emitter.cycleSeconds > 0.0F ? emitter.cycleLooping : effect.looping;
+    // The run time of this step, cut at the start delay and at the end of a single cycle (kept as the
+    // step itself when nothing is cut, so the rate integrates exactly).
+    float runPrevious = previous - emitter.startDelaySeconds;
+    float runDelta = activeDelta;
+    if (runPrevious < 0.0F) {
+        runDelta = runPrevious + activeDelta;
+        runPrevious = 0.0F;
+    }
+    if (!cycleLoops && cycle > 0.0F && runPrevious + runDelta > cycle) runDelta = cycle - runPrevious;
+    if (runDelta <= 0.0F) {
+        runtime.elapsedSeconds[emitterIndex] += activeDelta;
+        return;
+    }
+    const float runCurrent = runPrevious + runDelta;
+    float localPrevious = runPrevious;
+    float localCurrent = runCurrent;
     bool wrapped = false;
-    if (effect.looping && effect.durationSeconds > 0.0F) {
-        localPrevious = std::fmod(previous, effect.durationSeconds);
-        localCurrent = localPrevious + activeDelta;
-        if (localCurrent >= effect.durationSeconds) {
-            localCurrent = std::fmod(localCurrent, effect.durationSeconds);
+    if (cycleLoops && cycle > 0.0F) {
+        localPrevious = std::fmod(runPrevious, cycle);
+        localCurrent = localPrevious + runDelta;
+        if (localCurrent >= cycle) {
+            localCurrent = std::fmod(localCurrent, cycle);
             wrapped = true;
         }
     }
@@ -1348,7 +1579,7 @@ void CpuParticleBackend::StepEmitter(
     if (emitter.mode == kb::scene::ParticleSpawnMode::Continuous) {
         const float sampleTime = wrapped ? localCurrent * 0.5F : (localPrevious + localCurrent) * 0.5F;
         runtime.emissionFractions[emitterIndex] +=
-            std::max(0.0F, EvaluateRate(emitter, sampleTime)) * rateMultipliers_[denseIndex] * activeDelta;
+            std::max(0.0F, EvaluateRate(emitter, sampleTime)) * rateMultipliers_[denseIndex] * runDelta;
         const std::uint32_t continuous = static_cast<std::uint32_t>(runtime.emissionFractions[emitterIndex]);
         runtime.emissionFractions[emitterIndex] -= static_cast<float>(continuous);
         SpawnRequested(denseIndex, emitterIndex, continuous, remainingSpawnBudget, prewarmGroup);
@@ -1364,7 +1595,7 @@ void CpuParticleBackend::StepEmitter(
         }
     };
     if (wrapped) {
-        fireRange(localPrevious, effect.durationSeconds, false);
+        fireRange(localPrevious, cycle, false);
         runtime.nextBurst[emitterIndex] = 0U;
         fireRange(0.0F, localCurrent, true);
     } else {
@@ -1434,6 +1665,7 @@ void CpuParticleBackend::AdvanceParticleAges(
         particleSizes_[index] = particleSizes_[last];
         particleSpins_[index] = particleSpins_[last];
         particleSpinRates_[index] = particleSpinRates_[last];
+        particleSizeScales_[index] = particleSizeScales_[last];
         particleEventDepths_[index] = particleEventDepths_[last];
         particlePrewarmGroups_[index] = particlePrewarmGroups_[last];
         particleInstanceIds_.pop_back();
@@ -1450,6 +1682,7 @@ void CpuParticleBackend::AdvanceParticleAges(
         particleSizes_.pop_back();
         particleSpins_.pop_back();
         particleSpinRates_.pop_back();
+        particleSizeScales_.pop_back();
         particleEventDepths_.pop_back();
         particlePrewarmGroups_.pop_back();
         ++stepTelemetry_.deaths;
@@ -1475,6 +1708,8 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
         kb::math::Vec3& velocity = particleVelocities_[index];
         const float normalizedAge = kb::math::Clamp(
             particleAges_[index] / particleLifetimes_[index], 0.0F, 1.0F);
+        // Fields anchored to the emitter (axis rotation, attraction, torus) turn about where it is now.
+        const kb::math::Vec3 origin = EmitterOrigin(denseIndex, emitter);
         kb::math::Color color = EvaluateGradient(emitter.colorOverLife, normalizedAge);
         float size = emitter.sizeOverLife.keyCount > 0U
             ? EvaluateCurve(emitter.sizeOverLife, normalizedAge) : 1.0F;
@@ -1504,13 +1739,51 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
             case kb::scene::ParticleModuleType::AlphaOverLife:
                 alphaMultiplier = EvaluateCurve(emitter.alphaOverLife, normalizedAge);
                 break;
+            case kb::scene::ParticleModuleType::Noise: {
+                const auto& noise = std::get<kb::scene::ParticleNoiseModule>(module.payload);
+                // The field lies in the world: positions relative to the simulation origin are moved back.
+                const kb::math::Vec3 world = particlePositions_[index] + kb::math::ToVec3(simulationOrigin_);
+                velocity = velocity + CurlNoise(world * noise.frequency, static_cast<std::uint32_t>(module.moduleId)) *
+                    (noise.strength * fixedDeltaSeconds);
+                break;
+            }
+            case kb::scene::ParticleModuleType::AxisRotation: {
+                const auto& rotation = std::get<kb::scene::ParticleAxisRotationModule>(module.payload);
+                const float angle = rotation.degreesPerSecond * 0.017453292F * fixedDeltaSeconds;
+                particlePositions_[index] = origin + RotateAbout(particlePositions_[index] - origin, rotation.axis, angle);
+                velocity = RotateAbout(velocity, rotation.axis, angle);
+                break;
+            }
+            case kb::scene::ParticleModuleType::Attraction: {
+                const auto& attraction = std::get<kb::scene::ParticleAttractionModule>(module.payload);
+                const kb::math::Vec3 to = origin + attraction.point - particlePositions_[index];
+                const float distance = std::sqrt(kb::math::Dot(to, to));
+                const bool everywhere = attraction.radius <= 0.0F;
+                if (distance > 1.0e-4F && (everywhere || distance < attraction.radius)) {
+                    velocity = velocity + to * (attraction.strength *
+                        (everywhere ? 1.0F : 1.0F - distance / attraction.radius) / distance * fixedDeltaSeconds);
+                }
+                break;
+            }
+            case kb::scene::ParticleModuleType::TorusSwirl: {
+                const auto& torus = std::get<kb::scene::ParticleTorusSwirlModule>(module.payload);
+                const kb::math::Vec3 center = origin + torus.center;
+                kb::math::Vec3 radial{particlePositions_[index].x - center.x, 0.0F, particlePositions_[index].z - center.z};
+                const float flat = std::sqrt(kb::math::Dot(radial, radial));
+                radial = flat > 1.0e-5F ? radial * (1.0F / flat) : kb::math::Vec3{1.0F, 0.0F, 0.0F};
+                const kb::math::Vec3 ring = center + radial * torus.radius;
+                const kb::math::Vec3 tangent{radial.z, 0.0F, -radial.x};
+                particlePositions_[index] = ring + RotateAbout(particlePositions_[index] - ring, tangent,
+                    torus.degreesPerSecond * 0.017453292F * fixedDeltaSeconds);
+                break;
+            }
             default:
                 break;
             }
         }
         color.a *= alphaMultiplier;
         particleColors_[index] = color;
-        particleSizes_[index] = size;
+        particleSizes_[index] = size * particleSizeScales_[index];
         particlePositions_[index] = particlePositions_[index] + velocity * fixedDeltaSeconds;
         for (std::uint8_t moduleIndex = 0U; moduleIndex < emitter.moduleCount; ++moduleIndex) {
             const CompiledEmitter::Module& module = emitter.modules[moduleIndex];
@@ -1532,6 +1805,7 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
                 (static_cast<std::size_t>(denseIndex) * kb::scene::kParticleEffectMaxEmitters +
                     particleEmitterIndices_[index]) * kb::scene::kParticleEffectMaxModulesPerEmitter + moduleIndex;
             if (collisionEventsThisStep_[collisionBudgetIndex] >= collision.maxEventsPerStep) {
+                if (collision.killOnContact) particleAges_[index] = particleLifetimes_[index];
                 ++stepTelemetry_.rejectedByEventBudget;
                 ++renderRejectedByEventBudget_[RenderGroupIndex(denseIndex, particleEmitterIndices_[index])];
                 eventActionBudgetExceeded_ = true;
@@ -1547,6 +1821,43 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
                 .prewarmGroup = particlePrewarmGroups_[index],
                 .position = particlePositions_[index],
             }));
+            // Dies where it struck: its life ends, the next step removes it with its death event.
+            if (collision.killOnContact) particleAges_[index] = particleLifetimes_[index];
+        }
+    }
+}
+
+void CpuParticleBackend::EmitWhileAlive(float fixedDeltaSeconds, std::uint32_t& remainingSpawnBudget) noexcept {
+    // Only the particles alive at the start: the births join the arrays as the loop runs.
+    const std::size_t alive = particleInstanceIds_.size();
+    for (std::size_t index = 0U; index < alive; ++index) {
+        const std::uint32_t denseIndex = ResolveDenseIndex(particleInstanceIds_[index]);
+        if (denseIndex == kInvalidDenseIndex || (playbackStates_[denseIndex] != PlaybackState::Playing &&
+                                                 playbackStates_[denseIndex] != PlaybackState::Draining)) {
+            continue;
+        }
+        const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
+        for (std::uint8_t bindingIndex = 0U; bindingIndex < effect.eventBindingCount; ++bindingIndex) {
+            const CompiledEffect::EventBinding& binding = effect.eventBindings[bindingIndex];
+            if (binding.trigger != kb::scene::ParticleEventTrigger::WhileAlive ||
+                binding.sourceEmitterIndex != particleEmitterIndices_[index] ||
+                particleEventDepths_[index] >= binding.maxDepth) {
+                continue;
+            }
+            // Births over this step at the binding's rate, phased per particle so neighbours do not
+            // spawn in lockstep.
+            const float phase = static_cast<float>((particleIds_[index] * 0x9E3779B97F4A7C15ULL) >> 40U) / 16777216.0F;
+            const float age = particleAges_[index];
+            const float births = std::floor(age * binding.ratePerSecond + phase) -
+                std::floor(std::max(age - fixedDeltaSeconds, 0.0F) * binding.ratePerSecond + phase);
+            if (births < 1.0F) continue;
+            const std::uint32_t count = std::min(static_cast<std::uint32_t>(births), remainingSpawnBudget);
+            remainingSpawnBudget -= count;
+            const kb::math::Vec3 position = particlePositions_[index];
+            if (count != 0U && SpawnExact(denseIndex, binding.targetEmitterIndex, count,
+                    static_cast<std::uint8_t>(particleEventDepths_[index] + 1U), particlePrewarmGroups_[index], &position)) {
+                stepTelemetry_.spawned += count;
+            }
         }
     }
 }
@@ -1841,6 +2152,11 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
                 .volumetricRadiusScale = emitter.volumetricRadiusScale,
                 .volumetricLowQualitySteps = emitter.volumetricLowQualitySteps,
                 .volumetricHighQualitySteps = emitter.volumetricHighQualitySteps,
+                .colorIntensity = emitter.colorIntensity,
+                .lightRadius = emitter.lightRadius,
+                .lightIntensity = emitter.lightIntensity,
+                .lightMaxCount = static_cast<std::uint16_t>(emitter.lightEnabled ? std::min(emitter.lightMaxCount, 256U) : 0U),
+                .decalDepth = emitter.decalDepth,
                 .outputOrigin = emptyBounds,
                 .beamEnd = TransformPoint(ownerTransforms_[denseIndex],
                     emitter.localPosition + emitter.beamLocalEnd),
@@ -1965,6 +2281,7 @@ bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emit
     }
     const bool local = emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local;
     bool collisionPlane = false;
+    bool forces = false;
     bool eventActions = false;
     for (std::uint8_t index = 0U; index < emitter.moduleCount; ++index) {
         const auto& module = emitter.modules[index];
@@ -1973,6 +2290,15 @@ bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emit
             // A plane runs on the GPU too, but in world space only.
             if (local || trail) return false;
             collisionPlane = true;
+        } else if (module.type == kb::scene::ParticleModuleType::Noise ||
+                   module.type == kb::scene::ParticleModuleType::AxisRotation ||
+                   module.type == kb::scene::ParticleModuleType::Attraction) {
+            // The stateful kernel integrates them; a trail follows the closed form, which they break.
+            if (trail) return false;
+            forces = true;
+        } else if (module.type == kb::scene::ParticleModuleType::TorusSwirl) {
+            // A field the GPU kernel does not integrate: the CPU path follows it.
+            return false;
         } else if (module.type == kb::scene::ParticleModuleType::SubEmitter) {
             // Collision events would have to come back from the GPU.
             if (std::get<kb::scene::ParticleSubEmitterModule>(module.payload).trigger == kb::scene::ParticleEventTrigger::Collision) {
@@ -1981,13 +2307,15 @@ bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emit
             eventActions = true;
         }
     }
+    if (emitter.beam.enabled || emitter.absolutePosition) return false;
     for (std::uint8_t index = 0U; index < effect.eventBindingCount; ++index) {
         if (effect.eventBindings[index].sourceEmitterIndex != emitterIndex) continue;
-        if (effect.eventBindings[index].trigger == kb::scene::ParticleEventTrigger::Collision) return false;
+        if (effect.eventBindings[index].trigger == kb::scene::ParticleEventTrigger::Collision ||
+            effect.eventBindings[index].trigger == kb::scene::ParticleEventTrigger::WhileAlive) return false;
         eventActions = true;
     }
     // Death positions come from the closed form, which needs a free-flying world-space particle.
-    return !(eventActions && (collisionPlane || local));
+    return !(eventActions && (collisionPlane || forces || local));
 }
 
 namespace {
@@ -2032,6 +2360,18 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
             params.plane = {
                 .normal = plane.normal, .distance = PlaneDistance(plane), .restitution = plane.restitution, .friction = plane.friction };
             params.hasPlane = true;
+        } else if (module.type == kb::scene::ParticleModuleType::Noise) {
+            const auto& noise = std::get<kb::scene::ParticleNoiseModule>(module.payload);
+            params.noiseStrength = noise.strength;
+            params.noiseFrequency = noise.frequency;
+            params.noiseSeed = static_cast<std::uint32_t>(module.moduleId);
+        } else if (module.type == kb::scene::ParticleModuleType::AxisRotation) {
+            params.axisRadiansPerSecond =
+                std::get<kb::scene::ParticleAxisRotationModule>(module.payload).degreesPerSecond * 0.017453292F;
+        } else if (module.type == kb::scene::ParticleModuleType::Attraction) {
+            const auto& attraction = std::get<kb::scene::ParticleAttractionModule>(module.payload);
+            params.attractionStrength = attraction.strength;
+            params.attractionRadius = attraction.radius;
         }
     }
     // A colliding emitter also bounces off the surfaces the renderer's depth buffer shows.
@@ -2043,7 +2383,9 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
         const float age = static_cast<float>(sample) / static_cast<float>(kb::particles::kParticleGpuCurveSamples - 1U);
         kb::math::Color color = EvaluateGradient(emitter.colorOverLife, age);
         if (alphaOverLife) color.a *= EvaluateCurve(emitter.alphaOverLife, age);
-        params.color[sample] = { color.r, color.g, color.b, color.a };
+        // The emitter's colour intensity lifts the colour to HDR, as on the CPU path.
+        params.color[sample] = { color.r * emitter.colorIntensity, color.g * emitter.colorIntensity,
+            color.b * emitter.colorIntensity, color.a };
         params.size[sample] = emitter.sizeOverLife.keyCount > 0U ? EvaluateCurve(emitter.sizeOverLife, age) : 1.0F;
     }
     params.textureAtlasAssetId = emitter.textureAtlasAssetId;
@@ -2107,19 +2449,25 @@ void CpuParticleBackend::SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitter
     pending->spawns.reserve(pending->spawns.size() + count);
     for (std::uint32_t index = 0U; index < count; ++index) {
         const float lifetime = emitter.lifetimeMin + (emitter.lifetimeMax - emitter.lifetimeMin) * NextRandom01(runtime);
-        const kb::math::Vec3 sampled = SampleInitialVelocity(emitter, runtime);
-        const kb::math::Vec3 velocity = local ? Unscale(sampled, ownerTransform.scale) : TransformDirection(ownerTransform, sampled);
+        // The same shape and start velocity as a CPU birth, turned by the emitter's rotation (and the
+        // owner's, for world space).
+        kb::math::Vec3 normal;
+        const kb::math::Vec3 point = kb::math::Rotate(emitter.localRotation, SampleShape(emitter, runtime, normal));
+        const kb::math::Vec3 sampled = kb::math::Rotate(emitter.localRotation, SampleStartVelocity(emitter, runtime, emitterIndex, normal));
+        const kb::math::Vec3 velocity = (local ? Unscale(sampled, ownerTransform.scale) : TransformDirection(ownerTransform, sampled)) +
+            emitter.addedVelocity;
+        const kb::math::Vec3 position = origin + (local ? point : TransformDirection(ownerTransform, point));
         pending->spawns.push_back(kb::particles::ParticleGpuSpawn{
-            .position = origin, .birthTime = static_cast<float>(gpuSimTime_), .velocity = velocity, .lifetime = lifetime });
+            .position = position, .birthTime = static_cast<float>(gpuSimTime_), .velocity = velocity, .lifetime = lifetime });
         ++runtime.spawnOrdinals[emitterIndex];
-        eventPrototype.position = origin;
+        eventPrototype.position = position;
         if (birthAction) {
             eventPrototype.trigger = kb::scene::ParticleEventTrigger::Birth;
             static_cast<void>(QueueInternalEvent(eventPrototype));
         }
         if (deathAction) {
             eventPrototype.trigger = kb::scene::ParticleEventTrigger::Death;
-            eventPrototype.position = GpuClosedFormPosition(origin, velocity, motion.acceleration, motion.drag, lifetime);
+            eventPrototype.position = GpuClosedFormPosition(position, velocity, motion.acceleration, motion.drag, lifetime);
             ScheduleGpuDeath(eventPrototype, gpuSimTime_ + static_cast<double>(lifetime));
         }
     }
@@ -2171,9 +2519,15 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
         if (playbackStates_[denseIndex] == PlaybackState::Stopped) continue;
         const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
         for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
-            const bool local = effect.emitters[emitterIndex].simulationSpace == kb::scene::ParticleSimulationSpace::Local;
-            const bool mesh = effect.emitters[emitterIndex].outputType == kb::scene::ParticleOutputType::Mesh;
-            if ((!local && !mesh) || !GpuEligible(denseIndex, emitterIndex, UINT8_MAX)) {
+            const CompiledEmitter& emitter = effect.emitters[emitterIndex];
+            const bool local = emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local;
+            const bool mesh = emitter.outputType == kb::scene::ParticleOutputType::Mesh;
+            const bool field = std::any_of(emitter.modules.begin(), emitter.modules.begin() + emitter.moduleCount,
+                [](const CompiledEmitter::Module& module) {
+                    return module.enabled && (module.type == kb::scene::ParticleModuleType::AxisRotation ||
+                        module.type == kb::scene::ParticleModuleType::Attraction);
+                });
+            if ((!local && !mesh && !field) || !GpuEligible(denseIndex, emitterIndex, UINT8_MAX)) {
                 continue;
             }
             const kb::scene::WorldTransform& owner = ownerTransforms_[denseIndex];
@@ -2196,6 +2550,25 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
                 const kb::math::Vec3 origin = owner.position + TransformDirection(owner,
                     Scale(effect.emitters[emitterIndex].localPosition, owner.scale));
                 command.origin = { origin.x, origin.y, origin.z };
+            }
+            if (field) {
+                // The fields as the CPU modules place them (about the emitter's origin, the axis and point in world
+                // axes), in the frame of the birth records: the owner's for a local-space emitter.
+                const kb::math::Quat toRecords = local ? kb::math::Conjugate(owner.rotation) : kb::math::Quat{};
+                command.hasField = true;
+                command.fieldOrigin = local ? emitter.localPosition
+                    : owner.position + TransformDirection(owner, Scale(emitter.localPosition, owner.scale));
+                for (std::uint8_t moduleIndex = 0U; moduleIndex < emitter.moduleCount; ++moduleIndex) {
+                    const CompiledEmitter::Module& module = emitter.modules[moduleIndex];
+                    if (!module.enabled) continue;
+                    if (module.type == kb::scene::ParticleModuleType::AxisRotation) {
+                        command.fieldAxis = kb::math::Rotate(toRecords,
+                            std::get<kb::scene::ParticleAxisRotationModule>(module.payload).axis);
+                    } else if (module.type == kb::scene::ParticleModuleType::Attraction) {
+                        command.attractionTarget = command.fieldOrigin + kb::math::Rotate(toRecords,
+                            std::get<kb::scene::ParticleAttractionModule>(module.payload).point);
+                    }
+                }
             }
             kb::particles::ParticlePlayback::QueueGpuEmitterCommand(*gpuScene_, std::move(command));
         }
