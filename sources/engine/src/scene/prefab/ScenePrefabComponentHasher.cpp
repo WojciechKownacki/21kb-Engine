@@ -45,6 +45,10 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.light->contactShadowLength);
         ScenePrefabHashBuilder::MixFloat(hash, components.light->volumetricScattering);
         ScenePrefabHashBuilder::Mix(hash, components.light->castsShadow ? 1U : 0U);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->sourceRadius);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowStrength);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->shadowDistance);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(components.light->mobility));
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.input.has_value() ? 1U : 0U);

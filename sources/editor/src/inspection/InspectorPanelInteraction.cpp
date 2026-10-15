@@ -359,6 +359,9 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::LightContactShadowLength:
     case InspectorPropertyId::LightVolumetricScattering:
     case InspectorPropertyId::LightColorTemperatureKelvin:
+    case InspectorPropertyId::LightSourceRadius:
+    case InspectorPropertyId::LightShadowStrength:
+    case InspectorPropertyId::LightShadowDistance:
         return true;
     default:
         return false;
@@ -471,6 +474,15 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::LightColorTemperatureKelvin:
         value = light.colorTemperatureKelvin;
         return true;
+    case InspectorPropertyId::LightSourceRadius:
+        value = light.sourceRadius;
+        return true;
+    case InspectorPropertyId::LightShadowStrength:
+        value = light.shadowStrength;
+        return true;
+    case InspectorPropertyId::LightShadowDistance:
+        value = light.shadowDistance;
+        return true;
     default:
         return false;
     }
@@ -511,6 +523,15 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
             return false;
         }
         light.colorTemperatureKelvin = std::clamp(value, 1000.0F, 40000.0F);
+        return true;
+    case InspectorPropertyId::LightSourceRadius:
+        light.sourceRadius = std::clamp(value, 0.0F, 10.0F);
+        return true;
+    case InspectorPropertyId::LightShadowStrength:
+        light.shadowStrength = std::clamp(value, 0.0F, 1.0F);
+        return true;
+    case InspectorPropertyId::LightShadowDistance:
+        light.shadowDistance = std::clamp(value, 0.0F, 5000.0F);
         return true;
     default:
         return false;
@@ -795,6 +816,8 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     return text == "-0" ? "0" : text;
 }
 
+// Type cycles Directional, Point, Spot, Area; an area light's Shape cycles
+// Rectangle, Disc, Tube.
 [[nodiscard]] kb::scene::LightKind NextLightKind(kb::scene::LightKind kind) noexcept {
     switch (kind) {
     case kb::scene::LightKind::Directional:
@@ -804,13 +827,22 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case kb::scene::LightKind::Spot:
         return kb::scene::LightKind::AreaRect;
     case kb::scene::LightKind::AreaRect:
-        return kb::scene::LightKind::AreaDisk;
     case kb::scene::LightKind::AreaDisk:
-        return kb::scene::LightKind::Tube;
     case kb::scene::LightKind::Tube:
         return kb::scene::LightKind::Directional;
     }
     return kb::scene::LightKind::Point;
+}
+
+[[nodiscard]] kb::scene::LightKind NextLightShape(kb::scene::LightKind kind) noexcept {
+    switch (kind) {
+    case kb::scene::LightKind::AreaRect:
+        return kb::scene::LightKind::AreaDisk;
+    case kb::scene::LightKind::AreaDisk:
+        return kb::scene::LightKind::Tube;
+    default:
+        return kb::scene::LightKind::AreaRect;
+    }
 }
 
 template <typename Mutator>
@@ -1123,6 +1155,19 @@ template <typename Mutator>
         sceneContext.Inspector().EndTextEdit();
         return MutateLightComponent(sceneContext, entity, "Edit Light Type", [](kb::scene::LightComponent& light) {
             light.kind = NextLightKind(light.kind);
+        });
+    }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightShape) {
+        sceneContext.Inspector().EndTextEdit();
+        return MutateLightComponent(sceneContext, entity, "Edit Light Shape", [](kb::scene::LightComponent& light) {
+            light.kind = NextLightShape(light.kind);
+        });
+    }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightMobility) {
+        sceneContext.Inspector().EndTextEdit();
+        return MutateLightComponent(sceneContext, entity, "Edit Light Mobility", [](kb::scene::LightComponent& light) {
+            light.mobility = light.mobility == kb::scene::LightMobility::Static
+                ? kb::scene::LightMobility::Movable : kb::scene::LightMobility::Static;
         });
     }
     if (hit.kind == InspectorHitKind::BoolField && hit.property == InspectorPropertyId::LightCastsShadow) {

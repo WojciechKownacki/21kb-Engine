@@ -131,6 +131,9 @@ bool SceneDeferredLightingPass::Initialize() {
     shadowCascades_.Create();
     pointShadows_.Create();
     giUniforms_.Create();
+    fogParamsUniform_ = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
+    fogColorUniform_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
+    fogVolumetricUniform_ = bgfx::createUniform("u_fogVolumetric", bgfx::UniformType::Vec4);
     backdropHorizonUniform_ = bgfx::createUniform("u_deferredBackdropHorizon", bgfx::UniformType::Vec4);
     backdropZenithUniform_ = bgfx::createUniform("u_deferredBackdropZenith", bgfx::UniformType::Vec4);
     backdropParamsUniform_ = bgfx::createUniform("u_deferredBackdropParams", bgfx::UniformType::Vec4);
@@ -221,6 +224,10 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
     shadowCascades_.Destroy();
     pointShadows_.Destroy();
     giUniforms_.Destroy();
+    for (bgfx::UniformHandle* handle : { &fogParamsUniform_, &fogColorUniform_, &fogVolumetricUniform_ }) {
+        if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
+        *handle = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(shadowParamsUniform_)) {
         bgfx::destroy(shadowParamsUniform_);
         shadowParamsUniform_ = BGFX_INVALID_HANDLE;
@@ -499,6 +506,18 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     // Adds the bounce light the resolve pass accumulated up to the previous frame; without one
     // (first frame, resize) the shader skips it rather than reading an undefined texture.
     giUniforms_.Set(desc.gi, desc.lightingConfig, viewProjection, fallbackShadowTexture_);
+    {
+        const SceneRenderLightingConfig& config = desc.lightingConfig;
+        const std::array<float, 4> fogParams{ std::max(config.fogDensity, 0.0F), std::max(config.fogHeightFalloff, 0.0F),
+            config.fogBaseHeight, config.fogEnabled ? 1.0F : 0.0F };
+        const std::array<float, 4> fogColor{ config.fogColor[0], config.fogColor[1], config.fogColor[2],
+            std::clamp(config.fogAnisotropy, -0.9F, 0.9F) };
+        // Volumetric fog is marched over the first 100 m.
+        const std::array<float, 4> fogVolumetric{ config.volumetricFogEnabled ? 1.0F : 0.0F, 100.0F, 0.0F, 0.0F };
+        bgfx::setUniform(fogParamsUniform_, fogParams.data());
+        bgfx::setUniform(fogColorUniform_, fogColor.data());
+        bgfx::setUniform(fogVolumetricUniform_, fogVolumetric.data());
+    }
     lightGrid_.Bind(lighting.lightGrid, 7U);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setVertexBuffer(0, &vertices);

@@ -245,6 +245,23 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "light.layerMask") {
         return ParseNumber(property.value, Ensure(node.components.light).layerMask);
     }
+    if (property.propertyPath == "light.sourceRadius") {
+        return ParseNumber(property.value, Ensure(node.components.light).sourceRadius);
+    }
+    if (property.propertyPath == "light.shadowStrength") {
+        return ParseNumber(property.value, Ensure(node.components.light).shadowStrength);
+    }
+    if (property.propertyPath == "light.shadowDistance") {
+        return ParseNumber(property.value, Ensure(node.components.light).shadowDistance);
+    }
+    if (property.propertyPath == "light.mobility") {
+        std::uint32_t mobility = 0U;
+        if (!ParseNumber(property.value, mobility) || mobility > static_cast<std::uint32_t>(LightMobility::Static)) {
+            return false;
+        }
+        Ensure(node.components.light).mobility = static_cast<LightMobility>(mobility);
+        return true;
+    }
     if (property.propertyPath == "input") {
         return ApplyComponentPresence(property.value, node.components.input);
     }

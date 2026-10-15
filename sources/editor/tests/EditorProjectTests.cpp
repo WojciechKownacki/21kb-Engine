@@ -98,7 +98,7 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Physics.Jolt") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Physics.Jolt"), "Persisted physics plugin path should stay config-agnostic");
     kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Audio.Miniaudio") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Audio.Miniaudio"), "Persisted audio plugin path should stay config-agnostic");
     kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Rendering.BasicLighting") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Rendering.BasicLighting"), "Persisted lighting plugin path should stay config-agnostic");
-    kb::editor::tests::Require(created.settings.lightingPath == kb::project::ProjectSceneLightingPath::Forward, "Created editor project should default to Forward lighting path");
+    kb::editor::tests::Require(created.settings.lightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Created editor project should default to Deferred lighting path");
     kb::editor::tests::Require(loaded.descriptor.fileVersion == kb::project::ProjectDescriptor::CurrentFileVersion,
         "Created editor project descriptor should be written at the current file version");
 

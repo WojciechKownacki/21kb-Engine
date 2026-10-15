@@ -67,6 +67,10 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "light.useColorTemperature=" << (components.light->useColorTemperature ? 1 : 0) << '\n';
         output << "light.colorTemperatureKelvin=" << components.light->colorTemperatureKelvin << '\n';
         output << "light.layerMask=" << components.light->layerMask << '\n';
+        output << "light.sourceRadius=" << components.light->sourceRadius << '\n';
+        output << "light.shadowStrength=" << components.light->shadowStrength << '\n';
+        output << "light.shadowDistance=" << components.light->shadowDistance << '\n';
+        output << "light.mobility=" << static_cast<int>(components.light->mobility) << '\n';
     }
 
     output << "input=" << (components.input.has_value() ? 1 : 0) << '\n';

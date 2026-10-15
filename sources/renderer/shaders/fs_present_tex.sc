@@ -136,5 +136,9 @@ void main()
     if (u_displayAntiAliasing.x > 0.5) {
         display = fxaa_display(v_texcoord0);
     }
+    // Quantisation dither: half an 8-bit step of
+    // interleaved gradient noise hides the banding of smooth light falloff.
+    float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    display += vec3_splat((noise - 0.5) / 255.0);
     gl_FragColor = vec4(display, scene.a);
 }

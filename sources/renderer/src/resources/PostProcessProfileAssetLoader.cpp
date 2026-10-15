@@ -153,6 +153,30 @@ enum class FieldResult { Applied, Invalid, Unknown };
     if (keyword == "ambientOcclusionEnabled") return Applied(ParseBoolToken(rest, settings.ambientOcclusionEnabled));
     if (keyword == "ambientOcclusionIntensity") return Applied(ParseNonNegativeFloat(Trim(rest), settings.ambientOcclusionIntensity));
     if (keyword == "ambientOcclusionRadius") return Applied(ParsePositiveFloat(Trim(rest), settings.ambientOcclusionRadius));
+    if (keyword == "globalIllumination") {
+        const std::string_view value = Trim(rest);
+        using Method = ScenePostProcessSettings::GlobalIlluminationMethod;
+        if (value == "Off") settings.globalIllumination = Method::Off;
+        else if (value == "ScreenSpace") settings.globalIllumination = Method::ScreenSpace;
+        else if (value == "Voxel") settings.globalIllumination = Method::Voxel;
+        else return FieldResult::Invalid;
+        return FieldResult::Applied;
+    }
+    if (keyword == "globalIlluminationIntensity") return Applied(ParseNonNegativeFloat(Trim(rest), settings.globalIlluminationIntensity));
+    if (keyword == "fogEnabled") return Applied(ParseBoolToken(rest, settings.fogEnabled));
+    if (keyword == "fogDensity") return Applied(ParseNonNegativeFloat(Trim(rest), settings.fogDensity));
+    if (keyword == "fogHeightFalloff") return Applied(ParseNonNegativeFloat(Trim(rest), settings.fogHeightFalloff));
+    if (keyword == "fogBaseHeight") return Applied(ParseFiniteMaterialFloatToken(Trim(rest), settings.fogBaseHeight));
+    if (keyword == "fogColor.r") return Applied(ParseUnitFloat(Trim(rest), settings.fogColorR));
+    if (keyword == "fogColor.g") return Applied(ParseUnitFloat(Trim(rest), settings.fogColorG));
+    if (keyword == "fogColor.b") return Applied(ParseUnitFloat(Trim(rest), settings.fogColorB));
+    if (keyword == "volumetricFogEnabled") return Applied(ParseBoolToken(rest, settings.volumetricFogEnabled));
+    if (keyword == "fogAnisotropy") {
+        float value = 0.0F;
+        if (!ParseFiniteMaterialFloatToken(Trim(rest), value) || value < -0.9F || value > 0.9F) return FieldResult::Invalid;
+        settings.fogAnisotropy = value;
+        return FieldResult::Applied;
+    }
     return FieldResult::Unknown; // forward compatible: a profile file ignores it rather than failing.
 }
 
@@ -204,6 +228,19 @@ void WriteProfile(std::ostream& output, const ScenePostProcessSettings& settings
     output << "ambientOcclusionEnabled " << (settings.ambientOcclusionEnabled ? 1 : 0) << '\n';
     output << "ambientOcclusionIntensity " << settings.ambientOcclusionIntensity << '\n';
     output << "ambientOcclusionRadius " << settings.ambientOcclusionRadius << '\n';
+    using Method = ScenePostProcessSettings::GlobalIlluminationMethod;
+    output << "globalIllumination " << (settings.globalIllumination == Method::ScreenSpace ? "ScreenSpace"
+        : settings.globalIllumination == Method::Voxel ? "Voxel" : "Off") << '\n';
+    output << "globalIlluminationIntensity " << settings.globalIlluminationIntensity << '\n';
+    output << "fogEnabled " << (settings.fogEnabled ? 1 : 0) << '\n';
+    output << "fogDensity " << settings.fogDensity << '\n';
+    output << "fogHeightFalloff " << settings.fogHeightFalloff << '\n';
+    output << "fogBaseHeight " << settings.fogBaseHeight << '\n';
+    output << "fogColor.r " << settings.fogColorR << '\n';
+    output << "fogColor.g " << settings.fogColorG << '\n';
+    output << "fogColor.b " << settings.fogColorB << '\n';
+    output << "volumetricFogEnabled " << (settings.volumetricFogEnabled ? 1 : 0) << '\n';
+    output << "fogAnisotropy " << settings.fogAnisotropy << '\n';
 }
 
 } // namespace

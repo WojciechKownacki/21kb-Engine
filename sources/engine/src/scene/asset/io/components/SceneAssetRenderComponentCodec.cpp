@@ -1,5 +1,6 @@
 #include "scene/asset/io/components/SceneAssetRenderComponentCodec.hpp"
 
+#include "engine/scene/SceneDocument.hpp"
 #include "scene/asset/io/SceneAssetPrimitiveCodec.hpp"
 
 namespace kb::scene {
@@ -32,7 +33,7 @@ void SceneAssetRenderComponentCodec::WriteMeshRenderer(std::vector<std::uint8_t>
     SceneAssetBinaryIO::WriteUInt32(output, meshRenderer.layer);
 }
 
-bool SceneAssetRenderComponentCodec::ReadLight(SceneAssetBinaryIO::ByteReader& input, LightComponent& output) {
+bool SceneAssetRenderComponentCodec::ReadLight(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, LightComponent& output) {
     std::uint32_t kind = 0;
     bool castsShadow = true;
     bool useColorTemperature = false;
@@ -52,6 +53,15 @@ bool SceneAssetRenderComponentCodec::ReadLight(SceneAssetBinaryIO::ByteReader& i
         !input.ReadFloat(output.colorTemperatureKelvin) ||
         !input.ReadUInt32(output.layerMask)) {
         return false;
+    }
+    if (fileVersion >= SceneDocument::LightShadowSettingsFileVersion) {
+        std::uint32_t mobility = 0U;
+        if (!input.ReadFloat(output.sourceRadius) || !input.ReadFloat(output.shadowStrength) ||
+            !input.ReadFloat(output.shadowDistance) || !input.ReadUInt32(mobility) ||
+            mobility > static_cast<std::uint32_t>(LightMobility::Static)) {
+            return false;
+        }
+        output.mobility = static_cast<LightMobility>(mobility);
     }
     output.kind = static_cast<LightKind>(kind);
     output.castsShadow = castsShadow;
@@ -74,6 +84,10 @@ void SceneAssetRenderComponentCodec::WriteLight(std::vector<std::uint8_t>& outpu
     SceneAssetBinaryIO::WriteUInt8(output, light.useColorTemperature ? 1U : 0U);
     SceneAssetBinaryIO::WriteFloat(output, light.colorTemperatureKelvin);
     SceneAssetBinaryIO::WriteUInt32(output, light.layerMask);
+    SceneAssetBinaryIO::WriteFloat(output, light.sourceRadius);
+    SceneAssetBinaryIO::WriteFloat(output, light.shadowStrength);
+    SceneAssetBinaryIO::WriteFloat(output, light.shadowDistance);
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(light.mobility));
 }
 
 } // namespace kb::scene

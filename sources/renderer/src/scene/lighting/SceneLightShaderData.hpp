@@ -43,13 +43,18 @@ public:
         const float inner = std::cos(kb::math::ToRadians(kb::math::Degrees{light.innerConeDegrees}).Value());
         const float outer = std::cos(kb::math::ToRadians(kb::math::Degrees{light.outerConeDegrees}).Value());
         return ScenePackedLight{{{
-            {direction[0], direction[1], direction[2], Kind(light.kind)},
+            // w: the kind, plus Contact Shadow Length (m, up to 10) as a fraction below 0.4.
+            {direction[0], direction[1], direction[2],
+                Kind(light.kind) + 0.04F * std::clamp(light.contactShadowLength, 0.0F, 10.0F)},
             {light.position[0], light.position[1], light.position[2], std::max(light.range, 0.0F)},
             {std::max(light.color[0], 0.0F), std::max(light.color[1], 0.0F),
                 std::max(light.color[2], 0.0F), light.intensity},
             {std::max(inner, outer), std::min(inner, outer),
                 std::max(light.areaWidth, 0.0F), std::max(light.areaHeight, 0.0F)},
-            {1.0F - (q[1]*y2 + q[2]*z2), q[0]*y2 + q[3]*z2, q[0]*z2 - q[3]*y2, light.castsShadow ? 1.0F : 0.0F},
+            // w: 1 + how much of the light volumetric fog scatters (Volumetric Scattering), negative when
+            // the light casts no shadow.
+            {1.0F - (q[1]*y2 + q[2]*z2), q[0]*y2 + q[3]*z2, q[0]*z2 - q[3]*y2,
+                (light.castsShadow ? 1.0F : -1.0F) * (1.0F + std::max(light.volumetricScattering, 0.0F))},
         }}};
     }
 

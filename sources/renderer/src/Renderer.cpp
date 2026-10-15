@@ -1121,7 +1121,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     // the screen-space ambient occlusion; without either, the lighting config keeps its own.
     if (resolvedPostProcessSettings.has_value()) {
         RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, *resolvedPostProcessSettings);
-    } else if (defaultPostProcessSettings_.ambientOcclusionEnabled) {
+    } else if (defaultPostProcessSettings_.ambientOcclusionEnabled || defaultPostProcessSettings_.fogEnabled ||
+               defaultPostProcessSettings_.globalIllumination != ScenePostProcessSettings::GlobalIlluminationMethod::Off) {
         RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(effectiveLightingConfig, defaultPostProcessSettings_);
     }
     if (!desc.shadowPassEnabled) {

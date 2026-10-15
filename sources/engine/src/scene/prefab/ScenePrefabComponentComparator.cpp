@@ -39,7 +39,9 @@ namespace {
         && lhs.areaHeight == rhs.areaHeight
         && lhs.contactShadowLength == rhs.contactShadowLength
         && lhs.volumetricScattering == rhs.volumetricScattering
-        && lhs.castsShadow == rhs.castsShadow;
+        && lhs.castsShadow == rhs.castsShadow
+        && lhs.sourceRadius == rhs.sourceRadius && lhs.shadowStrength == rhs.shadowStrength
+        && lhs.shadowDistance == rhs.shadowDistance && lhs.mobility == rhs.mobility;
 }
 
 [[nodiscard]] bool Equal(const InputComponent& lhs, const InputComponent& rhs) noexcept {

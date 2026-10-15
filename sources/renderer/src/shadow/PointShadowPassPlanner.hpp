@@ -31,6 +31,8 @@ struct PointShadowSetup {
     std::uint32_t atlasWidth = 0U;
     std::uint32_t atlasHeight = 0U;
     std::array<std::array<PointShadowFace, ScenePointShadowBinding::kFaceCount>, ScenePointShadowBinding::kMaxLights> faces{};
+    // Lights with Mobility Static: their tiles are cached while nothing changes.
+    std::array<bool, ScenePointShadowBinding::kMaxLights> staticLight{};
     ScenePointShadowBinding binding{};
 };
 

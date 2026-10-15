@@ -4,6 +4,7 @@
 #include <bgfx/bgfx.h>
 #include <array>
 #include <memory>
+#include <vector>
 
 namespace kb::render {
 
@@ -11,6 +12,8 @@ struct SceneLightGridBinding {
     bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
     std::array<float, 4> minimum{}, inverseCellSize{}, dimensions{}, layout{};
     std::uint32_t lightCount = 0U;
+    // Entity of each light index the shaders read from the grid (point shadows are matched by it).
+    std::vector<std::uint64_t> entityIds;
 };
 
 // Owns derived GPU snapshots. Authored light state remains in RenderScene/ECS.

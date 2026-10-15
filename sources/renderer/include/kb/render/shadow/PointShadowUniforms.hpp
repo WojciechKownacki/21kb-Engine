@@ -22,6 +22,7 @@ struct PointShadowUniforms {
     bgfx::UniformHandle spot = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle atlas = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle info = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle strength = BGFX_INVALID_HANDLE;
 
     void Create() {
         constexpr auto lights = static_cast<std::uint16_t>(ScenePointShadowBinding::kMaxLights);
@@ -31,10 +32,11 @@ struct PointShadowUniforms {
         spot = bgfx::createUniform("u_pointShadowSpot", bgfx::UniformType::Vec4, lights);
         atlas = bgfx::createUniform("u_pointShadowAtlas", bgfx::UniformType::Vec4);
         info = bgfx::createUniform("u_pointShadowInfo", bgfx::UniformType::Vec4);
+        strength = bgfx::createUniform("u_pointShadowStrength", bgfx::UniformType::Vec4, lights / 4U);
     }
 
     void Destroy() noexcept {
-        for (bgfx::UniformHandle* handle : { &sampler, &light, &depth, &spot, &atlas, &info }) {
+        for (bgfx::UniformHandle* handle : { &sampler, &light, &depth, &spot, &atlas, &info, &strength }) {
             if (bgfx::isValid(*handle)) {
                 bgfx::destroy(*handle);
             }
@@ -44,7 +46,7 @@ struct PointShadowUniforms {
 
     [[nodiscard]] bool IsValid() const noexcept {
         return bgfx::isValid(sampler) && bgfx::isValid(light) && bgfx::isValid(depth) &&
-            bgfx::isValid(spot) && bgfx::isValid(atlas) && bgfx::isValid(info);
+            bgfx::isValid(spot) && bgfx::isValid(atlas) && bgfx::isValid(info) && bgfx::isValid(strength);
     }
 
     // Publishes zero lights when `binding` is null or invalid, which the shader treats as "no shadow".
@@ -66,6 +68,7 @@ struct PointShadowUniforms {
                 depthData[slot * 4U + 0U] = binding->depthParams[slot * 4U + 0U];
                 depthData[slot * 4U + 1U] = binding->positionRange[slot * 4U + 3U];
                 depthData[slot * 4U + 2U] = binding->depthParams[slot * 4U + 1U];
+                depthData[slot * 4U + 3U] = binding->depthParams[slot * 4U + 2U];
             }
             atlasData = binding->atlas;
             const bgfx::Caps* caps = bgfx::getCaps();
@@ -77,6 +80,7 @@ struct PointShadowUniforms {
         bgfx::setUniform(spot, enabled ? binding->spot.data() : noSpot.data(), ScenePointShadowBinding::kMaxLights);
         bgfx::setUniform(atlas, atlasData.data());
         bgfx::setUniform(info, infoData.data());
+        bgfx::setUniform(strength, enabled ? binding->lightStrength.data() : noSpot.data(), ScenePointShadowBinding::kMaxLights / 4U);
     }
 };
 

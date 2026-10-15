@@ -2208,7 +2208,7 @@ void PaintCameraSection(
 }
 
 [[nodiscard]] int LightSectionRows(const kb::scene::LightComponent& light) noexcept {
-    int rows = 9;
+    int rows = 11;
     if (LightUsesRange(light.kind)) {
         ++rows;
     }
@@ -2216,7 +2216,13 @@ void PaintCameraSection(
         rows += 2;
     }
     if (LightUsesAreaSize(light.kind)) {
-        rows += 2;
+        rows += 3;
+    }
+    if (light.kind == kb::scene::LightKind::Directional) {
+        ++rows;
+    }
+    if (light.useColorTemperature) {
+        ++rows;
     }
     return rows;
 }
@@ -2230,24 +2236,37 @@ void PaintLightSection(
     const kb::scene::LightComponent& light) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, EditorText("inspector.light.title", "Light"));
     section.Field(EditorText("inspector.light.type", "Type"), InspectorComponentLabelFormatter::LightKindName(light.kind), InspectorPropertyId::LightKind);
+    if (LightUsesAreaSize(light.kind)) {
+        section.Field(EditorText("inspector.light.shape", "Shape"), InspectorComponentLabelFormatter::LightShapeName(light.kind), InspectorPropertyId::LightShape);
+    }
     section.Color(light.color, InspectorPropertyId::LightColor);
     section.Float(EditorText("inspector.light.intensity", "Intensity"), FormatFloat(light.intensity, 2), InspectorPropertyId::LightIntensity);
     if (LightUsesRange(light.kind)) {
         section.Float(EditorText("inspector.light.range", "Range"), FormatFloat(light.range, 2), InspectorPropertyId::LightRange);
     }
     if (LightUsesSpotCone(light.kind)) {
-        section.Float(EditorText("inspector.light.innerCone", "Inner Cone"), FormatFloat(light.innerConeDegrees, 2), InspectorPropertyId::LightInnerCone);
-        section.Float(EditorText("inspector.light.outerCone", "Outer Cone"), FormatFloat(light.outerConeDegrees, 2), InspectorPropertyId::LightOuterCone);
+        section.Float(EditorText("inspector.light.innerAngle", "Inner Angle"), FormatFloat(light.innerConeDegrees, 2), InspectorPropertyId::LightInnerCone);
+        section.Float(EditorText("inspector.light.outerAngle", "Outer Angle"), FormatFloat(light.outerConeDegrees, 2), InspectorPropertyId::LightOuterCone);
     }
     if (LightUsesAreaSize(light.kind)) {
-        section.Float(EditorText("inspector.light.areaWidth", "Area Width"), FormatFloat(light.areaWidth, 2), InspectorPropertyId::LightAreaWidth);
-        section.Float(EditorText("inspector.light.areaHeight", "Area Height"), FormatFloat(light.areaHeight, 2), InspectorPropertyId::LightAreaHeight);
+        section.Float(EditorText("inspector.light.width", "Width"), FormatFloat(light.areaWidth, 2), InspectorPropertyId::LightAreaWidth);
+        section.Float(EditorText("inspector.light.height", "Height"), FormatFloat(light.areaHeight, 2), InspectorPropertyId::LightAreaHeight);
     }
-    section.Float(EditorText("inspector.light.contactShadow", "Contact Shadow"), FormatFloat(light.contactShadowLength, 2), InspectorPropertyId::LightContactShadowLength);
-    section.Float(EditorText("inspector.light.volumetric", "Volumetric"), FormatFloat(light.volumetricScattering, 2), InspectorPropertyId::LightVolumetricScattering);
-    section.Bool(EditorText("inspector.light.castsShadow", "Casts Shadow"), light.castsShadow, InspectorPropertyId::LightCastsShadow);
-    section.Bool(EditorText("inspector.light.useColorTemperature", "Use Color Temperature"), light.useColorTemperature, InspectorPropertyId::LightUseColorTemperature);
-    section.Float(EditorText("inspector.light.colorTemperatureK", "Color Temperature (K)"), FormatFloat(light.colorTemperatureKelvin, 0), InspectorPropertyId::LightColorTemperatureKelvin);
+    section.Field(EditorText("inspector.light.mobility", "Mobility"), InspectorComponentLabelFormatter::LightMobilityName(light.mobility), InspectorPropertyId::LightMobility);
+    section.Bool(EditorText("inspector.light.castShadows", "Cast Shadows"), light.castsShadow, InspectorPropertyId::LightCastsShadow);
+    section.Float(EditorText("inspector.light.shadowStrength", "Shadow Strength"), FormatFloat(light.shadowStrength, 2), InspectorPropertyId::LightShadowStrength);
+    if (light.kind == kb::scene::LightKind::Directional) {
+        section.Float(EditorText("inspector.light.sourceAngle", "Source Angle"), FormatFloat(light.sourceRadius, 4), InspectorPropertyId::LightSourceRadius);
+        section.Float(EditorText("inspector.light.shadowDistance", "Shadow Distance"), FormatFloat(light.shadowDistance, 1), InspectorPropertyId::LightShadowDistance);
+    } else {
+        section.Float(EditorText("inspector.light.sourceRadius", "Source Radius"), FormatFloat(light.sourceRadius, 3), InspectorPropertyId::LightSourceRadius);
+    }
+    section.Float(EditorText("inspector.light.contactShadow", "Contact Shadow Length"), FormatFloat(light.contactShadowLength, 2), InspectorPropertyId::LightContactShadowLength);
+    section.Float(EditorText("inspector.light.volumetricScattering", "Volumetric Scattering"), FormatFloat(light.volumetricScattering, 2), InspectorPropertyId::LightVolumetricScattering);
+    section.Bool(EditorText("inspector.light.useTemperature", "Use Temperature"), light.useColorTemperature, InspectorPropertyId::LightUseColorTemperature);
+    if (light.useColorTemperature) {
+        section.Float(EditorText("inspector.light.temperatureK", "Temperature (K)"), FormatFloat(light.colorTemperatureKelvin, 0), InspectorPropertyId::LightColorTemperatureKelvin);
+    }
     section.Field(EditorText("inspector.light.layerMask", "Layer Mask"), std::to_string(light.layerMask), InspectorPropertyId::LightLayerMask);
     y = section.Bottom() + kSectionGap;
 }

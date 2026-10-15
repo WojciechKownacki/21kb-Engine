@@ -22,12 +22,13 @@ vec2 KbGiUv(vec4 clip)
     return vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
 }
 
-// Accumulated bounce light and ambient visibility at a world position. Returns 1 when the stored sample
-// belongs to the same surface; otherwise gi is zero and ao is 1 (unoccluded).
-float KbScreenSpaceAccumulated(vec3 worldPos, out vec3 gi, out float ao)
+// Accumulated bounce light, ambient visibility and sky visibility at a world position. Returns 1 when
+// the stored sample belongs to the same surface; otherwise gi is zero and ao and sky are 1 (unoccluded).
+float KbScreenSpaceAccumulated(vec3 worldPos, out vec3 gi, out float ao, out float sky)
 {
     gi = vec3(0.0, 0.0, 0.0);
     ao = 1.0;
+    sky = 1.0;
     vec4 clip = mul(u_giPrevViewProj, vec4(worldPos, 1.0));
     if (u_giTemporal.z < 0.5 || clip.w <= 0.0001) {
         return 0.0;
@@ -39,6 +40,8 @@ float KbScreenSpaceAccumulated(vec3 worldPos, out vec3 gi, out float ao)
     vec4 stored = texture2DLod(s_giAccum, uv, 0.0);
     float same = abs(stored.a - clip.w) < u_giTemporal.y * clip.w ? 1.0 : 0.0;
     gi = stored.rgb * same;
-    ao = mix(1.0, texture2DLod(s_aoAccum, uv, 0.0).x, same);
+    vec2 visibility = texture2DLod(s_aoAccum, uv, 0.0).xy;
+    ao = mix(1.0, visibility.x, same);
+    sky = mix(1.0, visibility.y, same);
     return same;
 }

@@ -2,6 +2,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <array>
 #include <cstdint>
 
 namespace kb::render {
@@ -29,7 +30,17 @@ public:
     [[nodiscard]] static std::uint64_t AllocationBytesFor(std::uint32_t shadowMapSize) noexcept;
     [[nodiscard]] static std::uint64_t AllocationBytesFor(std::uint32_t width, std::uint32_t height) noexcept;
 
+    // What the tiles of light slot `slot` were last rendered for, when its light is static (Mobility
+    // Static): unchanged, the tiles are kept instead of rendered again. 0 = nothing cached.
+    [[nodiscard]] std::uint64_t CachedTiles(std::uint32_t slot) const noexcept {
+        return slot < cachedTiles_.size() ? cachedTiles_[slot] : 0U;
+    }
+    void SetCachedTiles(std::uint32_t slot, std::uint64_t key) noexcept {
+        if (slot < cachedTiles_.size()) cachedTiles_[slot] = key;
+    }
+
 private:
+    std::array<std::uint64_t, 32> cachedTiles_{};
     bgfx::TextureHandle depthTexture_ = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle frameBuffer_ = BGFX_INVALID_HANDLE;
     std::uint32_t size_ = 0;

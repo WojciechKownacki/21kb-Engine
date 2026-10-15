@@ -20,6 +20,7 @@ public:
     [[nodiscard]] const std::array<float, 4>& InverseCellSize() const noexcept { return inverseCellSize_; }
     [[nodiscard]] const std::array<float, 4>& Dimensions() const noexcept { return dimensions_; }
     [[nodiscard]] std::uint32_t LightCount() const noexcept { return lightCount_; }
+    [[nodiscard]] std::span<const std::uint64_t> EntityIds() const noexcept { return entityIds_; }
     [[nodiscard]] std::uint32_t HeaderOffset() const noexcept { return lightCount_ * 5U; }
     [[nodiscard]] std::uint32_t IndexOffset() const noexcept { return HeaderOffset() + cellCount_ + 1U; }
     [[nodiscard]] std::uint32_t CellFor(const std::array<float, 3>& position) const noexcept;
@@ -27,6 +28,7 @@ public:
 private:
     std::vector<std::array<float, 4>> atlas_;
     std::vector<std::uint32_t> counts_;
+    std::vector<std::uint64_t> entityIds_;
     std::array<float, 4> minimum_{};
     std::array<float, 4> inverseCellSize_{};
     std::array<float, 4> dimensions_{};

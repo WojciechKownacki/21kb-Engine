@@ -68,12 +68,14 @@ float GeometrySchlickGgx(float nDotV, float roughness)
 
 float DiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
 {
+    // Disney diffuse shape without energy renormalisation, so a surface lit straight on
+    // returns its albedo as Lambert diffuse does (the factor darkened
+    // every light by about a quarter at common roughness).
     float energyBias = mix(0.0, 0.5, roughness);
-    float energyFactor = mix(1.0, 1.0 / 1.51, roughness);
     float fd90 = energyBias + 2.0 * lDotH * lDotH * roughness;
     float lightScatter = 1.0 + (fd90 - 1.0) * pow(clamp(1.0 - nDotL, 0.0, 1.0), 5.0);
     float viewScatter = 1.0 + (fd90 - 1.0) * pow(clamp(1.0 - nDotV, 0.0, 1.0), 5.0);
-    return lightScatter * viewScatter * energyFactor;
+    return lightScatter * viewScatter;
 }
 
 vec3 EnvironmentColor(vec3 direction)
@@ -103,12 +105,8 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     return diffuseEnv + mix(specularEnv, specularSsr, reflection.a);
 }
 
-// Material ambient occlusion darkens only the light from the surroundings (Unreal, Unity); a light
-// shining on the surface is not occluded by it.
-vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular,
-    float shadingModel, float customData0, float customData1, vec3 modelColor, vec3 irisNormal, vec2 iris)
+void ReadSceneLight(int lightIndex, out vec4 dirKind, out vec4 positionRange, out vec4 colorIntensity, out vec4 spot, out vec4 areaRight)
 {
-    vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
     if (u_sceneLightGridDimensions.w > 0.5) {
         float base = float(lightIndex) * 5.0;
         dirKind = KbLightGridTexel(base);
@@ -123,6 +121,43 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
         spot = u_deferredLightSpot[lightIndex];
         areaRight = u_deferredLightAreaRight[lightIndex];
     }
+}
+
+// Screen-space contact shadow (Contact Shadow Length): 12 steps
+// toward the light over `contactLength` metres against the depth buffer; a surface just in front of
+// the step hides the light. Catches the small shadows a shadow map is too coarse for.
+float ContactShadow(vec3 worldPos, vec3 lightVector, float contactLength)
+{
+    if (contactLength <= 0.0) {
+        return 1.0;
+    }
+    vec3 camera = u_deferredCameraPosition.xyz;
+    float jitter = fract(52.9829189 * fract(dot(worldPos, vec3(0.06711056, 0.00583715, 0.0372))));
+    for (int i = 0; i < 12; ++i) {
+        vec3 p = worldPos + lightVector * (contactLength * (float(i) + jitter) / 12.0);
+        vec4 clip = mul(u_giViewProj, vec4(p, 1.0));
+        if (clip.w <= 0.0001) {
+            break;
+        }
+        vec2 uv = KbGiUv(clip);
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+            break;
+        }
+        float behind = length(p - camera) - length(ReconstructWorldPosition(uv, texture2DLod(s_gbufferDepth, uv, 0.0).x) - camera);
+        if (behind > 0.02 && behind < 0.25 * contactLength + 0.1) {
+            return 0.0;
+        }
+    }
+    return 1.0;
+}
+
+// Material ambient occlusion darkens only the light from the surroundings; a light
+// shining on the surface is not occluded by it.
+vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular,
+    float shadingModel, float customData0, float customData1, vec3 modelColor, vec3 irisNormal, vec2 iris)
+{
+    vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
+    ReadSceneLight(lightIndex, dirKind, positionRange, colorIntensity, spot, areaRight);
 
     vec3 lightVector = vec3(0.0, 1.0, 0.0);
     float attenuation = 1.0;
@@ -144,10 +179,13 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
             float coneAttenuation = clamp((coneCos - spot.y) / coneWidth, 0.0, 1.0);
             attenuation *= coneAttenuation * coneAttenuation;
         }
-        if (dirKind.w > 2.5) {
+        // Rectangle and disc emit from their front face only; a tube shines all around.
+        if (dirKind.w > 2.5 && dirKind.w < 4.5) {
             attenuation *= max(dot(normalize(dirKind.xyz), normalize(-lightVector)), 0.0);
         }
     }
+
+    attenuation *= ContactShadow(worldPos + normal * 0.02, lightVector, fract(dirKind.w) * 25.0);
 
     float nDotLRaw = dot(normal, lightVector);
     float nDotL = max(nDotLRaw, 0.0);
@@ -174,25 +212,149 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
         albedo, metallic, roughness, diffuse, specularTerm, modelColor, irisNormal, iris) * radiance;
 }
 
-float SampleShadowVisibility(vec3 shadowCoord)
+float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
 {
     float biasedDepth = shadowCoord.z + u_deferredShadowParams.x;
-    float storedDepth = texture2D(s_deferredShadowMap, shadowCoord.xy).x;
-    float hardShadow = biasedDepth < storedDepth ? 1.0 : 0.0;
     float texelSize = max(u_deferredShadowParams.z, 0.000001);
-    float shadowSamples =
-        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(-texelSize, -texelSize)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(0.0, -texelSize)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(texelSize, -texelSize)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(-texelSize, 0.0)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(texelSize, 0.0)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(-texelSize, texelSize)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(0.0, texelSize)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_deferredShadowMap, shadowCoord.xy + vec2(texelSize, texelSize)).x ? 1.0 : 0.0);
-    float inShadow = shadowSamples * 0.11111111;
-    float selectedShadow = u_deferredShadowParams.w < 2.0 ? hardShadow : inShadow;
+    float selectedShadow = 0.0;
+    if (penumbraScale > 0.0 && u_deferredShadowParams.w >= 2.0) {
+        // Soft shadows from the light's source angle (PCSS): the mean depth of
+        // the occluders around the point sets the penumbra the filter covers.
+        float turn = 6.2831853 * fract(52.9829189 * fract(dot(shadowCoord.xy, vec2(4211.0, 2203.0))));
+        float search = clamp(penumbraScale * 0.05, texelSize, 12.0 * texelSize);
+        float occluderSum = 0.0;
+        float occluders = 0.0;
+        for (int i = 0; i < 12; ++i) {
+            float r = sqrt((float(i) + 0.5) / 12.0);
+            float a = float(i) * 2.39996323 + turn;
+            float d = texture2DLod(s_deferredShadowMap, shadowCoord.xy + vec2(cos(a), sin(a)) * (r * search), 0.0).x;
+            // The shadow map keeps reversed depth: an occluder is nearer the light, its depth larger.
+            occluderSum += d > biasedDepth ? d : 0.0;
+            occluders += d > biasedDepth ? 1.0 : 0.0;
+        }
+        float penumbra = clamp(penumbraScale * (occluderSum / max(occluders, 1.0) - biasedDepth), texelSize, 16.0 * texelSize);
+        float softShadow = 0.0;
+        for (int j = 0; j < 12; ++j) {
+            float r = sqrt((float(j) + 0.5) / 12.0);
+            float a = float(j) * 2.39996323 + turn + 1.3;
+            softShadow += biasedDepth < texture2DLod(s_deferredShadowMap, shadowCoord.xy + vec2(cos(a), sin(a)) * (r * penumbra), 0.0).x ? 1.0 : 0.0;
+        }
+        selectedShadow = occluders > 0.0 ? softShadow / 12.0 : 0.0;
+    } else {
+        float hardShadow = biasedDepth < texture2DLod(s_deferredShadowMap, shadowCoord.xy, 0.0).x ? 1.0 : 0.0;
+        float shadowSamples = 0.0;
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                shadowSamples += biasedDepth < texture2DLod(s_deferredShadowMap, shadowCoord.xy + vec2(float(x), float(y)) * texelSize, 0.0).x ? 1.0 : 0.0;
+            }
+        }
+        selectedShadow = u_deferredShadowParams.w < 2.0 ? hardShadow : shadowSamples * 0.11111111;
+    }
     return mix(1.0, 1.0 - u_deferredShadowParams.y, selectedShadow);
+}
+
+// Exponential height fog and volumetric fog. u_fogParams: density at the base height,
+// falloff per metre above it, base height, 1 = fog on. u_fogColor: colour, w = anisotropy.
+// u_fogVolumetric: x 1 = volumetric, y = how far (m) it is marched.
+uniform vec4 u_fogParams;
+uniform vec4 u_fogColor;
+uniform vec4 u_fogVolumetric;
+
+float FogDensity(float height)
+{
+    return u_fogParams.x * exp(-u_fogParams.y * max(height - u_fogParams.z, -100.0));
+}
+
+// Henyey-Greenstein phase function, normalised over the sphere.
+float FogPhase(float cosTheta, float g)
+{
+    float g2 = g * g;
+    return (1.0 - g2) / (12.5663706 * pow(max(1.0 + g2 - 2.0 * g * cosTheta, 0.0001), 1.5));
+}
+
+// Light the scene's lights scatter toward the camera at `p` (per unit of fog density): each light
+// with Volumetric Scattering (|areaRight.w| - 1), with its falloff, cone and shadows - light shafts.
+vec3 LightInFog(vec3 p, vec3 rayDir)
+{
+    vec3 inScattered = vec3_splat(0.0);
+    vec2 lightList = KbLightGridList(p, u_deferredLightParams.x);
+    for (int entry = 0; entry < int(lightList.y); ++entry) {
+        int lightIndex = KbLightGridIndex(lightList, entry);
+        vec4 dirKind, positionRange, colorIntensity, spot, areaRight;
+        ReadSceneLight(lightIndex, dirKind, positionRange, colorIntensity, spot, areaRight);
+        float scattering = abs(areaRight.w) - 1.0;
+        if (scattering <= 0.0) {
+            continue;
+        }
+        vec3 lightVector;
+        float attenuation = 1.0;
+        if (dirKind.w < 0.5) {
+            lightVector = normalize(-dirKind.xyz);
+            if (lightIndex == 0 && u_deferredShadowParams.w > 0.5) {
+                vec4 coarser;
+                vec4 shadowCoord = KbResolveShadowCascade(p, coarser);
+                if (shadowCoord.w > 0.5) {
+                    attenuation = SampleShadowVisibility(shadowCoord.xyz, 0.0);
+                }
+            }
+        } else {
+            vec3 toLight = KbSurfaceEmitterSamplePosition(positionRange.xyz, dirKind.xyz, areaRight.xyz, dirKind.w, spot.zw, p) - p;
+            float distanceToLight = length(toLight);
+            lightVector = toLight / max(distanceToLight, 0.0001);
+            float rangeRatio = distanceToLight / max(positionRange.w, 0.0001);
+            float rangeWindow = clamp(1.0 - rangeRatio * rangeRatio * rangeRatio * rangeRatio, 0.0, 1.0);
+            attenuation = rangeWindow * rangeWindow / max(distanceToLight * distanceToLight, 0.0001);
+            if (dirKind.w > 1.5 && dirKind.w < 2.5) {
+                float cone = clamp((dot(normalize(dirKind.xyz), -lightVector) - spot.y) / max(spot.x - spot.y, 0.001), 0.0, 1.0);
+                attenuation *= cone * cone;
+            }
+            if (dirKind.w > 2.5 && dirKind.w < 4.5) {
+                attenuation *= max(dot(normalize(dirKind.xyz), -lightVector), 0.0);
+            }
+            if (attenuation <= 0.0) {
+                continue;
+            }
+            attenuation *= KbPointShadowFactor(lightIndex, p, vec3_splat(0.0));
+        }
+        // The engine's intensity convention (the surface lighting takes the light times pi).
+        inScattered += colorIntensity.rgb * (colorIntensity.a * 3.14159265 * attenuation * scattering *
+            FogPhase(dot(rayDir, lightVector), u_fogColor.w));
+    }
+    return inScattered;
+}
+
+// The fogged colour of a surface at `worldPos`: the height fog lights itself to its colour (Fog
+// Inscattering Color); volumetric fog adds the light the scene's lights scatter in it, marched
+// in 24 steps with their shadows (light shafts).
+vec3 ApplyFog(vec3 color, vec3 worldPos)
+{
+    if (u_fogParams.w < 0.5) {
+        return color;
+    }
+    vec3 camera = u_deferredCameraPosition.xyz;
+    vec3 ray = worldPos - camera;
+    float rayLength = length(ray);
+    vec3 rayDir = ray / max(rayLength, 0.0001);
+    float falloff = max(u_fogParams.y, 0.0001);
+    float rise = falloff * ray.y;
+    float alongRay = abs(rise) > 0.001 ? (1.0 - exp(-rise)) / rise : 1.0;
+    float transmittance = exp(-FogDensity(camera.y) * alongRay * rayLength);
+    if (u_fogVolumetric.x < 0.5) {
+        return color * transmittance + u_fogColor.rgb * (1.0 - transmittance);
+    }
+    float marched = min(rayLength, u_fogVolumetric.y);
+    float stepLength = marched / 24.0;
+    float jitter = fract(52.9829189 * fract(dot(worldPos, vec3(0.06711056, 0.00583715, 0.0372))));
+    vec3 inScattered = vec3_splat(0.0);
+    float throughput = 1.0;
+    for (int i = 0; i < 24; ++i) {
+        vec3 p = camera + rayDir * ((float(i) + jitter) * stepLength);
+        float density = FogDensity(p.y);
+        // White albedo: the lights' own colour scatters.
+        inScattered += throughput * density * stepLength * LightInFog(p, rayDir);
+        throughput *= exp(-density * stepLength);
+    }
+    return color * transmittance + u_fogColor.rgb * (1.0 - transmittance) + inScattered;
 }
 
 void main()
@@ -251,9 +413,9 @@ void main()
         vec4 coarserCoord;
         vec4 shadowCoord = KbResolveShadowCascade(worldPos, coarserCoord);
         if (shadowCoord.w > 0.5) {
-            shadowVisible = SampleShadowVisibility(shadowCoord.xyz);
+            shadowVisible = SampleShadowVisibility(shadowCoord.xyz, shadowCoord.w - 1.0);
             if (coarserCoord.w > 0.0) {
-                shadowVisible = mix(shadowVisible, SampleShadowVisibility(coarserCoord.xyz), coarserCoord.w);
+                shadowVisible = mix(shadowVisible, SampleShadowVisibility(coarserCoord.xyz, shadowCoord.w - 1.0), coarserCoord.w);
             }
         }
     }
@@ -261,10 +423,13 @@ void main()
     // Screen-space results of the previous frame: bounce light, ambient visibility, reflections.
     vec3 giAccumulated;
     float aoAccumulated;
-    KbScreenSpaceAccumulated(worldPos, giAccumulated, aoAccumulated);
+    float skyAccumulated;
+    KbScreenSpaceAccumulated(worldPos, giAccumulated, aoAccumulated, skyAccumulated);
     aoAccumulated = mix(1.0, aoAccumulated, step(0.0001, u_aoParams.x));
+    // The sky light reaches only as much of the sky as the voxel GI sees (occluded sky light).
+    skyAccumulated = mix(1.0, skyAccumulated, step(0.0001, u_giParams.x));
     vec4 reflection = KbScreenSpaceReflection(worldPos, normal, viewDir, roughness, gl_FragCoord.xy);
-    vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion * aoAccumulated, reflection);
+    vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion * aoAccumulated * skyAccumulated, reflection);
     if (KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_CLEAR_COAT) && u_deferredEnvironmentParams.x > 0.5) {
         vec3 coatDirection = reflect(-viewDir, normal);
         vec3 coatReflection = mix(KbSkyReflection(coatDirection, customData1, EnvironmentColor(coatDirection)) * u_deferredEnvironmentParams.z,
@@ -278,7 +443,7 @@ void main()
             int lightIndex = KbLightGridIndex(lightList, entry);
             vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, specular,
                 shadingModel, customData0, customData1, modelColor, irisNormal, iris);
-            lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, worldPos);
+            lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, worldPos, normal);
         }
     }
 
@@ -286,5 +451,5 @@ void main()
         lighting += giAccumulated * albedo.rgb * ((1.0 - metallic) * occlusion * aoAccumulated * u_giParams.x);
     }
 
-    gl_FragColor = vec4(lighting + surface.rgb, 1.0);
+    gl_FragColor = vec4(ApplyFog(lighting + surface.rgb, worldPos), 1.0);
 }

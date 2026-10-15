@@ -74,7 +74,9 @@ RenderProxyDirtyFlag RenderSceneProxyDirtyTracker::DirtyForLightChange(const Lig
         current.areaHeight != next.areaHeight ||
         current.contactShadowLength != next.contactShadowLength ||
         current.volumetricScattering != next.volumetricScattering ||
-        current.castsShadow != next.castsShadow || current.layer != next.layer) {
+        current.castsShadow != next.castsShadow || current.layer != next.layer ||
+        current.sourceRadius != next.sourceRadius || current.shadowStrength != next.shadowStrength ||
+        current.shadowDistance != next.shadowDistance || current.staticMobility != next.staticMobility) {
         dirty |= RenderProxyDirtyFlag::Light;
     }
     if (current.visible != next.visible) {

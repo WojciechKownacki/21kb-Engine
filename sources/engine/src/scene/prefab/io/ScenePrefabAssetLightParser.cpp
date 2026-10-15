@@ -59,9 +59,18 @@ bool ScenePrefabAssetLightParser::Parse(const ScenePrefabAssetFieldMap& fields, 
         || !ParseOptionalBool(fields, "light.castsShadow", light.castsShadow)
         || !ParseOptionalBool(fields, "light.useColorTemperature", light.useColorTemperature)
         || !ParseOptionalField(fields, "light.colorTemperatureKelvin", light.colorTemperatureKelvin)
-        || !ParseOptionalField(fields, "light.layerMask", light.layerMask)) {
+        || !ParseOptionalField(fields, "light.layerMask", light.layerMask)
+        || !ParseOptionalField(fields, "light.sourceRadius", light.sourceRadius)
+        || !ParseOptionalField(fields, "light.shadowStrength", light.shadowStrength)
+        || !ParseOptionalField(fields, "light.shadowDistance", light.shadowDistance)) {
         return false;
     }
+    std::uint32_t mobility = static_cast<std::uint32_t>(light.mobility);
+    if (!ParseOptionalField(fields, "light.mobility", mobility) ||
+        mobility > static_cast<std::uint32_t>(LightMobility::Static)) {
+        return false;
+    }
+    light.mobility = static_cast<LightMobility>(mobility);
 
     light.kind = static_cast<LightKind>(kind);
     if (!IsLightComponentValid(light)) {

@@ -177,7 +177,9 @@ struct LivePrefabComponentReaders {
     return lhs.kind == rhs.kind && Equals(lhs.color, rhs.color) && lhs.intensity == rhs.intensity && lhs.range == rhs.range
         && lhs.innerConeDegrees == rhs.innerConeDegrees && lhs.outerConeDegrees == rhs.outerConeDegrees && lhs.areaWidth == rhs.areaWidth
         && lhs.areaHeight == rhs.areaHeight && lhs.contactShadowLength == rhs.contactShadowLength && lhs.volumetricScattering == rhs.volumetricScattering
-        && lhs.castsShadow == rhs.castsShadow;
+        && lhs.castsShadow == rhs.castsShadow
+        && lhs.sourceRadius == rhs.sourceRadius && lhs.shadowStrength == rhs.shadowStrength
+        && lhs.shadowDistance == rhs.shadowDistance && lhs.mobility == rhs.mobility;
 }
 
 [[nodiscard]] bool Equals(const InputComponent& lhs, const InputComponent& rhs) noexcept {
@@ -367,6 +369,10 @@ void MixLiveSceneComponents(std::uint64_t& hash, SceneComponents components, Sce
         ScenePrefabHashBuilder::MixFloat(hash, light->contactShadowLength);
         ScenePrefabHashBuilder::MixFloat(hash, light->volumetricScattering);
         ScenePrefabHashBuilder::Mix(hash, light->castsShadow ? 1U : 0U);
+        ScenePrefabHashBuilder::MixFloat(hash, light->sourceRadius);
+        ScenePrefabHashBuilder::MixFloat(hash, light->shadowStrength);
+        ScenePrefabHashBuilder::MixFloat(hash, light->shadowDistance);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(light->mobility));
     }
 
     const InputComponent* input = components.Inputs().TryGet(entity);

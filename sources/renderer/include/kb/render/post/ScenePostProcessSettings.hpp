@@ -39,6 +39,28 @@ struct ScenePostProcessSettings {
     bool ambientOcclusionEnabled = false;
     float ambientOcclusionIntensity = 1.0F;
     float ambientOcclusionRadius = 0.6F;
+    // Global illumination (the post-process Global Illumination
+    // Method): light bounced off the scene, gathered on screen or traced through the voxel grid
+    // around the camera, so a closed room is lit by what its lights reach and not by the sky.
+    enum class GlobalIlluminationMethod : std::uint8_t {
+        Off,
+        ScreenSpace,
+        Voxel,
+    };
+    GlobalIlluminationMethod globalIllumination = GlobalIlluminationMethod::Off;
+    float globalIlluminationIntensity = 1.0F;
+    // Exponential height fog: density at the base height falling off per metre above it,
+    // lit to its colour; volumetric fog adds the light each light's Volumetric Scattering scatters
+    // in it, with its shadows (light shafts).
+    bool fogEnabled = false;
+    float fogDensity = 0.02F;
+    float fogHeightFalloff = 0.2F;
+    float fogBaseHeight = 0.0F;
+    float fogColorR = 0.6F;
+    float fogColorG = 0.65F;
+    float fogColorB = 0.7F;
+    bool volumetricFogEnabled = false;
+    float fogAnisotropy = 0.3F;
 };
 
 } // namespace kb::render

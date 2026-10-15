@@ -44,6 +44,13 @@ SceneRenderLightingConfig RendererSceneLightingConfigResolver::Resolve(SceneRend
         .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
         .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
         .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
+        .fogEnabled = requested.fogEnabled != defaultConfig.fogEnabled ? requested.fogEnabled : fallback.fogEnabled,
+        .fogDensity = requested.fogDensity != defaultConfig.fogDensity ? requested.fogDensity : fallback.fogDensity,
+        .fogHeightFalloff = requested.fogHeightFalloff != defaultConfig.fogHeightFalloff ? requested.fogHeightFalloff : fallback.fogHeightFalloff,
+        .fogBaseHeight = requested.fogBaseHeight != defaultConfig.fogBaseHeight ? requested.fogBaseHeight : fallback.fogBaseHeight,
+        .fogColor = requested.fogColor != defaultConfig.fogColor ? requested.fogColor : fallback.fogColor,
+        .volumetricFogEnabled = requested.volumetricFogEnabled != defaultConfig.volumetricFogEnabled ? requested.volumetricFogEnabled : fallback.volumetricFogEnabled,
+        .fogAnisotropy = requested.fogAnisotropy != defaultConfig.fogAnisotropy ? requested.fogAnisotropy : fallback.fogAnisotropy,
         .debugView = requested.debugView != defaultConfig.debugView ? requested.debugView : fallback.debugView,
     };
 }
@@ -53,6 +60,22 @@ void RendererSceneLightingConfigResolver::ApplyPostProcessAmbientOcclusion(
     config.ambientOcclusionEnabled = settings.ambientOcclusionEnabled;
     config.aoIntensity = settings.ambientOcclusionIntensity;
     config.aoRadius = settings.ambientOcclusionRadius;
+    // Global illumination and fog the profile turns on (Off leaves the lighting config's own).
+    using Method = ScenePostProcessSettings::GlobalIlluminationMethod;
+    if (settings.globalIllumination != Method::Off) {
+        config.globalIllumination = settings.globalIllumination == Method::Voxel
+            ? SceneRenderGlobalIlluminationMode::VoxelGrid : SceneRenderGlobalIlluminationMode::SsGi;
+        config.giIntensity = settings.globalIlluminationIntensity;
+    }
+    if (settings.fogEnabled) {
+        config.fogEnabled = true;
+        config.fogDensity = settings.fogDensity;
+        config.fogHeightFalloff = settings.fogHeightFalloff;
+        config.fogBaseHeight = settings.fogBaseHeight;
+        config.fogColor = { settings.fogColorR, settings.fogColorG, settings.fogColorB };
+        config.volumetricFogEnabled = settings.volumetricFogEnabled;
+        config.fogAnisotropy = settings.fogAnisotropy;
+    }
 }
 
 std::uint32_t RendererSceneLightingConfigResolver::ShadowFilterSampleCount(SceneRenderShadowFilter filter) noexcept {

@@ -16,7 +16,7 @@ public:
     [[nodiscard]] static bool ReadMeshRenderer(SceneAssetBinaryIO::ByteReader& input, MeshRendererComponent& output);
     static void WriteMeshRenderer(std::vector<std::uint8_t>& output, const MeshRendererComponent& meshRenderer);
 
-    [[nodiscard]] static bool ReadLight(SceneAssetBinaryIO::ByteReader& input, LightComponent& output);
+    [[nodiscard]] static bool ReadLight(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, LightComponent& output);
     static void WriteLight(std::vector<std::uint8_t>& output, const LightComponent& light);
 };
 

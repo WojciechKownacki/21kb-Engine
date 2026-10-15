@@ -108,6 +108,17 @@ std::array<float, 4> SceneLightingPacker::CameraPosition(const SceneRenderCamera
 
 void SceneLightingPacker::AssignPointShadowSlots(PackedSceneLighting& lighting, const ScenePointShadowBinding& binding) noexcept {
     lighting.pointShadowSlot.fill(-1.0F);
+    // With a light grid the shaders index lights in grid order, not in forward slots.
+    const std::vector<std::uint64_t>& gridIds = lighting.lightGrid.entityIds;
+    if (bgfx::isValid(lighting.lightGrid.texture) && !gridIds.empty()) {
+        for (std::uint32_t shadow = 0U; shadow < binding.lightCount; ++shadow) {
+            const auto found = std::ranges::find(gridIds, binding.entityId[shadow]);
+            if (found != gridIds.end()) {
+                lighting.pointShadowSlot[shadow] = static_cast<float>(found - gridIds.begin());
+            }
+        }
+        return;
+    }
     const std::uint32_t packedCount = std::min<std::uint32_t>(
         static_cast<std::uint32_t>(lighting.params[0]), kMaxSceneForwardPlusLights);
     for (std::uint32_t shadow = 0U; shadow < binding.lightCount; ++shadow) {

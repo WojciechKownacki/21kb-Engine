@@ -155,7 +155,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
     }
     if ((componentBits & LightBit) != 0U) {
         LightComponent light;
-        if (!SceneAssetRenderComponentCodec::ReadLight(input, light)) {
+        if (!SceneAssetRenderComponentCodec::ReadLight(input, fileVersion, light)) {
             return false;
         }
         output.light = light;

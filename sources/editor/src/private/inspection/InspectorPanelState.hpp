@@ -103,6 +103,8 @@ enum class InspectorSectionId : std::uint8_t {
     PostProcessAntiAliasing,
     PostProcessVignette,
     PostProcessAmbientOcclusion,
+    PostProcessGlobalIllumination,
+    PostProcessFog,
     // The scene's post-process profile, shown on the scene's environment (World Backdrop) object.
     ScenePostProcess,
 };
@@ -236,6 +238,11 @@ enum class InspectorPropertyId : std::uint16_t {
     LightUseColorTemperature,
     LightColorTemperatureKelvin,
     LightLayerMask,
+    LightShape,
+    LightMobility,
+    LightSourceRadius,
+    LightShadowStrength,
+    LightShadowDistance,
     MaterialBaseColorR,
     MaterialBaseColorG,
     MaterialBaseColorB,
