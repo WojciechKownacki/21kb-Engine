@@ -630,19 +630,30 @@ void TestStripGeometryHistoryOrderAndFixedStepDeterminism() {
         "beam snapshot publication failed");
     const auto beamSnapshot = beamChannel.Read();
     const auto beamA = builder.Build(*beamSnapshot, IdentityCamera());
-    const float beamNoiseY = beamA.vertices[6].y;
+    // One strip: two vertices per point (5 points, 4 segments). The ends stay put, the middle is pushed
+    // across the beam by the noise.
+    const auto centre = [](const auto& built, std::size_t point) {
+        return std::array<float, 2>{(built.vertices[2U * point].x + built.vertices[2U * point + 1U].x) * 0.5F,
+                                    (built.vertices[2U * point].y + built.vertices[2U * point + 1U].y) * 0.5F};
+    };
     const float beamStartX = beamA.vertices[0].x;
-    const float beamEndX = beamA.vertices[14].x;
+    const float beamEndX = beamA.vertices[8].x;
     const auto beamB = builder.Build(*beamSnapshot, IdentityCamera());
-    Require(beamA.Succeeded() && beamA.vertices.size() == 16U && beamA.indices.size() == 24U &&
-            beamNoiseY == beamB.vertices[6].y && std::fabs(beamStartX - 0.5F) < 0.0001F,
+    Require(beamA.Succeeded() && beamA.vertices.size() == 10U && beamA.indices.size() == 24U &&
+            beamA.vertices[4].x == beamB.vertices[4].x && beamA.vertices[4].y == beamB.vertices[4].y,
         "beam geometry changed without a fixed-step advance");
+    Require(std::fabs(centre(beamA, 0U)[0]) < 0.0001F && std::fabs(centre(beamA, 0U)[1]) < 0.0001F &&
+            std::fabs(centre(beamA, 4U)[1] - 4.0F) < 0.0001F && std::fabs(centre(beamA, 2U)[0]) > 0.0001F,
+        "beam noise must bend the beam across itself and keep both ends in place");
+    // The first segment ends on the vertices the second starts from (no gap or overlap at the joint).
+    Require(beamA.indices[2] == beamA.indices[7] && beamA.indices[5] == beamA.indices[6],
+        "beam joints must share their vertices");
     auto crossingCamera = IdentityCamera();
     crossingCamera.view[0] = -1.0F;
     crossingCamera.view[10] = -1.0F;
     const auto crossed = builder.Build(*beamSnapshot, crossingCamera);
     Require(crossed.Succeeded() && crossed.indices.size() == beamA.indices.size() &&
-            std::fabs(crossed.vertices[0].x + 0.5F) < 0.0001F && crossed.vertices[0].x != beamStartX,
+            std::fabs(crossed.vertices[0].x + beamStartX) < 0.0001F && crossed.vertices[0].x != beamStartX,
         "camera crossing did not rebuild the strip-facing geometry");
     auto movedEmitter = emitter;
     movedEmitter.beamEnd.x = 0.5F;
@@ -651,14 +662,15 @@ void TestStripGeometryHistoryOrderAndFixedStepDeterminism() {
                 .emitters = movedEmitters, .particles = std::span<const kb::particles::ParticleRenderRecord>{}}).Succeeded(),
         "moved beam snapshot publication failed");
     const auto moved = builder.Build(*beamChannel.Read(), IdentityCamera());
-    Require(moved.Succeeded() && moved.vertices[14].x != beamEndX,
+    Require(moved.Succeeded() && moved.vertices[8].x != beamEndX,
         "beam endpoint motion did not rebuild the dynamic strip geometry");
 }
 
 void TestStripGeometryCapacityIsHardAndDiagnostic() {
     constexpr std::uint32_t segmentsPerEmitter = 256U;
+    // A beam strip of n segments takes 2 (n + 1) vertices and 6 n indices: the index budget fills first.
     constexpr std::uint32_t emitterCount =
-        kb::render::kParticleStripVertexBudget / (segmentsPerEmitter * 4U) + 1U;
+        kb::render::kParticleStripIndexBudget / (segmentsPerEmitter * 6U) + 1U;
     std::vector<kb::particles::ParticleRenderEmitterRecord> emitters;
     emitters.reserve(emitterCount);
     for (std::uint32_t index = 0U; index < emitterCount; ++index) {
@@ -681,7 +693,7 @@ void TestStripGeometryCapacityIsHardAndDiagnostic() {
     builder.Warmup();
     const auto built = builder.Build(*channel.Read(), IdentityCamera());
     Require(built.status == kb::render::ParticleStripBuildStatus::CapacityExceeded &&
-            built.vertices.size() == kb::render::kParticleStripVertexBudget &&
+            built.vertices.size() == (emitterCount - 1U) * 2U * (segmentsPerEmitter + 1U) &&
             built.indices.size() == kb::render::kParticleStripIndexBudget &&
             built.droppedSegmentCount == segmentsPerEmitter &&
             built.draws.size() == emitterCount - 1U,
@@ -753,14 +765,15 @@ void TestStripColourIntensityAndTextureCoordinates() {
     builder.Warmup();
     const auto ribbonSnapshot = Snapshot(std::span{&emitter, 1U}, particles);
     const auto ribbon = builder.Build(*ribbonSnapshot, IdentityCamera());
-    Require(ribbon.Succeeded() && ribbon.vertices.size() == 8U && ribbon.draws.size() == 1U &&
-            ribbon.draws[0].textureAtlasAssetId == 6U,
+    // Two segments of one strip: three points, two vertices each, shared at the joint.
+    Require(ribbon.Succeeded() && ribbon.vertices.size() == 6U && ribbon.indices.size() == 12U &&
+            ribbon.draws.size() == 1U && ribbon.draws[0].textureAtlasAssetId == 6U,
         "a three-point ribbon did not build two textured segments");
     const auto& v = ribbon.vertices;
-    Require(v[0].u == 0.0F && v[2].u == 0.5F && v[4].u == 0.5F && v[6].u == 1.0F && v[0].v == 0.0F && v[1].v == 1.0F,
+    Require(v[0].u == 0.0F && v[2].u == 0.5F && v[4].u == 1.0F && v[0].v == 0.0F && v[1].v == 1.0F,
         "the ribbon's texture coordinate did not run along the whole strip");
-    Require(v[0].r == 2.0F && v[0].g == 0.0F && v[2].g == 2.0F && v[6].b == 2.0F &&
-            std::abs(v[6].a - 128.0F / 255.0F) < 0.0001F && v[0].a == 1.0F,
+    Require(v[0].r == 2.0F && v[0].g == 0.0F && v[2].g == 2.0F && v[4].b == 2.0F &&
+            std::abs(v[4].a - 128.0F / 255.0F) < 0.0001F && v[0].a == 1.0F,
         "the ribbon's points did not keep their colour times the colour intensity and their alpha");
 
     auto trailEmitter = Emitter(0U, 1U, kb::particles::ParticleRenderSortMode::None);
@@ -783,8 +796,8 @@ void TestStripColourIntensityAndTextureCoordinates() {
             "trail fade snapshot publication failed");
         trail = trailBuilder.Build(*channel.Read(), IdentityCamera());
     }
-    Require(trail.Succeeded() && trail.vertices.size() == 8U && trail.vertices[0].a == 0.0F &&
-            std::abs(trail.vertices[2].a - 0.5F) < 0.0001F && trail.vertices[6].a == 1.0F && trail.vertices[6].r == 1.0F,
+    Require(trail.Succeeded() && trail.vertices.size() == 6U && trail.vertices[0].a == 0.0F &&
+            std::abs(trail.vertices[2].a - 0.5F) < 0.0001F && trail.vertices[4].a == 1.0F && trail.vertices[4].r == 1.0F,
         "the trail did not take its particle's colour fading out toward the oldest sample");
 }
 

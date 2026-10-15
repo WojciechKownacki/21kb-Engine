@@ -30,7 +30,7 @@ std::string_view InspectorSceneColor::Label(InspectorPropertyId property) {
     case InspectorPropertyId::LightColor:
     case InspectorPropertyId::WorldBackdropColor:
     case InspectorPropertyId::AmbientRadianceColor: return EditorText("inspector.color.color", "Color");
-    case InspectorPropertyId::CameraClearColor: return EditorText("inspector.color.clearColor", "Clear Color");
+    case InspectorPropertyId::CameraClearColor: return EditorText("inspector.color.clearColor", "Background Color");
     case InspectorPropertyId::WorldBackdropHorizonColor:
     case InspectorPropertyId::AmbientRadianceHorizonColor: return EditorText("inspector.color.horizon", "Horizon");
     case InspectorPropertyId::WorldBackdropZenithColor:

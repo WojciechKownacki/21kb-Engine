@@ -1380,8 +1380,14 @@ bool CpuParticleBackend::SpawnExact(
     const std::uint32_t perBirth = emitter.beam.enabled ? emitter.beam.segments + 1U : 1U;
     for (std::uint32_t index = 0U; index < count * perBirth; ++index) {
         const std::uint32_t pointOfBeam = index % perBirth;
-        const float lifetime = emitter.lifetimeMin +
-            (emitter.lifetimeMax - emitter.lifetimeMin) * NextRandom01(runtime);
+        // A beam lives and dies whole (Unity, Niagara): its points share one lifetime, so the strip
+        // never loses points mid-life and its texture does not slide along it.
+        if (pointOfBeam == 0U) {
+            runtime.beamLifetime = emitter.lifetimeMin +
+                (emitter.lifetimeMax - emitter.lifetimeMin) * NextRandom01(runtime);
+        }
+        const float lifetime = emitter.beam.enabled ? runtime.beamLifetime
+            : emitter.lifetimeMin + (emitter.lifetimeMax - emitter.lifetimeMin) * NextRandom01(runtime);
         particleInstanceIds_.push_back(instanceId);
         particleIds_.push_back(nextParticleId_++);
         if (nextParticleId_ == 0U) nextParticleId_ = 1U;
