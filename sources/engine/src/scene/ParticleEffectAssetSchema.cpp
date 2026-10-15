@@ -9,7 +9,7 @@ bool IsRepeatableParticleModule(ParticleModuleType type) noexcept {
     return type == ParticleModuleType::Wind || type == ParticleModuleType::Drag ||
            type == ParticleModuleType::SubEmitter || type == ParticleModuleType::Noise ||
            type == ParticleModuleType::AxisRotation || type == ParticleModuleType::Attraction ||
-           type == ParticleModuleType::TorusSwirl;
+           type == ParticleModuleType::TorusSwirl || type == ParticleModuleType::Separation;
 }
 
 bool IsValidParticleEffectUtf8(std::string_view text) noexcept {
@@ -89,6 +89,8 @@ ParticleModulePayload DefaultParticleModulePayload(ParticleModuleType type) {
         return ParticleAttractionModule{};
     case ParticleModuleType::TorusSwirl:
         return ParticleTorusSwirlModule{};
+    case ParticleModuleType::Separation:
+        return ParticleSeparationModule{};
     }
     throw std::invalid_argument{"particle module type is invalid"};
 }

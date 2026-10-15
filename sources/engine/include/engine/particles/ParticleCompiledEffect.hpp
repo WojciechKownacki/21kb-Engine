@@ -48,7 +48,8 @@ struct ParticleCompiledEmitter {
                                        kb::scene::ParticleNoiseModule,
                                        kb::scene::ParticleAxisRotationModule,
                                        kb::scene::ParticleAttractionModule,
-                                       kb::scene::ParticleTorusSwirlModule>;
+                                       kb::scene::ParticleTorusSwirlModule,
+                                       kb::scene::ParticleSeparationModule>;
 
     struct Module {
         kb::scene::ParticleStableId moduleId = 0U;
@@ -62,6 +63,7 @@ struct ParticleCompiledEmitter {
     std::uint64_t materialAssetId = 0U;
     std::uint64_t meshAssetId = 0U;
     std::uint64_t textureAtlasAssetId = 0U;
+    std::uint64_t shapeMeshAssetId = 0U;  // Mesh spawn shape
     float meshLodBias = 0.0F;
     bool meshCastsShadow = false;
     bool meshReceivesShadow = true;

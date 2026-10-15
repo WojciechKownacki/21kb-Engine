@@ -130,6 +130,7 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
         destination.materialAssetId = Resolve(source.output.material, registry);
         destination.meshAssetId = Resolve(source.output.mesh, registry);
         destination.textureAtlasAssetId = Resolve(source.output.textureAtlas, registry);
+        destination.shapeMeshAssetId = Resolve(source.spawn.shapeMesh, registry);
         destination.blendMode = source.output.blend;
         destination.sortMode = source.output.sort;
         destination.alignment = source.output.alignment;
@@ -306,6 +307,8 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
                 destinationModule.payload = std::get<kb::scene::ParticleAttractionModule>(sourceModule.payload); break;
             case kb::scene::ParticleModuleType::TorusSwirl:
                 destinationModule.payload = std::get<kb::scene::ParticleTorusSwirlModule>(sourceModule.payload); break;
+            case kb::scene::ParticleModuleType::Separation:
+                destinationModule.payload = std::get<kb::scene::ParticleSeparationModule>(sourceModule.payload); break;
             }
         }
         const kb::math::Color startColor = source.spawn.startColor;

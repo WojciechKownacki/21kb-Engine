@@ -92,13 +92,15 @@ enum class ParticleModuleType : std::uint8_t {
     AxisRotation,
     Attraction,
     TorusSwirl,
+    Separation,
 };
 // WhileAlive: every live particle of the source keeps emitting the target at the binding's rate
 // (smoke behind debris; Niagara's spawn per particle).
 enum class ParticleEventTrigger : std::uint8_t { Birth, Death, Collision, WhileAlive };
 // Where a particle is born (Unity's Shape module, Niagara's shape location), around the emitter's
 // position and turned by its rotation.
-enum class ParticleSpawnShape : std::uint8_t { Point, Sphere, Box, Cone, Circle, Disc, Line, Spiral };
+// Mesh: on the surface of spawn.shapeMesh, area-weighted (Unity's Mesh shape, Niagara's Static Mesh Location).
+enum class ParticleSpawnShape : std::uint8_t { Point, Sphere, Box, Cone, Circle, Disc, Line, Spiral, Mesh };
 // Start velocity: Cone around the direction (speed range, spread), Radial along the shape's normal at
 // the birth point, Spiral2D along one of spiralArms directions in the XY plane turning with time.
 enum class ParticleVelocityMode : std::uint8_t { Cone, Radial, Spiral2D };
@@ -191,6 +193,7 @@ struct ParticleSpawnAsset {
     float cycleSeconds = 0.0F;
     bool cycleLooping = true;
     ParticleSpawnShapeAsset shape;
+    ParticleAssetReference shapeMesh;  // Mesh shape
     ParticleVelocityMode velocityMode = ParticleVelocityMode::Cone;
     float spiralArms = 1.0F;                  // Spiral2D
     float spiralTurnDegreesPerSecond = 0.0F;  // Spiral2D
@@ -255,6 +258,12 @@ struct ParticleTorusSwirlModule {
     float radius = 2.0F;
     float degreesPerSecond = 180.0F;
 };
+// Particles of one emitter push apart when closer than `distance` (Niagara's neighbour grid,
+// Verth's Separation card): strength x (1 - d / distance) along the line between them.
+struct ParticleSeparationModule {
+    float strength = 2.0F;
+    float distance = 0.5F;
+};
 struct ParticleSubEmitterModule {
     ParticleStableId targetEmitterId = 0U;
     ParticleEventTrigger trigger = ParticleEventTrigger::Death;
@@ -266,7 +275,8 @@ using ParticleModulePayload =
     std::variant<ParticleInitialVelocityModule, ParticleGravityModule, ParticleWindModule, ParticleDragModule,
                  ParticleColorOverLifeModule, ParticleSizeOverLifeModule, ParticleAlphaOverLifeModule,
                  ParticleCollisionPlaneModule, ParticleSubEmitterModule, ParticleNoiseModule,
-                 ParticleAxisRotationModule, ParticleAttractionModule, ParticleTorusSwirlModule>;
+                 ParticleAxisRotationModule, ParticleAttractionModule, ParticleTorusSwirlModule,
+                 ParticleSeparationModule>;
 
 struct ParticleModuleAsset {
     ParticleStableId moduleId = 0U;

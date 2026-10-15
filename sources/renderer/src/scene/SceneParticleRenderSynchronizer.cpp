@@ -85,7 +85,9 @@ void SyncParticleLights(const kb::particles::ParticleRenderSnapshot* snapshot, R
                     .position = {particle.position.x + offset.x, particle.position.y + offset.y,
                         particle.position.z + offset.z},
                     .color = {channel(0U), channel(8U), channel(16U)},
-                    .intensity = emitter.lightIntensity * channel(24U),
+                    // The particle's HDR colour lights the scene (Niagara's light renderer): the packed
+                    // colour is 0..1, its emitter's colour intensity carries the rest.
+                    .intensity = emitter.lightIntensity * emitter.colorIntensity * channel(24U),
                     .range = emitter.lightRadius,
                     .castsShadow = false,
                 }));

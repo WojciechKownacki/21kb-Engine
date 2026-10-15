@@ -12,6 +12,9 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#if KB_21KB_PARTICLE_MESH_SHAPE
+#include "kb/render/resources/RenderMeshAssetBuilder.hpp"
+#endif
 
 #include "engine/particles/ParticlePlayback.hpp"
 
@@ -703,6 +706,7 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     }
     RefreshCompiledEffects(scene);
     ProcessOwnerLifecycle(scene);
+    UpdateSharedSimulations();
     stepTelemetry_ = {};
     std::fill(renderRejectedByCapacity_.begin(), renderRejectedByCapacity_.end(), 0U);
     std::fill(renderRejectedBySpawnBudget_.begin(), renderRejectedBySpawnBudget_.end(), 0U);
@@ -713,7 +717,12 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     ReleaseDueGpuEvents();
     std::uint32_t remainingSpawnBudget = kb::scene::kParticleEffectMaxSpawnsPerStep;
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
-        if (playbackStates_[denseIndex] == PlaybackState::Playing) {
+        if (sharedLeaders_[denseIndex] != kInvalidDenseIndex) {
+            const InstanceRuntime& runtime = instanceRuntime_[denseIndex];
+            if (std::any_of(runtime.liveParticles.begin(), runtime.liveParticles.end(), [](std::uint32_t n) { return n != 0U; })) {
+                RemoveParticles(MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]));
+            }
+        } else if (playbackStates_[denseIndex] == PlaybackState::Playing) {
             StepInstance(denseIndex, fixedDeltaSeconds, remainingSpawnBudget);
         }
     }
@@ -944,6 +953,41 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
         }) ? kb::particles::ParticleRuntimeStatus::UnsupportedOutput
            : kb::particles::ParticleRuntimeStatus::InvalidAsset;
         return kInvalidDenseIndex;
+    }
+
+    // Mesh spawn shapes: the renderer's mesh asset (level 0) through the scene's asset manager.
+    for (std::uint8_t e = 0U; e < compiled.effect->emitterCount; ++e) {
+        const std::uint64_t meshId = compiled.effect->emitters[e].shapeMeshAssetId;
+        if (compiled.effect->emitters[e].shape.type != kb::scene::ParticleSpawnShape::Mesh || meshId == 0U ||
+            meshSurfaces_.contains(meshId)) continue;
+        [[maybe_unused]] MeshSurface& surface = meshSurfaces_[meshId];
+#if KB_21KB_PARTICLE_MESH_SHAPE
+        const auto mesh = manager.Load<kb::render::RenderMeshAssetData>(kb::assets::AssetId{meshId});
+        if (!mesh.IsLoaded()) continue;
+        const std::size_t vertexCount = mesh->vertices.empty() ? mesh->tangentVertices.size() : mesh->vertices.size();
+        const std::size_t indexCount = mesh->indices32.empty() ? mesh->indices16.size() : mesh->indices32.size();
+        const auto corner = [&](std::size_t index, std::uint32_t vertexStart, kb::math::Vec3& out) {
+            const std::size_t v = std::size_t{vertexStart} + (mesh->indices32.empty() ? mesh->indices16[index] : mesh->indices32[index]);
+            if (v >= vertexCount) return false;
+            out = mesh->vertices.empty() ? kb::math::Vec3{mesh->tangentVertices[v].x, mesh->tangentVertices[v].y, mesh->tangentVertices[v].z}
+                                         : kb::math::Vec3{mesh->vertices[v].x, mesh->vertices[v].y, mesh->vertices[v].z};
+            return true;
+        };
+        const auto addRange = [&](std::size_t start, std::size_t count, std::uint32_t vertexStart) {
+            for (std::size_t i = start; i + 3U <= start + count && i + 3U <= indexCount; i += 3U) {
+                kb::math::Vec3 t[3];
+                if (!corner(i, vertexStart, t[0]) || !corner(i + 1U, vertexStart, t[1]) || !corner(i + 2U, vertexStart, t[2])) continue;
+                const kb::math::Vec3 c = kb::math::Cross(t[1] - t[0], t[2] - t[0]);
+                surface.area.push_back((surface.area.empty() ? 0.0F : surface.area.back()) + 0.5F * std::sqrt(kb::math::Dot(c, c)));
+                surface.corners.insert(surface.corners.end(), t, t + 3);
+            }
+        };
+        if (mesh->sections.empty()) addRange(0U, indexCount, 0U);
+        for (const kb::render::RenderMeshSectionDesc& section : mesh->sections) {
+            if (section.lodLevel == 0U && section.terrainLayerIndex == UINT8_MAX)
+                addRange(section.indexStart, section.indexCount, section.vertexStart);
+        }
+#endif
     }
 
     std::uint32_t freeIndex = kInvalidDenseIndex;
@@ -1288,6 +1332,21 @@ kb::math::Vec3 CpuParticleBackend::SampleShape(const CompiledEmitter& emitter, I
         if (kb::math::Dot(point, point) > 1.0e-10F) normal = kb::math::Normalize(point);
         break;
     }
+    case kb::scene::ParticleSpawnShape::Mesh: {
+        // A triangle by its area, a uniform point on it; normal = the face's.
+        const auto found = meshSurfaces_.find(emitter.shapeMeshAssetId);
+        if (found == meshSurfaces_.end() || found->second.area.empty()) break;
+        const MeshSurface& s = found->second;
+        const auto hit = std::upper_bound(s.area.begin(), s.area.end(), NextRandom01(runtime) * s.area.back());
+        const std::size_t t = std::min<std::size_t>(static_cast<std::size_t>(hit - s.area.begin()), s.area.size() - 1U) * 3U;
+        float a = NextRandom01(runtime), b = NextRandom01(runtime);
+        if (a + b > 1.0F) { a = 1.0F - a; b = 1.0F - b; }
+        const kb::math::Vec3 e1 = s.corners[t + 1U] - s.corners[t], e2 = s.corners[t + 2U] - s.corners[t];
+        point = s.corners[t] + e1 * a + e2 * b;
+        const kb::math::Vec3 c = kb::math::Cross(e1, e2);
+        if (kb::math::Dot(c, c) > 1.0e-20F) normal = kb::math::Normalize(c);
+        break;
+    }
     }
     return point;
 }
@@ -1382,7 +1441,7 @@ bool CpuParticleBackend::SpawnExact(
         const std::uint32_t pointOfBeam = index % perBirth;
         // A beam lives and dies whole (Unity, Niagara): its points share one lifetime, so the strip
         // never loses points mid-life and its texture does not slide along it.
-        if (pointOfBeam == 0U) {
+        if (emitter.beam.enabled && pointOfBeam == 0U) {
             runtime.beamLifetime = emitter.lifetimeMin +
                 (emitter.lifetimeMax - emitter.lifetimeMin) * NextRandom01(runtime);
         }
@@ -1509,6 +1568,33 @@ void CpuParticleBackend::SpawnRequested(
     renderRejectedByCapacity_[RenderGroupIndex(denseIndex, emitterIndex)] += withinBudget - accepted;
     if (accepted != 0U && SpawnExact(denseIndex, emitterIndex, accepted, 0U, prewarmGroup)) {
         stepTelemetry_.spawned += accepted;
+    }
+}
+
+void CpuParticleBackend::UpdateSharedSimulations() noexcept {
+    sharedLeaders_.assign(denseInstanceCount_, kInvalidDenseIndex);
+    const auto shareable = [this](std::uint32_t d) noexcept {
+        const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[d].compiledEffectIndex].effect;
+        if (playbackStates_[d] != PlaybackState::Playing || (!effect.looping && effect.durationSeconds > 0.0F) ||
+            effect.eventBindingCount != 0U ||
+            executionPaths_[d] == kb::particles::ParticleRuntimeExecutionPath::GpuVisual) return false;
+        for (std::uint8_t e = 0U; e < effect.emitterCount; ++e) {
+            if (effect.emitters[e].enabled && effect.emitters[e].simulationSpace != kb::scene::ParticleSimulationSpace::Local) return false;
+        }
+        const std::uint64_t id = MakeInstanceId(denseToSlot_[d], slotGenerations_[denseToSlot_[d]]);
+        return std::none_of(parameters_.begin(), parameters_.end(), [id](const ParameterEntry& p) { return p.instanceId == id; });
+    };
+    for (std::uint32_t copy = 0U; copy < denseInstanceCount_; ++copy) {
+        if (!shareable(copy)) continue;
+        for (std::uint32_t leader = 0U; leader < copy; ++leader) {
+            if (sharedLeaders_[leader] == kInvalidDenseIndex &&
+                instanceRuntime_[leader].compiledEffectIndex == instanceRuntime_[copy].compiledEffectIndex &&
+                seeds_[leader] == seeds_[copy] && rateMultipliers_[leader] == rateMultipliers_[copy] &&
+                maxParticlesOverrides_[leader] == maxParticlesOverrides_[copy] && shareable(leader)) {
+                sharedLeaders_[copy] = leader;
+                break;
+            }
+        }
     }
 }
 
@@ -1699,18 +1785,80 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
     float fixedDeltaSeconds,
     std::uint64_t onlyInstanceId,
     std::uint8_t onlyPrewarmGroup) noexcept {
-    for (std::size_t index = 0U; index < particleInstanceIds_.size(); ++index) {
-        if (onlyInstanceId != 0U && particleInstanceIds_[index] != onlyInstanceId) continue;
-        if (onlyPrewarmGroup != UINT8_MAX && particlePrewarmGroups_[index] != onlyPrewarmGroup) continue;
+    // The emitter a particle integrates under this step, null when it does not.
+    const auto emitterOf = [&](std::size_t index) noexcept -> const CompiledEmitter* {
+        if (onlyInstanceId != 0U && particleInstanceIds_[index] != onlyInstanceId) return nullptr;
+        if (onlyPrewarmGroup != UINT8_MAX && particlePrewarmGroups_[index] != onlyPrewarmGroup) return nullptr;
         const std::uint32_t denseIndex = ResolveDenseIndex(particleInstanceIds_[index]);
         if (denseIndex == kInvalidDenseIndex ||
             (playbackStates_[denseIndex] != PlaybackState::Playing &&
              playbackStates_[denseIndex] != PlaybackState::Draining)) {
-            continue;
+            return nullptr;
         }
-        const InstanceRuntime& runtime = instanceRuntime_[denseIndex];
-        const CompiledEmitter& emitter =
-            compiledEffects_[runtime.compiledEffectIndex].effect->emitters[particleEmitterIndices_[index]];
+        return &compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect->emitters[particleEmitterIndices_[index]];
+    };
+    // Separation: a hashed grid of each emitter's particles (cell = its distance), the push from
+    // neighbours of the same instance and emitter (Verth's Separation card).
+    thread_local std::vector<std::uint32_t> cellHeads;
+    thread_local std::vector<std::uint32_t> cellNext;
+    thread_local std::vector<kb::math::Vec3> separationPush;
+    const std::size_t particleCount = particleInstanceIds_.size();
+    const auto separationOf = [&](std::size_t index) noexcept -> const kb::scene::ParticleSeparationModule* {
+        const CompiledEmitter* owner = emitterOf(index);
+        if (owner == nullptr) return nullptr;
+        for (std::uint8_t m = 0U; m < owner->moduleCount; ++m) {
+            if (owner->modules[m].enabled && owner->modules[m].type == kb::scene::ParticleModuleType::Separation)
+                return &std::get<kb::scene::ParticleSeparationModule>(owner->modules[m].payload);
+        }
+        return nullptr;
+    };
+    constexpr std::uint32_t kSeparationCells = 4096U;
+    const auto cellOf = [&](std::size_t index, float distance, int dx, int dy, int dz) noexcept {
+        const auto c = [distance](float v, int d) {
+            return static_cast<std::uint32_t>(static_cast<std::int32_t>(std::floor(v / distance)) + d);
+        };
+        const kb::math::Vec3 p = particlePositions_[index];
+        std::uint32_t h = c(p.x, dx) * 0x8DA6B343U ^ c(p.y, dy) * 0xD8163841U ^ c(p.z, dz) * 0xCB1AB31FU ^
+            static_cast<std::uint32_t>(particleInstanceIds_[index] * 0x9E3779B1U) ^ particleEmitterIndices_[index] * 0x85EBCA6BU;
+        h ^= h >> 15U;
+        return h & (kSeparationCells - 1U);
+    };
+    cellHeads.assign(kSeparationCells, UINT32_MAX);
+    cellNext.assign(particleCount, UINT32_MAX);
+    separationPush.assign(particleCount, kb::math::Vec3{});
+    for (std::size_t index = 0U; index < particleCount; ++index) {
+        if (const auto* separation = separationOf(index)) {
+            const std::uint32_t cell = cellOf(index, separation->distance, 0, 0, 0);
+            cellNext[index] = cellHeads[cell];
+            cellHeads[cell] = static_cast<std::uint32_t>(index);
+        }
+    }
+    for (std::size_t index = 0U; index < particleCount; ++index) {
+        const auto* separation = separationOf(index);
+        if (separation == nullptr) continue;
+        std::uint32_t visited[27];
+        std::uint32_t visitedCount = 0U;
+        kb::math::Vec3 push{};
+        for (int dz = -1; dz <= 1; ++dz) for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+            const std::uint32_t cell = cellOf(index, separation->distance, dx, dy, dz);
+            if (std::find(visited, visited + visitedCount, cell) != visited + visitedCount) continue;
+            visited[visitedCount++] = cell;
+            for (std::uint32_t other = cellHeads[cell]; other != UINT32_MAX; other = cellNext[other]) {
+                if (other == index || particleInstanceIds_[other] != particleInstanceIds_[index] ||
+                    particleEmitterIndices_[other] != particleEmitterIndices_[index]) continue;
+                const kb::math::Vec3 away = particlePositions_[index] - particlePositions_[other];
+                const float d = std::sqrt(kb::math::Dot(away, away));
+                if (d >= separation->distance || d < 1.0e-6F) continue;
+                push = push + away * ((1.0F - d / separation->distance) / d);
+            }
+        }
+        separationPush[index] = push * separation->strength;
+    }
+    for (std::size_t index = 0U; index < particleCount; ++index) {
+        const CompiledEmitter* integrated = emitterOf(index);
+        if (integrated == nullptr) continue;
+        const std::uint32_t denseIndex = ResolveDenseIndex(particleInstanceIds_[index]);
+        const CompiledEmitter& emitter = *integrated;
         kb::math::Vec3& velocity = particleVelocities_[index];
         const float normalizedAge = kb::math::Clamp(
             particleAges_[index] / particleLifetimes_[index], 0.0F, 1.0F);
@@ -1783,6 +1931,9 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
                     torus.degreesPerSecond * 0.017453292F * fixedDeltaSeconds);
                 break;
             }
+            case kb::scene::ParticleModuleType::Separation:
+                velocity = velocity + separationPush[index] * fixedDeltaSeconds;
+                break;
             default:
                 break;
             }
@@ -2051,6 +2202,23 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
         }
         ++renderGroupCounts_[RenderGroupIndex(denseIndex, particleEmitterIndices_[particleIndex])];
     }
+    // Copies sharing a simulation draw their leader's particles.
+    UpdateSharedSimulations();
+    std::uint32_t sharedParticles = 0U;
+    for (std::uint32_t copy = 0U; copy < denseInstanceCount_; ++copy) {
+        if (sharedLeaders_[copy] == kInvalidDenseIndex) continue;
+        std::uint32_t leaderTotal = 0U;
+        for (std::uint8_t e = 0U; e < kb::scene::kParticleEffectMaxEmitters; ++e)
+            leaderTotal += renderGroupCounts_[RenderGroupIndex(sharedLeaders_[copy], e)];
+        // Copies draw within the scene's particle limit, as separate simulations would.
+        if (particleInstanceIds_.size() + sharedParticles + leaderTotal > kb::scene::kParticleEffectMaxCpuParticlesPerScene) {
+            sharedLeaders_[copy] = kInvalidDenseIndex;
+            continue;
+        }
+        for (std::uint8_t e = 0U; e < kb::scene::kParticleEffectMaxEmitters; ++e)
+            renderGroupCounts_[RenderGroupIndex(copy, e)] += renderGroupCounts_[RenderGroupIndex(sharedLeaders_[copy], e)];
+        sharedParticles += leaderTotal;
+    }
 
     std::uint32_t particleOffset = 0U;
     std::size_t emitterRecordCount = 0U;
@@ -2178,10 +2346,10 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
             particleOffset += count;
         }
     }
-    if (particleOffset != static_cast<std::uint32_t>(particleInstanceIds_.size())) {
+    if (particleOffset != static_cast<std::uint32_t>(particleInstanceIds_.size()) + sharedParticles) {
         return {kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot};
     }
-    renderParticleScratch_.resize(particleInstanceIds_.size());
+    renderParticleScratch_.resize(particleOffset);
 
     for (std::size_t particleIndex = 0U; particleIndex < particleInstanceIds_.size(); ++particleIndex) {
         const std::uint32_t denseIndex = ResolveDenseIndex(particleInstanceIds_[particleIndex]);
@@ -2233,6 +2401,30 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
         batch.boundsMaximum.y = std::max(batch.boundsMaximum.y, position.y);
         batch.boundsMaximum.z = std::max(batch.boundsMaximum.z, position.z);
     }
+    for (std::uint32_t copy = 0U; copy < denseInstanceCount_; ++copy) {
+        const std::uint32_t leader = sharedLeaders_[copy];
+        if (leader == kInvalidDenseIndex) continue;
+        const kb::scene::WorldTransform& from = ownerTransforms_[leader];
+        const kb::scene::WorldTransform& to = ownerTransforms_[copy];
+        const kb::math::Quat turn = to.rotation * kb::math::Inverse(from.rotation);
+        for (std::uint8_t e = 0U; e < kb::scene::kParticleEffectMaxEmitters; ++e) {
+            const std::size_t leaderGroup = RenderGroupIndex(leader, e), copyGroup = RenderGroupIndex(copy, e);
+            const std::uint32_t end = renderGroupWriteOffsets_[leaderGroup];
+            if (renderGroupCounts_[leaderGroup] == 0U) continue;
+            kb::particles::ParticleRenderEmitterRecord& batch = renderEmitterScratch_[renderGroupRecordIndices_[copyGroup]];
+            for (std::uint32_t index = end - renderGroupCounts_[leaderGroup]; index < end; ++index) {
+                kb::particles::ParticleRenderRecord record = renderParticleScratch_[index];
+                record.position = TransformPoint(to, InverseTransformPoint(from, record.position));
+                record.previousPosition = TransformPoint(to, InverseTransformPoint(from, record.previousPosition));
+                record.velocity = kb::math::Rotate(turn, record.velocity);
+                batch.boundsMinimum = {std::min(batch.boundsMinimum.x, record.position.x),
+                    std::min(batch.boundsMinimum.y, record.position.y), std::min(batch.boundsMinimum.z, record.position.z)};
+                batch.boundsMaximum = {std::max(batch.boundsMaximum.x, record.position.x),
+                    std::max(batch.boundsMaximum.y, record.position.y), std::max(batch.boundsMaximum.z, record.position.z)};
+                renderParticleScratch_[renderGroupWriteOffsets_[copyGroup]++] = record;
+            }
+        }
+    }
 
     return kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, *this, {
         .revision = ++renderSnapshotRevision_,
@@ -2241,7 +2433,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
         .emitters = std::span<const kb::particles::ParticleRenderEmitterRecord>{
             renderEmitterScratch_.data(), emitterRecordCount},
         .particles = std::span<const kb::particles::ParticleRenderRecord>{
-            renderParticleScratch_.data(), particleInstanceIds_.size()},
+            renderParticleScratch_.data(), renderParticleScratch_.size()},
     });
 }
 
@@ -2302,7 +2494,8 @@ bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emit
             // The stateful kernel integrates them; a trail follows the closed form, which they break.
             if (trail) return false;
             forces = true;
-        } else if (module.type == kb::scene::ParticleModuleType::TorusSwirl) {
+        } else if (module.type == kb::scene::ParticleModuleType::TorusSwirl ||
+                   module.type == kb::scene::ParticleModuleType::Separation) {
             // A field the GPU kernel does not integrate: the CPU path follows it.
             return false;
         } else if (module.type == kb::scene::ParticleModuleType::SubEmitter) {
@@ -2313,7 +2506,7 @@ bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emit
             eventActions = true;
         }
     }
-    if (emitter.beam.enabled || emitter.absolutePosition) return false;
+    if (emitter.beam.enabled || emitter.absolutePosition || emitter.shape.type == kb::scene::ParticleSpawnShape::Mesh) return false;
     for (std::uint8_t index = 0U; index < effect.eventBindingCount; ++index) {
         if (effect.eventBindings[index].sourceEmitterIndex != emitterIndex) continue;
         if (effect.eventBindings[index].trigger == kb::scene::ParticleEventTrigger::Collision ||

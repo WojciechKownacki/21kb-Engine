@@ -41,6 +41,7 @@
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
+#include "editor/ParticleEditorCommands.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/AnimationAssets.hpp"
@@ -2738,48 +2739,8 @@ bool EditorSceneContext::CreateParticleEffectAsset(const std::filesystem::path& 
         ++suffix;
     }
 
-    kb::scene::ParticleEffectAsset effect;
-    effect.effectId = 1U;
-    effect.displayName = path.stem().string();
-    effect.recipeCategory = "General";
-    effect.determinismSeed = 0x6B62564150415254ULL;
-    effect.durationSeconds = 3.0F;
-    effect.looping = true;
-    kb::scene::ParticleEmitterAsset emitter;
-    emitter.emitterId = 1U;
-    emitter.authoringOrder = 0U;
-    emitter.name = "Emitter 1";
-    emitter.maxParticles = 512U;
-    emitter.spawn.rateOverTime.keyframes = {{.time = 0.0F, .value = 28.0F}};
-    emitter.spawn.lifetimeMin = 1.1F;
-    emitter.spawn.lifetimeMax = 1.8F;
-    emitter.spawn.speedMin = 1.4F;
-    emitter.spawn.speedMax = 3.2F;
-    emitter.spawn.spreadDegrees = 22.0F;
-    emitter.output.material = {.assetId = 0U, .virtualPath = "/21kbParticle/Materials/DefaultParticle.kbmat"};
-    emitter.output.blend = kb::scene::ParticleBlendMode::Add;
-    emitter.output.softParticles = true;
-    emitter.output.antiAliasing = true;
-    emitter.modules.push_back({
-        .moduleId = 1U,
-        .authoringOrder = 0U,
-        .type = kb::scene::ParticleModuleType::ColorOverLife,
-        .payload = kb::scene::ParticleColorOverLifeModule{.gradient = {.stops = {
-            {.time = 0.0F, .color = {1.0F, 0.78F, 0.32F, 1.0F}},
-            {.time = 0.45F, .color = {1.0F, 0.38F, 0.08F, 0.9F}},
-            {.time = 1.0F, .color = {0.28F, 0.05F, 0.01F, 0.0F}},
-        }}},
-    });
-    emitter.modules.push_back({
-        .moduleId = 2U,
-        .authoringOrder = 1U,
-        .type = kb::scene::ParticleModuleType::SizeOverLife,
-        .payload = kb::scene::ParticleSizeOverLifeModule{.curve = {.keyframes = {
-            {.time = 0.0F, .value = 1.0F},
-            {.time = 1.0F, .value = 0.18F},
-        }}},
-    });
-    effect.emitters.push_back(std::move(emitter));
+    const kb::scene::ParticleEffectAsset effect =
+        kb::particle_editor::ParticleEditorCommands::NewEffect(path.stem().string());
 
     const kb::particle_editor::ParticleEditorResult saved = particleEditorGateway_.Save(path, effect);
     if (!saved.Succeeded()) {

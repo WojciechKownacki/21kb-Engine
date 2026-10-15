@@ -178,14 +178,16 @@ KB_PARTICLE_ENUM_NAMES(ParticleModuleType, {ParticleModuleType::InitialVelocity,
                        {ParticleModuleType::SubEmitter, "SubEmitter"}, {ParticleModuleType::Noise, "Noise"},
                        {ParticleModuleType::AxisRotation, "AxisRotation"},
                        {ParticleModuleType::Attraction, "Attraction"},
-                       {ParticleModuleType::TorusSwirl, "TorusSwirl"});
+                       {ParticleModuleType::TorusSwirl, "TorusSwirl"},
+                       {ParticleModuleType::Separation, "Separation"});
 KB_PARTICLE_ENUM_NAMES(ParticleEventTrigger, {ParticleEventTrigger::Birth, "Birth"},
                        {ParticleEventTrigger::Death, "Death"}, {ParticleEventTrigger::Collision, "Collision"},
                        {ParticleEventTrigger::WhileAlive, "WhileAlive"});
 KB_PARTICLE_ENUM_NAMES(ParticleSpawnShape, {ParticleSpawnShape::Point, "Point"}, {ParticleSpawnShape::Sphere, "Sphere"},
                        {ParticleSpawnShape::Box, "Box"}, {ParticleSpawnShape::Cone, "Cone"},
                        {ParticleSpawnShape::Circle, "Circle"}, {ParticleSpawnShape::Disc, "Disc"},
-                       {ParticleSpawnShape::Line, "Line"}, {ParticleSpawnShape::Spiral, "Spiral"});
+                       {ParticleSpawnShape::Line, "Line"}, {ParticleSpawnShape::Spiral, "Spiral"},
+                       {ParticleSpawnShape::Mesh, "Mesh"});
 KB_PARTICLE_ENUM_NAMES(ParticleVelocityMode, {ParticleVelocityMode::Cone, "Cone"},
                        {ParticleVelocityMode::Radial, "Radial"}, {ParticleVelocityMode::Spiral2D, "Spiral2D"});
 KB_PARTICLE_ENUM_NAMES(ParticleBeamEnds, {ParticleBeamEnds::Fixed, "Fixed"},
@@ -556,6 +558,8 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
             opt("spawn.shape.spiralArms", s.shape.spiralArms, ParseFloat);
             opt("spawn.shape.spiralTwist", s.shape.spiralTwist, ParseFloat);
             opt("spawn.shape.spiralThickness", s.shape.spiralThickness, ParseFloat);
+            opt("spawn.shape.mesh.assetId", s.shapeMesh.assetId, ParseUInt<std::uint64_t>);
+            opt("spawn.shape.mesh.path", s.shapeMesh.virtualPath, ParseQuoted);
             static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.velocityMode"), s.velocityMode,
                                               ParseEnum<ParticleVelocityMode>, ParticleEffectDiagnosticCode::InvalidEnum));
             opt("spawn.spiralArms", s.spiralArms, ParseFloat);
@@ -628,6 +632,9 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
                         reader.Required(base + ".center", payload.center, ParseVec3);
                         reader.Required(base + ".radius", payload.radius, ParseFloat);
                         reader.Required(base + ".degreesPerSecond", payload.degreesPerSecond, ParseFloat);
+                    } else if constexpr (std::is_same_v<T, ParticleSeparationModule>) {
+                        reader.Required(base + ".strength", payload.strength, ParseFloat);
+                        reader.Required(base + ".distance", payload.distance, ParseFloat);
                     } else if constexpr (std::is_same_v<T, ParticleSubEmitterModule>) {
                         reader.Required(base + ".targetEmitterId", payload.targetEmitterId, ParseUInt<std::uint64_t>);
                         reader.Required(base + ".trigger", payload.trigger, ParseEnum<ParticleEventTrigger>,
@@ -1038,6 +1045,11 @@ void WriteFlipbook(std::string& out, const std::string& base, const ParticleFlip
 
 } // namespace
 
+std::optional<ParticleModuleType> ParticleEffectAssetIO::ModuleTypeFromName(std::string_view name) {
+    ParticleModuleType type{};
+    return ParseEnum(name, type) ? std::optional{type} : std::nullopt;
+}
+
 ParticleEffectLoadResult ParticleEffectAssetIO::Parse(std::string_view source) {
     ParticleEffectLoadResult result{};
     if (source.size() > kParticleEffectMaxSourceBytes) {
@@ -1185,6 +1197,7 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
                 Line(out, IndexPath(ei, "spawn.shape.spiralArms"), Float(s.shape.spiralArms));
                 Line(out, IndexPath(ei, "spawn.shape.spiralTwist"), Float(s.shape.spiralTwist));
                 Line(out, IndexPath(ei, "spawn.shape.spiralThickness"), Float(s.shape.spiralThickness));
+                if (s.shape.type == ParticleSpawnShape::Mesh) WriteReference(out, IndexPath(ei, "spawn.shape.mesh"), s.shapeMesh);
             }
             if (s.velocityMode != d.velocityMode || s.spiralArms != d.spiralArms ||
                 s.spiralTurnDegreesPerSecond != d.spiralTurnDegreesPerSecond) {
@@ -1253,6 +1266,9 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
                         VecLine(out, base + ".center", p.center);
                         Line(out, base + ".radius", Float(p.radius));
                         Line(out, base + ".degreesPerSecond", Float(p.degreesPerSecond));
+                    } else if constexpr (std::is_same_v<T, ParticleSeparationModule>) {
+                        Line(out, base + ".strength", Float(p.strength));
+                        Line(out, base + ".distance", Float(p.distance));
                     } else if constexpr (std::is_same_v<T, ParticleSubEmitterModule>) {
                         Line(out, base + ".targetEmitterId", std::to_string(p.targetEmitterId));
                         Line(out, base + ".trigger", EnumText(p.trigger));

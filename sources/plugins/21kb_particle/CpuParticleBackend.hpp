@@ -16,6 +16,7 @@
 #include <string_view>
 #include <variant>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::particle_plugin {
@@ -203,6 +204,10 @@ private:
         const CompiledEffect& previous,
         const CompiledEffect& candidate) noexcept;
     void ProcessOwnerLifecycle(kb::scene::Scene& scene) noexcept;
+    // Copies of one effect whose emitters all loop in local space share one simulation (Verth,
+    // Niagara, VFX Graph instancing): the first copy simulates, the others draw its particles at
+    // their own transform. sharedLeaders_[copy] = the simulating copy, or kInvalidDenseIndex.
+    void UpdateSharedSimulations() noexcept;
     [[nodiscard]] bool FinishOwnerLifecycle(kb::scene::Scene& scene, std::uint32_t denseIndex) noexcept;
     void ResetInstance(std::uint32_t denseIndex) noexcept;
     [[nodiscard]] kb::particles::ParticleRuntimeStatus PrewarmInstance(std::uint32_t denseIndex) noexcept;
@@ -300,6 +305,7 @@ private:
     std::vector<std::uint8_t> followTransforms_;
     std::vector<kb::scene::WorldTransform> ownerTransforms_;
     std::vector<std::uint8_t> reloadRestarted_;
+    std::vector<std::uint32_t> sharedLeaders_;
     std::vector<kb::particles::ParticleRuntimeExecutionPath> executionPaths_;
     std::vector<kb::particles::ParticleGpuVisualAvailability> gpuVisualAvailability_;
     std::vector<std::uint64_t> gpuVisualCapabilityEpochs_;
@@ -308,6 +314,12 @@ private:
     std::vector<PlaybackState> playbackStates_;
     std::vector<InstanceRuntime> instanceRuntime_;
     std::vector<CompiledEffectEntry> compiledEffects_;
+    // Mesh spawn shapes by mesh asset: triangle corners and the running sum of the triangle areas.
+    struct MeshSurface {
+        std::vector<kb::math::Vec3> corners;
+        std::vector<float> area;
+    };
+    std::unordered_map<std::uint64_t, MeshSurface> meshSurfaces_;
     std::vector<ParameterEntry> parameters_;
 
     std::vector<Command> commands_;
