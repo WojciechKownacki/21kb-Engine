@@ -10,6 +10,7 @@ bool SceneLightGrid::Build(const RenderScene::LightProxyMap& lights,
     SceneRenderLightingConfig config, std::uint32_t cameraMask,
     std::uint64_t primaryLightId, std::uint32_t maxAtlasTexels) {
     atlas_.clear();
+    entityIds_.clear();
     lightCount_ = cellCount_ = 0U;
     dimensions_ = {};
     minimum_ = inverseCellSize_ = {};
@@ -25,7 +26,7 @@ bool SceneLightGrid::Build(const RenderScene::LightProxyMap& lights,
     });
     if (selected.size() > maxAtlasTexels / 5U) return false;
     for (const auto& [id, light] : selected) {
-        static_cast<void>(id);
+        entityIds_.push_back(id);
         const auto packed = SceneLightShaderData::Pack(*light);
         atlas_.insert(atlas_.end(), packed.texels.begin(), packed.texels.end());
     }
@@ -46,7 +47,7 @@ bool SceneLightGrid::Build(const RenderScene::LightProxyMap& lights,
         return atlas_[base + 1U][3] + (atlas_[base][3] > 2.5F ? (size[2] + size[3]) * 0.5F : 0.0F);
     };
     for (std::uint32_t index = 0U; index < lightCount_; ++index) {
-        if (atlas_[index * 5U][3] == 0.0F) continue;
+        if (atlas_[index * 5U][3] < 0.5F) continue;  // directional
         const float radius = radiusFor(index);
         for (std::size_t axis = 0U; axis < 3U; ++axis) {
             const float center = atlas_[index * 5U + 1U][axis];
@@ -79,7 +80,7 @@ bool SceneLightGrid::Build(const RenderScene::LightProxyMap& lights,
     const auto visit = [&](auto&& accept) {
         std::uint64_t references = 0U;
         for (std::uint32_t index = 0U; index < lightCount_; ++index) {
-            if (atlas_[index * 5U][3] == 0.0F) {
+            if (atlas_[index * 5U][3] < 0.5F) {
                 references += cellCount_ + 1U;
                 if (references > maxReferences) return false;
                 for (std::uint32_t cell = 0U; cell <= cellCount_; ++cell) accept(cell, index);

@@ -13,16 +13,18 @@ namespace {
 using Kind = InspectorPostProcessProfileRowKind;
 constexpr std::string_view kAntiAliasingField = "antiAliasing";
 
-constexpr std::array<InspectorPostProcessProfileSection, 6> kSections{ {
+constexpr std::array<InspectorPostProcessProfileSection, 8> kSections{ {
     { InspectorSectionId::PostProcessTonemap },
     { InspectorSectionId::PostProcessExposure },
     { InspectorSectionId::PostProcessBloom },
     { InspectorSectionId::PostProcessAntiAliasing },
     { InspectorSectionId::PostProcessVignette },
     { InspectorSectionId::PostProcessAmbientOcclusion },
+    { InspectorSectionId::PostProcessGlobalIllumination },
+    { InspectorSectionId::PostProcessFog },
 } };
 
-constexpr std::array<InspectorPostProcessProfileRow, 20> kRows{ {
+constexpr std::array<InspectorPostProcessProfileRow, 31> kRows{ {
     { InspectorSectionId::PostProcessTonemap, Kind::Bool, "tonemapEnabled" },
     { InspectorSectionId::PostProcessTonemap, Kind::Choice, "outputTransform.tonemap" },
     { InspectorSectionId::PostProcessExposure, Kind::Number, "outputTransform.exposureStops" },
@@ -43,6 +45,17 @@ constexpr std::array<InspectorPostProcessProfileRow, 20> kRows{ {
     { InspectorSectionId::PostProcessAmbientOcclusion, Kind::Number, "ambientOcclusionRadius" },
     { InspectorSectionId::PostProcessExposure, Kind::Number, "outputTransform.gamma" },
     { InspectorSectionId::PostProcessBloom, Kind::Number, "bloomSoftKnee" },
+    { InspectorSectionId::PostProcessGlobalIllumination, Kind::Choice, "globalIllumination" },
+    { InspectorSectionId::PostProcessGlobalIllumination, Kind::Number, "globalIlluminationIntensity" },
+    { InspectorSectionId::PostProcessFog, Kind::Bool, "fogEnabled" },
+    { InspectorSectionId::PostProcessFog, Kind::Number, "fogDensity" },
+    { InspectorSectionId::PostProcessFog, Kind::Number, "fogHeightFalloff" },
+    { InspectorSectionId::PostProcessFog, Kind::Number, "fogBaseHeight" },
+    { InspectorSectionId::PostProcessFog, Kind::Number, "fogColor.r" },
+    { InspectorSectionId::PostProcessFog, Kind::Number, "fogColor.g" },
+    { InspectorSectionId::PostProcessFog, Kind::Number, "fogColor.b" },
+    { InspectorSectionId::PostProcessFog, Kind::Bool, "volumetricFogEnabled" },
+    { InspectorSectionId::PostProcessFog, Kind::Number, "fogAnisotropy" },
 } };
 
 // Every choice row's values, in the order a click steps through them: the file's value name and
@@ -54,6 +67,7 @@ struct Choice {
 constexpr std::array<Choice, 3> kToneCurves{ { { "Aces" }, { "AgxApprox" }, { "None" } } };
 constexpr std::array<Choice, 3> kMetering{ { { "HdrColor" }, { "SceneLighting" }, { "Manual" } } };
 constexpr std::array<Choice, 3> kAntiAliasing{ { { "Taa" }, { "Fxaa" }, { "Off" } } };
+constexpr std::array<Choice, 3> kGlobalIllumination{ { { "Off" }, { "ScreenSpace" }, { "Voxel" } } };
 
 [[nodiscard]] std::string_view ChoiceLabel(std::string_view value) {
     if (value == "Aces") return "ACES";
@@ -65,12 +79,15 @@ constexpr std::array<Choice, 3> kAntiAliasing{ { { "Taa" }, { "Fxaa" }, { "Off" 
     if (value == "Taa") return "TAA";
     if (value == "Fxaa") return "FXAA";
     if (value == "Off") return EditorText("inspector.postProcess.off", "Off");
+    if (value == "ScreenSpace") return EditorText("inspector.postProcess.screenSpace", "Screen Space");
+    if (value == "Voxel") return EditorText("inspector.postProcess.voxel", "Voxel");
     return value;
 }
 
 [[nodiscard]] std::span<const Choice> ChoicesFor(std::string_view field) noexcept {
     if (field == "outputTransform.tonemap") return kToneCurves;
     if (field == "autoExposureMetering") return kMetering;
+    if (field == "globalIllumination") return kGlobalIllumination;
     return kAntiAliasing;
 }
 
@@ -192,6 +209,8 @@ std::string_view InspectorPostProcessProfileModel::SectionTitle(InspectorSection
     case InspectorSectionId::PostProcessAntiAliasing: return EditorText("inspector.postProcess.antiAliasing", "Anti-aliasing");
     case InspectorSectionId::PostProcessVignette: return EditorText("inspector.postProcess.vignette", "Vignette");
     case InspectorSectionId::PostProcessAmbientOcclusion: return EditorText("inspector.postProcess.ambientOcclusion", "Ambient Occlusion");
+    case InspectorSectionId::PostProcessGlobalIllumination: return EditorText("inspector.postProcess.globalIllumination", "Global Illumination");
+    case InspectorSectionId::PostProcessFog: return EditorText("inspector.postProcess.fog", "Fog");
     default: return {};
     }
 }
@@ -218,6 +237,17 @@ std::string_view InspectorPostProcessProfileModel::RowLabel(int row) {
     case 17: return EditorText("inspector.postProcess.ambientOcclusionRadius", "Radius (m)");
     case 18: return EditorText("inspector.postProcess.gamma", "Display Gamma");
     case 19: return EditorText("inspector.postProcess.bloomSoftKnee", "Soft Knee");
+    case 20: return EditorText("inspector.postProcess.giMethod", "Mode");
+    case 21: return EditorText("inspector.postProcess.giIntensity", "GI Intensity");
+    case 22: return EditorText("inspector.postProcess.fogEnabled", "Height Fog");
+    case 23: return EditorText("inspector.postProcess.fogDensity", "Height Fog Density");
+    case 24: return EditorText("inspector.postProcess.fogHeightFalloff", "Height Fog Falloff");
+    case 25: return EditorText("inspector.postProcess.fogBaseHeight", "Height");
+    case 26: return EditorText("inspector.postProcess.fogColorR", "Height Fog Color R");
+    case 27: return EditorText("inspector.postProcess.fogColorG", "Height Fog Color G");
+    case 28: return EditorText("inspector.postProcess.fogColorB", "Height Fog Color B");
+    case 29: return EditorText("inspector.postProcess.volumetricFog", "Volumetric Fog");
+    case 30: return EditorText("inspector.postProcess.fogAnisotropy", "Volumetric Fog Anisotropy");
     default: return {};
     }
 }

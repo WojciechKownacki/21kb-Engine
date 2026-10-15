@@ -166,6 +166,9 @@ SceneCreateResult SceneCreateMenu::Create(Scene& scene, std::string_view id, std
     } else if (lightKind.has_value()) {
         LightComponent light{};
         light.kind = *lightKind;
+        if (light.kind == LightKind::Directional) {
+            light.sourceRadius = 0.5357F;  // Source Angle of the sun seen from the Earth
+        }
         scene.Components().Lights().Set(entity, light);
     } else if (item->id == "Environment") {
         WorldBackdropComponent backdrop{};

@@ -1,11 +1,12 @@
 // Cascaded shadow lookup shared by the forward and deferred lighting shaders.
 // All cascades live in one 2x2 atlas; cascade 0 is the finest, the last one the widest.
 uniform mat4 u_shadowCascadeViewProj[4];
-uniform vec4 u_shadowCascadeAtlas[4]; // xy = tile offset, z = tile scale
+uniform vec4 u_shadowCascadeAtlas[4]; // xy = tile offset, z = tile scale, w = penumbra uv per unit of depth
 uniform vec4 u_shadowCascadeInfo;     // x = cascade count, y = tile-uv edge margin, z = tile-uv blend width
 
 // Returns the atlas shadow coordinate (xy uv, z depth) of the finest cascade that contains
-// worldPos, with w = 1; w = 0 when no cascade covers it (outside the shadow distance).
+// worldPos, with w = 1 + the penumbra the light's source angle casts per unit of depth between
+// occluder and receiver (in atlas uv; 0 = a hard light); w = 0 when no cascade covers it.
 // Near the outer edge of that cascade `coarser` holds the next cascade's coordinate with the weight
 // of its visibility in w (rising to 1 at the edge); w = 0 when no blending is needed.
 vec4 KbResolveShadowCascade(vec3 worldPos, out vec4 coarser)
@@ -36,7 +37,7 @@ vec4 KbResolveShadowCascade(vec3 worldPos, out vec4 coarser)
                     coarser = vec4(n.xy * u_shadowCascadeAtlas[i + 1].z + u_shadowCascadeAtlas[i + 1].xy, n.z, weight);
                 }
             }
-            return vec4(c.xy * u_shadowCascadeAtlas[i].z + u_shadowCascadeAtlas[i].xy, c.z, 1.0);
+            return vec4(c.xy * u_shadowCascadeAtlas[i].z + u_shadowCascadeAtlas[i].xy, c.z, 1.0 + u_shadowCascadeAtlas[i].w);
         }
     }
     return vec4(0.0, 0.0, 0.0, 0.0);

@@ -127,9 +127,15 @@ struct LightRenderProxyDesc {
     float areaWidth = 1.0F;
     float areaHeight = 1.0F;
     float contactShadowLength = 0.0F;
-    float volumetricScattering = 0.0F;
+    float volumetricScattering = 1.0F;  // Volumetric Scattering default
     bool castsShadow = true;
     bool visible = true;
+    // kb::scene::LightComponent: soft-shadow size (m; directional: source angle in degrees), Shadow
+    // Strength, a directional light's Shadow Distance (0 = the project's) and Mobility Static.
+    float sourceRadius = 0.0F;
+    float shadowStrength = 1.0F;
+    float shadowDistance = 0.0F;
+    bool staticMobility = false;
     // LIB-141: mirrors kb::scene::LightComponent::layerMask. Filtered against the current
     // camera's cullingMask by SceneForwardLightSelector - see LightComponent.hpp's own doc
     // comment for the default-safety reasoning.

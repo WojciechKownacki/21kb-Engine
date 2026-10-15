@@ -6750,6 +6750,9 @@ struct ShadowFloorScene {
         Require(target.Initialize(kSize, kSize), "Cascade seam test could not create its readback target");
         SceneRenderLightingConfig lighting{};
         lighting.shadowCascadeBlend = cascadeBlend;
+        // A short shadow distance and a small map keep the cascade steps inside the view.
+        lighting.shadowDistance = 50.0F;
+        lighting.shadowMapSize = 1024U;
         const RenderSceneSubmitDesc desc{
             .target = target.Binding(),
             .cameraOverride = camera,

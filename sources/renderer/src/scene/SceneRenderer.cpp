@@ -70,6 +70,13 @@ namespace {
         .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
         .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
         .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
+        .fogEnabled = requested.fogEnabled != defaultConfig.fogEnabled ? requested.fogEnabled : fallback.fogEnabled,
+        .fogDensity = requested.fogDensity != defaultConfig.fogDensity ? requested.fogDensity : fallback.fogDensity,
+        .fogHeightFalloff = requested.fogHeightFalloff != defaultConfig.fogHeightFalloff ? requested.fogHeightFalloff : fallback.fogHeightFalloff,
+        .fogBaseHeight = requested.fogBaseHeight != defaultConfig.fogBaseHeight ? requested.fogBaseHeight : fallback.fogBaseHeight,
+        .fogColor = requested.fogColor != defaultConfig.fogColor ? requested.fogColor : fallback.fogColor,
+        .volumetricFogEnabled = requested.volumetricFogEnabled != defaultConfig.volumetricFogEnabled ? requested.volumetricFogEnabled : fallback.volumetricFogEnabled,
+        .fogAnisotropy = requested.fogAnisotropy != defaultConfig.fogAnisotropy ? requested.fogAnisotropy : fallback.fogAnisotropy,
         .debugView = requested.debugView != defaultConfig.debugView ? requested.debugView : fallback.debugView,
     };
 }

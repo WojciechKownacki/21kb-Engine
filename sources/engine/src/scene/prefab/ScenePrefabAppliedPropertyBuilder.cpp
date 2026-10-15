@@ -309,6 +309,22 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             property.value = std::to_string(light->colorTemperatureKelvin);
             return true;
         }
+        if (propertyPath == "light.sourceRadius") {
+            property.value = std::to_string(light->sourceRadius);
+            return true;
+        }
+        if (propertyPath == "light.shadowStrength") {
+            property.value = std::to_string(light->shadowStrength);
+            return true;
+        }
+        if (propertyPath == "light.shadowDistance") {
+            property.value = std::to_string(light->shadowDistance);
+            return true;
+        }
+        if (propertyPath == "light.mobility") {
+            property.value = std::to_string(static_cast<int>(light->mobility));
+            return true;
+        }
         if (propertyPath == "light.layerMask") {
             property.value = std::to_string(light->layerMask);
             return true;

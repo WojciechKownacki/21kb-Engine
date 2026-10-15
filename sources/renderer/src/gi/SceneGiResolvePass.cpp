@@ -155,7 +155,7 @@ bool SceneGiResolvePass::Submit(const SceneGiResolvePassDesc& desc) const {
     bgfx::setUniform(voxelLightPositionRangeUniform_, lighting.positionRange.data(), kVoxelLightCount);
     bgfx::setUniform(voxelLightColorIntensityUniform_, lighting.colorIntensity.data(), kVoxelLightCount);
     bgfx::setUniform(voxelLightSpotUniform_, lighting.spot.data(), kVoxelLightCount);
-    bgfx::setUniform(voxelLightFlagsUniform_, lighting.areaRight.data(), kVoxelLightCount); // w = casts shadows
+    bgfx::setUniform(voxelLightFlagsUniform_, lighting.areaRight.data(), kVoxelLightCount); // w > 0 = casts shadows
     if (voxelGi) {
         bgfx::setTexture(kVoxelAlbedoStage, voxelAlbedoSampler_, desc.voxels->Albedo());
         bgfx::setTexture(kVoxelEmissiveStage, voxelEmissiveSampler_, desc.voxels->Emissive());

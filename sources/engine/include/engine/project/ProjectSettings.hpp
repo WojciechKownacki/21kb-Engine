@@ -46,7 +46,8 @@ struct ProjectSettings {
     std::string lastOpenMap;
 
     // Rendering
-    ProjectSceneLightingPath lightingPath = ProjectSceneLightingPath::Forward;
+    // Deferred by default: any number of lights, GI, fog and contact shadows.
+    ProjectSceneLightingPath lightingPath = ProjectSceneLightingPath::Deferred;
 
     // Input
     bool inputEnabled = true;

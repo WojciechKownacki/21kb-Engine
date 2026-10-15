@@ -10,6 +10,7 @@
 #include <bx/math.h>
 
 #include <algorithm>
+#include <bit>
 
 namespace kb::render {
 
@@ -88,6 +89,27 @@ void SubmitPointShadows(
     }
     setup.binding.depthTexture = desc.pointShadowMap.DepthTexture();
     for (std::uint32_t light = 0U; light < setup.lightCount; ++light) {
+        // A static light keeps the tiles it last rendered while it, its tile and the scene's meshes
+        // stay the same (cached shadow maps of static lights).
+        std::uint64_t key = 0U;
+        if (setup.staticLight[light]) {
+            key = 1469598103934665603ULL;
+            const auto mix = [&key](std::uint64_t value) noexcept { key = (key ^ value) * 1099511628211ULL; };
+            mix(setup.binding.entityId[light]);
+            mix(desc.renderScene.MeshContentRevision());
+            mix((static_cast<std::uint64_t>(setup.tileSize) << 32U) ^ setup.atlasWidth ^ (static_cast<std::uint64_t>(setup.atlasHeight) << 16U));
+            for (std::uint32_t c = 0U; c < 4U; ++c) {
+                for (const float value : { setup.binding.positionRange[light * 4U + c], setup.binding.spot[light * 4U + c],
+                         setup.binding.depthParams[light * 4U + c] }) {
+                    mix(std::bit_cast<std::uint32_t>(value));
+                }
+            }
+            key |= 1U;
+            if (desc.pointShadowMap.CachedTiles(light) == key) {
+                continue;
+            }
+        }
+        desc.pointShadowMap.SetCachedTiles(light, key);
         for (std::uint32_t face = 0U; face < setup.faceCount[light]; ++face) {
             const std::uint32_t index = light * ScenePointShadowBinding::kFaceCount + face;
             const std::uint16_t viewId = desc.viewportPlan.viewIds.pointShadowViews[index];

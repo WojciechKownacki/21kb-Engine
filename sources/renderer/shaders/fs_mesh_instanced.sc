@@ -75,12 +75,14 @@ vec3 FresnelSchlickRoughness(float cosTheta, vec3 f0, float roughness)
 
 float DiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
 {
+    // Disney diffuse shape without energy renormalisation, so a surface lit straight on
+    // returns its albedo as Lambert diffuse does (the factor darkened
+    // every light by about a quarter at common roughness).
     float energyBias = mix(0.0, 0.5, roughness);
-    float energyFactor = mix(1.0, 1.0 / 1.51, roughness);
     float fd90 = energyBias + 2.0 * lDotH * lDotH * roughness;
     float lightScatter = 1.0 + (fd90 - 1.0) * pow(clamp(1.0 - nDotL, 0.0, 1.0), 5.0);
     float viewScatter = 1.0 + (fd90 - 1.0) * pow(clamp(1.0 - nDotV, 0.0, 1.0), 5.0);
-    return lightScatter * viewScatter * energyFactor;
+    return lightScatter * viewScatter;
 }
 
 // Material ambient occlusion darkens only the light from the surroundings (fs_deferred_lighting.sc).
@@ -122,7 +124,8 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
             float coneAttenuation = clamp((coneCos - spot.y) / coneWidth, 0.0, 1.0);
             attenuation *= coneAttenuation * coneAttenuation;
         }
-        if (dirKind.w > 2.5) {
+        // Rectangle and disc emit from their front face only; a tube shines all around.
+        if (dirKind.w > 2.5 && dirKind.w < 4.5) {
             attenuation *= max(dot(normalize(dirKind.xyz), normalize(-lightVector)), 0.0);
         }
     }
@@ -173,24 +176,44 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     return diffuseEnv + specularEnv;
 }
 
-float SampleShadowVisibility(vec3 shadowCoord)
+float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
 {
     float biasedDepth = shadowCoord.z + u_shadowParams.x;
-    float storedDepth = texture2D(s_shadowMap, shadowCoord.xy).x;
-    float hardShadow = biasedDepth < storedDepth ? 1.0 : 0.0;
     float texelSize = max(u_shadowParams.z, 0.000001);
-    float shadowSamples =
-        (biasedDepth < texture2D(s_shadowMap, shadowCoord.xy + vec2(-texelSize, -texelSize)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_shadowMap, shadowCoord.xy + vec2(0.0, -texelSize)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_shadowMap, shadowCoord.xy + vec2(texelSize, -texelSize)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_shadowMap, shadowCoord.xy + vec2(-texelSize, 0.0)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_shadowMap, shadowCoord.xy).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_shadowMap, shadowCoord.xy + vec2(texelSize, 0.0)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_shadowMap, shadowCoord.xy + vec2(-texelSize, texelSize)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_shadowMap, shadowCoord.xy + vec2(0.0, texelSize)).x ? 1.0 : 0.0) +
-        (biasedDepth < texture2D(s_shadowMap, shadowCoord.xy + vec2(texelSize, texelSize)).x ? 1.0 : 0.0);
-    float inShadow = shadowSamples * 0.11111111;
-    float selectedShadow = u_shadowParams.w < 2.0 ? hardShadow : inShadow;
+    float selectedShadow = 0.0;
+    if (penumbraScale > 0.0 && u_shadowParams.w >= 2.0) {
+        // Soft shadows from the light's source angle (PCSS): the mean depth of
+        // the occluders around the point sets the penumbra the filter covers.
+        float turn = 6.2831853 * fract(52.9829189 * fract(dot(shadowCoord.xy, vec2(4211.0, 2203.0))));
+        float search = clamp(penumbraScale * 0.05, texelSize, 12.0 * texelSize);
+        float occluderSum = 0.0;
+        float occluders = 0.0;
+        for (int i = 0; i < 12; ++i) {
+            float r = sqrt((float(i) + 0.5) / 12.0);
+            float a = float(i) * 2.39996323 + turn;
+            float d = texture2DLod(s_shadowMap, shadowCoord.xy + vec2(cos(a), sin(a)) * (r * search), 0.0).x;
+            // The shadow map keeps reversed depth: an occluder is nearer the light, its depth larger.
+            occluderSum += d > biasedDepth ? d : 0.0;
+            occluders += d > biasedDepth ? 1.0 : 0.0;
+        }
+        float penumbra = clamp(penumbraScale * (occluderSum / max(occluders, 1.0) - biasedDepth), texelSize, 16.0 * texelSize);
+        float softShadow = 0.0;
+        for (int j = 0; j < 12; ++j) {
+            float r = sqrt((float(j) + 0.5) / 12.0);
+            float a = float(j) * 2.39996323 + turn + 1.3;
+            softShadow += biasedDepth < texture2DLod(s_shadowMap, shadowCoord.xy + vec2(cos(a), sin(a)) * (r * penumbra), 0.0).x ? 1.0 : 0.0;
+        }
+        selectedShadow = occluders > 0.0 ? softShadow / 12.0 : 0.0;
+    } else {
+        float hardShadow = biasedDepth < texture2DLod(s_shadowMap, shadowCoord.xy, 0.0).x ? 1.0 : 0.0;
+        float shadowSamples = 0.0;
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                shadowSamples += biasedDepth < texture2DLod(s_shadowMap, shadowCoord.xy + vec2(float(x), float(y)) * texelSize, 0.0).x ? 1.0 : 0.0;
+            }
+        }
+        selectedShadow = u_shadowParams.w < 2.0 ? hardShadow : shadowSamples * 0.11111111;
+    }
     return mix(1.0, 1.0 - u_shadowParams.y, selectedShadow);
 }
 
@@ -223,9 +246,9 @@ void main()
         vec4 coarserCoord;
         vec4 shadowCoord = KbResolveShadowCascade(v_worldPos, coarserCoord);
         if (shadowCoord.w > 0.5) {
-            shadowVisible = SampleShadowVisibility(shadowCoord.xyz);
+            shadowVisible = SampleShadowVisibility(shadowCoord.xyz, shadowCoord.w - 1.0);
             if (coarserCoord.w > 0.0) {
-                shadowVisible = mix(shadowVisible, SampleShadowVisibility(coarserCoord.xyz), coarserCoord.w);
+                shadowVisible = mix(shadowVisible, SampleShadowVisibility(coarserCoord.xyz, shadowCoord.w - 1.0), coarserCoord.w);
             }
         }
     }
@@ -235,7 +258,7 @@ void main()
         {
             int lightIndex = KbLightGridIndex(lightList, entry);
             vec3 directLight = EvaluateSceneLight(lightIndex, normal, viewDir, v_worldPos, albedo.rgb, metallic, roughness);
-            lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, v_worldPos);
+            lighting += directLight * (lightIndex == 0 ? shadowVisible : 1.0) * KbPointShadowFactor(lightIndex, v_worldPos, normal);
         }
     }
     vec3 emissive = texture2D(s_emissive, materialUv).rgb * u_materialEmissive.rgb * u_materialEmissive.a;

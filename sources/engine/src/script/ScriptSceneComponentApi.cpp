@@ -222,6 +222,17 @@ struct ComponentAccess {
             return true; \
         } }
 
+#define KB_LIGHT_MOBILITY(Component, field) \
+    FieldBinding{ #field, \
+        [](const void* component) noexcept -> ScriptValue { \
+            KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
+            return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
+        [](void* component, const ScriptValue& value) noexcept -> bool { \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::LightMobility::Static)) { return false; } \
+            static_cast<Component*>(component)->field = static_cast<kb::scene::LightMobility>(value.AsInt()); \
+            return true; \
+        } }
+
 #define KB_RIGIDBODY_BODY_TYPE(Component, field) \
     FieldBinding{ #field, \
         [](const void* component) noexcept -> ScriptValue { \
@@ -329,6 +340,7 @@ constexpr std::array<std::string_view, 2> kContentInstanceLifetimeNames{ "Owner"
 constexpr std::array<std::string_view, 3> kNavLinkKindNames{ "Jump", "Ladder", "Walk" };
 constexpr std::array<std::string_view, 3> kCameraClearModeNames{ "SolidColor", "DepthOnly", "DontClear" };
 constexpr std::array<std::string_view, 6> kLightKindNames{ "Directional", "Point", "Spot", "AreaRect", "AreaDisk", "Tube" };
+constexpr std::array<std::string_view, 2> kLightMobilityNames{ "Movable", "Static" };
 constexpr std::array<std::string_view, 6> kTickGroupNames{ "Input", "Gameplay", "Physics", "Animation", "Camera", "Presentation" };
 constexpr std::array<std::string_view, 4> kColliderShapeNames{ "Box", "Sphere", "Capsule", "Mesh" };
 
@@ -528,7 +540,7 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kCameraPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "clearColor.z", ScriptValueType::Float },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 16> kLightPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 20> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int, true, kLightKindNames },
     ScriptSceneComponentPropertyDesc{ "color.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "color.y", ScriptValueType::Float },
@@ -547,6 +559,10 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 16> kLightPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "useColorTemperature", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "colorTemperatureKelvin", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "layerMask", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "sourceRadius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "shadowStrength", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "shadowDistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "mobility", ScriptValueType::Int, true, kLightMobilityNames },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kMeshRendererPropertyDescs{
@@ -751,7 +767,7 @@ constexpr std::array<FieldBinding, 13> kCameraFields{
     KB_NESTED_FLOAT(kb::scene::CameraComponent, clearColor, z),
 };
 
-constexpr std::array<FieldBinding, 16> kLightFields{
+constexpr std::array<FieldBinding, 20> kLightFields{
     KB_LIGHT_KIND(kb::scene::LightComponent, kind),
     KB_NESTED_FLOAT(kb::scene::LightComponent, color, x),
     KB_NESTED_FLOAT(kb::scene::LightComponent, color, y),
@@ -768,6 +784,10 @@ constexpr std::array<FieldBinding, 16> kLightFields{
     KB_BOOL(kb::scene::LightComponent, useColorTemperature),
     KB_FLOAT(kb::scene::LightComponent, colorTemperatureKelvin),
     KB_UINT32(kb::scene::LightComponent, layerMask),
+    KB_FLOAT(kb::scene::LightComponent, sourceRadius),
+    KB_FLOAT(kb::scene::LightComponent, shadowStrength),
+    KB_FLOAT(kb::scene::LightComponent, shadowDistance),
+    KB_LIGHT_MOBILITY(kb::scene::LightComponent, mobility),
 };
 
 constexpr std::array<FieldBinding, 4> kMeshRendererFields{

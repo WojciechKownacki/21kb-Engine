@@ -25,13 +25,22 @@ void main()
     vec3 normal = normalize(encodedNormal.xyz * 2.0 - 1.0);
     vec3 worldPos = ReconstructWorldPosition(v_texcoord0, texture2D(s_gbufferDepth, v_texcoord0).x);
     vec3 gi = vec3(0.0, 0.0, 0.0);
+    float skyVisibility = 1.0;
     if (u_giParams.x > 0.0) {
-        gi = u_voxelInfo.x > 0.5 ? KbVoxelGi(worldPos, normal, gl_FragCoord.xy) : KbScreenSpaceGi(worldPos, normal, gl_FragCoord.xy);
+        gi = u_voxelInfo.x > 0.5 ? KbVoxelGi(worldPos, normal, gl_FragCoord.xy, skyVisibility) : KbScreenSpaceGi(worldPos, normal, gl_FragCoord.xy);
     }
     float ao = u_aoParams.x > 0.0 ? KbScreenSpaceAo(worldPos, normal, gl_FragCoord.xy) : 1.0;
     vec3 giHistory;
     float aoHistory;
-    float weight = u_giTemporal.x * KbScreenSpaceAccumulated(worldPos, giHistory, aoHistory);
+    float skyHistory;
+    float weight = u_giTemporal.x * KbScreenSpaceAccumulated(worldPos, giHistory, aoHistory, skyHistory);
+    // A NaN or infinite sample would stay in the history for good: drop it.
+    if (!(dot(gi, gi) < 1.0e8)) {
+        gi = vec3(0.0, 0.0, 0.0);
+    }
+    if (!(dot(giHistory, giHistory) < 1.0e8)) {
+        giHistory = gi;
+    }
     gl_FragData[0] = vec4(mix(gi, giHistory, weight), mul(u_giViewProj, vec4(worldPos, 1.0)).w);
-    gl_FragData[1] = vec4(mix(ao, aoHistory, weight), 0.0, 0.0, 0.0);
+    gl_FragData[1] = vec4(mix(ao, aoHistory, weight), mix(skyVisibility, skyHistory, weight), 0.0, 0.0);
 }

@@ -52,12 +52,14 @@ vec3 KbFresnelSchlickRoughness(float cosTheta, vec3 f0, float roughness)
 
 float KbDiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
 {
+    // Disney diffuse shape without energy renormalisation, so a surface lit straight on
+    // returns its albedo as Lambert diffuse does (the factor darkened
+    // every light by about a quarter at common roughness).
     float energyBias = mix(0.0, 0.5, roughness);
-    float energyFactor = mix(1.0, 1.0 / 1.51, roughness);
     float fd90 = energyBias + 2.0 * lDotH * lDotH * roughness;
     float lightScatter = 1.0 + (fd90 - 1.0) * pow(clamp(1.0 - nDotL, 0.0, 1.0), 5.0);
     float viewScatter = 1.0 + (fd90 - 1.0) * pow(clamp(1.0 - nDotV, 0.0, 1.0), 5.0);
-    return lightScatter * viewScatter * energyFactor;
+    return lightScatter * viewScatter;
 }
 
 // Material ambient occlusion darkens only the light from the surroundings (fs_deferred_lighting.sc).
@@ -100,7 +102,7 @@ vec3 KbEvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldP
             float coneAttenuation = clamp((coneCos - spot.y) / coneWidth, 0.0, 1.0);
             attenuation *= coneAttenuation * coneAttenuation;
         }
-        if (dirKind.w > 2.5) attenuation *= max(dot(normalize(dirKind.xyz), normalize(-lightVector)), 0.0);
+        if (dirKind.w > 2.5 && dirKind.w < 4.5) attenuation *= max(dot(normalize(dirKind.xyz), normalize(-lightVector)), 0.0);
     }
 
     float nDotLRaw = dot(normal, lightVector);
@@ -170,7 +172,7 @@ vec3 KbEvaluateForwardLightingFull(vec3 worldNormal, vec3 worldPos, vec3 albedo,
             int lightIndex = KbLightGridIndex(lightList, entry);
             lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, specular,
                 shadingModel, customData0, customData1, modelColor, irisNormal, iris) *
-                KbPointShadowFactor(lightIndex, worldPos);
+                KbPointShadowFactor(lightIndex, worldPos, worldNormal);
         }
     }
     return lighting;

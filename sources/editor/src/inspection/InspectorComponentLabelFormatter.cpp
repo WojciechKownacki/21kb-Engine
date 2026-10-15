@@ -13,13 +13,28 @@ std::string_view InspectorComponentLabelFormatter::LightKindName(kb::scene::Ligh
     case kb::scene::LightKind::Spot:
         return EditorText("inspector.light.kind.spot", "Spot");
     case kb::scene::LightKind::AreaRect:
-        return EditorText("inspector.light.kind.areaRect", "Area Rect");
     case kb::scene::LightKind::AreaDisk:
-        return EditorText("inspector.light.kind.areaDisk", "Area Disk");
     case kb::scene::LightKind::Tube:
-        return EditorText("inspector.light.kind.tube", "Tube");
+        return EditorText("inspector.light.kind.area", "Area");
     }
     return EditorText("inspector.unknown", "Unknown");
+}
+
+std::string_view InspectorComponentLabelFormatter::LightShapeName(kb::scene::LightKind kind) {
+    switch (kind) {
+    case kb::scene::LightKind::AreaDisk:
+        return EditorText("inspector.light.shape.disc", "Disc");
+    case kb::scene::LightKind::Tube:
+        return EditorText("inspector.light.shape.tube", "Tube");
+    default:
+        return EditorText("inspector.light.shape.rectangle", "Rectangle");
+    }
+}
+
+std::string_view InspectorComponentLabelFormatter::LightMobilityName(kb::scene::LightMobility mobility) {
+    return mobility == kb::scene::LightMobility::Static
+        ? EditorText("inspector.light.mobility.static", "Static")
+        : EditorText("inspector.light.mobility.movable", "Movable");
 }
 
 std::string_view InspectorComponentLabelFormatter::ProjectionName(kb::scene::CameraProjection projection) {

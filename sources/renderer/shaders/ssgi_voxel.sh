@@ -74,7 +74,8 @@ vec3 KbVoxelDirect(vec3 position, vec3 normal)
         vec4 positionRange = u_voxelLightPositionRange[i];
         vec4 colorIntensity = u_voxelLightColorIntensity[i];
         vec4 spot = u_voxelLightSpot[i];
-        if (dirKind.w > 2.5) {
+        // Rectangle and disc emit from their front face only; a tube shines all around.
+        if (dirKind.w > 2.5 && dirKind.w < 4.5) {
             continue; // surface emitters are not sampled here
         }
         vec3 lightVector = normalize(-dirKind.xyz);
@@ -97,7 +98,12 @@ vec3 KbVoxelDirect(vec3 position, vec3 normal)
         }
         float facing = max(dot(normal, lightVector), 0.0);
         if (facing > 0.0 && attenuation > 0.0 && u_voxelLightFlags[i].w > 0.5) {
-            attenuation *= 1.0 - KbVoxelBlocked(position + normal * (0.9 * u_voxelGrid.w), lightVector, lightDistance);
+            // The walk stops a voxel and a half short of the light: a light next to a ceiling or a wall
+            // sits in that surface's voxel and would block itself.
+            // `position` lies half a voxel inside the hit voxel: start past its far side, or the voxel
+            // itself blocks every light.
+            attenuation *= 1.0 - KbVoxelBlocked(position + normal * (1.1 * u_voxelGrid.w), lightVector,
+                max(lightDistance - 1.5 * u_voxelGrid.w, 0.0));
         }
         // Same light intensity convention as direct lighting (as in Unity: intensity 1 = albedo).
         sum += colorIntensity.rgb * (colorIntensity.a * attenuation * facing * 3.14159265);
@@ -105,9 +111,12 @@ vec3 KbVoxelDirect(vec3 position, vec3 normal)
     return sum * 0.31830989;
 }
 
-// Returns incoming diffuse radiance (before multiplying by the surface albedo).
-vec3 KbVoxelGi(vec3 worldPos, vec3 normal, vec2 pixel)
+// Returns incoming diffuse radiance (before multiplying by the surface albedo) and in skyVisibility
+// the share of the (cosine-distributed) rays that leave the grid without hitting anything: how much
+// of the sky the point sees, which scales the ambient light so the sky light is occluded.
+vec3 KbVoxelGi(vec3 worldPos, vec3 normal, vec2 pixel, out float skyVisibility)
 {
+    skyVisibility = 0.0;
     float voxelSize = u_voxelGrid.w;
     float dimension = u_voxelInfo.z;
     vec3 total = vec3(0.0, 0.0, 0.0);
@@ -123,6 +132,7 @@ vec3 KbVoxelGi(vec3 worldPos, vec3 normal, vec2 pixel)
         vec3 inverseDir = vec3(1.0, 1.0, 1.0) / max(abs(dir), vec3_splat(0.00001));
         vec3 nextBoundary = cell + max(stepDir, vec3_splat(0.0));
         vec3 tMax = abs(nextBoundary - gridPos) * inverseDir;
+        bool hit = false;
         for (int stepIndex = 0; stepIndex < 96; ++stepIndex) {
             if (KbVoxelOutside(cell)) {
                 break;
@@ -141,6 +151,7 @@ vec3 KbVoxelGi(vec3 worldPos, vec3 normal, vec2 pixel)
                 }
                 vec3 emissive = texture3DLod(s_voxelEmissive, (cell + vec3_splat(0.5)) / dimension, 0.0).rgb;
                 total += min(emissive + voxel.rgb * KbVoxelDirect(hitCenter - hitNormal * (0.5 * voxelSize), hitNormal), vec3_splat(8.0));
+                hit = true;
                 break;
             }
             if (tMax.x < tMax.y && tMax.x < tMax.z) {
@@ -154,6 +165,7 @@ vec3 KbVoxelGi(vec3 worldPos, vec3 normal, vec2 pixel)
                 tMax.z += inverseDir.z;
             }
         }
+        skyVisibility += hit ? 0.0 : (1.0 / 6.0);
     }
     return total * (1.0 / 6.0);
 }

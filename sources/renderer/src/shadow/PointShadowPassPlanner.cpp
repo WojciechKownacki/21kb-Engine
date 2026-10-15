@@ -29,7 +29,7 @@ constexpr std::array<FaceBasis, ScenePointShadowBinding::kFaceCount> kFaces{{
 
 [[nodiscard]] bool CastsPointShadow(const LightRenderProxyDesc& light) noexcept {
     return light.visible && light.castsShadow &&
-        (light.kind == RenderLightKind::Point || light.kind == RenderLightKind::Spot) &&
+        light.kind != RenderLightKind::Directional &&
         light.intensity > 0.0F && light.range > 0.0F && std::isfinite(light.range);
 }
 
@@ -40,8 +40,15 @@ constexpr std::array<FaceBasis, ScenePointShadowBinding::kFaceCount> kFaces{{
     return dx * dx + dy * dy + dz * dz;
 }
 
-// Up to this many lights get full-size tiles; more share a smaller-tile atlas of the same memory.
+// Up to this many lights get full-size tiles, up to kHalfQualityLights half-size ones; more share
+// quarter-size tiles.
 constexpr std::uint32_t kFullQualityLights = 4U;
+constexpr std::uint32_t kHalfQualityLights = 8U;
+
+[[nodiscard]] std::uint32_t AtlasRows(std::uint32_t lightCount) noexcept {
+    return lightCount > kHalfQualityLights ? ScenePointShadowBinding::kMaxLights
+         : lightCount > kFullQualityLights ? kHalfQualityLights : kFullQualityLights;
+}
 
 } // namespace
 
@@ -92,10 +99,11 @@ PointShadowLightSelection PointShadowPassPlanner::Select(
 }
 
 std::uint32_t PointShadowPassPlanner::TileSizeFor(const SceneRenderLightingConfig& lightingConfig, std::uint32_t lightCount) noexcept {
-    // One tile per face: half the directional map size keeps the atlas near 6144 x 4096 at the default. Beyond
-    // kFullQualityLights lights the tiles halve, so eight lights cost half the memory of four at full size.
+    // One tile per face, half the directional map size; the tiles halve beyond kFullQualityLights lights and
+    // halve again beyond kHalfQualityLights, so 32 lights fit a 1536 x 8192 atlas at the default map size.
     const std::uint32_t tile = std::clamp(lightingConfig.shadowMapSize / 2U, 128U, 1024U);
-    return lightCount > kFullQualityLights ? std::max(tile / 2U, 128U) : tile;
+    return lightCount > kHalfQualityLights ? std::max(tile / 4U, 128U)
+         : lightCount > kFullQualityLights ? std::max(tile / 2U, 128U) : tile;
 }
 
 PointShadowSetup PointShadowPassPlanner::Build(
@@ -116,7 +124,7 @@ PointShadowSetup PointShadowPassPlanner::Build(
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
     setup.tileSize = TileSizeFor(lightingConfig, selection.count);
     setup.atlasWidth = setup.tileSize * ScenePointShadowBinding::kFaceCount;
-    setup.atlasHeight = setup.tileSize * (selection.count > kFullQualityLights ? ScenePointShadowBinding::kMaxLights : kFullQualityLights);
+    setup.atlasHeight = setup.tileSize * AtlasRows(selection.count);
     setup.lightCount = selection.count;
 
     ScenePointShadowBinding& binding = setup.binding;
@@ -141,6 +149,14 @@ PointShadowSetup PointShadowPassPlanner::Build(
         binding.positionRange[slot * 4U + 3U] = far;
         binding.depthParams[slot * 4U + 0U] = near;
         binding.depthParams[slot * 4U + 1U] = std::max(lightingConfig.shadowDepthBias * 10.0F, 0.01F);
+        // An area light's shadows soften with its size (its width and Height):
+        // the radius of a disc of the same area.
+        const bool area = light.kind == RenderLightKind::AreaRect || light.kind == RenderLightKind::AreaDisk ||
+            light.kind == RenderLightKind::Tube;
+        binding.depthParams[slot * 4U + 2U] = std::max(light.sourceRadius,
+            area ? 0.5F * std::sqrt(std::max(light.areaWidth * light.areaHeight, 0.0F)) : 0.0F);
+        binding.lightStrength[slot] = std::clamp(light.shadowStrength, 0.0F, 1.0F);
+        setup.staticLight[slot] = light.staticMobility;
         const bx::Vec3 eye{ light.position[0], light.position[1], light.position[2] };
         if (light.kind == RenderLightKind::Spot) {
             const auto& axis = SceneLightShaderData::Pack(light).texels[0];

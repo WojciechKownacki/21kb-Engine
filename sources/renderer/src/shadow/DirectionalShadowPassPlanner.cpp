@@ -144,6 +144,14 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     }
     setup.lightEntityId = selectedLight.entityId;
     const LightRenderProxyDesc& light = *selectedLight.light;
+    // The light's own Shadow Distance and Shadow Strength, over the project's.
+    if (std::isfinite(light.shadowDistance) && light.shadowDistance > 0.0F) {
+        lightingConfig.shadowDistance = light.shadowDistance;
+    }
+    lightingConfig.shadowStrength *= std::clamp(light.shadowStrength, 0.0F, 1.0F);
+    // Tangent of half the source angle (degrees; Source Angle): the penumbra per metre
+    // between occluder and receiver.
+    const float sourceTan = std::tan(bx::toRad(0.5F * std::clamp(light.sourceRadius, 0.0F, 10.0F)));
 
     if (!std::isfinite(lightingConfig.shadowDistance) || lightingConfig.shadowDistance <= 0.0F) {
         return setup;
@@ -187,8 +195,9 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     setup.casterCount = focusCamera ? casterBounds.focusedCasterCount : casterBounds.casterCount;
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
 
-    // Cascades are camera-centred squares of halving size (stable under camera rotation); a cascade
-    // needs a camera focus, otherwise the single bounds-fitted map is used.
+    // Cascades are camera-centred squares, each a quarter of the next (stable under camera rotation), so a
+    // 1000 m shadow distance still gives a sharp 15.6 m first cascade; a cascade needs a camera focus,
+    // otherwise the single bounds-fitted map is used.
     constexpr std::uint32_t kMaxCascades = SceneRenderShadowMapBinding::kMaxCascades;
     const std::uint32_t cascadeCount = focusCamera
         ? std::clamp(lightingConfig.shadowCascadeCount, 1U, std::clamp(maxCascades, 1U, kMaxCascades)) : 1U;
@@ -199,7 +208,7 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     setup.binding.cascadeCount = cascadeCount;
     for (std::uint32_t cascade = 0U; cascade < cascadeCount; ++cascade) {
         const float cascadeRadius = focusCamera
-            ? lightingConfig.shadowDistance / static_cast<float>(1U << (cascadeCount - 1U - cascade))
+            ? lightingConfig.shadowDistance / static_cast<float>(1U << (2U * (cascadeCount - 1U - cascade)))
             : radius;
         const float orthoHeight = 2.0F * cascadeRadius;
         SceneRenderCamera& camera = setup.cascadeCameras[cascade];
@@ -218,6 +227,9 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
         setup.binding.cascadeAtlas[cascade * 4U + 0U] = static_cast<float>(cascade & 1U) * 0.5F;
         setup.binding.cascadeAtlas[cascade * 4U + 1U] = static_cast<float>(cascade >> 1U) * 0.5F;
         setup.binding.cascadeAtlas[cascade * 4U + 2U] = tileScale;
+        // Penumbra in atlas uv per unit of shadow depth (the depth spans the projection's far - near).
+        const float depthRange = maximumDepth - minimumDepth + 2.0F - 0.1F;
+        setup.binding.cascadeAtlas[cascade * 4U + 3U] = sourceTan * depthRange * tileScale / std::max(orthoHeight, 0.001F);
     }
     setup.camera = setup.cascadeCameras[0];
     setup.binding.depthTexture = shadowDepthTexture;

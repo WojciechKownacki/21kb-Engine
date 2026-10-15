@@ -12621,11 +12621,11 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // plus one public compatibility alias. This total includes the stable
     // task components and the complete Lens Echo schema.
     // Light is a public compatibility alias for 3D Radiance Emitter and
-    // deliberately exercises the same 16 generated accessors.
+    // deliberately exercises the same 20 generated accessors.
     // NavLink adds eleven fields.
     // WorldBackdrop grew eleven procedural sky fields, and the older names of Line Renderer
     // (10), Trail Renderer (9) and Lens Flare (7) are accepted aliases: 628 -> 665.
-    kb::tests::Require(fieldsChecked == 673U, "Script component API generated accessor coverage test did not exercise the expected total field count (673, including collision mesh assets and the compatibility aliases)");
+    kb::tests::Require(fieldsChecked == 681U, "Script component API generated accessor coverage test did not exercise the expected total field count (681, including collision mesh assets and the compatibility aliases)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12707,7 +12707,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 673U, "LIB-082 raw-pointer audit did not exercise the expected total field count (673, including collision mesh assets and the compatibility aliases)");
+    kb::tests::Require(propertiesChecked == 681U, "LIB-082 raw-pointer audit did not exercise the expected total field count (681, including collision mesh assets and the compatibility aliases)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

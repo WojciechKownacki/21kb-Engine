@@ -252,8 +252,10 @@ struct SceneRenderLight {
     float areaWidth = 1.0F;
     float areaHeight = 1.0F;
     float contactShadowLength = 0.0F;
-    float volumetricScattering = 0.0F;
+    float volumetricScattering = 1.0F;  // Volumetric Scattering default
     bool castsShadow = true;
+    float sourceRadius = 0.0F;
+    float shadowStrength = 1.0F;
 };
 
 struct SceneRenderReflectionProbe {
@@ -340,12 +342,12 @@ struct SceneRenderLightingConfig {
     bool screenSpaceReflectionsEnabled = false;
     float ssrIntensity = 1.0F;
     float ssrMaxDistance = 25.0F;
-    std::uint32_t shadowMapSize = 1024U;
+    std::uint32_t shadowMapSize = 2048U;
     std::uint32_t shadowCascadeCount = 4U;
     std::uint32_t shadowAtlasSize = 2048U;
-    float shadowDistance = 50.0F;
+    float shadowDistance = 1000.0F;
     float shadowDepthBias = 0.002F;
-    float shadowStrength = 0.65F;
+    float shadowStrength = 1.0F;
     SceneRenderShadowFilter shadowFilter = SceneRenderShadowFilter::Pcf3x3;
     // Width of the fade between neighbouring cascades, as a fraction of the finer cascade (0 = hard switch).
     float shadowCascadeBlend = 0.1F;
@@ -354,6 +356,15 @@ struct SceneRenderLightingConfig {
     bool perLightShadowCaching = true;
     bool contactShadowsEnabled = false;
     bool volumetricLightingEnabled = false;
+    // Exponential height fog (ScenePostProcessSettings): density at fogBaseHeight, its falloff per
+    // metre above it and the colour it lights to; volumetric fog scatters the lights in it.
+    bool fogEnabled = false;
+    float fogDensity = 0.02F;
+    float fogHeightFalloff = 0.2F;
+    float fogBaseHeight = 0.0F;
+    std::array<float, 3> fogColor{ 0.6F, 0.65F, 0.7F };
+    bool volumetricFogEnabled = false;
+    float fogAnisotropy = 0.3F;
     SceneRenderDebugView debugView = SceneRenderDebugView::None;
     // The sky light's prefiltered cube (SceneSkyReflection) and its last mip; invalid while there is
     // none, and reflections then use the environment colour.
@@ -361,18 +372,24 @@ struct SceneRenderLightingConfig {
     float skyReflectionMaxMip = 0.0F;
 };
 
-// Cube shadows of up to four point lights share one depth atlas: face f of light s occupies the
-// tile at column f, row s. Faces use a slightly wider than 90 degree frustum so that filtering
+// Cube shadows of up to 32 lights (point, spot, area and tube) share one depth atlas: face f of light s
+// occupies the tile at column f, row s. Faces use a slightly wider than 90 degree frustum so that filtering
 // near a face edge stays inside the tile. A spot light takes a slot too but renders only column 0,
 // one frustum along its axis that covers the cone.
 struct ScenePointShadowBinding {
-    static constexpr std::uint32_t kMaxLights = 8U;
+    static constexpr std::uint32_t kMaxLights = 32U;
     static constexpr std::uint32_t kFaceCount = 6U;
     bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
     std::uint32_t lightCount = 0U;
     std::array<std::uint64_t, kMaxLights> entityId{};
     std::array<float, 4U * kMaxLights> positionRange{}; // xyz = light position, w = far plane
-    std::array<float, 4U * kMaxLights> depthParams{};   // x = near plane, y = depth bias (m)
+    std::array<float, 4U * kMaxLights> depthParams{};   // x = near plane, y = depth bias (m), z = source radius (m)
+    // Each light's Shadow Strength (0..1); full strength unless the light sets its own.
+    std::array<float, kMaxLights> lightStrength = [] {
+        std::array<float, kMaxLights> strengths{};
+        strengths.fill(1.0F);
+        return strengths;
+    }();
     std::array<float, 4U * kMaxLights> spot{};          // xyz = spot axis, w = tan(half fov); w = 0 for a cube light
     std::array<float, 4U> atlas{};                      // x,y = 1 / atlas size, z = tile px, w = tan(half fov)
     float strength = 0.0F;                              // 0 = no darkening, 1 = fully dark

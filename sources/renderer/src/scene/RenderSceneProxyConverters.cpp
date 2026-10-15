@@ -168,6 +168,8 @@ SceneRenderLight RenderSceneLightBuilder::Build(const LightRenderProxyDesc& ligh
         .contactShadowLength = light.contactShadowLength,
         .volumetricScattering = light.volumetricScattering,
         .castsShadow = light.castsShadow,
+        .sourceRadius = light.sourceRadius,
+        .shadowStrength = light.shadowStrength,
     };
 }
 

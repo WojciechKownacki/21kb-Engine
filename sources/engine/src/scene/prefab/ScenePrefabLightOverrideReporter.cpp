@@ -22,7 +22,9 @@ namespace {
         && lhs.castsShadow == rhs.castsShadow
         && lhs.useColorTemperature == rhs.useColorTemperature
         && lhs.colorTemperatureKelvin == rhs.colorTemperatureKelvin
-        && lhs.layerMask == rhs.layerMask;
+        && lhs.layerMask == rhs.layerMask
+        && lhs.sourceRadius == rhs.sourceRadius && lhs.shadowStrength == rhs.shadowStrength
+        && lhs.shadowDistance == rhs.shadowDistance && lhs.mobility == rhs.mobility;
 }
 
 } // namespace
@@ -55,6 +57,10 @@ void ScenePrefabLightOverrideReporter::Append(SceneComponents components, SceneE
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.useColorTemperature", ScenePrefabOverrideValueFormatter::ToString(actual->useColorTemperature), ScenePrefabOverrideFlag::Light);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.colorTemperatureKelvin", ScenePrefabOverrideValueFormatter::ToString(actual->colorTemperatureKelvin), ScenePrefabOverrideFlag::Light);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.layerMask", std::to_string(actual->layerMask), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.sourceRadius", ScenePrefabOverrideValueFormatter::ToString(actual->sourceRadius), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowStrength", ScenePrefabOverrideValueFormatter::ToString(actual->shadowStrength), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowDistance", ScenePrefabOverrideValueFormatter::ToString(actual->shadowDistance), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.mobility", std::to_string(static_cast<int>(actual->mobility)), ScenePrefabOverrideFlag::Light);
         return;
     }
     if (actual->kind != expected->kind) {
@@ -98,6 +104,18 @@ void ScenePrefabLightOverrideReporter::Append(SceneComponents components, SceneE
     }
     if (actual->layerMask != expected->layerMask) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.layerMask", std::to_string(actual->layerMask), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->sourceRadius != expected->sourceRadius) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.sourceRadius", ScenePrefabOverrideValueFormatter::ToString(actual->sourceRadius), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->shadowStrength != expected->shadowStrength) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowStrength", ScenePrefabOverrideValueFormatter::ToString(actual->shadowStrength), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->shadowDistance != expected->shadowDistance) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.shadowDistance", ScenePrefabOverrideValueFormatter::ToString(actual->shadowDistance), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->mobility != expected->mobility) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.mobility", std::to_string(static_cast<int>(actual->mobility)), ScenePrefabOverrideFlag::Light);
     }
 }
 

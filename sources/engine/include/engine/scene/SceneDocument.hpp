@@ -57,7 +57,8 @@ struct SceneDocument {
     // v44: the scene's post-process profile (tonemapping, exposure, bloom, anti-aliasing) persists
     //      with the scene, as a Unity global Volume or a Godot WorldEnvironment does; older files
     //      load with no profile (renderer defaults).
-    static constexpr std::uint32_t CurrentFileVersion = 47U;
+    static constexpr std::uint32_t CurrentFileVersion = 48U;
+    static constexpr std::uint32_t LightShadowSettingsFileVersion = 48U;
     static constexpr std::uint32_t JointMotorSpringBreakFileVersion = 47U;
     static constexpr std::uint32_t RigidbodyDampingFileVersion = 46U;
     static constexpr std::uint32_t ProceduralSkySettingsFileVersion = 43U;

@@ -126,6 +126,7 @@ SceneLightGridBinding SceneLightGridResources::Prepare(const RenderScene& scene,
         static_cast<std::uint16_t>(rows), memory);
     slot.key = key;
     slot.lastUsed = state_->frame;
+    slot.binding.entityIds.assign(state_->grid.EntityIds().begin(), state_->grid.EntityIds().end());
     slot.binding.minimum = state_->grid.Minimum();
     slot.binding.inverseCellSize = state_->grid.InverseCellSize();
     slot.binding.dimensions = state_->grid.Dimensions();

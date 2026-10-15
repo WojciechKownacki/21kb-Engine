@@ -21,7 +21,8 @@ bool SceneGiHistory::Ensure(RenderExtent extent, bgfx::TextureFormat::Enum forma
     bool created = bgfx::isValid(lit_);
     for (std::size_t index = 0U; created && index < accum_.size(); ++index) {
         accum_[index] = bgfx::createTexture2D(width, height, false, 1U, bgfx::TextureFormat::RGBA16F, kRenderTargetFlags);
-        aoAccum_[index] = bgfx::createTexture2D(width, height, false, 1U, bgfx::TextureFormat::R16F, kRenderTargetFlags);
+        // r = ambient occlusion, g = the sky the voxel GI sees.
+        aoAccum_[index] = bgfx::createTexture2D(width, height, false, 1U, bgfx::TextureFormat::RG16F, kRenderTargetFlags);
         created = bgfx::isValid(accum_[index]) && bgfx::isValid(aoAccum_[index]);
         if (created) {
             const std::array<bgfx::TextureHandle, 2> attachments{ accum_[index], aoAccum_[index] };

@@ -573,6 +573,10 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
         .volumetricScattering = light.volumetricScattering,
         .castsShadow = light.castsShadow,
         .visible = kb::scene::ResolveVisibility(*sync->scene, entity).visible,
+        .sourceRadius = light.sourceRadius,
+        .shadowStrength = light.shadowStrength,
+        .shadowDistance = light.shadowDistance,
+        .staticMobility = light.mobility == kb::scene::LightMobility::Static,
         .layer = light.layerMask,
     }));
     static_cast<void>(transform);

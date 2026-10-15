@@ -83,6 +83,9 @@ private:
     ShadowCascadeUniforms shadowCascades_{};
     PointShadowUniforms pointShadows_{};
     SceneGiUniforms giUniforms_{};
+    bgfx::UniformHandle fogParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle fogColorUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle fogVolumetricUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle skyReflectionSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle customDataSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle customDataUniform_ = BGFX_INVALID_HANDLE;
