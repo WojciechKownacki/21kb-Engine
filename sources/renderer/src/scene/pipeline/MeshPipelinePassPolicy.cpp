@@ -121,7 +121,9 @@ namespace {
     case RenderMaterialTranslucencyBlend::Alpha:
         return SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
     case RenderMaterialTranslucencyBlend::Additive:
-        return SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE);
+        // Light added in proportion to the material's opacity, as Unity's and Godot's additive
+        // (SrcAlpha, One): a fading additive mesh fades instead of staying at full strength.
+        return SceneColorAlphaPolicy::HidingBlend(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_ONE);
     case RenderMaterialTranslucencyBlend::Modulate:
         return SceneColorAlphaPolicy::KeepingBlend(BGFX_STATE_BLEND_DST_COLOR, BGFX_STATE_BLEND_ZERO);
     case RenderMaterialTranslucencyBlend::PreMultipliedAlpha:

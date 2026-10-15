@@ -60,10 +60,10 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "viewportId", "Viewport", "Which render viewport this camera targets. 0 means every viewport." },
                 LibraryComponentInspectorFieldDesc{ "priority", "Priority", "Breaks ties when more than one primary camera targets the same viewport; higher wins." },
                 LibraryComponentInspectorFieldDesc{ "cullingMask", "Culling Mask", "Render layer bitmask this camera draws." },
-                LibraryComponentInspectorFieldDesc{ "clearMode", "Clear Mode", "Solid color, depth-only, or no clear before this camera draws." },
-                LibraryComponentInspectorFieldDesc{ "clearColor.x", "Clear Color R", "Clear color, red channel (solid-color clear mode)." },
-                LibraryComponentInspectorFieldDesc{ "clearColor.y", "Clear Color G", "Clear color, green channel (solid-color clear mode)." },
-                LibraryComponentInspectorFieldDesc{ "clearColor.z", "Clear Color B", "Clear color, blue channel (solid-color clear mode)." },
+                LibraryComponentInspectorFieldDesc{ "clearMode", "Background", "Solid color, depth-only, or no clear before this camera draws." },
+                LibraryComponentInspectorFieldDesc{ "clearColor.x", "Background Color R", "Background color, red channel (solid-color background)." },
+                LibraryComponentInspectorFieldDesc{ "clearColor.y", "Background Color G", "Background color, green channel (solid-color background)." },
+                LibraryComponentInspectorFieldDesc{ "clearColor.z", "Background Color B", "Background color, blue channel (solid-color background)." },
             },
         },
         LibraryComponentInspectorDesc{
@@ -342,7 +342,7 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             .displayName = "Ambient Radiance",
             .category = "Rendering",
             .fields = {
-                LibraryComponentInspectorFieldDesc{ "mode", "Mode", "Constant, gradient, image, procedural, captured or estimated ambient contribution." },
+                LibraryComponentInspectorFieldDesc{ "mode", "Ambient Source", "Flat color, sky gradient, image, procedural, captured or estimated ambient contribution." },
                 LibraryComponentInspectorFieldDesc{ "color.x", "Color Red", "Constant ambient red channel." },
                 LibraryComponentInspectorFieldDesc{ "color.y", "Color Green", "Constant ambient green channel." },
                 LibraryComponentInspectorFieldDesc{ "color.z", "Color Blue", "Constant ambient blue channel." },

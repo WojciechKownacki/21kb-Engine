@@ -694,8 +694,8 @@ void RunMaterialPassPolicyAppliesMaterialRenderStateTest() {
             BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA, BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA),
         "KBMAT-MAT79: alpha translucency must map to bgfx alpha blend and hide the surface behind by its opacity");
     Require((additiveState & BGFX_STATE_BLEND_MASK) == BGFX_STATE_BLEND_FUNC_SEPARATE(
-            BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA),
-        "KBMAT-MAT79: additive translucency must map to bgfx additive blend and hide the surface behind by its opacity");
+            BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_INV_SRC_ALPHA),
+        "KBMAT-MAT79: additive translucency must add light by its opacity (Unity/Godot SrcAlpha, One) and hide the surface behind by it");
     Require((alphaState & BGFX_STATE_BLEND_MASK) != (additiveState & BGFX_STATE_BLEND_MASK),
         "KBMAT-MAT79: distinct translucency blend modes must produce distinct render state");
 

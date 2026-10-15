@@ -169,6 +169,7 @@ private:
         std::array<std::uint32_t, kb::scene::kParticleEffectMaxEmitters> liveParticles{};
         std::array<std::uint32_t, kb::scene::kParticleEffectMaxEventBindings> bindingEventsThisStep{};
         kb::math::Vec3 beamStart{};  // ends of the beam being born (SpawnExact)
+        float beamLifetime = 0.0F;   // one lifetime for every point of that beam
         kb::math::Vec3 beamEnd{};
     };
 

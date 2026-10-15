@@ -28,7 +28,7 @@ struct FullscreenTextureAutoExposureSettings {
 
 struct FullscreenTextureOutputTransform {
     float exposureStops = 0.0F;
-    float gamma = 2.2F;
+    float gamma = 2.2F;  // 2.2 = the sRGB transfer curve; other values a plain power
     FullscreenTextureTonemapOperator tonemap = FullscreenTextureTonemapOperator::Aces;
     float colorGradingLutStrength = 0.0F;
     FullscreenTextureAutoExposureSettings autoExposure{};

@@ -1960,8 +1960,8 @@ void PaintWorldBackdropSection(HDC dc, RECT content, int& y, const EditorTheme& 
 
 [[nodiscard]] std::string_view AmbientRadianceModeName(kb::scene::AmbientRadianceMode mode) {
     switch (mode) {
-    case kb::scene::AmbientRadianceMode::Constant: return EditorText("inspector.ambientRadiance.constant", "Constant");
-    case kb::scene::AmbientRadianceMode::Gradient: return EditorText("inspector.ambientRadiance.gradient", "Gradient");
+    case kb::scene::AmbientRadianceMode::Constant: return EditorText("inspector.ambientRadiance.constant", "Flat Color");
+    case kb::scene::AmbientRadianceMode::Gradient: return EditorText("inspector.ambientRadiance.gradient", "Sky Gradient");
     case kb::scene::AmbientRadianceMode::EnvironmentMap:
         return EditorText("inspector.environmentMapEquirectangular", "Environment Map (2D Equirectangular)");
     case kb::scene::AmbientRadianceMode::ProceduralSky: return EditorText("inspector.proceduralSky", "Procedural Sky");
@@ -1976,7 +1976,7 @@ constexpr int kAmbientRadianceRows = 10;
 
 void PaintAmbientRadianceSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::AmbientRadianceComponent& ambient) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AmbientRadiance, HeroIconKind::Bolt, EditorText("inspector.ambientRadiance.title", "Ambient Radiance"), true);
-    section.Field(EditorText("inspector.ambientRadiance.mode", "Mode"), AmbientRadianceModeName(ambient.mode), InspectorPropertyId::AmbientRadianceMode);
+    section.Field(EditorText("inspector.ambientRadiance.mode", "Ambient Source"), AmbientRadianceModeName(ambient.mode), InspectorPropertyId::AmbientRadianceMode);
     section.Color(ambient.color, InspectorPropertyId::AmbientRadianceColor);
     section.Color(ambient.horizonColor, InspectorPropertyId::AmbientRadianceHorizonColor);
     section.Color(ambient.zenithColor, InspectorPropertyId::AmbientRadianceZenithColor);
@@ -2188,7 +2188,7 @@ void PaintCameraSection(
         std::to_string(camera.cullingMask),
         InspectorPropertyId::CameraCullingMask);
     section.Field(
-        EditorText("inspector.camera.clearMode", "Clear Mode"),
+        EditorText("inspector.camera.clearMode", "Background"),
         InspectorComponentLabelFormatter::CameraClearModeName(camera.clearMode),
         InspectorPropertyId::CameraClearMode);
     section.Color(camera.clearColor, InspectorPropertyId::CameraClearColor);
