@@ -550,7 +550,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 if (inspector.modules.size() >= kb::scene::kParticleEffectMaxModulesPerEmitter) return;
                 HMENU menu = CreatePopupMenu();
                 if (menu == nullptr) return;
-                const std::array<std::string, 9> labels{
+                // Index = ParticleModuleType.
+                const std::array<std::string, 14> labels{
                     std::string{ EditorText("particleEditor.module.initialVelocity", "Initial Velocity") },
                     std::string{ EditorText("particleEditor.module.gravity", "Gravity") },
                     std::string{ EditorText("particleEditor.module.wind", "Wind") },
@@ -560,6 +561,11 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     std::string{ EditorText("particleEditor.module.alphaOverLife", "Alpha Over Life") },
                     std::string{ EditorText("particleEditor.module.collisionPlane", "Collision Plane") },
                     std::string{ EditorText("particleEditor.module.subEmitter", "Sub Emitter") },
+                    std::string{ EditorText("particleEditor.module.noise", "Noise") },
+                    std::string{ EditorText("particleEditor.module.axisRotation", "Axis Rotation") },
+                    std::string{ EditorText("particleEditor.module.attraction", "Attraction") },
+                    std::string{ EditorText("particleEditor.module.torusSwirl", "Torus Swirl") },
+                    std::string{ EditorText("particleEditor.module.separation", "Separation") },
                 };
                 for (UINT index = 0U; index < static_cast<UINT>(labels.size()); ++index) {
                     const UINT flags = index == static_cast<UINT>(kb::scene::ParticleModuleType::SubEmitter) &&
@@ -570,7 +576,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
                     TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, messageWindow, nullptr);
                 DestroyMenu(menu);
-                if (choice < 100U || choice >= 109U) return;
+                if (choice < 100U || choice >= 100U + static_cast<UINT>(labels.size())) return;
                 hit.moduleType = static_cast<kb::scene::ParticleModuleType>(choice - 100U);
                 if (hit.moduleType == kb::scene::ParticleModuleType::SubEmitter) {
                     HMENU targets = CreatePopupMenu();

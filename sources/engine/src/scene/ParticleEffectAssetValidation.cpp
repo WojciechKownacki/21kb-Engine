@@ -269,7 +269,7 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                 s.startDelaySeconds < 0.0F || !Finite(s.cycleSeconds) || s.cycleSeconds < 0.0F)
                 Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn.timing",
                     "size random must be in [0, 1], start delay and cycle not negative", emitter.emitterId);
-            if (!EnumInRange(shape.type, ParticleSpawnShape::Spiral) || !Finite(shape.radius) || shape.radius < 0.0F ||
+            if (!EnumInRange(shape.type, ParticleSpawnShape::Mesh) || !Finite(shape.radius) || shape.radius < 0.0F ||
                 !Finite(shape.boxSize) || shape.boxSize.x < 0.0F || shape.boxSize.y < 0.0F || shape.boxSize.z < 0.0F ||
                 !Finite(shape.coneAngleDegrees) || shape.coneAngleDegrees < 0.0F || shape.coneAngleDegrees > 90.0F ||
                 !Finite(shape.lineStart) || !Finite(shape.lineEnd) || !Finite(shape.spiralArms) ||
@@ -278,6 +278,9 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                 Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn.shape",
                     "spawn shape is invalid (sizes not negative, cone angle 0..90, at least one spiral arm)",
                     emitter.emitterId);
+            if (shape.type == ParticleSpawnShape::Mesh && s.shapeMesh.Empty())
+                Add(result, ParticleEffectDiagnosticCode::InvalidReference, base + ".spawn.shape.mesh",
+                    "a Mesh spawn shape needs a mesh", emitter.emitterId);
             if (!EnumInRange(s.velocityMode, ParticleVelocityMode::Spiral2D) || !Finite(s.spiralArms) ||
                 s.spiralArms < 1.0F || !Finite(s.spiralTurnDegreesPerSecond) || !Finite(s.addedVelocity))
                 Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn.velocityMode",
@@ -311,7 +314,7 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                 !moduleAuthoringOrders.insert(module.authoringOrder).second)
                 Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".authoringOrder",
                     "module authoring order must be a contiguous permutation", emitter.emitterId, module.moduleId);
-            if (!EnumInRange(module.type, ParticleModuleType::TorusSwirl))
+            if (!EnumInRange(module.type, ParticleModuleType::Separation))
                 Add(result, ParticleEffectDiagnosticCode::InvalidEnum, path + ".type", "module type is invalid",
                     emitter.emitterId, module.moduleId);
             if (!PayloadMatchesType(module))
@@ -389,6 +392,11 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                             !Finite(payload.degreesPerSecond))
                             Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".torusSwirl",
                                 "torus swirl values must be finite, the radius not negative", emitter.emitterId,
+                                module.moduleId);
+                    } else if constexpr (std::is_same_v<T, ParticleSeparationModule>) {
+                        if (!Finite(payload.strength) || !Finite(payload.distance) || payload.distance <= 0.0F)
+                            Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".separation",
+                                "separation values must be finite, the distance positive", emitter.emitterId,
                                 module.moduleId);
                     } else if constexpr (std::is_same_v<T, ParticleSubEmitterModule>) {
                         if (payload.targetEmitterId == 0U || payload.count == 0U ||

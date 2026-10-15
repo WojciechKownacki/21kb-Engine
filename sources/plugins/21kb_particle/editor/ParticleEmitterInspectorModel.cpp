@@ -44,6 +44,11 @@ namespace {
     case kb::scene::ParticleModuleType::AlphaOverLife: return ParticleText("particle.module.alpha_over_life", "Alpha Over Life");
     case kb::scene::ParticleModuleType::CollisionPlane: return ParticleText("particle.module.collision_plane", "Collision Plane");
     case kb::scene::ParticleModuleType::SubEmitter: return ParticleText("particle.module.sub_emitter", "Sub Emitter");
+    case kb::scene::ParticleModuleType::Noise: return ParticleText("particle.module.noise", "Noise");
+    case kb::scene::ParticleModuleType::AxisRotation: return ParticleText("particle.module.axis_rotation", "Axis Rotation");
+    case kb::scene::ParticleModuleType::Attraction: return ParticleText("particle.module.attraction", "Attraction");
+    case kb::scene::ParticleModuleType::TorusSwirl: return ParticleText("particle.module.torus_swirl", "Torus Swirl");
+    case kb::scene::ParticleModuleType::Separation: return ParticleText("particle.module.separation", "Separation");
     }
     return ParticleText("particle.invalid", "Invalid");
 }
@@ -194,6 +199,23 @@ void AddModuleProperties(ParticleEmitterInspectorView& view, const kb::scene::Pa
                 static_cast<std::uint32_t>(payload.trigger), {ParticleText("particle.choice.birth", "Birth"), ParticleText("particle.choice.death", "Death"), ParticleText("particle.choice.collision", "Collision")});
             AddIntegerSlider(add(std::string{ ParticleText("particle.property.count", "Count") }, ScalarText(payload.count)), payload.count, 1U, 16U);
             AddIntegerSlider(add(std::string{ ParticleText("particle.property.max_depth", "Max depth") }, ScalarText(payload.maxDepth)), payload.maxDepth, 1U, 3U);
+        } else if constexpr (std::is_same_v<T, kb::scene::ParticleNoiseModule>) {
+            AddSlider(add(std::string{ ParticleText("particle.property.strength", "Strength") }, ScalarText(payload.strength)), payload.strength, 0.0F, 20.0F);
+            AddSlider(add(std::string{ ParticleText("particle.property.frequency", "Frequency") }, ScalarText(payload.frequency)), payload.frequency, 0.0F, 10.0F);
+        } else if constexpr (std::is_same_v<T, kb::scene::ParticleAxisRotationModule>) {
+            AddVector(add(std::string{ ParticleText("particle.property.axis", "Axis") }, VecText(payload.axis)), payload.axis);
+            AddSlider(add(std::string{ ParticleText("particle.property.degrees_per_second", "Degrees per second") }, ScalarText(payload.degreesPerSecond)), payload.degreesPerSecond, -720.0F, 720.0F);
+        } else if constexpr (std::is_same_v<T, kb::scene::ParticleAttractionModule>) {
+            AddVector(add(std::string{ ParticleText("particle.property.point", "Point") }, VecText(payload.point)), payload.point);
+            AddSlider(add(std::string{ ParticleText("particle.property.strength", "Strength") }, ScalarText(payload.strength)), payload.strength, -50.0F, 50.0F);
+            AddSlider(add(std::string{ ParticleText("particle.property.radius", "Radius") }, ScalarText(payload.radius)), payload.radius, 0.0F, 50.0F);
+        } else if constexpr (std::is_same_v<T, kb::scene::ParticleTorusSwirlModule>) {
+            AddVector(add(std::string{ ParticleText("particle.property.center", "Center") }, VecText(payload.center)), payload.center);
+            AddSlider(add(std::string{ ParticleText("particle.property.radius", "Radius") }, ScalarText(payload.radius)), payload.radius, 0.0F, 50.0F);
+            AddSlider(add(std::string{ ParticleText("particle.property.degrees_per_second", "Degrees per second") }, ScalarText(payload.degreesPerSecond)), payload.degreesPerSecond, -720.0F, 720.0F);
+        } else if constexpr (std::is_same_v<T, kb::scene::ParticleSeparationModule>) {
+            AddSlider(add(std::string{ ParticleText("particle.property.strength", "Strength") }, ScalarText(payload.strength)), payload.strength, 0.0F, 50.0F);
+            AddSlider(add(std::string{ ParticleText("particle.property.distance", "Distance") }, ScalarText(payload.distance)), payload.distance, 0.01F, 10.0F);
         }
     }, module.payload);
 }

@@ -112,8 +112,10 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
         float distanceToLight = length(toLight);
         lightVector = distanceToLight > 0.0001 ? toLight / distanceToLight : vec3(0.0, 1.0, 0.0);
         float range = max(positionRange.w, 0.0001);
-        float rangeAttenuation = clamp(1.0 - distanceToLight / range, 0.0, 1.0);
-        attenuation = rangeAttenuation * rangeAttenuation;
+        // Inverse square, windowed to zero at the light's range (Unity URP, Unreal, Godot 4, Verth).
+        float rangeRatio = distanceToLight / range;
+        float rangeWindow = clamp(1.0 - rangeRatio * rangeRatio * rangeRatio * rangeRatio, 0.0, 1.0);
+        attenuation = rangeWindow * rangeWindow / max(distanceToLight * distanceToLight, 0.0001);
         if (dirKind.w > 1.5 && dirKind.w < 2.5) {
             float coneCos = dot(normalize(dirKind.xyz), normalize(-lightVector));
             float coneWidth = max(spot.x - spot.y, 0.001);

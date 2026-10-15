@@ -115,6 +115,9 @@ struct DependencyReference {
         const std::string base = "effect.emitter[" + std::to_string(index) + "].output.";
         references.push_back(
             {emitter.output.material, base + "material", kb::assets::AssetKind::Material, false, emitter.emitterId});
+        if (!emitter.spawn.shapeMesh.Empty())
+            references.push_back({emitter.spawn.shapeMesh, "effect.emitter[" + std::to_string(index) + "].spawn.shape.mesh",
+                                  kb::assets::AssetKind::Mesh, false, emitter.emitterId});
         if (!emitter.output.mesh.Empty())
             references.push_back(
                 {emitter.output.mesh, base + "mesh", kb::assets::AssetKind::Mesh, false, emitter.emitterId});

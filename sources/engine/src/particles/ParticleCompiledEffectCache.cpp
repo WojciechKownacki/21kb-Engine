@@ -49,7 +49,7 @@ void WriteSpawnExtras(std::vector<std::uint8_t>& bytes, const ParticleCompiledEm
     WriteUInt8(bytes, static_cast<std::uint8_t>(s.type)); WriteFloat(bytes, s.radius); WriteVec3(bytes, s.boxSize);
     WriteFloat(bytes, s.coneAngleDegrees); WriteBool(bytes, s.surfaceOnly); WriteBool(bytes, s.upperHalfOnly);
     WriteVec3(bytes, s.lineStart); WriteVec3(bytes, s.lineEnd); WriteFloat(bytes, s.spiralArms);
-    WriteFloat(bytes, s.spiralTwist); WriteFloat(bytes, s.spiralThickness);
+    WriteFloat(bytes, s.spiralTwist); WriteFloat(bytes, s.spiralThickness); WriteUInt64(bytes, e.shapeMeshAssetId);
     WriteUInt8(bytes, static_cast<std::uint8_t>(e.velocityMode)); WriteFloat(bytes, e.spiralArms);
     WriteFloat(bytes, e.spiralTurnRadians); WriteVec3(bytes, e.addedVelocity); WriteFloat(bytes, e.sizeRandom);
     WriteFloat(bytes, e.startDelaySeconds); WriteFloat(bytes, e.cycleSeconds); WriteBool(bytes, e.cycleLooping);
@@ -135,6 +135,10 @@ void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect&
                 const auto& value = std::get<kb::scene::ParticleTorusSwirlModule>(module.payload);
                 WriteVec3(bytes, value.center); WriteFloat(bytes, value.radius); WriteFloat(bytes, value.degreesPerSecond); break;
             }
+            case kb::scene::ParticleModuleType::Separation: {
+                const auto& value = std::get<kb::scene::ParticleSeparationModule>(module.payload);
+                WriteFloat(bytes, value.strength); WriteFloat(bytes, value.distance); break;
+            }
             case kb::scene::ParticleModuleType::SubEmitter: {
                 const auto& value = std::get<kb::scene::ParticleSubEmitterModule>(module.payload);
                 WriteUInt64(bytes, value.targetEmitterId); WriteUInt8(bytes, static_cast<std::uint8_t>(value.trigger));
@@ -188,9 +192,9 @@ class Reader {
     bool SpawnExtras(ParticleCompiledEmitter& e) {
         kb::scene::ParticleSpawnShapeAsset& s = e.shape;
         std::uint8_t shape = 0U, velocity = 0U, ends = 0U;
-        if (!U8(shape) || shape > static_cast<std::uint8_t>(kb::scene::ParticleSpawnShape::Spiral) || !F(s.radius) ||
+        if (!U8(shape) || shape > static_cast<std::uint8_t>(kb::scene::ParticleSpawnShape::Mesh) || !F(s.radius) ||
             !Vec3(s.boxSize) || !F(s.coneAngleDegrees) || !Bool(s.surfaceOnly) || !Bool(s.upperHalfOnly) ||
-            !Vec3(s.lineStart) || !Vec3(s.lineEnd) || !F(s.spiralArms) || !F(s.spiralTwist) || !F(s.spiralThickness) ||
+            !Vec3(s.lineStart) || !Vec3(s.lineEnd) || !F(s.spiralArms) || !F(s.spiralTwist) || !F(s.spiralThickness) || !U64(e.shapeMeshAssetId) ||
             !U8(velocity) || velocity > static_cast<std::uint8_t>(kb::scene::ParticleVelocityMode::Spiral2D) ||
             !F(e.spiralArms) || !F(e.spiralTurnRadians) || !Vec3(e.addedVelocity) || !F(e.sizeRandom) ||
             !F(e.startDelaySeconds) || !F(e.cycleSeconds) || !Bool(e.cycleLooping) || !Bool(e.beam.enabled) ||
@@ -258,7 +262,7 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             !reader.U8(e.moduleCount) || e.moduleCount > kb::scene::kParticleEffectMaxModulesPerEmitter) return false;
         for (std::uint8_t index = 0U; index < e.moduleCount; ++index) {
             auto& module = e.modules[index]; std::uint8_t type = 0U;
-            if (!reader.U64(module.moduleId) || !reader.U8(type) || type > static_cast<std::uint8_t>(kb::scene::ParticleModuleType::TorusSwirl) ||
+            if (!reader.U64(module.moduleId) || !reader.U8(type) || type > static_cast<std::uint8_t>(kb::scene::ParticleModuleType::Separation) ||
                 !reader.Bool(module.enabled)) return false;
             module.type = static_cast<kb::scene::ParticleModuleType>(type);
             switch (module.type) {
@@ -271,6 +275,7 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             case kb::scene::ParticleModuleType::AxisRotation: { kb::scene::ParticleAxisRotationModule value; if (!reader.Vec3(value.axis) || !reader.F(value.degreesPerSecond)) return false; module.payload = value; break; }
             case kb::scene::ParticleModuleType::Attraction: { kb::scene::ParticleAttractionModule value; if (!reader.Vec3(value.point) || !reader.F(value.strength) || !reader.F(value.radius)) return false; module.payload = value; break; }
             case kb::scene::ParticleModuleType::TorusSwirl: { kb::scene::ParticleTorusSwirlModule value; if (!reader.Vec3(value.center) || !reader.F(value.radius) || !reader.F(value.degreesPerSecond)) return false; module.payload = value; break; }
+            case kb::scene::ParticleModuleType::Separation: { kb::scene::ParticleSeparationModule value; if (!reader.F(value.strength) || !reader.F(value.distance)) return false; module.payload = value; break; }
             case kb::scene::ParticleModuleType::SubEmitter: { kb::scene::ParticleSubEmitterModule value; std::uint8_t trigger = 0U; if (!reader.U64(value.targetEmitterId) || !reader.U8(trigger) || trigger > static_cast<std::uint8_t>(kb::scene::ParticleEventTrigger::WhileAlive) || !reader.U32(value.count) || !reader.U32(value.maxDepth)) return false; value.trigger = static_cast<kb::scene::ParticleEventTrigger>(trigger); module.payload = value; break; }
             case kb::scene::ParticleModuleType::ColorOverLife:
             case kb::scene::ParticleModuleType::SizeOverLife:

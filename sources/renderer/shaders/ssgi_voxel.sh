@@ -85,8 +85,10 @@ vec3 KbVoxelDirect(vec3 position, vec3 normal)
             float distanceToLight = length(toLight);
             lightVector = toLight / max(distanceToLight, 0.0001);
             lightDistance = distanceToLight;
-            float rangeAttenuation = clamp(1.0 - distanceToLight / max(positionRange.w, 0.0001), 0.0, 1.0);
-            attenuation = rangeAttenuation * rangeAttenuation;
+            // Inverse square, windowed to zero at the light's range (Unity URP, Unreal, Godot 4, Verth).
+            float rangeRatio = distanceToLight / max(positionRange.w, 0.0001);
+            float rangeWindow = clamp(1.0 - rangeRatio * rangeRatio * rangeRatio * rangeRatio, 0.0, 1.0);
+            attenuation = rangeWindow * rangeWindow / max(distanceToLight * distanceToLight, 0.0001);
             if (dirKind.w > 1.5) {
                 float coneCos = dot(normalize(dirKind.xyz), -lightVector);
                 float coneAttenuation = clamp((coneCos - spot.y) / max(spot.x - spot.y, 0.001), 0.0, 1.0);

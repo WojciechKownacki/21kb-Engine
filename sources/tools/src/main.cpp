@@ -100,6 +100,19 @@ Commands:
   scene-post-process Give a scene (the startup scene unless --scene) its post-process
                profile, or none for the renderer's defaults.
                  --project <dir> [--scene <path>] --profile /Game/<path>.kbppfx|none
+  vfx-new      Create a particle effect (.kbvfx) as the editor's New Particle Effect.
+                 --project <dir> --name <Name> [--folder Assets/Particles] [--set key=value ...]
+  vfx-show     Print a particle effect: every key=value of its file.
+                 --project <dir> --effect /Game/<path>.kbvfx
+  vfx-set      Change values of a particle effect (keys as vfx-show prints them, e.g.
+               effect.emitter[0].spawn.shape.type=Sphere).
+                 --project <dir> --effect <path> --set key=value [...]
+  vfx-emitter-add / vfx-emitter-remove   Add an emitter / remove one by id.
+                 --project <dir> --effect <path> [--name <Name>] | --emitter <id>
+  vfx-module-add / vfx-module-remove     Add a module (Gravity, Wind, Drag, Noise,
+               TorusSwirl, Separation, ...) to an emitter / remove one by id.
+                 --project <dir> --effect <path> --emitter <id> --type <Type> [--target <id>]
+                 | --module <id>
   script-build Build the project's C++ scripts (or one), as Play and the cooker
                do. Exits 1 when a build fails.
                  --project <dir> [--script <path>]
@@ -354,6 +367,15 @@ int Dispatch(int argc, char** argv) {
         return kb::cli::RunScenePostProcessCommand(arguments, io);
 #else
         std::cerr << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
+        return 1;
+#endif
+    }
+    if (command.starts_with("vfx-")) {
+#if KB_CLI_RENDERER
+        return kb::cli::RunVfxCommand(command, arguments, io);
+#else
+        std::cerr << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF
+";
         return 1;
 #endif
     }
