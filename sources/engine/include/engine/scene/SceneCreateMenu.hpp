@@ -28,6 +28,7 @@ struct SceneCreateItem {
 struct SceneCreateResult {
     SceneEntity entity{};
     std::string error; // why nothing was created, when entity is invalid
+    bool pluginDisabled = false; // the item needs a project plugin that is turned off
 };
 
 class SceneCreateMenu {
