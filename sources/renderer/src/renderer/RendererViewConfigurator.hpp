@@ -14,7 +14,8 @@ class RendererViewConfigurator {
 public:
     static void ApplyViewOrder(
         const std::array<std::uint16_t, ViewId::Max>& viewRemap);
-    static void ConfigureSceneClear(bgfx::ViewId viewId, const RenderSceneSubmitDesc& desc, std::uint16_t clearFlags, std::uint32_t clearRgba);
+    // `clearColor` is linear (the HDR scene target), see SceneClearColor.hpp.
+    static void ConfigureSceneClear(bgfx::ViewId viewId, const RenderSceneSubmitDesc& desc, std::uint16_t clearFlags, const std::array<float, 3>& clearColor);
     static void ConfigureSceneNoClear(bgfx::ViewId viewId, const RenderSceneSubmitDesc& desc, const char* name);
     static void ConfigureFramebufferClear(
         bgfx::ViewId viewId,

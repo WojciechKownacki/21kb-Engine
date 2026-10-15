@@ -24,7 +24,7 @@ public:
     [[nodiscard]] static bool ReadCharacterController(SceneAssetBinaryIO::ByteReader& input, CharacterControllerComponent& output);
     static void WriteCharacterController(std::vector<std::uint8_t>& output, const CharacterControllerComponent& characterController);
 
-    [[nodiscard]] static bool ReadJoint(SceneAssetBinaryIO::ByteReader& input, ScenePrefabJointComponent& output);
+    [[nodiscard]] static bool ReadJoint(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, ScenePrefabJointComponent& output);
     static void WriteJoint(std::vector<std::uint8_t>& output, const ScenePrefabJointComponent& joint);
 };
 

@@ -25,6 +25,12 @@ add_library(kb_21kb_particle_plugin ${KB_21KB_PARTICLE_PLUGIN_LIBRARY_TYPE}
 
 target_include_directories(kb_21kb_particle_plugin PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kb_21kb_particle_plugin PRIVATE kb_21kb_particle_core)
+if(KB_BUILD_RENDERER)
+    # Mesh spawn shape: the renderer's mesh asset payload (its header only), loaded through the scene's assets.
+    target_include_directories(kb_21kb_particle_plugin PRIVATE
+        $<TARGET_PROPERTY:kb_renderer,INTERFACE_INCLUDE_DIRECTORIES> $<TARGET_PROPERTY:bgfx,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_compile_definitions(kb_21kb_particle_plugin PRIVATE KB_21KB_PARTICLE_MESH_SHAPE=1)
+endif()
 
 if(NOT KB_BUILD_PROVIDER_MODULES_AS_DLL)
     target_compile_definitions(kb_21kb_particle_plugin PUBLIC KB_ENGINE_MODULE_STATIC_LINK)

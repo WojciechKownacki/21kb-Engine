@@ -212,6 +212,14 @@ public:
         return true;
     }
 
+    bool AddTorque(kb::scene::SceneEntity entity, kb::scene::Vec3 torque) noexcept override {
+        if (entity != knownEntity) {
+            return false;
+        }
+        lastTorque = torque;
+        return true;
+    }
+
     bool SetVelocity(kb::scene::SceneEntity entity, kb::scene::Vec3 velocity) noexcept override {
         if (entity != knownEntity) {
             return false;
@@ -425,6 +433,7 @@ public:
     kb::scene::SceneEntity knownEntity{};
     kb::scene::Vec3 lastForce{};
     kb::scene::Vec3 lastImpulse{};
+    kb::scene::Vec3 lastTorque{};
     kb::scene::Vec3 lastMoveTarget{};
     kb::scene::Quat lastMoveRotation{};
     float lastMoveDeltaSeconds = 0.0F;
@@ -6463,6 +6472,33 @@ void RunScriptPhysicsForceVelocitySleepApiTest() {
     };
     kb::tests::Require(host.Functions().Call("Physics.AddImpulse", impulseArgs, context).Output("applied")->AsBool(), "Physics.AddImpulse must report applied=true for a known entity");
     kb::tests::Require(kb::tests::NearlyEqual(backend.lastImpulse.x, 4.0F) && kb::tests::NearlyEqual(backend.lastImpulse.z, 6.0F), "Physics.AddImpulse must pass the exact impulse vector through");
+
+    const std::vector<kb::script::ScriptFunctionArgument> torqueArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "torqueX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "torqueY", .value = kb::script::ScriptValue{ 2.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "torqueZ", .value = kb::script::ScriptValue{ 0.0F } },
+    };
+    kb::tests::Require(host.Functions().Call("Physics.AddTorque", torqueArgs, context).Output("applied")->AsBool() &&
+        kb::tests::NearlyEqual(backend.lastTorque.y, 2.5F), "Physics.AddTorque must pass the exact torque through");
+
+    // Explosion 1 m from the body (at the origin), radius 2: half of the 10 Ns impulse, pointing away.
+    const auto explosionArgs = [&object](float centerX) {
+        return std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
+            kb::script::ScriptFunctionArgument{ .name = "force", .value = kb::script::ScriptValue{ 10.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "centerX", .value = kb::script::ScriptValue{ centerX } },
+            kb::script::ScriptFunctionArgument{ .name = "centerY", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "centerZ", .value = kb::script::ScriptValue{ 0.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "radius", .value = kb::script::ScriptValue{ 2.0F } },
+            kb::script::ScriptFunctionArgument{ .name = "impulse", .value = kb::script::ScriptValue{ true } },
+        };
+    };
+    kb::tests::Require(host.Functions().Call("Physics.AddExplosionForce", explosionArgs(-1.0F), context).Output("applied")->AsBool() &&
+        kb::tests::NearlyEqual(backend.lastImpulse.x, 5.0F) && kb::tests::NearlyEqual(backend.lastImpulse.y, 0.0F),
+        "Physics.AddExplosionForce must push away from the center with linear falloff to the radius");
+    static_cast<void>(host.Functions().Call("Physics.AddExplosionForce", explosionArgs(-3.0F), context));
+    kb::tests::Require(kb::tests::NearlyEqual(backend.lastImpulse.x, 0.0F), "A body outside the explosion radius must get nothing");
 
     const std::vector<kb::script::ScriptFunctionArgument> setVelocityArgs{
         kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ object.Entity().Id(), kb::script::ScriptValueType::Entity } },
@@ -12589,7 +12625,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // NavLink adds eleven fields.
     // WorldBackdrop grew eleven procedural sky fields, and the older names of Line Renderer
     // (10), Trail Renderer (9) and Lens Flare (7) are accepted aliases: 628 -> 665.
-    kb::tests::Require(fieldsChecked == 668U, "Script component API generated accessor coverage test did not exercise the expected total field count (668, including collision mesh assets and the compatibility aliases)");
+    kb::tests::Require(fieldsChecked == 673U, "Script component API generated accessor coverage test did not exercise the expected total field count (673, including collision mesh assets and the compatibility aliases)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12671,7 +12707,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 668U, "LIB-082 raw-pointer audit did not exercise the expected total field count (668, including collision mesh assets and the compatibility aliases)");
+    kb::tests::Require(propertiesChecked == 673U, "LIB-082 raw-pointer audit did not exercise the expected total field count (673, including collision mesh assets and the compatibility aliases)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

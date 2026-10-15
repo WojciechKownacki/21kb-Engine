@@ -225,11 +225,15 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
         if (emitter.spawn.bursts.size() > kParticleEffectMaxBursts)
             Add(result, ParticleEffectDiagnosticCode::LimitExceeded, base + ".spawn.burstCount",
                 "burst count exceeds the hard limit", emitter.emitterId);
+        // A GPU emitter's burst is birth records the renderer simulates, bounded by its capacity, not by the
+        // CPU's spawns per step.
+        const std::uint32_t burstLimit =
+            std::max(kParticleEffectMaxSpawnsPerStep, ParticleEmitterCapacityLimit(asset.backendPolicy));
         float previousBurstTime = -1.0F;
         for (std::size_t burstIndex = 0U; burstIndex < emitter.spawn.bursts.size(); ++burstIndex) {
             const ParticleBurstAsset& burst = emitter.spawn.bursts[burstIndex];
             if (!Finite(burst.timeSeconds) || burst.timeSeconds < 0.0F || burst.timeSeconds <= previousBurstTime ||
-                burst.count == 0U || burst.count > kParticleEffectMaxSpawnsPerStep)
+                burst.count == 0U || burst.count > burstLimit)
                 Add(result, ParticleEffectDiagnosticCode::InvalidValue,
                     base + ".spawn.burst[" + std::to_string(burstIndex) + "]",
                     "bursts must be ordered and within spawn limits", emitter.emitterId);
@@ -258,6 +262,39 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
             !SpinRangeValid(emitter.spawn.angularVelocityMinDegrees, emitter.spawn.angularVelocityMaxDegrees, 36000.0F))
             Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn",
                 "spawn values are outside the supported range", emitter.emitterId);
+        {
+            const ParticleSpawnAsset& s = emitter.spawn;
+            const ParticleSpawnShapeAsset& shape = s.shape;
+            if (!Finite(s.sizeRandom) || s.sizeRandom < 0.0F || s.sizeRandom > 1.0F || !Finite(s.startDelaySeconds) ||
+                s.startDelaySeconds < 0.0F || !Finite(s.cycleSeconds) || s.cycleSeconds < 0.0F)
+                Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn.timing",
+                    "size random must be in [0, 1], start delay and cycle not negative", emitter.emitterId);
+            if (!EnumInRange(shape.type, ParticleSpawnShape::Mesh) || !Finite(shape.radius) || shape.radius < 0.0F ||
+                !Finite(shape.boxSize) || shape.boxSize.x < 0.0F || shape.boxSize.y < 0.0F || shape.boxSize.z < 0.0F ||
+                !Finite(shape.coneAngleDegrees) || shape.coneAngleDegrees < 0.0F || shape.coneAngleDegrees > 90.0F ||
+                !Finite(shape.lineStart) || !Finite(shape.lineEnd) || !Finite(shape.spiralArms) ||
+                shape.spiralArms < 1.0F || !Finite(shape.spiralTwist) || !Finite(shape.spiralThickness) ||
+                shape.spiralThickness < 0.0F)
+                Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn.shape",
+                    "spawn shape is invalid (sizes not negative, cone angle 0..90, at least one spiral arm)",
+                    emitter.emitterId);
+            if (shape.type == ParticleSpawnShape::Mesh && s.shapeMesh.Empty())
+                Add(result, ParticleEffectDiagnosticCode::InvalidReference, base + ".spawn.shape.mesh",
+                    "a Mesh spawn shape needs a mesh", emitter.emitterId);
+            if (!EnumInRange(s.velocityMode, ParticleVelocityMode::Spiral2D) || !Finite(s.spiralArms) ||
+                s.spiralArms < 1.0F || !Finite(s.spiralTurnDegreesPerSecond) || !Finite(s.addedVelocity))
+                Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn.velocityMode",
+                    "start velocity mode or its spiral values are invalid", emitter.emitterId);
+            if (s.beam.enabled &&
+                (!EnumInRange(s.beam.ends, ParticleBeamEnds::ShapeToEmitter) || s.beam.segments == 0U ||
+                 s.beam.segments > 256U || !Finite(s.beam.start) || !Finite(s.beam.end) || !Finite(s.beam.noise) ||
+                 s.beam.noise < 0.0F || emitter.output.type != ParticleOutputType::Ribbon))
+                Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn.beam",
+                    "a beam spawn needs ribbon output, 1..256 segments and a non-negative noise", emitter.emitterId);
+            if (emitter.absolutePosition && emitter.simulationSpace != ParticleSimulationSpace::World)
+                Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".absolutePosition",
+                    "an absolute position needs a world-space emitter", emitter.emitterId);
+        }
 
         std::set<ParticleStableId> moduleIds;
         std::set<ParticleModuleType> singletonTypes;
@@ -277,7 +314,7 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                 !moduleAuthoringOrders.insert(module.authoringOrder).second)
                 Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".authoringOrder",
                     "module authoring order must be a contiguous permutation", emitter.emitterId, module.moduleId);
-            if (!EnumInRange(module.type, ParticleModuleType::SubEmitter))
+            if (!EnumInRange(module.type, ParticleModuleType::Separation))
                 Add(result, ParticleEffectDiagnosticCode::InvalidEnum, path + ".type", "module type is invalid",
                     emitter.emitterId, module.moduleId);
             if (!PayloadMatchesType(module))
@@ -333,6 +370,34 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                             payload.maxEventsPerStep > kParticleEffectMaxEventsPerStep)
                             Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".collisionPlane",
                                 "collision plane values are invalid", emitter.emitterId, module.moduleId);
+                    } else if constexpr (std::is_same_v<T, ParticleNoiseModule>) {
+                        if (!Finite(payload.strength) || !Finite(payload.frequency) || payload.frequency <= 0.0F)
+                            Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".noise",
+                                "noise strength must be finite and its frequency positive", emitter.emitterId,
+                                module.moduleId);
+                    } else if constexpr (std::is_same_v<T, ParticleAxisRotationModule>) {
+                        if (!Finite(payload.axis) || LengthSquared(payload.axis) <= 0.000001F ||
+                            !Finite(payload.degreesPerSecond))
+                            Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".axisRotation",
+                                "axis rotation needs a non-zero axis and a finite speed", emitter.emitterId,
+                                module.moduleId);
+                    } else if constexpr (std::is_same_v<T, ParticleAttractionModule>) {
+                        if (!Finite(payload.point) || !Finite(payload.strength) || !Finite(payload.radius) ||
+                            payload.radius < 0.0F)
+                            Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".attraction",
+                                "attraction values must be finite, the radius not negative", emitter.emitterId,
+                                module.moduleId);
+                    } else if constexpr (std::is_same_v<T, ParticleTorusSwirlModule>) {
+                        if (!Finite(payload.center) || !Finite(payload.radius) || payload.radius < 0.0F ||
+                            !Finite(payload.degreesPerSecond))
+                            Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".torusSwirl",
+                                "torus swirl values must be finite, the radius not negative", emitter.emitterId,
+                                module.moduleId);
+                    } else if constexpr (std::is_same_v<T, ParticleSeparationModule>) {
+                        if (!Finite(payload.strength) || !Finite(payload.distance) || payload.distance <= 0.0F)
+                            Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".separation",
+                                "separation values must be finite, the distance positive", emitter.emitterId,
+                                module.moduleId);
                     } else if constexpr (std::is_same_v<T, ParticleSubEmitterModule>) {
                         if (payload.targetEmitterId == 0U || payload.count == 0U ||
                             payload.count > kParticleEffectMaxSpawnsPerStep || payload.maxDepth == 0U ||
@@ -347,7 +412,7 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
         if (!OutputPayloadMatchesType(emitter.output))
             Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".output.payload",
                 "output payload does not match its type", emitter.emitterId);
-        if (!EnumInRange(emitter.output.type, ParticleOutputType::Volumetric))
+        if (!EnumInRange(emitter.output.type, ParticleOutputType::Decal))
             Add(result, ParticleEffectDiagnosticCode::InvalidEnum, base + ".output.type", "output type is invalid",
                 emitter.emitterId);
         if (!EnumInRange(emitter.output.blend, ParticleBlendMode::Premultiplied))
@@ -374,9 +439,28 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
         const bool supportsFlipbook = emitter.output.type == ParticleOutputType::Billboard ||
                                       emitter.output.type == ParticleOutputType::StretchedBillboard ||
                                       emitter.output.type == ParticleOutputType::PointSprite;
-        if (!supportsFlipbook && !emitter.output.textureAtlas.Empty())
+        // Strips (trail, ribbon, beam) repeat their texture along the strip; decals project theirs.
+        const bool supportsTexture = supportsFlipbook || emitter.output.type == ParticleOutputType::Trail ||
+                                     emitter.output.type == ParticleOutputType::Ribbon ||
+                                     emitter.output.type == ParticleOutputType::Beam ||
+                                     emitter.output.type == ParticleOutputType::Decal;
+        if (!supportsTexture && !emitter.output.textureAtlas.Empty())
             Add(result, ParticleEffectDiagnosticCode::InvalidReference, base + ".output.textureAtlas",
-                "texture atlas is only valid for flipbook-capable output", emitter.emitterId);
+                "texture atlas is only valid for sprite, strip and decal output", emitter.emitterId);
+        if (!Finite(emitter.output.colorIntensity) || emitter.output.colorIntensity < 0.0F)
+            Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".output.colorIntensity",
+                "colour intensity must be finite and not negative", emitter.emitterId);
+        if (emitter.output.lightEnabled &&
+            (!Finite(emitter.output.lightRadius) || emitter.output.lightRadius <= 0.0F ||
+             !Finite(emitter.output.lightIntensity) || emitter.output.lightIntensity < 0.0F ||
+             emitter.output.lightMaxCount == 0U || emitter.output.lightMaxCount > 256U))
+            Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".output.light",
+                "particle lights need a positive radius, a non-negative intensity and 1..256 lights",
+                emitter.emitterId);
+        if (const auto* decal = std::get_if<ParticleDecalOutput>(&emitter.output.payload);
+            decal && (!Finite(decal->depth) || decal->depth <= 0.0F))
+            Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".output.decal.depth",
+                "decal depth must be finite and positive", emitter.emitterId);
         if (const auto* billboard = std::get_if<ParticleBillboardOutput>(&emitter.output.payload))
             ValidateFlipbook(billboard->flipbook, emitter.output.textureAtlas, base + ".output.billboard.flipbook",
                              result, emitter.emitterId);
@@ -447,9 +531,13 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
         if (!emitterIds.contains(binding.sourceEmitterId))
             Add(result, ParticleEffectDiagnosticCode::InvalidReference, path + ".sourceEmitterId",
                 "event source emitter does not exist", binding.sourceEmitterId, binding.sourceModuleId);
-        if (!EnumInRange(binding.trigger, ParticleEventTrigger::Collision))
+        if (!EnumInRange(binding.trigger, ParticleEventTrigger::WhileAlive))
             Add(result, ParticleEffectDiagnosticCode::InvalidEnum, path + ".trigger", "event trigger is invalid",
                 binding.sourceEmitterId, binding.sourceModuleId);
+        if (binding.trigger == ParticleEventTrigger::WhileAlive &&
+            (!Finite(binding.ratePerSecond) || binding.ratePerSecond <= 0.0F))
+            Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".ratePerSecond",
+                "a while-alive event needs a positive rate", binding.sourceEmitterId, binding.sourceModuleId);
         if (!EnumInRange(binding.action, ParticleEventAction::EmitEffectAsset))
             Add(result, ParticleEffectDiagnosticCode::InvalidEnum, path + ".action", "event action is invalid",
                 binding.sourceEmitterId, binding.sourceModuleId);

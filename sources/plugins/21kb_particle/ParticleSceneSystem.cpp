@@ -16,12 +16,13 @@
 namespace kb::particle_plugin {
 namespace {
 
-[[noreturn]] void ThrowComponentCreateFailure(kb::particles::ParticleRuntimeStatus status) {
+[[noreturn]] void ThrowComponentCreateFailure(kb::particles::ParticleRuntimeStatus status, const std::string& reason) {
+    const std::string detail = reason.empty() ? std::string{} : " (" + reason + ")";
     switch (status) {
     case kb::particles::ParticleRuntimeStatus::InvalidAsset:
-        throw std::logic_error("particle component effectAssetId does not resolve to an executable particle effect");
+        throw std::logic_error("particle component effectAssetId does not resolve to an executable particle effect" + detail);
     case kb::particles::ParticleRuntimeStatus::UnsupportedOutput:
-        throw std::logic_error("particle component effect is unsupported by the CPU verification backend");
+        throw std::logic_error("particle component effect is unsupported by the CPU verification backend" + detail);
     case kb::particles::ParticleRuntimeStatus::InvalidOwner:
         throw std::logic_error("particle component owner is invalid");
     case kb::particles::ParticleRuntimeStatus::InstanceLimitReached:
@@ -152,7 +153,7 @@ void ParticleSceneSystem::CreateComponentInstance(
     }
     const kb::particles::ParticleRuntimeResult created = backend_.Create(
         scene, binding.component.effectAssetId, binding.owner);
-    if (!created.Succeeded()) ThrowComponentCreateFailure(created.status);
+    if (!created.Succeeded()) ThrowComponentCreateFailure(created.status, backend_.LastEffectFailure());
     binding.instanceId = created.instanceId;
     static_cast<void>(backend_.ConfigureOwnerDeathPolicy(
         binding.instanceId, binding.component.ownerDeathPolicy));

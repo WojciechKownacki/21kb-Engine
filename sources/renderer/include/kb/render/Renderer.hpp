@@ -270,6 +270,9 @@ public:
     [[nodiscard]] bool RuntimeAssetDiscoveryEnabled() const noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     void ReleaseAllScenes() noexcept;
+    // Makes the renderer the scene's GPU particle consumer before the scene's first step, so GPU emitters
+    // simulate on the GPU from their first births (a burst at time 0) instead of starting on the CPU.
+    void PrepareParticleScene(kb::scene::Scene& scene) noexcept;
     // When the render origin of a scene follows its viewing camera (docs/large_worlds.md).
     void SetRenderOriginPolicy(const RenderOriginPolicy& policy) noexcept;
     [[nodiscard]] const RenderOriginPolicy& CurrentRenderOriginPolicy() const noexcept;
@@ -320,6 +323,11 @@ private:
     std::array<SceneGBuffer, RenderViewportViewIdAllocator::kMaxViewportCount> sceneGBuffers_{};
     std::array<SceneGiHistory, RenderViewportViewIdAllocator::kMaxViewportCount> giHistories_{};
     ScenePostProcessTargets defaultPostProcessTargets_;
+    // Copy of the scene depth the forward transparent pass samples (TransparentDepthCopy).
+    bgfx::TextureHandle transparentDepthCopy_ = BGFX_INVALID_HANDLE;
+    RenderExtent transparentDepthCopyExtent_{};
+    bgfx::TextureFormat::Enum transparentDepthCopyFormat_ = bgfx::TextureFormat::Count;
+    [[nodiscard]] bgfx::TextureHandle TransparentDepthCopy(bgfx::ViewId viewId, const RenderSceneTargetBinding& target) noexcept;
     ShadowMapResource defaultShadowMap_;
     ShadowMapResource defaultPointShadowMap_;
     RenderFramePipeline framePipeline_;

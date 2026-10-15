@@ -327,6 +327,23 @@ ScriptFunctionCallResult AddImpulse(const ScriptFunctionCallContext& context, st
     return BoolResult("applied", kb::scene::PhysicsBackend::AddImpulse(*context.scene, EntityArg(arguments, "entity"), VecArg(arguments, "impulse")));
 }
 
+ScriptFunctionCallResult AddTorque(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    return BoolResult("applied", kb::scene::PhysicsBackend::AddTorque(*context.scene, EntityArg(arguments, "entity"), VecArg(arguments, "torque")));
+}
+
+ScriptFunctionCallResult AddExplosionForce(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("physics api requires an active scene");
+    }
+    const ScriptValue* impulse = FindArg(arguments, "impulse");
+    return BoolResult("applied", kb::scene::PhysicsBackend::AddExplosionForce(*context.scene, EntityArg(arguments, "entity"),
+        FloatArg(arguments, "force", 0.0F), VecArg(arguments, "center"), FloatArg(arguments, "radius", 0.0F),
+        impulse != nullptr && impulse->Type() == ScriptValueType::Bool && impulse->AsBool()));
+}
+
 ScriptFunctionCallResult SetVelocity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return Error("physics api requires an active scene");
@@ -620,6 +637,23 @@ bool ScriptPhysicsApi::Register(ScriptRuntimeHost& host) {
 
     ok = RegisterVectorSetter(host, "Physics.AddForce", "force", &AddForce) && ok;
     ok = RegisterVectorSetter(host, "Physics.AddImpulse", "impulse", &AddImpulse) && ok;
+    ok = RegisterVectorSetter(host, "Physics.AddTorque", "torque", &AddTorque) && ok;
+    {
+        ScriptFunctionDesc explosion;
+        explosion.signature.name = "Physics.AddExplosionForce";
+        explosion.signature.inputs = {
+            ScriptFunctionPin{ "entity", ScriptValueType::Entity, true },
+            ScriptFunctionPin{ "force", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "centerX", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "centerY", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "centerZ", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "radius", ScriptValueType::Float, true },
+            ScriptFunctionPin{ "impulse", ScriptValueType::Bool, false },
+        };
+        explosion.signature.outputs = { ScriptFunctionPin{ "applied", ScriptValueType::Bool, true } };
+        explosion.callback = &AddExplosionForce;
+        ok = host.RegisterFunction(std::move(explosion)) && ok;
+    }
     ok = RegisterVectorSetter(host, "Physics.SetVelocity", "velocity", &SetVelocity) && ok;
     ok = RegisterVectorGetter(host, "Physics.GetVelocity", &GetVelocity) && ok;
     ok = RegisterVectorSetter(host, "Physics.SetAngularVelocity", "angularVelocity", &SetAngularVelocity) && ok;

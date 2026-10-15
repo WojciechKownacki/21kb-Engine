@@ -212,6 +212,93 @@ void RunSpinSchemaTest() {
     Require(!ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "a reversed spin range passed validation");
 }
 
+// The spawn shape, velocity modes, emitter clock, beam, field modules, killing plane, WhileAlive rate and the
+// output's colour intensity, light and decal depth survive a save and a load; an asset without them writes none.
+void RunMotionAndOutputSchemaTest() {
+    using namespace kb::scene;
+    ParticleEffectAsset asset = MakeComprehensiveAsset();
+    std::vector<ParticleEffectDiagnostic> diagnostics;
+    const std::optional<std::string> plain = ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(plain.has_value() && plain->find("spawn.shape") == std::string::npos && plain->find("spawn.beam") == std::string::npos &&
+                plain->find("colorIntensity") == std::string::npos && plain->find("lightEnabled") == std::string::npos,
+            "an asset without the motion and output extras must not write them");
+    ParticleEmitterAsset& emitter = asset.emitters[0];
+    emitter.simulationSpace = ParticleSimulationSpace::World;
+    emitter.absolutePosition = true;
+    emitter.spawn.shape = {.type = ParticleSpawnShape::Spiral, .radius = 6.0F, .spiralArms = 3.0F, .spiralTwist = 1.5F,
+                           .spiralThickness = 0.25F};
+    emitter.spawn.velocityMode = ParticleVelocityMode::Spiral2D;
+    emitter.spawn.spiralArms = 5.0F;
+    emitter.spawn.spiralTurnDegreesPerSecond = 40.0F;
+    emitter.spawn.addedVelocity = {0.0F, 3.0F, 0.0F};
+    emitter.spawn.sizeRandom = 0.5F;
+    emitter.spawn.startDelaySeconds = 1.2F;
+    emitter.spawn.cycleSeconds = 2.0F;
+    emitter.spawn.cycleLooping = false;
+    emitter.output.colorIntensity = 2.5F;
+    emitter.output.lightEnabled = true;
+    emitter.output.lightRadius = 3.0F;
+    emitter.output.lightIntensity = 1.5F;
+    emitter.output.lightMaxCount = 8U;
+    const auto nextOrder = [&] { return static_cast<std::uint32_t>(emitter.modules.size()); };
+    emitter.modules.push_back(ParticleModuleAsset{.moduleId = 91U, .authoringOrder = nextOrder(), .type = ParticleModuleType::Noise,
+        .enabled = true, .payload = ParticleNoiseModule{.strength = 3.0F, .frequency = 0.4F}});
+    emitter.modules.push_back(ParticleModuleAsset{.moduleId = 92U, .authoringOrder = nextOrder(), .type = ParticleModuleType::Attraction,
+        .enabled = true, .payload = ParticleAttractionModule{.point = {0.0F, 4.0F, 0.0F}, .strength = 1.0F, .radius = 2.0F}});
+    const ParticleEffectValidationResult validation = ParticleEffectAssetValidator::ValidateStructure(asset);
+    Require(validation.Succeeded(), "valid motion and output extras failed validation: " +
+            (validation.diagnostics.empty() ? std::string{} : validation.diagnostics.front().propertyPath + " " +
+                validation.diagnostics.front().message));
+    const std::optional<std::string> encoded = ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(encoded.has_value(), "an asset with the motion and output extras did not serialize");
+    const ParticleEffectLoadResult decoded = ParticleEffectAssetIO::Parse(*encoded);
+    Require(decoded.Succeeded(), "an asset with the motion and output extras did not load");
+    const ParticleEmitterAsset& loaded = decoded.asset->emitters[0];
+    Require(loaded.absolutePosition && loaded.spawn.shape.type == ParticleSpawnShape::Spiral && loaded.spawn.shape.radius == 6.0F &&
+                loaded.spawn.shape.spiralArms == 3.0F && loaded.spawn.shape.spiralTwist == 1.5F &&
+                loaded.spawn.shape.spiralThickness == 0.25F && loaded.spawn.velocityMode == ParticleVelocityMode::Spiral2D &&
+                loaded.spawn.spiralArms == 5.0F && loaded.spawn.spiralTurnDegreesPerSecond == 40.0F &&
+                loaded.spawn.addedVelocity.y == 3.0F && loaded.spawn.sizeRandom == 0.5F &&
+                loaded.spawn.startDelaySeconds == 1.2F && loaded.spawn.cycleSeconds == 2.0F && !loaded.spawn.cycleLooping,
+            "the spawn shape, velocity mode or emitter clock did not round-trip");
+    Require(loaded.output.colorIntensity == 2.5F && loaded.output.lightEnabled && loaded.output.lightRadius == 3.0F &&
+                loaded.output.lightIntensity == 1.5F && loaded.output.lightMaxCount == 8U,
+            "the output's colour intensity or light did not round-trip");
+    const auto module = [&](ParticleStableId id) {
+        return std::find_if(loaded.modules.begin(), loaded.modules.end(), [&](const auto& m) { return m.moduleId == id; });
+    };
+    Require(module(91U) != loaded.modules.end() && std::get<ParticleNoiseModule>(module(91U)->payload).frequency == 0.4F &&
+                module(92U) != loaded.modules.end() &&
+                std::get<ParticleAttractionModule>(module(92U)->payload).point.y == 4.0F &&
+                std::get<ParticleAttractionModule>(module(92U)->payload).radius == 2.0F,
+            "the field modules did not round-trip");
+
+    // A beam spawn with its ribbon, a decal and a WhileAlive rate.
+    ParticleEffectAsset beam = MakeComprehensiveAsset();
+    beam.emitters[0].spawn.beam = {.enabled = true, .ends = ParticleBeamEnds::ShapeToEmitter, .segments = 12U,
+                                   .start = {0.0F, 12.0F, 0.0F}, .end = {0.0F, 0.0F, 0.0F}, .noise = 0.4F};
+    beam.emitters[0].output.type = ParticleOutputType::Ribbon;
+    beam.emitters[0].output.payload = ParticleRibbonOutput{};
+    beam.emitters[1].output.type = ParticleOutputType::Decal;
+    beam.emitters[1].output.payload = ParticleDecalOutput{.depth = 1.5F};
+    beam.eventBindings.push_back({.sourceEmitterId = beam.emitters[0].emitterId, .trigger = ParticleEventTrigger::WhileAlive,
+                                  .targetEmitterId = beam.emitters[1].emitterId, .ratePerSecond = 25.0F});
+    Require(ParticleEffectAssetValidator::ValidateStructure(beam).Succeeded(), "a valid beam, decal and WhileAlive binding failed validation");
+    const std::optional<std::string> beamText = ParticleEffectAssetIO::Serialize(beam, diagnostics);
+    const ParticleEffectLoadResult beamLoaded = beamText ? ParticleEffectAssetIO::Parse(*beamText) : ParticleEffectLoadResult{};
+    Require(beamLoaded.Succeeded(), "a beam, decal and WhileAlive binding did not round-trip");
+    const ParticleEmitterAsset& loadedBeam = beamLoaded.asset->emitters[0];
+    Require(loadedBeam.spawn.beam.enabled && loadedBeam.spawn.beam.ends == ParticleBeamEnds::ShapeToEmitter &&
+                loadedBeam.spawn.beam.segments == 12U && loadedBeam.spawn.beam.start.y == 12.0F && loadedBeam.spawn.beam.noise == 0.4F &&
+                std::get<ParticleDecalOutput>(beamLoaded.asset->emitters[1].output.payload).depth == 1.5F &&
+                beamLoaded.asset->eventBindings.back().trigger == ParticleEventTrigger::WhileAlive &&
+                beamLoaded.asset->eventBindings.back().ratePerSecond == 25.0F,
+            "the beam, the decal depth or the WhileAlive rate did not round-trip");
+    beam.emitters[0].output.type = ParticleOutputType::Billboard;
+    beam.emitters[0].output.payload = ParticleBillboardOutput{};
+    Require(!ParticleEffectAssetValidator::ValidateStructure(beam).Succeeded(), "a beam spawn without ribbon output passed validation");
+}
+
 void RunComprehensiveSchemaTest() {
     using namespace kb::scene;
     const ParticleEffectAsset asset = MakeComprehensiveAsset();
@@ -433,7 +520,7 @@ void RunMalformedInputTest() {
     ReplaceOnce(badEnum, "effect.backendPolicy CpuDeterministic", "effect.backendPolicy Unknown");
     check(std::move(badEnum), ParticleEffectDiagnosticCode::InvalidEnum, "effect.backendPolicy", true);
     std::string badCount = canonical;
-    ReplaceOnce(badCount, "effect.emitterCount 1", "effect.emitterCount 9");
+    ReplaceOnce(badCount, "effect.emitterCount 1", "effect.emitterCount " + std::to_string(kParticleEffectMaxEmitters + 1U));
     check(std::move(badCount), ParticleEffectDiagnosticCode::LimitExceeded, "effect.emitterCount", true);
     std::string countMismatch = canonical;
     ReplaceOnce(countMismatch, "effect.emitterCount 1", "effect.emitterCount 2");
@@ -555,7 +642,8 @@ void RunValidatorMatrixTest() {
         "mesh wrong slot", [](ParticleEffectAsset& value) { value.emitters[0].output.mesh.assetId = 301U; },
         ParticleEffectDiagnosticCode::InvalidReference);
     rejects(
-        "atlas wrong slot", [](ParticleEffectAsset& value) { value.emitters[4].output.textureAtlas.assetId = 302U; },
+        // Emitter 7 is volumetric: strips and decals take a texture, a volume does not.
+        "atlas wrong slot", [](ParticleEffectAsset& value) { value.emitters[7].output.textureAtlas.assetId = 302U; },
         ParticleEffectDiagnosticCode::InvalidReference);
     rejects(
         "module self-cycle",
@@ -643,7 +731,8 @@ void RunValidatorMatrixTest() {
     ParticleEffectAsset capacityBoundary = valid;
     capacityBoundary.backendPolicy = ParticleBackendPolicy::CpuDeterministic;
     for (ParticleEmitterAsset& emitter : capacityBoundary.emitters)
-        emitter.maxParticles = kParticleEffectMaxCpuParticlesPerScene / kParticleEffectMaxEmitters;
+        emitter.maxParticles =
+            kParticleEffectMaxCpuParticlesPerScene / static_cast<std::uint32_t>(capacityBoundary.emitters.size());
     Require(ParticleEffectAssetValidator::ValidateStructure(capacityBoundary).Succeeded(),
             "combined CPU scene capacity boundary was rejected");
     ++capacityBoundary.emitters.back().maxParticles;
@@ -1135,6 +1224,7 @@ int main() {
         RunCanonicalGoldenTest();
         RunComprehensiveSchemaTest();
         RunSpinSchemaTest();
+        RunMotionAndOutputSchemaTest();
         RunAuthoringOrderTest();
         RunHardLimitBoundaryTest();
         RunBoundedFileLoadTest();

@@ -48,14 +48,28 @@ float vignette_factor(vec2 uv)
     return falloff * falloff;
 }
 
-// The display image of a scene colour at `uv`: exposed, vignetted, tonemapped, graded and gamma encoded.
+// Display encoding. Gamma 2.2 (the default) is the sRGB transfer curve of the display, as in Unity,
+// Unreal and Godot - a plain 1/2.2 power lifts the darks (#0A0C16 came out as #141418). Any other
+// gamma (1.0 for linear debug views) is a plain power.
+vec3 encode_display(vec3 display)
+{
+    display = max(display, vec3_splat(0.0));
+    if (abs(u_tonemapParams.y - 1.0 / 2.2) < 1.0e-4) {
+        vec3 low = display * 12.92;
+        vec3 high = 1.055 * pow(display, vec3_splat(1.0 / 2.4)) - vec3_splat(0.055);
+        return mix(low, high, step(vec3_splat(0.0031308), display));
+    }
+    return pow(display, vec3_splat(u_tonemapParams.y));
+}
+
+// The display image of a scene colour at `uv`: exposed, vignetted, tonemapped, graded and display encoded.
 vec3 display_transform(vec3 sceneColor, vec2 uv)
 {
     vec3 hdr = sceneColor * exp2(u_tonemapParams.x);
     hdr = hdr * vignette_factor(uv);
     vec3 display = tonemap_display(hdr);
     display = apply_color_grade_lut(display);
-    return pow(max(display, vec3_splat(0.0)), vec3_splat(u_tonemapParams.y));
+    return encode_display(display);
 }
 
 // A bilinear sample of the display image, as an LDR target holding it would return: the four source texels

@@ -14,6 +14,8 @@ inline constexpr std::uint32_t kParticleStripVertexBudget = 65'536U;
 inline constexpr std::uint32_t kParticleStripIndexBudget = 98'304U;
 inline constexpr std::uint32_t kParticleTrailHistoryBudget = 16'384U;
 
+// A strip point: position, colour (HDR, the emitter's colour intensity applied; alpha fades
+// trails toward their tail) and the texture coordinate (U along the segment, V across it).
 struct ParticleStripVertex {
     float x = 0.0F;
     float y = 0.0F;
@@ -21,14 +23,18 @@ struct ParticleStripVertex {
     float r = 1.0F;
     float g = 1.0F;
     float b = 1.0F;
+    float a = 1.0F;
+    float u = 0.0F;
+    float v = 0.0F;
 };
 
-static_assert(sizeof(ParticleStripVertex) == 24U);
+static_assert(sizeof(ParticleStripVertex) == 36U);
 
 struct ParticleStripDraw {
     std::uint32_t emitterRecordIndex = 0U;
     std::uint32_t firstIndex = 0U;
     std::uint32_t indexCount = 0U;
+    std::uint64_t textureAtlasAssetId = 0U;
     kb::particles::ParticleRenderBlendMode blend = kb::particles::ParticleRenderBlendMode::Alpha;
     kb::particles::ParticleRenderDepthMode depth = kb::particles::ParticleRenderDepthMode::ReadOnly;
     std::uint16_t transparentDepthBucket = 0U;
@@ -67,6 +73,7 @@ private:
         std::uint64_t lastSeenRevision = 0U;
         std::uint64_t lastSampleStep = 0U;
         std::uint32_t emitterRecordIndex = 0U;
+        std::uint32_t packedColor = 0xFFFFFFFFU;
         // The simulation origin the samples are relative to.
         kb::math::DVec3 origin{};
         std::array<kb::math::Vec3, kb::scene::kParticleEffectMaxTrailSamplesPerParticle> samples{};

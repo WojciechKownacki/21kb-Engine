@@ -53,6 +53,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
             .minLimit = joint->minLimit,
             .maxLimit = joint->maxLimit,
             .enableLimit = joint->enableLimit,
+            .motor = joint->motor,
+            .spring = joint->spring,
+            .breakForce = joint->breakForce,
         };
     }
 

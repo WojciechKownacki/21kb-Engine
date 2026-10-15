@@ -73,7 +73,7 @@ substantial portions of the software.
 
 - Repository: https://github.com/jrouwe/JoltPhysics
 - Local path: `third_party/jolt`
-- Revision: `c581b5f`
+- Revision: `v5.6.0` (e77f1755)
 - License: MIT
 - License file: `third_party/jolt/LICENSE`
 

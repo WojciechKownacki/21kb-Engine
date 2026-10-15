@@ -8,6 +8,7 @@
 #include "renderer/RendererMatrixMath.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "renderer/RendererDebugLog.hpp"
+#include "renderer/SceneClearColor.hpp"
 
 #include <array>
 #include <cstdint>
@@ -351,7 +352,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
                 << " surfaceTex=" << HandleValue(desc.gbuffer->SurfaceTexture())
                 << " depthTex=" << HandleValue(desc.gbuffer->DepthTexture())
                 << " program=" << HandleValue(program_)
-                << " clear=0x" << std::hex << desc.clearRgba << std::dec
+                << " clear=" << desc.clearColor[0] << ',' << desc.clearColor[1] << ',' << desc.clearColor[2]
                 << " lightsPath=" << static_cast<int>(desc.lightingConfig.lightingPath)
                 << " envMode=" << static_cast<int>(desc.lightingConfig.environmentMode);
         WriteRendererDebugLog("deferred_lighting", message.str());
@@ -367,7 +368,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setViewFrameBuffer(desc.viewId, desc.frameBuffer);
     bgfx::setViewRect(desc.viewId, 0, 0, ClampToViewExtent(desc.extent.width), ClampToViewExtent(desc.extent.height));
     bgfx::setViewTransform(desc.viewId, identity.data(), identity.data());
-    bgfx::setViewClear(desc.viewId, BGFX_CLEAR_COLOR, desc.clearRgba);
+    SetSceneViewClear(desc.viewId, BGFX_CLEAR_COLOR, desc.clearColor, 1.0F, 0U, desc.clearPaletteViewport);
     bgfx::touch(desc.viewId);
 
     if (desc.lightingConfig.debugView == SceneRenderDebugView::GBufferNormal) {
@@ -381,7 +382,6 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
             .frameBuffer = desc.frameBuffer,
             .extent = desc.extent,
             .outputTransform = debugTransform,
-            .clearRgba = desc.clearRgba,
             .clearTarget = true,
             .viewName = "KB GBuffer Normal Debug",
         });

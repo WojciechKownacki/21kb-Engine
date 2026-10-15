@@ -101,6 +101,11 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.joint->minLimit);
         ScenePrefabHashBuilder::MixFloat(hash, components.joint->maxLimit);
         ScenePrefabHashBuilder::Mix(hash, components.joint->enableLimit ? 1U : 0U);
+        ScenePrefabHashBuilder::MixFloat(hash, components.joint->motor.targetVelocity);
+        ScenePrefabHashBuilder::MixFloat(hash, components.joint->motor.force);
+        ScenePrefabHashBuilder::MixFloat(hash, components.joint->spring.spring);
+        ScenePrefabHashBuilder::MixFloat(hash, components.joint->spring.damper);
+        ScenePrefabHashBuilder::MixFloat(hash, components.joint->breakForce);
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.regionPortal.has_value() ? 1U : 0U);

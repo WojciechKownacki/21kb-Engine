@@ -6,6 +6,7 @@
 #include "engine/math/EngineMath.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -298,6 +299,25 @@ void ListProperties(std::string_view component, std::ostream& out) {
         kb::scene::MeshRendererComponent renderer = *scene.Components().MeshRenderers().TryGet(entity);
         (name == "mesh" ? renderer.meshAssetId : renderer.materialAssetId) = id;
         scene.Components().MeshRenderers().Set(entity, renderer);
+        return true;
+    }
+
+    // A particle effect by its path (/Game/Effects/Sparks.kbvfx), as the Mesh Renderer's mesh. Choosing
+    // an effect enables the component, as the editor's asset field does.
+    if (component == "Particle Effect" && name == "effectAssetId" && value.starts_with('/')) {
+        const kb::assets::AssetMetadata* metadata =
+            FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(value));
+        if (metadata == nullptr || metadata->type != kb::scene::kParticleEffectAssetType) {
+            io.err << "error: effectAssetId '" << value << "' is not a particle effect (.kbvfx) of the project\n";
+            return false;
+        }
+        kb::scene::ParticleEffectComponent* effect = scene.Components().ParticleEffects().TryGet(entity);
+        if (effect == nullptr) {
+            io.err << "error: the entity has no Particle Effect\n";
+            return false;
+        }
+        effect->effectAssetId = metadata->id.value;
+        effect->enabled = true;
         return true;
     }
 

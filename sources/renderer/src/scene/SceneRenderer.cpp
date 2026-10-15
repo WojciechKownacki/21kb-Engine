@@ -1,4 +1,6 @@
 #include "kb/render/scene/SceneRenderer.hpp"
+
+#include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/Scene.hpp"
 
 #include "kb/render/scene/RenderScene.hpp"
@@ -162,6 +164,11 @@ void SceneRenderer::SyncGpuParticleEmitters(
     if (particleRenderer_ == nullptr || !particleRenderer_->GpuEmittersReady()) return;
     gpuParticleSceneId_ = scene.Id();
     particleRenderer_->SyncGpuEmitters(scene, frameDeltaSeconds, frameIndex, renderOrigin);
+}
+
+void SceneRenderer::PrepareGpuParticleConsumer(kb::scene::Scene& scene) noexcept {
+    if (particleRenderer_ == nullptr || !particleRenderer_->GpuEmittersReady()) return;
+    kb::particles::ParticlePlayback::SetGpuEmitterConsumer(scene, true);
 }
 
 void SceneRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {

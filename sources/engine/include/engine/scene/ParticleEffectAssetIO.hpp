@@ -42,6 +42,8 @@ class ParticleEffectAssetIO final {
     [[nodiscard]] static bool Save(const std::filesystem::path& path, const ParticleEffectAsset& asset);
     [[nodiscard]] static std::optional<std::string> Serialize(const ParticleEffectAsset& asset,
                                                               std::vector<ParticleEffectDiagnostic>& diagnostics);
+    // A module type by the name the file uses ("Gravity", "TorusSwirl", ...).
+    [[nodiscard]] static std::optional<ParticleModuleType> ModuleTypeFromName(std::string_view name);
 };
 
 } // namespace kb::scene

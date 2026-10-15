@@ -37,6 +37,7 @@ void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
     case kb::scene::ParticleOutputType::Ribbon: return capabilities.ribbon;
     case kb::scene::ParticleOutputType::Beam: return capabilities.beam;
     case kb::scene::ParticleOutputType::Volumetric: return capabilities.volumetric;
+    case kb::scene::ParticleOutputType::Decal: return capabilities.decal;
     }
     return false;
 }
@@ -46,7 +47,7 @@ void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
 std::uint64_t ParticleCompilerCapabilities::StableKey() const noexcept {
     return (billboard ? 1ULL : 0ULL) | (stretchedBillboard ? 2ULL : 0ULL) | (pointSprite ? 4ULL : 0ULL) |
         (mesh ? 8ULL : 0ULL) | (trail ? 16ULL : 0ULL) | (ribbon ? 32ULL : 0ULL) |
-        (beam ? 64ULL : 0ULL) | (volumetric ? 128ULL : 0ULL);
+        (beam ? 64ULL : 0ULL) | (volumetric ? 128ULL : 0ULL) | (decal ? 256ULL : 0ULL);
 }
 
 std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::ValidateCapabilities(
@@ -129,6 +130,7 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
         destination.materialAssetId = Resolve(source.output.material, registry);
         destination.meshAssetId = Resolve(source.output.mesh, registry);
         destination.textureAtlasAssetId = Resolve(source.output.textureAtlas, registry);
+        destination.shapeMeshAssetId = Resolve(source.spawn.shapeMesh, registry);
         destination.blendMode = source.output.blend;
         destination.sortMode = source.output.sort;
         destination.alignment = source.output.alignment;
@@ -183,7 +185,25 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
             destination.volumetricRadiusScale = value.radiusScale;
             destination.volumetricLowQualitySteps = value.lowQualitySteps;
             destination.volumetricHighQualitySteps = value.highQualitySteps;
+        } else if (source.output.type == kb::scene::ParticleOutputType::Decal) {
+            destination.decalDepth = std::get<kb::scene::ParticleDecalOutput>(source.output.payload).depth;
         }
+        destination.colorIntensity = source.output.colorIntensity;
+        destination.lightEnabled = source.output.lightEnabled;
+        destination.lightRadius = source.output.lightRadius;
+        destination.lightIntensity = source.output.lightIntensity;
+        destination.lightMaxCount = source.output.lightMaxCount;
+        destination.shape = source.spawn.shape;
+        destination.velocityMode = source.spawn.velocityMode;
+        destination.spiralArms = std::max(1.0F, source.spawn.spiralArms);
+        destination.spiralTurnRadians = source.spawn.spiralTurnDegreesPerSecond * 0.017453292F;
+        destination.addedVelocity = source.spawn.addedVelocity;
+        destination.sizeRandom = source.spawn.sizeRandom;
+        destination.startDelaySeconds = source.spawn.startDelaySeconds;
+        destination.cycleSeconds = source.spawn.cycleSeconds;
+        destination.cycleLooping = source.spawn.cycleLooping;
+        destination.beam = source.spawn.beam;
+        destination.absolutePosition = source.absolutePosition;
         destination.simulationSpace = source.simulationSpace;
         destination.enabled = source.enabled;
         destination.mode = source.spawn.mode;
@@ -275,6 +295,20 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
             }
             case kb::scene::ParticleModuleType::SubEmitter:
                 destinationModule.payload = std::get<kb::scene::ParticleSubEmitterModule>(sourceModule.payload); break;
+            case kb::scene::ParticleModuleType::Noise:
+                destinationModule.payload = std::get<kb::scene::ParticleNoiseModule>(sourceModule.payload); break;
+            case kb::scene::ParticleModuleType::AxisRotation: {
+                auto rotation = std::get<kb::scene::ParticleAxisRotationModule>(sourceModule.payload);
+                rotation.axis = kb::math::Normalize(rotation.axis);
+                destinationModule.payload = rotation;
+                break;
+            }
+            case kb::scene::ParticleModuleType::Attraction:
+                destinationModule.payload = std::get<kb::scene::ParticleAttractionModule>(sourceModule.payload); break;
+            case kb::scene::ParticleModuleType::TorusSwirl:
+                destinationModule.payload = std::get<kb::scene::ParticleTorusSwirlModule>(sourceModule.payload); break;
+            case kb::scene::ParticleModuleType::Separation:
+                destinationModule.payload = std::get<kb::scene::ParticleSeparationModule>(sourceModule.payload); break;
             }
         }
         const kb::math::Color startColor = source.spawn.startColor;
@@ -311,7 +345,7 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
             .trigger = source.trigger, .sourceModuleId = source.sourceModuleId,
             .targetEmitterIndex = static_cast<std::uint8_t>(targetEmitter - compiled.emitters.begin()),
             .count = source.count, .maxDepth = static_cast<std::uint8_t>(source.maxDepth),
-            .perStepBudget = source.perStepBudget};
+            .perStepBudget = source.perStepBudget, .ratePerSecond = source.ratePerSecond};
     }
     result.effect = kb::particles::MakeParticleCompiledEffect(std::move(compiled));
     return result;

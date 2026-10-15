@@ -123,7 +123,7 @@ void RunSceneLightGridGpuTests() {
             for (std::uint64_t id = 1U; id <= 1024U; ++id) static_cast<void>(scene.RemoveLight(id));
             for (std::uint64_t id = 1U; id <= count; ++id) static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{
                 .entityId = id, .position = {0.0F, 0.0F, 1.0F}, .color = color,
-                .intensity = 1.5F / count, .range = 4.0F}));
+                .intensity = 0.3F / count, .range = 4.0F}));  // inverse-square falloff: mid-grey at the probe
         };
         const auto submit = [&](const Target& target, bgfx::ViewId view, const SceneRenderCamera& activeCamera) {
             auto& gbuffer = &target == &first ? firstGbuffer : secondGbuffer;

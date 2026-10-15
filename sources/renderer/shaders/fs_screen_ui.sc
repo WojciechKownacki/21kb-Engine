@@ -46,13 +46,26 @@ vec3 agx_approx(vec3 color)
     return saturate(compressed * vec3_splat(1.18));
 }
 
+// Display encoding as the scene's (fs_present_tex): gamma 2.2 is the sRGB transfer curve, any
+// other gamma a plain power.
+vec3 encode_display(vec3 display)
+{
+    display = max(display, vec3_splat(0.0));
+    if (abs(u_screenUITonemapParams.y - 1.0 / 2.2) < 1.0e-4) {
+        vec3 low = display * 12.92;
+        vec3 high = 1.055 * pow(display, vec3_splat(1.0 / 2.4)) - vec3_splat(0.055);
+        return mix(low, high, step(vec3_splat(0.0031308), display));
+    }
+    return pow(display, vec3_splat(u_screenUITonemapParams.y));
+}
+
 vec3 display_color(vec3 hdr)
 {
     vec3 exposed = hdr * exp2(u_screenUITonemapParams.x);
     vec3 mapped = u_screenUITonemapParams.z < 0.0
         ? saturate(exposed)
         : (u_screenUITonemapParams.z < 0.5 ? aces_fitted(exposed) : agx_approx(exposed));
-    return pow(max(mapped, vec3_splat(0.0)), vec3_splat(u_screenUITonemapParams.y));
+    return encode_display(mapped);
 }
 
 void main()

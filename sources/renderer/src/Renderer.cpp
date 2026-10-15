@@ -34,6 +34,7 @@
 #include "renderer/RendererExposureSubmitter.hpp"
 #include "renderer/RendererFinalCompositeSubmitter.hpp"
 #include "renderer/RendererDebugLog.hpp"
+#include "renderer/SceneClearColor.hpp"
 #include "renderer/RendererMeshPassSubmitter.hpp"
 #include "renderer/RendererMatrixMath.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
@@ -149,12 +150,6 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
     return config;
 }
 
-[[nodiscard]] std::uint32_t PackOpaqueRgba(const std::array<float, 3>& color) noexcept {
-    const auto channel = [](float value) noexcept -> std::uint32_t {
-        return static_cast<std::uint32_t>(std::clamp(value, 0.0F, 1.0F) * 255.0F + 0.5F);
-    };
-    return (channel(color[0]) << 24U) | (channel(color[1]) << 16U) | (channel(color[2]) << 8U) | 0xFFU;
-}
 
 [[nodiscard]] const char* LightingPathName(SceneRenderLightingPath path) noexcept {
     switch (path) {
@@ -440,6 +435,8 @@ void Renderer::Shutdown() {
         finalCompositePass_->Shutdown();
         finalCompositePass_.reset();
     }
+    if (bgfx::isValid(transparentDepthCopy_)) bgfx::destroy(transparentDepthCopy_);
+    transparentDepthCopy_ = BGFX_INVALID_HANDLE;
     giVoxelGrid_.Shutdown();
     giResolvePass_.Shutdown();
     skyReflection_.Shutdown();
@@ -558,6 +555,7 @@ bool Renderer::SubmitRuntimeScene(const kb::scene::Scene& scene, const RuntimeSc
                 .viewportIndex = 0U,
             },
             .colorFormat = defaultSceneTarget_.ColorSelection().format,
+            .depthFormat = defaultSceneTarget_.DepthSelection().format,
         },
         .postProcess = defaultPostProcessTargets_.Binding(),
         .finalComposite = RenderFinalCompositeTargetBinding{
@@ -1263,7 +1261,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     // scene-resolved camera; editor fly cameras simply retain their defaults.
     // GBuffer/deferred clearing is intentionally unaffected.
     std::uint16_t opaqueClearFlags = BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
-    std::uint32_t opaqueClearRgba = desc.clearRgba;
+    std::array<float, 3> opaqueClearColor = UnpackLinearRgb(desc.clearRgba);
     if (desc.cameraOverride.has_value()) {
         switch (desc.cameraOverride->clearMode) {
         case SceneRenderCameraClearMode::SolidColor:
@@ -1276,7 +1274,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             opaqueClearFlags = BGFX_CLEAR_NONE;
             break;
         }
-        opaqueClearRgba = PackOpaqueRgba(desc.cameraOverride->clearColor);
+        opaqueClearColor = desc.cameraOverride->clearColor;
     } else {
         const CameraRenderProxyDesc* clearCameraProxy = renderScene.FindPrimaryCameraProxy(desc.target.viewport.id.value);
         if (clearCameraProxy != nullptr) {
@@ -1291,11 +1289,11 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 opaqueClearFlags = BGFX_CLEAR_NONE;
                 break;
             }
-            opaqueClearRgba = PackOpaqueRgba(clearCameraProxy->clearColor);
+            opaqueClearColor = clearCameraProxy->clearColor;
         }
     }
     if (worldBackdrop.has_value() && worldBackdrop->mode == SceneRenderWorldBackdropMode::SolidColor) {
-        opaqueClearRgba = PackOpaqueRgba(worldBackdrop->color);
+        opaqueClearColor = worldBackdrop->color;
     }
     bgfx::TextureHandle worldBackdropEnvironment = BGFX_INVALID_HANDLE;
     if (worldBackdrop.has_value() &&
@@ -1330,7 +1328,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear end");
     } else {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure opaque clear begin");
-        RendererViewConfigurator::ConfigureSceneClear(viewportPlan.viewIds.opaqueScene, desc, opaqueClearFlags, opaqueClearRgba);
+        RendererViewConfigurator::ConfigureSceneClear(viewportPlan.viewIds.opaqueScene, desc, opaqueClearFlags, opaqueClearColor);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure opaque clear end");
     }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure transparent no-clear begin");
@@ -1579,9 +1577,9 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 .camera = sceneCamera,
                 .lightingConfig = effectiveLightingConfig,
                 .extent = desc.target.viewport.extent,
-                .clearRgba = worldBackdrop.has_value() && worldBackdrop->mode == SceneRenderWorldBackdropMode::SolidColor
-                    ? PackOpaqueRgba(worldBackdrop->color)
-                    : desc.clearRgba,
+                // The background the camera (or a solid world backdrop) asked for, as the opaque view.
+                .clearColor = opaqueClearColor,
+                .clearPaletteViewport = desc.target.viewport.viewportIndex,
                 .shadowMap = shadowBinding.HasAny() ? &shadowBinding : nullptr,
                 .worldBackdrop = worldBackdrop.has_value() ? &*worldBackdrop : nullptr,
                 .worldBackdropEnvironment = worldBackdropEnvironment,
@@ -1632,6 +1630,12 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             // The lighting view is unused by the forward path and binds no scene depth in the deferred one.
             sceneRenderer_->DispatchGpuParticleEmitters(
                 viewportPlan.viewIds.deferredLighting, *sceneCamera, desc.target.viewport.extent.width, desc.target.viewport.extent.height);
+        }
+        if (!terrainLayersOnly && !deferredLighting) {
+            // The forward transparent pass depth-tests against the scene depth, so it samples a copy of it
+            // (decals, soft particles, depth-fading materials): a texture bound as the depth attachment reads
+            // back as zero. The GPU particle emitters above read the depth itself, in a view that does not bind it.
+            sceneRenderer_->SetSceneDepthTexture(TransparentDepthCopy(viewportPlan.viewIds.transparentScene, desc.target));
         }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass begin");
         RendererMeshPassSubmitter::SubmitViewportPass(
@@ -2415,6 +2419,30 @@ void Renderer::SetRuntimeAssetDiscoveryEnabled(bool enabled) noexcept {
 
 bool Renderer::RuntimeAssetDiscoveryEnabled() const noexcept {
     return runtimeAssetDiscovery_.DiscoveryEnabled();
+}
+
+bgfx::TextureHandle Renderer::TransparentDepthCopy(bgfx::ViewId viewId, const RenderSceneTargetBinding& target) noexcept {
+    if (!bgfx::isValid(target.depthTexture) || target.depthFormat == bgfx::TextureFormat::Count || target.msaaSamples > 0U) {
+        return BGFX_INVALID_HANDLE;
+    }
+    const RenderExtent extent = target.viewport.extent;
+    if (!bgfx::isValid(transparentDepthCopy_) || transparentDepthCopyExtent_.width != extent.width ||
+        transparentDepthCopyExtent_.height != extent.height || transparentDepthCopyFormat_ != target.depthFormat) {
+        if (bgfx::isValid(transparentDepthCopy_)) bgfx::destroy(transparentDepthCopy_);
+        transparentDepthCopy_ = bgfx::createTexture2D(static_cast<std::uint16_t>(extent.width),
+            static_cast<std::uint16_t>(extent.height), false, 1U, target.depthFormat,
+            BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+        transparentDepthCopyExtent_ = extent;
+        transparentDepthCopyFormat_ = target.depthFormat;
+        if (!bgfx::isValid(transparentDepthCopy_)) return BGFX_INVALID_HANDLE;
+        bgfx::setName(transparentDepthCopy_, "KB Transparent Scene Depth Copy");
+    }
+    bgfx::blit(viewId, transparentDepthCopy_, 0U, 0U, target.depthTexture);
+    return transparentDepthCopy_;
+}
+
+void Renderer::PrepareParticleScene(kb::scene::Scene& scene) noexcept {
+    if (sceneRenderer_ != nullptr) sceneRenderer_->PrepareGpuParticleConsumer(scene);
 }
 
 void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {

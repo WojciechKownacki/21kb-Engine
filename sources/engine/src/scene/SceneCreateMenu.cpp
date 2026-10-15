@@ -126,7 +126,7 @@ SceneCreateResult SceneCreateMenu::Create(Scene& scene, std::string_view id, std
     for (const std::string_view component : components) {
         const SceneComponentKind* kind = SceneComponentAuthoring::Find(component);
         if (kind != nullptr && !SceneComponentAuthoring::PluginEnabled(project, *kind)) {
-            return { {}, std::string{ item->id } + " needs the project plugin " + std::string{ kind->requiredPlugin } };
+            return { {}, std::string{ item->id } + " needs the project plugin " + std::string{ kind->requiredPlugin }, true };
         }
     }
 

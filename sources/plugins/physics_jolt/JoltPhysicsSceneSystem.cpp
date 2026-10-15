@@ -90,6 +90,8 @@ using kb::scene::CharacterControllerComponent;
 using kb::scene::ColliderComponent;
 using kb::scene::ColliderShape;
 using kb::scene::JointComponent;
+using kb::scene::JointMotor;
+using kb::scene::JointSpring;
 using kb::scene::JointType;
 using kb::scene::Quat;
 using kb::scene::RigidbodyBodyType;
@@ -445,6 +447,9 @@ struct JointSignature {
     float minLimit = 0.0F;
     float maxLimit = 0.0F;
     bool enableLimit = false;
+    JointMotor motor{};
+    JointSpring spring{};
+    float breakForce = 0.0F;
     JPH::BodyID ownerBodyId;
     JPH::BodyID connectedBodyId; // invalid BodyID when connectedEntity is invalid (joint connects to the static world).
 };
@@ -459,6 +464,9 @@ struct JointSignature {
         .minLimit = joint.minLimit,
         .maxLimit = joint.maxLimit,
         .enableLimit = joint.enableLimit,
+        .motor = joint.motor,
+        .spring = joint.spring,
+        .breakForce = joint.breakForce,
         .ownerBodyId = ownerBodyId,
         .connectedBodyId = connectedBodyId,
     };
@@ -468,6 +476,8 @@ struct JointSignature {
     return lhs.type == rhs.type && lhs.connectedEntity == rhs.connectedEntity && SameVec3(lhs.anchor, rhs.anchor) &&
         SameVec3(lhs.connectedAnchor, rhs.connectedAnchor) && SameVec3(lhs.axis, rhs.axis) &&
         lhs.minLimit == rhs.minLimit && lhs.maxLimit == rhs.maxLimit && lhs.enableLimit == rhs.enableLimit &&
+        lhs.motor.targetVelocity == rhs.motor.targetVelocity && lhs.motor.force == rhs.motor.force &&
+        lhs.spring.spring == rhs.spring.spring && lhs.spring.damper == rhs.spring.damper && lhs.breakForce == rhs.breakForce &&
         lhs.ownerBodyId == rhs.ownerBodyId && lhs.connectedBodyId == rhs.connectedBodyId;
 }
 
@@ -521,7 +531,16 @@ struct JointRecord {
             settings.mLimitsMin = kb::math::Clamp(-JPH::DegreesToRadians(joint.maxLimit), -JPH::JPH_PI, 0.0F);
             settings.mLimitsMax = kb::math::Clamp(-JPH::DegreesToRadians(joint.minLimit), 0.0F, JPH::JPH_PI);
         }
-        return settings.Create(body1, body2);
+        if (joint.motor.force <= 0.0F) {
+            return settings.Create(body1, body2);
+        }
+        settings.mMotorSettings.SetTorqueLimit(joint.motor.force);
+        JPH::Ref<JPH::Constraint> constraint = settings.Create(body1, body2);
+        auto* hinge = static_cast<JPH::HingeConstraint*>(constraint.GetPtr());
+        hinge->SetMotorState(JPH::EMotorState::Velocity);
+        // Jolt drives body2 relative to body1; the motor turns the owner (body1), as Unity's.
+        hinge->SetTargetAngularVelocity(-JPH::DegreesToRadians(joint.motor.targetVelocity));
+        return constraint;
     }
     case JointType::Distance: {
         JPH::DistanceConstraintSettings settings;
@@ -531,6 +550,11 @@ struct JointRecord {
         if (joint.enableLimit) {
             settings.mMinDistance = joint.minLimit;
             settings.mMaxDistance = joint.maxLimit;
+        }
+        if (joint.spring.spring > 0.0F) {
+            settings.mLimitsSpringSettings.mMode = JPH::ESpringMode::StiffnessAndDamping;
+            settings.mLimitsSpringSettings.mStiffness = joint.spring.spring;
+            settings.mLimitsSpringSettings.mDamping = joint.spring.damper;
         }
         // enableLimit==false leaves Jolt's own default (-1/-1), which it
         // documents as "replaced by the distance between mPoint1 and
@@ -1220,6 +1244,7 @@ public:
 
     void OnFixedUpdate(SceneSystemContext& context) {
         PublishPendingStep(context);
+        BreakOverloadedJoints(context);
         RefreshCollisionMeshes(context.GetScene());
         SynchronizeBodies(context);
         pendingPushes_.clear();  // queued for a body this synchronization did not create
@@ -1368,7 +1393,20 @@ public:
     // A Dynamic Rigidbody whose Jolt body is created by the next synchronization (the first
     // fixed step runs scripts before it, as Start in Unity runs before the first physics step):
     // the force/impulse is applied to the body as soon as it exists.
-    bool QueueForBodyCreation(SceneEntity entity, Vec3 force, Vec3 impulse) {
+    bool AddTorque(SceneEntity entity, Vec3 torque) noexcept override {
+        JoinStep();
+        const BodyRecord* body = FindDynamicBody(entity);
+        if (!IsFinite(torque)) {
+            return false;
+        }
+        if (body == nullptr) {
+            return QueueForBodyCreation(entity, Vec3{}, Vec3{}, torque);
+        }
+        physicsSystem_.GetBodyInterface().AddTorque(body->bodyId, ToJolt(torque));
+        return true;
+    }
+
+    bool QueueForBodyCreation(SceneEntity entity, Vec3 force, Vec3 impulse, Vec3 torque = {}) {
         const RigidbodyComponent* rigidbody = scene_ != nullptr && scene_->Entities().IsAlive(entity)
             ? scene_->Components().Rigidbodies().TryGet(entity) : nullptr;
         if (rigidbody == nullptr || rigidbody->bodyType != RigidbodyBodyType::Dynamic ||
@@ -1378,6 +1416,7 @@ public:
         PendingPush& pending = pendingPushes_[entity.Id()];
         pending.force = Vec3{pending.force.x + force.x, pending.force.y + force.y, pending.force.z + force.z};
         pending.impulse = Vec3{pending.impulse.x + impulse.x, pending.impulse.y + impulse.y, pending.impulse.z + impulse.z};
+        pending.torque = Vec3{pending.torque.x + torque.x, pending.torque.y + torque.y, pending.torque.z + torque.z};
         return true;
     }
 
@@ -1853,6 +1892,7 @@ public:
         if (const auto pending = pendingPushes_.find(entity.Id()); pending != pendingPushes_.end()) {
             physicsSystem_.GetBodyInterface().AddForce(bodyId, ToJolt(pending->second.force));
             physicsSystem_.GetBodyInterface().AddImpulse(bodyId, ToJolt(pending->second.impulse));
+            physicsSystem_.GetBodyInterface().AddTorque(bodyId, ToJolt(pending->second.torque));
             pendingPushes_.erase(pending);
         }
         if (rigidbody.bodyType == RigidbodyBodyType::Static && wakeSurvivingDynamicBodies) {
@@ -2048,6 +2088,7 @@ private:
         std::unordered_set<std::uint64_t> seen;
         seen.reserve(std::max(joints_.size(), jointScratch_.size()));
         for (const JointSnapshot& snapshot : jointScratch_) {
+            if (std::ranges::find(brokenJoints_, snapshot.entity) != brokenJoints_.end()) continue;
             seen.insert(snapshot.entity.Id());
             SynchronizeJoint(snapshot.entity, snapshot.joint);
         }
@@ -2060,6 +2101,37 @@ private:
                 ++it;
             }
         }
+    }
+
+    // Unity's Joint.breakForce: a joint whose constraint force in the last step exceeded its
+    // break force is removed at once; the engine removes its component after this fixed update
+    // (a plugin makes no structural ECS changes), until then it is not rebuilt.
+    void BreakOverloadedJoints(SceneSystemContext& context) {
+        brokenJoints_.clear();
+        const float deltaSeconds = context.DeltaSeconds();
+        if (deltaSeconds <= 0.0F) return;
+        for (auto it = joints_.begin(); it != joints_.end();) {
+            const float breakForce = it->second.signature.breakForce;
+            if (breakForce <= 0.0F || ConstraintImpulse(it->second) / deltaSeconds <= breakForce) {
+                ++it;
+                continue;
+            }
+            RemoveJointRecord(it->second);
+            kb::scene::PhysicsBackend::QueueJointBreak(context.GetScene(), SceneEntity{ it->first });
+            brokenJoints_.push_back(SceneEntity{ it->first });
+            it = joints_.erase(it);
+        }
+    }
+
+    [[nodiscard]] static float ConstraintImpulse(const JointRecord& record) noexcept {
+        JPH::Constraint* constraint = record.constraint.GetPtr();
+        switch (record.signature.type) {
+        case JointType::Fixed: return static_cast<JPH::FixedConstraint*>(constraint)->GetTotalLambdaPosition().Length();
+        case JointType::Hinge: return static_cast<JPH::HingeConstraint*>(constraint)->GetTotalLambdaPosition().Length();
+        case JointType::Distance: return std::abs(static_cast<JPH::DistanceConstraint*>(constraint)->GetTotalLambdaPosition());
+        case JointType::Point: return static_cast<JPH::PointConstraint*>(constraint)->GetTotalLambdaPosition().Length();
+        }
+        return 0.0F;
     }
 
     // A joint that held a body motionless for long enough can put it to
@@ -2144,6 +2216,11 @@ private:
         if (constraint == nullptr) {
             return; // A body vanished between FindBodyId and the lock - honest skip, retried next step.
         }
+        // A body on a long arm (pendulum) has very different effective masses for rotation and
+        // motion: with Jolt's default 10/2 solver steps a hinge limit lets it through by 5 deg and
+        // bounces. Jolt recommends more steps for such constraints - the limit holds as in Unity.
+        constraint->SetNumVelocityStepsOverride(40U);
+        constraint->SetNumPositionStepsOverride(10U);
         physicsSystem_.AddConstraint(constraint);
         joints_.emplace(entity.Id(), JointRecord{ .constraint = constraint, .signature = signature });
     }
@@ -3047,6 +3124,7 @@ private:
     struct PendingPush {
         Vec3 force{};
         Vec3 impulse{};
+        Vec3 torque{};
     };
     std::unordered_map<std::uint64_t, PendingPush> pendingPushes_;
     std::unordered_map<std::uint64_t, Vec3> pendingCharacterMoves_;
@@ -3081,6 +3159,7 @@ private:
     JPH::Vec3 updatingCharacterVelocity_ = JPH::Vec3::sZero();
     std::unordered_map<JPH::BodyID, SceneEntity> entityByBodyId_;
     std::unordered_map<std::uint64_t, JointRecord> joints_;
+    std::vector<SceneEntity> brokenJoints_;
     std::vector<JointSnapshot> jointScratch_;
     std::unordered_map<std::uint64_t, CharacterRecord> characters_;
     std::unordered_map<std::uint64_t, RootMotionQueue> pendingCharacterRootMotion_;

@@ -95,6 +95,8 @@ bool ParticleGpuEmitterSimulation::Initialize() {
     outputUniform_ = bgfx::createUniform("u_gpuParticleOutput", bgfx::UniformType::Vec4);
     spinUniform_ = bgfx::createUniform("u_gpuParticleSpin", bgfx::UniformType::Vec4, 4U);
     basisUniform_ = bgfx::createUniform("u_gpuParticleBasis", bgfx::UniformType::Vec4, 3U);
+    forcesUniform_ = bgfx::createUniform("u_gpuParticleForces", bgfx::UniformType::Vec4, 4U);
+    noiseOriginUniform_ = bgfx::createUniform("u_gpuParticleNoiseOrigin", bgfx::UniformType::Vec4);
     collideProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_collide.sc");
     rebaseProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_rebase.sc");
     rebaseUniform_ = bgfx::createUniform("u_gpuParticleRebase", bgfx::UniformType::Vec4);
@@ -134,7 +136,8 @@ void ParticleGpuEmitterSimulation::Shutdown() noexcept {
     for (bgfx::UniformHandle* handle : { &motionUniform_, &timeUniform_, &colorUniform_, &sizeUniform_, &worldUniform_, &worldInverseUniform_, &localUniform_, &planeUniform_,
              &collisionUniform_, &depthBounceUniform_, &texelUniform_, &viewProjectionUniform_, &depthSampler_,
              &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_, &sortCameraUniform_,
-             &sortParamsUniform_, &outputUniform_, &spinUniform_, &basisUniform_, &rebaseUniform_ }) {
+             &sortParamsUniform_, &outputUniform_, &spinUniform_, &basisUniform_, &rebaseUniform_, &forcesUniform_,
+             &noiseOriginUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
@@ -177,7 +180,7 @@ bool ParticleGpuEmitterSimulation::Create(const Key& key, const kb::particles::P
         return false;
     }
     allocatedBytes_ += bytes;
-    if (params.HasCollision() && !EnsureState(emitter)) {
+    if (params.NeedsState() && !EnsureState(emitter)) {
         allocatedBytes_ -= bytes;
         Destroy(emitter);
         return false;
@@ -320,6 +323,8 @@ void ParticleGpuEmitterSimulation::Rebase(bgfx::ViewId viewId, std::uint64_t sce
     for (auto& [key, emitter] : emitters_) {
         if (key.sceneId != sceneId || emitter.params.localSpace) continue;
         emitter.params.plane.distance += kb::math::Dot(emitter.params.plane.normal, shift);
+        emitter.fieldOrigin = emitter.fieldOrigin + shift;
+        emitter.attractionTarget = emitter.attractionTarget + shift;
         if (!bgfx::isValid(rebaseProgram_)) {
             Clear(emitter);
             continue;
@@ -371,10 +376,14 @@ void ParticleGpuEmitterSimulation::Apply(
                 found->second.params = params;
                 found->second.params.capacity = capacity;
                 if (NeedsSort(params, false)) static_cast<void>(EnsureSort(found->second));
-                if (params.HasCollision() && !EnsureState(found->second)) {
-                    // No budget left for the state: the emitter keeps simulating without collisions.
+                if (params.NeedsState() && !EnsureState(found->second)) {
+                    // No budget left for the state: the emitter keeps simulating in closed form, without
+                    // collisions and fields.
                     found->second.params.hasPlane = false;
                     found->second.params.sceneDepthCollision = false;
+                    found->second.params.noiseStrength = 0.0F;
+                    found->second.params.axisRadiansPerSecond = 0.0F;
+                    found->second.params.attractionStrength = 0.0F;
                 }
             }
         }
@@ -389,6 +398,13 @@ void ParticleGpuEmitterSimulation::Apply(
         if (command.hasOrientation) {
             found->second.basis = BasisColumns(command.orientation);
             found->second.origin = { command.origin[0] + offset.x, command.origin[1] + offset.y, command.origin[2] + offset.z };
+        }
+        if (command.hasField) {
+            // A local-space field is in the owner's frame; a world-space one moves to the records' origin.
+            const kb::math::Vec3 shift = found->second.params.localSpace ? kb::math::Vec3{} : recordOffset;
+            found->second.fieldOrigin = command.fieldOrigin + shift;
+            found->second.fieldAxis = command.fieldAxis;
+            found->second.attractionTarget = command.attractionTarget + shift;
         }
         if (command.clear) Clear(found->second);
         if (found->second.params.localSpace || (recordOffset.x == 0.0F && recordOffset.y == 0.0F && recordOffset.z == 0.0F)) {
@@ -442,8 +458,20 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         }
         bgfx::setBuffer(0U, emitter.spawns, bgfx::Access::Read);
         bgfx::setBuffer(1U, emitter.instances, bgfx::Access::Write);
-        const bool colliding = params.HasCollision() && bgfx::isValid(emitter.state) && bgfx::isValid(collideProgram_);
+        const bool colliding = params.NeedsState() && bgfx::isValid(emitter.state) && bgfx::isValid(collideProgram_);
         if (colliding) {
+            const std::array<float, 16> forces{
+                params.noiseStrength, params.noiseFrequency, static_cast<float>(params.noiseSeed), 0.0F,
+                emitter.fieldAxis.x, emitter.fieldAxis.y, emitter.fieldAxis.z, params.axisRadiansPerSecond,
+                emitter.attractionTarget.x, emitter.attractionTarget.y, emitter.attractionTarget.z, params.attractionStrength,
+                emitter.fieldOrigin.x, emitter.fieldOrigin.y, emitter.fieldOrigin.z, params.attractionRadius };
+            // Noise lies in the world: the records (world space) or the owner's matrix (local space) are relative
+            // to an origin the kernel adds back.
+            const kb::math::DVec3& noiseOrigin = params.localSpace ? clock.renderOrigin : clock.recordOrigin;
+            const std::array<float, 4> noiseOriginData{
+                static_cast<float>(noiseOrigin.x), static_cast<float>(noiseOrigin.y), static_cast<float>(noiseOrigin.z), 0.0F };
+            bgfx::setUniform(forcesUniform_, forces.data(), 4U);
+            bgfx::setUniform(noiseOriginUniform_, noiseOriginData.data());
             const kb::particles::ParticleGpuCollisionPlane& plane = params.plane;
             const std::array<float, 8> planeData{
                 plane.normal.x, plane.normal.y, plane.normal.z, plane.distance, plane.restitution, plane.friction, 0.0F, 0.0F };

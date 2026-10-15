@@ -319,11 +319,11 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     Require(cancelledSubEmitter.status == ParticleEditorStatus::InvalidSelection &&
             !allTypesDocument.CanUndo() && allTypesDocument.Asset().emitters[0].modules.empty(),
         "cancelled Sub Emitter target selection mutated document history");
-    for (std::uint8_t raw = 0U; raw <= static_cast<std::uint8_t>(kb::scene::ParticleModuleType::SubEmitter); ++raw) {
+    for (std::uint8_t raw = 0U; raw <= static_cast<std::uint8_t>(kb::scene::ParticleModuleType::Separation); ++raw) {
         const auto type = static_cast<kb::scene::ParticleModuleType>(raw);
         const auto added = ParticleEditorCommands::AddModule(allTypesDocument, allTypesWorkspace, 11U, type,
             type == kb::scene::ParticleModuleType::SubEmitter ? 12U : 0U);
-        Require(added.Succeeded(), "one of the nine executable module types could not be added validly");
+        Require(added.Succeeded(), "one of the fourteen module types could not be added validly");
     }
     const auto& allModules = allTypesDocument.Asset().emitters[0].modules;
     const auto color = std::find_if(allModules.begin(), allModules.end(), [](const auto& module) {
@@ -332,7 +332,7 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     const auto subEmitter = std::find_if(allModules.begin(), allModules.end(), [](const auto& module) {
         return module.type == kb::scene::ParticleModuleType::SubEmitter;
     });
-    Require(allModules.size() == 9U && color != allModules.end() &&
+    Require(allModules.size() == 14U && color != allModules.end() &&
             std::get<kb::scene::ParticleColorOverLifeModule>(color->payload).gradient.stops.size() == 2U &&
             subEmitter != allModules.end() &&
             std::get<kb::scene::ParticleSubEmitterModule>(subEmitter->payload).targetEmitterId == 12U &&
@@ -358,6 +358,18 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
         [](const auto& row) { return row.label == "Curve"; });
     Require(curveRow != sizeInspector.properties.end() && curveRow->editable && curveRow->value == "0,1,0",
         "SizeOverLife curve property row was not editable or did not encode the default curve");
+    const auto separation = std::find_if(allModules.begin(), allModules.end(), [](const auto& module) {
+        return module.type == kb::scene::ParticleModuleType::Separation;
+    });
+    Require(separation != allModules.end(), "Separation module was not added");
+    const auto separationInspector =
+        ParticleEmitterInspectorModel::Build(allTypesDocument.Asset(), 11U, separation->moduleId, nullptr, nullptr);
+    Require(separationInspector.properties.size() >= 2U &&
+            std::any_of(separationInspector.properties.begin(), separationInspector.properties.end(),
+                [](const auto& row) { return row.label == "Strength" && row.editable; }) &&
+            std::any_of(separationInspector.properties.begin(), separationInspector.properties.end(),
+                [](const auto& row) { return row.label == "Distance" && row.editable; }),
+        "Separation module rows (Strength, Distance) are not in the inspector");
     const auto rateInspector = ParticleEmitterInspectorModel::Build(allTypesDocument.Asset(), 11U, 0U, nullptr, nullptr);
 
     const auto rateRow = std::find_if(rateInspector.properties.begin(), rateInspector.properties.end(),
@@ -687,9 +699,10 @@ void TestProductionBakeCacheAndCapabilityGates() {
         "oversized compiled cache was read unboundedly or not rebuilt");
     {
         std::fstream future{rebuilt.cachePath, std::ios::binary | std::ios::in | std::ios::out};
-        const std::array<char, 8U> versionTwo{2, 0, 0, 0, 0, 0, 0, 0};
+        const std::array<char, 8U> versionNext{
+            static_cast<char>(kb::particles::kParticleCompiledEffectCacheFormatVersion + 1U), 0, 0, 0, 0, 0, 0, 0};
         future.seekp(8, std::ios::beg);
-        future.write(versionTwo.data(), static_cast<std::streamsize>(versionTwo.size()));
+        future.write(versionNext.data(), static_cast<std::streamsize>(versionNext.size()));
     }
     Require(bake(effect).status == ParticleBakeStatus::Baked,
         "future compiled cache format was accepted instead of atomically rebuilt");

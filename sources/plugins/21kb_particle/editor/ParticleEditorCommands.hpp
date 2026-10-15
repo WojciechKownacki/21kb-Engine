@@ -9,6 +9,9 @@ class ParticleEditorCommands final {
 public:
     ParticleEditorCommands() = delete;
 
+    // The effect "New Particle Effect" creates (editor and kb_cli vfx-new).
+    [[nodiscard]] static kb::scene::ParticleEffectAsset NewEffect(std::string displayName);
+
     [[nodiscard]] static ParticleEditorResult AddEmitter(
         ParticleEditorDocument& document,
         ParticleEditorWorkspaceState& workspace,

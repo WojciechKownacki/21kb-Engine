@@ -90,10 +90,11 @@ std::string SceneTemplates::Fill(Scene& scene, SceneTemplate kind, const kb::pro
 
     // The sun from above at an angle (the Create menu's Directional Light), the procedural sky
     // with its ambient light, and the 10 x 10 m floor - without them the game view is black.
+    // An item whose project plugin is off is left out, as the listener above.
     for (const auto& [item, name] : { std::pair{ "Directional Light", "Sun" }, std::pair{ "Environment", "Environment" },
              std::pair{ "Plane", "Plane" } }) {
         const SceneCreateResult created = SceneCreateMenu::Create(scene, item, name, project);
-        if (!created.entity.IsValid()) {
+        if (!created.entity.IsValid() && !created.pluginDisabled) {
             return "Basic template: " + created.error;
         }
     }

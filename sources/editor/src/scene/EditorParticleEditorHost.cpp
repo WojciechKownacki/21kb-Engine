@@ -893,6 +893,21 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
                 else if (row.payloadField == 1U) { parsed = ParseNumber(text, uintValue) && uintValue <= 2U; if (parsed) value.trigger = static_cast<kb::scene::ParticleEventTrigger>(uintValue); }
                 else if (row.payloadField == 2U) parsed = setUInt(value.count);
                 else if (row.payloadField == 3U) parsed = setUInt(value.maxDepth);
+            } else if constexpr (std::is_same_v<T, kb::scene::ParticleNoiseModule>) {
+                parsed = row.payloadField == 0U ? setFloat(value.strength) : setFloat(value.frequency);
+            } else if constexpr (std::is_same_v<T, kb::scene::ParticleAxisRotationModule>) {
+                if (row.payloadField == 0U) { parsed = ParseVec3(text, vectorValue); if (parsed) value.axis = vectorValue; }
+                else parsed = setFloat(value.degreesPerSecond);
+            } else if constexpr (std::is_same_v<T, kb::scene::ParticleAttractionModule>) {
+                if (row.payloadField == 0U) { parsed = ParseVec3(text, vectorValue); if (parsed) value.point = vectorValue; }
+                else if (row.payloadField == 1U) parsed = setFloat(value.strength);
+                else parsed = setFloat(value.radius);
+            } else if constexpr (std::is_same_v<T, kb::scene::ParticleTorusSwirlModule>) {
+                if (row.payloadField == 0U) { parsed = ParseVec3(text, vectorValue); if (parsed) value.center = vectorValue; }
+                else if (row.payloadField == 1U) parsed = setFloat(value.radius);
+                else parsed = setFloat(value.degreesPerSecond);
+            } else if constexpr (std::is_same_v<T, kb::scene::ParticleSeparationModule>) {
+                parsed = row.payloadField == 0U ? setFloat(value.strength) : setFloat(value.distance);
             }
         }, payload);
         if (!parsed) { console_.Error("Particles", "Particle module property value is malformed."); return false; }

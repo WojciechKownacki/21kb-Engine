@@ -9,7 +9,7 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint32_t kParticleCompiledEffectVersion = 5U;
+inline constexpr std::uint32_t kParticleCompiledEffectVersion = 6U;
 
 enum class ParticleCompilePlatform : std::uint8_t {
     PlatformIndependent,
@@ -44,7 +44,12 @@ struct ParticleCompiledEmitter {
                                        kb::scene::ParticleWindModule,
                                        kb::scene::ParticleDragModule,
                                        kb::scene::ParticleCollisionPlaneModule,
-                                       kb::scene::ParticleSubEmitterModule>;
+                                       kb::scene::ParticleSubEmitterModule,
+                                       kb::scene::ParticleNoiseModule,
+                                       kb::scene::ParticleAxisRotationModule,
+                                       kb::scene::ParticleAttractionModule,
+                                       kb::scene::ParticleTorusSwirlModule,
+                                       kb::scene::ParticleSeparationModule>;
 
     struct Module {
         kb::scene::ParticleStableId moduleId = 0U;
@@ -58,6 +63,7 @@ struct ParticleCompiledEmitter {
     std::uint64_t materialAssetId = 0U;
     std::uint64_t meshAssetId = 0U;
     std::uint64_t textureAtlasAssetId = 0U;
+    std::uint64_t shapeMeshAssetId = 0U;  // Mesh spawn shape
     float meshLodBias = 0.0F;
     bool meshCastsShadow = false;
     bool meshReceivesShadow = true;
@@ -115,6 +121,26 @@ struct ParticleCompiledEmitter {
     ParticleCompiledGradient colorOverLife{};
     ParticleCompiledCurve sizeOverLife{};
     ParticleCompiledCurve alphaOverLife{};
+    // Spawn shape, start velocity, size variation, the emitter's own clock and the beam spawn
+    // (kb::scene::ParticleSpawnAsset); spiralTurnRadians per second.
+    kb::scene::ParticleSpawnShapeAsset shape{};
+    kb::scene::ParticleVelocityMode velocityMode = kb::scene::ParticleVelocityMode::Cone;
+    float spiralArms = 1.0F;
+    float spiralTurnRadians = 0.0F;
+    kb::math::Vec3 addedVelocity{};
+    float sizeRandom = 0.0F;
+    float startDelaySeconds = 0.0F;
+    float cycleSeconds = 0.0F;
+    bool cycleLooping = true;
+    kb::scene::ParticleBeamSpawnAsset beam{};
+    bool absolutePosition = false;
+    // HDR colour multiplier, particle lights and decals of the output.
+    float colorIntensity = 1.0F;
+    bool lightEnabled = false;
+    float lightRadius = 4.0F;
+    float lightIntensity = 1.0F;
+    std::uint32_t lightMaxCount = 16U;
+    float decalDepth = 1.0F;
     std::uint8_t moduleCount = 0U;
     std::array<Module, kb::scene::kParticleEffectMaxModulesPerEmitter> modules{};
 };
@@ -128,6 +154,7 @@ struct ParticleCompiledEffect {
         std::uint32_t count = 1U;
         std::uint8_t maxDepth = 1U;
         std::uint32_t perStepBudget = 1U;
+        float ratePerSecond = 0.0F;  // WhileAlive
     };
 
     std::uint64_t determinismSeed = 0U;

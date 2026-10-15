@@ -13,6 +13,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <array>
 #include <cstdint>
 
 namespace kb::render {
@@ -25,7 +26,10 @@ struct SceneDeferredLightingPassDesc {
     const SceneRenderCamera* camera = nullptr;
     SceneRenderLightingConfig lightingConfig{};
     RenderExtent extent{};
-    std::uint32_t clearRgba = 0x000000FFU;
+    // Linear background of pixels without geometry, cleared through the float palette entry of
+    // viewport `clearPaletteViewport` (the opaque view's clear).
+    std::array<float, 3> clearColor{ 0.0F, 0.0F, 0.0F };
+    std::uint32_t clearPaletteViewport = 0U;
     const SceneRenderShadowMapBinding* shadowMap = nullptr;
     const SceneRenderWorldBackdrop* worldBackdrop = nullptr;
     bgfx::TextureHandle worldBackdropEnvironment = BGFX_INVALID_HANDLE;

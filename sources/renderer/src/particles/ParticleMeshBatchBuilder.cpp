@@ -173,7 +173,9 @@ void ParticleMeshBatchBuilder::Build(const kb::particles::ParticleRenderSnapshot
             instance.meshAssetId = emitter.meshAssetId;
             instance.materialAssetId = emitter.materialAssetId;
             instance.model = FlattenModel(kb::math::FromTRS(particle.position + renderOffset, orientation, scale));
+            // The emitter's colour intensity lifts the colour to HDR, as for billboards.
             instance.color = UnpackColor(particle.packedColor);
+            for (std::size_t channel = 0U; channel < 3U; ++channel) instance.color[channel] *= emitter.colorIntensity;
             instance.castsShadow = castsShadow;
             instance.receivesShadow = receivesShadow;
             instance.lodBias = emitter.meshLodLevel;

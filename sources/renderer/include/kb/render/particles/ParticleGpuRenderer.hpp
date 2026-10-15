@@ -68,7 +68,12 @@ public:
     [[nodiscard]] bool PrepareVisualSimulation(
         bgfx::ViewId viewId,
         const kb::particles::ParticleRenderSnapshot& snapshot) noexcept;
-    [[nodiscard]] ParticleStripSubmitResult SubmitStripDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept;
+    // Strips take their emitter's texture; one that is not loaded draws plain white.
+    [[nodiscard]] ParticleStripSubmitResult SubmitStripDraw(
+        bgfx::ViewId viewId,
+        std::uint32_t drawIndex,
+        const RenderResourceRegistry& resources,
+        const SceneRenderResourceMap& resourceMap) noexcept;
     // GPU-simulated emitters (see engine/particles/ParticleGpuEmitter.hpp). SyncGpuEmitters drains the
     // queued commands of a scene once per rendered frame; DispatchGpuEmitters runs the simulation for
     // that frame (once) in a view that does not bind the scene depth as a render target, because
@@ -120,6 +125,12 @@ private:
     bgfx::UniformHandle localBasisUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle volumetricParamsUniform_ = BGFX_INVALID_HANDLE;
+    // Decals: a box per particle projecting the texture onto the scene depth inside it.
+    bgfx::ProgramHandle decalProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle decalParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::VertexBufferHandle decalBoxVertices_ = BGFX_INVALID_HANDLE;
+    bgfx::IndexBufferHandle decalBoxIndices_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle solidTexture_ = BGFX_INVALID_HANDLE; // plain white: trail segments are flat quads
     bgfx::TextureHandle whiteTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle streakTexture_ = BGFX_INVALID_HANDLE;
