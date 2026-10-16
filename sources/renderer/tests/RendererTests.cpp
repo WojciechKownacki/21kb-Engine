@@ -59,6 +59,7 @@ void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
 void RunRendererVisibilityFeedbackTest();
 void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
+void RunRendererScreenSpaceEffectTests();
 void RunRendererParticleStripSnapshotSubmitTest();
 void RunRendererParticleVolumetricSnapshotSubmitTest();
 void RunRendererDetachedViewportFinalCompositePixelsTest();
@@ -138,6 +139,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "shader-manifest") {
         kb::render::tests::RunShaderManifestTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "screen-space") {
+        kb::render::tests::RunRendererScreenSpaceEffectTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "frame-pipeline") {

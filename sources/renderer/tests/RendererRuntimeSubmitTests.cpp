@@ -7099,9 +7099,14 @@ void RunRendererRendersScreenSpaceReflectionsTest() {
     SceneRenderLightingConfig lighting{};
     const bx::Vec3 eye{ -6.0F, 1.0F, -3.0F };
     const bx::Vec3 target{ 2.0F, 0.0F, 0.0F };
-    const auto off = RenderScreenSpaceScene(boxes, lights, eye, target, 40.0F, lighting, 8, kSize);
+    // The wall is seen by the floor at a grazing angle, so its reflection is a fraction of the wall's own
+    // brightness: light it well enough that the mirror image stands out from the floor's sky reflection.
+    constexpr float kWallLightIntensity = 10.0F;
+    const auto off = RenderScreenSpaceScene(boxes, lights, eye, target, 40.0F, lighting, 8, kSize,
+        SceneRenderMeshPassMode::OpaqueOnly, {}, false, kWallLightIntensity);
     lighting.screenSpaceReflectionsEnabled = true;
-    const auto on = RenderScreenSpaceScene(boxes, lights, eye, target, 40.0F, lighting, 8, kSize);
+    const auto on = RenderScreenSpaceScene(boxes, lights, eye, target, 40.0F, lighting, 8, kSize,
+        SceneRenderMeshPassMode::OpaqueOnly, {}, false, kWallLightIntensity);
     // The mirror image of the wall lies on the floor below the wall's base line in the image.
     const auto redExcess = [&](const std::vector<std::uint8_t>& pixels) {
         double sum = 0.0;
@@ -7228,15 +7233,18 @@ void RunRendererVignetteDarkensFinalCompositeCornersTest() {
 // traced through the world-space voxel grid: screen-space GI cannot see what is not on screen.
 void RunRendererRendersVoxelGiFromOffscreenObjectsTest() {
     constexpr std::uint16_t kSize = 64U;
-    const std::vector<SsBox> boxes{
-        { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } },
-        { { -4.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, SsMaterial::Red },
-    };
+    // The wall is lit from the side by a light five metres away: bright enough for its bounce to show.
+    constexpr float kLightIntensity = 6.0F;
     const std::vector<kb::scene::Vec3> lights{ { -1.0F, 5.0F, 0.0F } };
     const auto redExcess = [&](SceneRenderGlobalIlluminationMode mode) {
+        const std::vector<SsBox> boxes{
+            { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } },
+            { { -4.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, SsMaterial::Red },
+        };
         SceneRenderLightingConfig lighting{};
         lighting.globalIllumination = mode;
-        const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 3.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 2.0F }, 30.0F, lighting, 30, kSize);
+        const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 3.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 2.0F }, 30.0F, lighting, 30, kSize,
+            SceneRenderMeshPassMode::OpaqueOnly, {}, false, kLightIntensity);
         double sum = 0.0;
         for (int y = 28; y < 36; ++y) {
             for (int x = 28; x < 36; ++x) {
@@ -7254,22 +7262,23 @@ void RunRendererRendersVoxelGiFromOffscreenObjectsTest() {
     Require(screenSpace < none + 3.0, "Voxel GI test: screen-space GI must not see the off-screen wall");
 }
 
-// The same red wall, with a plate that hides it from the light but not from the floor: the bounce off the
-// wall must vanish when the light casts shadows (the voxel grid traces a ray towards the light) and stay when
-// the light does not.
+// The same wall, with a plate that hides it from the light but not from the floor: the tint the red wall
+// puts on the floor (against an identical white wall, which blocks the same sky) must vanish when the
+// light casts shadows (the voxel grid traces a ray towards the light) and stay when the light does not.
 void RunRendererShadowsVoxelGiBounceTest() {
     constexpr std::uint16_t kSize = 64U;
-    const std::vector<SsBox> boxes{
-        { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } },
-        { { -4.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, SsMaterial::Red },
-        { { -2.5F, 4.2F, 0.0F }, { 2.6F, 0.2F, 20.0F } }, // above the wall's lower part, below the light
-    };
+    constexpr float kLightIntensity = 12.0F;
     const std::vector<kb::scene::Vec3> lights{ { -1.0F, 5.0F, 0.0F } };
-    const auto redExcess = [&](bool lightCastsShadow) {
+    const auto redExcess = [&](bool lightCastsShadow, SsMaterial wall) {
+        const std::vector<SsBox> boxes{
+            { { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } },
+            { { -4.0F, 3.0F, 0.0F }, { 0.5F, 6.0F, 20.0F }, wall },
+            { { -2.5F, 4.2F, 0.0F }, { 2.6F, 0.2F, 20.0F } }, // above the wall's lower part, below the light
+        };
         SceneRenderLightingConfig lighting{};
         lighting.globalIllumination = SceneRenderGlobalIlluminationMode::VoxelGrid;
         const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 3.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 2.0F }, 30.0F,
-            lighting, 30, kSize, SceneRenderMeshPassMode::OpaqueOnly, {}, lightCastsShadow);
+            lighting, 30, kSize, SceneRenderMeshPassMode::OpaqueOnly, {}, lightCastsShadow, kLightIntensity);
         double sum = 0.0;
         for (int y = 28; y < 36; ++y) {
             for (int x = 28; x < 36; ++x) {
@@ -7279,12 +7288,11 @@ void RunRendererShadowsVoxelGiBounceTest() {
         }
         return sum / 64.0;
     };
-    const double unshadowed = redExcess(false);
-    const double shadowed = redExcess(true);
-    std::fprintf(stderr, "voxel_gi_shadow red_minus_blue unshadowed=%.1f shadowed=%.1f%c", unshadowed, shadowed, 10);
-    // -12.2 is the floor with no bounce at all (see the voxel GI test): the shadowed wall must add nothing.
-    Require(unshadowed > shadowed + 8.0, "Voxel GI shadow test: the lit red wall must tint the floor");
-    Require(shadowed < -10.0, "Voxel GI shadow test: a wall in shadow must bounce (almost) no light");
+    const double unshadowed = redExcess(false, SsMaterial::Red) - redExcess(false, SsMaterial::White);
+    const double shadowed = redExcess(true, SsMaterial::Red) - redExcess(true, SsMaterial::White);
+    std::fprintf(stderr, "voxel_gi_shadow red_tint unshadowed=%.1f shadowed=%.1f%c", unshadowed, shadowed, 10);
+    Require(unshadowed > 8.0, "Voxel GI shadow test: the lit red wall must tint the floor");
+    Require(shadowed < 3.0, "Voxel GI shadow test: a wall in shadow must bounce (almost) no light");
 }
 
 // A hollow sphere must fill the voxels its surface passes through, not its whole bounding box.
@@ -8414,6 +8422,20 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
 #endif
     RunRendererDrawsGpuSimulatedParticlesTest();
     RunRendererDrawsMillionGpuParticlesTest();
+#endif
+}
+
+// The screen-space effects and the voxel GI alone: gathered GI, its temporal smoothing, ambient
+// occlusion, reflections and the world-space bounce.
+void RunRendererScreenSpaceEffectTests() {
+#if defined(_WIN32)
+    RunRendererRendersScreenSpaceGiBounceTest();
+    RunRendererSmoothsScreenSpaceGiOverTimeTest();
+    RunRendererRendersScreenSpaceAmbientOcclusionTest();
+    RunRendererRendersScreenSpaceReflectionsTest();
+    RunRendererRendersVoxelGiFromOffscreenObjectsTest();
+    RunRendererShadowsVoxelGiBounceTest();
+    RunVoxelGridFollowsMeshGeometryTest();
 #endif
 }
 
