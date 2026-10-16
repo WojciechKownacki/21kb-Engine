@@ -20,6 +20,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
+#include "kb/render/scene/SceneLightingQuality.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -421,6 +422,7 @@ int RunGame(const GameOptions& options) {
         case kb::project::ProjectSceneLightingPath::Deferred: lighting.lightingPath = kb::render::SceneRenderLightingPath::Deferred; break;
         }
         if (options.profileLighting) lighting.lightingPath = *options.profileLighting;
+        kb::render::ApplyProjectLightingQuality(lighting, projectRuntime.shadowQuality, projectRuntime.giQuality, kb::game::kMobileDevice);
         lighting.maxForwardLights = lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus
             ? kb::render::kMaxSceneForwardPlusLights : kb::render::kMaxSceneForwardLights;
         renderer.SetDefaultSceneLightingConfig(lighting);

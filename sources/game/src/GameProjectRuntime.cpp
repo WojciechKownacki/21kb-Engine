@@ -359,6 +359,8 @@ bool ReadMountedGameProjectRuntime(
     packaged.inputMappingContext = manifest.settings.inputMappingContext;
     packaged.inputEnabled = manifest.settings.inputEnabled;
     packaged.lightingPath = manifest.settings.lightingPath;
+    packaged.shadowQuality = kMobileDevice ? manifest.settings.shadowQualityMobile : manifest.settings.shadowQuality;
+    packaged.giQuality = kMobileDevice ? manifest.settings.giQualityMobile : manifest.settings.giQuality;
     for (const kb::project::ProjectPluginReference& plugin : packaged.descriptor.plugins) {
         if (plugin.enabled && !plugin.name.empty()) {
             packaged.requiredModules.push_back(plugin.name);
@@ -586,6 +588,8 @@ bool ReadGameProjectRuntime(
     runtime.inputMappingContext = resolved.inputMappingContext;
     runtime.inputEnabled = resolved.inputEnabled;
     runtime.lightingPath = resolved.lightingPath;
+    runtime.shadowQuality = kMobileDevice ? resolved.shadowQualityMobile : resolved.shadowQuality;
+    runtime.giQuality = kMobileDevice ? resolved.giQualityMobile : resolved.giQuality;
     runtime.descriptor = std::move(loaded.descriptor);
     return true;
 }

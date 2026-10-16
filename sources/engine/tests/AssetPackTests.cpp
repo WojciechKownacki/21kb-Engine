@@ -187,6 +187,7 @@ struct RuntimeManifestCountOffsets {
         cursor = SkipRuntimeManifestString(bytes, cursor);
     }
     cursor += 4U; // lighting path
+    cursor += 4U; // shadow and global illumination quality, desktop and mobile
     cursor += 1U; // input enabled
     cursor = SkipRuntimeManifestString(bytes, cursor);
     cursor = SkipRuntimeManifestString(bytes, cursor);
@@ -692,6 +693,10 @@ void RuntimeManifestIsCanonicalAndHostileInputSafe() {
     first.settings.name = "CookedProject";
     first.settings.gameName = "Cooked Game";
     first.settings.defaultMap = "/Game/Scenes/Main.21kbscene";
+    first.settings.shadowQuality = kb::project::ProjectQualityLevel::High;
+    first.settings.shadowQualityMobile = kb::project::ProjectQualityLevel::Low;
+    first.settings.giQuality = kb::project::ProjectQualityLevel::Ultra;
+    first.settings.giQualityMobile = kb::project::ProjectQualityLevel::Medium;
     first.assets = {
         bake::RuntimeAssetManifestEntry{
             .id = kb::assets::MakeAssetId("/Game/Textures/Albedo.png:RenderTexture"),

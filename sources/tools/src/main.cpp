@@ -234,6 +234,11 @@ Commands:
                Layers are indexes 0-30 or names. The asset is the project's
                [Physics] LayersAsset, created at
                /Game/Settings/PhysicsLayers.21kbphysicslayers when it has none.
+  lighting-quality  Show or set the project's shadow and global illumination quality.
+                 --project <dir> [--shadows <level>] [--shadows-mobile <level>]
+                 [--gi <level>] [--gi-mobile <level>]
+               Levels are auto, low, medium, high and ultra. Auto leaves the choice to
+               the engine; the mobile settings apply on phones and tablets.
 
 Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).
@@ -409,6 +414,9 @@ int Dispatch(int argc, char** argv) {
     }
     if (command == "physics-layers") {
         return kb::cli::RunPhysicsLayersCommand(arguments, io);
+    }
+    if (command == "lighting-quality") {
+        return kb::cli::RunLightingQualityCommand(arguments, io);
     }
     if (command == "help" || command == "--help" || command == "-h") {
         std::cout << kUsage;

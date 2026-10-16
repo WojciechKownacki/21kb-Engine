@@ -212,8 +212,13 @@ private:
         }) || settings.description.size() > kMaxDescriptionBytes || !IsCleanText(settings.description)) {
         return false;
     }
+    const auto validQuality = [](kb::project::ProjectQualityLevel level) noexcept {
+        return static_cast<std::uint8_t>(level) < kb::project::kProjectQualityLevelCount;
+    };
     return static_cast<std::uint32_t>(settings.lightingPath) <=
-        static_cast<std::uint32_t>(kb::project::ProjectSceneLightingPath::ForwardPlus);
+            static_cast<std::uint32_t>(kb::project::ProjectSceneLightingPath::ForwardPlus) &&
+        validQuality(settings.shadowQuality) && validQuality(settings.shadowQualityMobile) &&
+        validQuality(settings.giQuality) && validQuality(settings.giQualityMobile);
 }
 
 [[nodiscard]] bool ArtifactLess(
@@ -425,6 +430,10 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
     PutString(bytes, settings.defaultMap);
     PutString(bytes, settings.lastOpenMap);
     PutUInt32(bytes, static_cast<std::uint32_t>(settings.lightingPath));
+    PutUInt8(bytes, static_cast<std::uint8_t>(settings.shadowQuality));
+    PutUInt8(bytes, static_cast<std::uint8_t>(settings.shadowQualityMobile));
+    PutUInt8(bytes, static_cast<std::uint8_t>(settings.giQuality));
+    PutUInt8(bytes, static_cast<std::uint8_t>(settings.giQualityMobile));
     PutUInt8(bytes, settings.inputEnabled ? 1U : 0U);
     PutString(bytes, settings.inputMappingContext);
     PutString(bytes, settings.physicsLayersAsset);
@@ -432,6 +441,7 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
 
 [[nodiscard]] bool DecodeSettings(Reader& reader, kb::project::ProjectSettings& settings) {
     std::uint32_t lightingPath = 0U;
+    std::array<std::uint8_t, 4U> quality{};
     std::uint8_t inputEnabled = 0U;
     if (!reader.ReadString(settings.name, kMaxPathBytes) ||
         !reader.ReadString(settings.gameName, kMaxPathBytes) ||
@@ -439,12 +449,19 @@ void EncodeSettings(std::vector<std::uint8_t>& bytes, const kb::project::Project
         !reader.ReadString(settings.description, kMaxDescriptionBytes) ||
         !reader.ReadString(settings.defaultMap, kMaxPathBytes) ||
         !reader.ReadString(settings.lastOpenMap, kMaxPathBytes) || !reader.ReadUInt32(lightingPath) ||
-        !reader.ReadUInt8(inputEnabled) || inputEnabled > 1U ||
+        !reader.ReadUInt8(quality[0]) || !reader.ReadUInt8(quality[1]) || !reader.ReadUInt8(quality[2]) ||
+        !reader.ReadUInt8(quality[3]) || std::ranges::any_of(quality, [](std::uint8_t level) {
+            return level >= kb::project::kProjectQualityLevelCount;
+        }) || !reader.ReadUInt8(inputEnabled) || inputEnabled > 1U ||
         !reader.ReadString(settings.inputMappingContext, kMaxPathBytes) ||
         !reader.ReadString(settings.physicsLayersAsset, kMaxPathBytes)) {
         return false;
     }
     settings.lightingPath = static_cast<kb::project::ProjectSceneLightingPath>(lightingPath);
+    settings.shadowQuality = static_cast<kb::project::ProjectQualityLevel>(quality[0]);
+    settings.shadowQualityMobile = static_cast<kb::project::ProjectQualityLevel>(quality[1]);
+    settings.giQuality = static_cast<kb::project::ProjectQualityLevel>(quality[2]);
+    settings.giQualityMobile = static_cast<kb::project::ProjectQualityLevel>(quality[3]);
     settings.inputEnabled = inputEnabled != 0U;
     return true;
 }

@@ -17,7 +17,7 @@ namespace kb::assets::bake {
 inline constexpr std::string_view kRuntimeManifestAssetTypeId = "RuntimeManifest";
 inline constexpr std::string_view kSourceAssetTypeId = "SourceAsset";
 inline constexpr std::string_view kMaterialShaderAssetTypeId = "MaterialShader";
-inline constexpr std::uint32_t kRuntimeAssetManifestVersion = 1U;
+inline constexpr std::uint32_t kRuntimeAssetManifestVersion = 2U;
 
 // How a manifest reference is meant to be consumed. The digest points at an artifact in the
 // same AssetPack; the encoding prevents a raw source blob from being mistaken for cooked GPU

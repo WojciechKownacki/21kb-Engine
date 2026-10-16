@@ -7,6 +7,7 @@ add_library(kb_cli_core STATIC
     src/CliNavMeshCommands.cpp
     src/CliPackSetCommands.cpp
     src/CliPhysicsCommands.cpp
+    src/CliQualityCommands.cpp
     src/CliRunCommand.cpp
     src/CliSceneCommands.cpp
     src/CliScriptCommands.cpp
