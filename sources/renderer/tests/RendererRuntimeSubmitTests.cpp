@@ -34,6 +34,7 @@
 #include "engine/ui/visual/UIText.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
+#include "kb/render/shadow/ShadowMapResource.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/RenderSurface.hpp"
@@ -3914,7 +3915,7 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(bool testRetention = f
     Require(submitStats.submittedShadowDrawCallCount == 1U, "Runtime submit did not draw one shadow caster batch");
     Require(submitStats.shadowFilterSampleCount == 9U, "Runtime submit did not report PCF shadow filter sample count");
     Require(submitStats.shadowLightEntityId == light.Id(), "Runtime submit did not report selected shadow light entity");
-    Require(submitStats.shadowMapAllocationBytes == 1024ULL * 1024ULL * 4ULL, "Runtime submit did not report shadow map allocation bytes");
+    Require(submitStats.shadowMapAllocationBytes == ShadowMapResource::AllocationBytesFor(SceneRenderLightingConfig{}.shadowMapSize), "Runtime submit did not report shadow map allocation bytes");
     Require(submitStats.submittedEnvironmentLightingCount == 3U, "Runtime submit did not report environment lighting for every mesh pass");
     Require(submitStats.environmentLightingMode == static_cast<std::uint32_t>(SceneRenderEnvironmentMode::Constant) + 1U, "Runtime submit did not report default environment lighting mode");
     Require(submitStats.environmentLightingSampleCount == 1U, "Runtime submit did not report default environment sample count");
@@ -3924,7 +3925,7 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(bool testRetention = f
     Require(passStats[0].pass == MeshPassType::ShadowDepth && passStats[0].stats.submittedShadowCasterCount == instanceCount, "Runtime submit shadow pass stats are wrong");
     Require(passStats[0].stats.shadowFilterSampleCount == 9U, "Runtime submit shadow pass did not report PCF filter sample count");
     Require(passStats[0].stats.shadowLightEntityId == light.Id(), "Runtime submit shadow pass did not report selected shadow light entity");
-    Require(passStats[0].stats.shadowMapAllocationBytes == 1024ULL * 1024ULL * 4ULL, "Runtime submit shadow pass did not report shadow map allocation bytes");
+    Require(passStats[0].stats.shadowMapAllocationBytes == ShadowMapResource::AllocationBytesFor(SceneRenderLightingConfig{}.shadowMapSize), "Runtime submit shadow pass did not report shadow map allocation bytes");
     Require(passStats[1].pass == MeshPassType::BaseOpaque && passStats[1].stats.submittedMeshCount == instanceCount, "Runtime submit opaque pass stats are wrong");
     Require(passStats[2].pass == MeshPassType::BaseTransparent && passStats[2].stats.submittedMeshCount == 1U, "Runtime submit transparent pass must submit the blended material (MAT-80)");
     Require(renderer.LastSceneExposureStats().empty(), "Runtime submit without post-process unexpectedly reported exposure stats");
@@ -3941,8 +3942,8 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest(bool testRetention = f
     Require(runtimeStats.referencedMaterialAssetCount == 2U, "Runtime submit did not reference opaque and transparent material assets");
     Require(runtimeStats.referencedTextureAssetCount == 5U, "Runtime submit did not reference every material texture asset");
     Require(runtimeStats.unresolvedMaterialTexturePathCount == 1U, "Runtime submit did not report unresolved material texture paths");
-    Require(runtimeStats.shadowMapAllocated && runtimeStats.shadowMapSize == 1024U, "Runtime submit did not allocate the configured runtime shadow map");
-    Require(runtimeStats.shadowMapAllocationBytes == 1024ULL * 1024ULL * 4ULL, "Runtime submit did not expose shadow map allocation bytes");
+    Require(runtimeStats.shadowMapAllocated && runtimeStats.shadowMapSize == SceneRenderLightingConfig{}.shadowMapSize, "Runtime submit did not allocate the configured runtime shadow map");
+    Require(runtimeStats.shadowMapAllocationBytes == ShadowMapResource::AllocationBytesFor(SceneRenderLightingConfig{}.shadowMapSize), "Runtime submit did not expose shadow map allocation bytes");
     Require(runtimeStats.defaultEnvironmentLightingMode == static_cast<std::uint32_t>(SceneRenderEnvironmentMode::Constant) + 1U, "Runtime submit did not expose default environment lighting mode");
     Require(runtimeStats.defaultEnvironmentLightingSampleCount == 1U, "Runtime submit did not expose default environment sample count");
     Require(runtimeStats.defaultShadowFilterSampleCount == 9U, "Runtime submit did not expose default shadow filter sample count");
@@ -7586,7 +7587,7 @@ void RunRendererFollowsLocalSpaceGpuParticlesTest() {
     // SsRed is published by the helper only when a box uses it; a far-away red box makes it exist.
     const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red } };
     const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
-        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue, false, 40.0F);
     const std::size_t offset = (32U * kSize + 32U) * 4U;
     return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
 }
@@ -7629,7 +7630,7 @@ void RunRendererDrawsGpuMeshParticlesTest() {
     };
     const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red } };
     const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
-        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue, false, 40.0F);
     // 10 px = 1.25 m to the right of and above the centre
     return { pixels[(32U * kSize + 42U) * 4U], pixels[(42U * kSize + 32U) * 4U] };
 }
@@ -7683,7 +7684,7 @@ void RunRendererSpinsGpuMeshParticlesTest() {
     };
     const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red } };
     const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
-        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue, false, 40.0F);
     return { pixels[(32U * kSize + 42U) * 4U], pixels[(42U * kSize + 32U) * 4U] };
 }
 
@@ -7736,7 +7737,7 @@ void RunRendererAlignsGpuMeshParticlesToVelocityTest() {
     const std::vector<SsBox> boxes{ { { 0.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Red },
         { { 5.0F, -40.0F, 0.0F }, { 1.0F, 1.0F, 1.0F }, SsMaterial::Blend } };
     const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
-        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue, false, 40.0F);
     const std::size_t offset = (32U * kSize + 32U) * 4U;
     return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
 }
@@ -7781,7 +7782,7 @@ void RunRendererSortsTranslucentGpuMeshParticlesTest() {
     };
     const std::vector<SsBox> boxes{ { { 0.0F, 0.0F, boxZ }, { 2.0F, 2.0F, 2.0F }, SsMaterial::Blend } };
     const auto pixels = RenderScreenSpaceScene(boxes, lights, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
-        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue, false, 40.0F);
     const std::size_t offset = (32U * kSize + 32U) * 4U;
     return { pixels[offset], pixels[offset + 1U], pixels[offset + 2U] };
 }
@@ -7821,7 +7822,7 @@ void RunRendererOrdersGpuMeshParticlesAmongSceneMeshesTest() {
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
     };
     const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 0.0F, 0.0F, 5.0F }, 30.0F,
-        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+        lighting, 4, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue, false, 40.0F);
     const auto at = [&](std::size_t x) { return static_cast<int>(pixels[(32U * kSize + x) * 4U]); };
     return { at(32U), at(24U), at(6U) }; // path middle (x = 0), near the trail's oldest end (x = -1), beyond it
 }

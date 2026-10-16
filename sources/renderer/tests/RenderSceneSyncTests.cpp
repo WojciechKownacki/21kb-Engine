@@ -2490,6 +2490,7 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
             .position = { static_cast<float>(index) * 0.35F, 1.0F, 2.0F },
             .intensity = 1.0F,
             .range = 10.0F,
+            .volumetricScattering = 0.0F, // only the area light is counted as scattering in the fog
             .visible = true,
         }));
     }
@@ -2671,9 +2672,11 @@ void RunDirectionalShadowCameraCoverageTest() {
     const auto cascaded = DirectionalShadowPassPlanner{}.Build(scene, resources, resourceMap, config, BGFX_INVALID_HANDLE, 1U, &eye);
     Require(cascaded.valid && cascaded.binding.cascadeCount == 3U && cascaded.atlasSize == 2U * config.shadowMapSize,
         "Cascaded shadows must pack three cascades into a 2x2 atlas");
-    Require(NearlyEqual(std::abs(cascaded.cascadeCameras[0].projection[0]), 4.0F / 50.0F) &&
+    // Each cascade is a quarter of the next one, so the nearest of three covers 1/16 of the shadow distance.
+    Require(NearlyEqual(std::abs(cascaded.cascadeCameras[0].projection[0]), 16.0F / 50.0F) &&
+            NearlyEqual(std::abs(cascaded.cascadeCameras[1].projection[0]), 4.0F / 50.0F) &&
             NearlyEqual(std::abs(cascaded.cascadeCameras[2].projection[0]), 1.0F / 50.0F),
-        "Cascade extents must halve from the shadow distance down to the nearest cascade");
+        "Cascade extents must shrink by a quarter from the shadow distance down to the nearest cascade");
     config.shadowCascadeCount = 1U;
     const bgfx::Caps* caps = bgfx::getCaps();
     const float textureYScale = caps != nullptr && caps->originBottomLeft ? 0.5F : -0.5F;
