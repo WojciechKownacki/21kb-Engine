@@ -3,6 +3,8 @@
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
 
+#include <algorithm>
+
 namespace kb::editor {
 namespace {
 
@@ -20,6 +22,9 @@ constexpr int kOptionHeight = 28;
 constexpr int kBackendButtonWidth = 86;
 constexpr int kMsaaButtonWidth = 58;
 constexpr int kAaButtonWidth = 64;
+constexpr int kQualityLabelWidth = 232;
+constexpr int kQualityButtonWidth = 72;
+constexpr int kQualityButtonGap = 6;
 
 [[nodiscard]] int RowTopAfter(const RECT& row) noexcept {
     return row.bottom + kRowGap;
@@ -100,6 +105,18 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     const int gpuRowTop = RowTopAfter(rects.selectionOutlineLabel);
     rects.gpuDrivenLabel = RECT{ left, gpuRowTop, left + kLabelWidth, gpuRowTop + kRowHeight };
     rects.gpuDrivenCheckbox = CheckboxForRow(left, gpuRowTop);
+
+    // The five level buttons share what the label leaves of the row, up to a comfortable width each.
+    const int levelsWidth = std::max(0, right - left - kQualityLabelWidth);
+    const int buttonWidth = std::clamp((levelsWidth - 4 * kQualityButtonGap) / 5, 24, kQualityButtonWidth);
+    for (int row = 0; row < 4; ++row) {
+        const int rowTop = sectionTop + kSectionHeaderHeight + kRowGap + row * (kRowHeight + kRowGap);
+        rects.qualityLabel[row] = RECT{ left, rowTop, left + kQualityLabelWidth, rowTop + kRowHeight };
+        for (int level = 0; level < 5; ++level) {
+            const int buttonLeft = left + kQualityLabelWidth + level * (buttonWidth + kQualityButtonGap);
+            rects.qualityButton[row][level] = RECT{ buttonLeft, rowTop + 3, buttonLeft + buttonWidth, rowTop + kRowHeight - 3 };
+        }
+    }
     return rects;
 }
 
@@ -194,6 +211,13 @@ RECT ProjectSettingsPanelLayout::AntiAliasingModeButton(const ProjectSettingsPan
     default:
         return {};
     }
+}
+
+RECT ProjectSettingsPanelLayout::QualityOptionButton(const ProjectSettingsPanelLayoutRects& rects, int row, int level) noexcept {
+    if (row < 0 || row >= 4 || level < 0 || level >= 5) {
+        return {};
+    }
+    return rects.qualityButton[row][level];
 }
 
 RECT ProjectSettingsPanelLayout::MsaaOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept {

@@ -2966,6 +2966,22 @@ bool EditorSceneContext::SetProjectSceneLightingPath(kb::project::ProjectSceneLi
     return saved;
 }
 
+bool EditorSceneContext::SetProjectQualityLevel(int row, kb::project::ProjectQualityLevel level) {
+    kb::project::ProjectQualityLevel* target = nullptr;
+    switch (row) {
+    case 0: target = &projectConfig_.shadowQuality; break;
+    case 1: target = &projectConfig_.shadowQualityMobile; break;
+    case 2: target = &projectConfig_.giQuality; break;
+    case 3: target = &projectConfig_.giQualityMobile; break;
+    default: return false;
+    }
+    if (static_cast<std::uint8_t>(level) >= kb::project::kProjectQualityLevelCount || *target == level) {
+        return false;
+    }
+    *target = level;
+    return SaveProjectConfiguration();
+}
+
 bool EditorSceneContext::CycleEntityVisibilityMode(kb::scene::SceneEntity entity) {
     return ExecuteSceneCommand("Edit Visibility Mode", [this, entity]() {
         kb::scene::VisibilityComponent* visibility = scene_->Components().Visibility().TryGet(entity);

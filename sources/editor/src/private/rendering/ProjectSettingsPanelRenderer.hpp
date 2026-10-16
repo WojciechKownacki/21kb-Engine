@@ -31,6 +31,7 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     AntiAliasingMode,
     GraphicsToggle,
     MsaaOption,
+    QualityOption,        // A level button of a Lighting row (index = row * 5 + level; level 0 when over the label).
 };
 
 // Categories shown in the left sidebar. Add entries here as the panel grows;
@@ -39,6 +40,7 @@ enum class ProjectSettingsCategory : int {
     Inputs = 0,
     Graphics,
     Physics,
+    Lighting,
     Count,
 };
 #endif

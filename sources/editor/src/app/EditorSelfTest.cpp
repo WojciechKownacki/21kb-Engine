@@ -355,6 +355,35 @@ void RunProjectSettingsSuite(Report& report) {
                 stored.settings.lightingPath == kb::project::ProjectSceneLightingPath::Deferred,
             "Deferred lighting path persisted to the settings file");
     }
+
+    // Lighting category: shadow and global illumination quality, desktop and mobile, one level button each.
+    const ProjectSettingsPanelLayoutRects lightingRects = ProjectSettingsPanelLayout::Resolve(kContent);
+    const POINT lightingCategory = Center(ProjectSettingsPanelLayout::CategoryRow(
+        lightingRects.sidebar, static_cast<int>(ProjectSettingsCategory::Lighting)));
+    report.Check(controller.HandlePointerDown(kContent, lightingCategory.x, lightingCategory.y), "Clicking the Lighting category is handled");
+    report.Check(context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Lighting), "Lighting category active after click");
+    const POINT shadowsHigh = Center(lightingRects.qualityButton[0][3]);
+    const POINT giMobileLow = Center(lightingRects.qualityButton[3][1]);
+    report.Check(HitKindAt(context, shadowsHigh) == ProjectSettingsHitKind::QualityOption, "A shadow quality button hit-tests as QualityOption");
+    report.Check(controller.HandlePointerDown(kContent, shadowsHigh.x, shadowsHigh.y), "Clicking the High shadow quality is handled");
+    report.Check(controller.HandlePointerDown(kContent, giMobileLow.x, giMobileLow.y), "Clicking the Low mobile global illumination quality is handled");
+    report.Check(context.ProjectConfiguration().shadowQuality == kb::project::ProjectQualityLevel::High &&
+            context.ProjectConfiguration().giQualityMobile == kb::project::ProjectQualityLevel::Low &&
+            context.ProjectConfiguration().shadowQualityMobile == kb::project::ProjectQualityLevel::Auto &&
+            context.ProjectConfiguration().giQuality == kb::project::ProjectQualityLevel::Auto,
+        "Quality buttons change only the row they belong to");
+    {
+        const auto stored = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+        report.Check(stored.Succeeded() && stored.found &&
+                stored.settings.shadowQuality == kb::project::ProjectQualityLevel::High &&
+                stored.settings.giQualityMobile == kb::project::ProjectQualityLevel::Low,
+            "Quality levels persisted to the settings file");
+    }
+    const POINT shadowsLabel = Center(lightingRects.qualityLabel[2]);
+    const ProjectSettingsPanelRenderer::Hit labelHit = ProjectSettingsPanelRenderer::TooltipHitTest(kContent, context, shadowsLabel.x, shadowsLabel.y);
+    report.Check(labelHit.kind == ProjectSettingsHitKind::QualityOption && labelHit.index / 5 == 2,
+        "A quality row label hit-tests for its tooltip");
 }
 
 void RunProjectPhysicsLayersRuntimeSuite(Report& report) {
@@ -5394,10 +5423,16 @@ void RunInspectorLightComponentSuite(Report& report) {
         report.Check(InspectorPanelInteraction::HandlePointerDown(context, typeHit, point.x, point.y) &&
                 context.Scene().Components().Lights().TryGet(lightEntity)->kind == kb::scene::LightKind::AreaRect,
             "Light cycles to rectangular area light through the Inspector");
-        report.Check(InspectorPanelInteraction::HandlePointerDown(context, typeHit, point.x, point.y) &&
+        // An area light's shape (Rectangle, Disc, Tube) is a field of its own, shown once the type is Area.
+        InspectorPanelRenderer::Hit shapeHit{};
+        shapeHit.kind = InspectorHitKind::TextField;
+        shapeHit.section = InspectorSectionId::Light;
+        shapeHit.property = InspectorPropertyId::LightShape;
+        const POINT shapePoint = Center(typeHit.rect);
+        report.Check(InspectorPanelInteraction::HandlePointerDown(context, shapeHit, shapePoint.x, shapePoint.y) &&
                 context.Scene().Components().Lights().TryGet(lightEntity)->kind == kb::scene::LightKind::AreaDisk,
             "Light cycles to disk area light through the Inspector");
-        report.Check(InspectorPanelInteraction::HandlePointerDown(context, typeHit, point.x, point.y) &&
+        report.Check(InspectorPanelInteraction::HandlePointerDown(context, shapeHit, shapePoint.x, shapePoint.y) &&
                 context.Scene().Components().Lights().TryGet(lightEntity)->kind == kb::scene::LightKind::Tube,
             "Light cycles to tube area light through the Inspector");
     }

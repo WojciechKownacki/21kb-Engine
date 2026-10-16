@@ -1191,6 +1191,9 @@ public:
     [[nodiscard]] bool SetProjectInputMappingContext(std::string virtualPath);
     [[nodiscard]] bool ToggleProjectInputEnabled();
     [[nodiscard]] bool SetProjectSceneLightingPath(kb::project::ProjectSceneLightingPath path);
+    // Pins the shadow (rows 0 and 1) or global illumination (rows 2 and 3) quality of computers (even rows)
+    // or mobile devices (odd rows) in the project settings; true when the level changed and was saved.
+    [[nodiscard]] bool SetProjectQualityLevel(int row, kb::project::ProjectQualityLevel level);
     [[nodiscard]] bool SetProjectPhysicsLayersAsset(std::string virtualPath);
     bool CloseProjectSettingsDropdowns() noexcept;
     [[nodiscard]] bool IsProjectPluginEnabled(std::string_view pluginId) const noexcept;
