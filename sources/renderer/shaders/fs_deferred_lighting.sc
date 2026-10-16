@@ -259,6 +259,7 @@ float SampleShadowVisibility(vec3 shadowCoord, float penumbraScale)
 uniform vec4 u_fogParams;
 uniform vec4 u_fogColor;
 uniform vec4 u_fogVolumetric;
+uniform vec4 u_fogSky; // rgb = the colour the scene clears its sky to, w = 1 when fog is on
 
 float FogDensity(float height)
 {
@@ -326,7 +327,7 @@ vec3 LightInFog(vec3 p, vec3 rayDir)
 // The fogged colour of a surface at `worldPos`: the height fog lights itself to its colour (Fog
 // Inscattering Color); volumetric fog adds the light the scene's lights scatter in it, marched
 // in 24 steps with their shadows (light shafts).
-vec3 ApplyFog(vec3 color, vec3 worldPos)
+vec3 ApplyFog(vec3 color, vec3 worldPos, vec2 pixel)
 {
     if (u_fogParams.w < 0.5) {
         return color;
@@ -344,7 +345,9 @@ vec3 ApplyFog(vec3 color, vec3 worldPos)
     }
     float marched = min(rayLength, u_fogVolumetric.y);
     float stepLength = marched / 24.0;
-    float jitter = fract(52.9829189 * fract(dot(worldPos, vec3(0.06711056, 0.00583715, 0.0372))));
+    // Interleaved gradient noise of the pixel: neighbouring pixels start their march at different offsets, so the 24
+    // steps read as fine noise instead of rings.
+    float jitter = fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
     vec3 inScattered = vec3_splat(0.0);
     float throughput = 1.0;
     for (int i = 0; i < 24; ++i) {
@@ -368,8 +371,14 @@ void main()
     bool background = encodedNormal.a < 0.5;
     if (background) {
         vec3 backdropDirection = normalize(ReconstructWorldPosition(v_texcoord0, depth) - u_deferredCameraPosition.xyz);
+        // The sky is as far away as the fog is marched: it takes the fog (and its light shafts) in front of it.
+        vec3 skyEnd = u_deferredCameraPosition.xyz + backdropDirection * u_fogVolumetric.y;
         if (u_deferredBackdropParams.x > 0.5) {
-            gl_FragColor = vec4(KbBackdropRadiance(backdropDirection), 1.0);
+            gl_FragColor = vec4(ApplyFog(KbBackdropRadiance(backdropDirection), skyEnd, gl_FragCoord.xy), 1.0);
+            return;
+        }
+        if (u_fogSky.w > 0.5) {
+            gl_FragColor = vec4(ApplyFog(u_fogSky.rgb, skyEnd, gl_FragCoord.xy), 1.0);
             return;
         }
         discard;
@@ -451,5 +460,5 @@ void main()
         lighting += giAccumulated * albedo.rgb * ((1.0 - metallic) * occlusion * aoAccumulated * u_giParams.x);
     }
 
-    gl_FragColor = vec4(ApplyFog(lighting + surface.rgb, worldPos), 1.0);
+    gl_FragColor = vec4(ApplyFog(lighting + surface.rgb, worldPos, gl_FragCoord.xy), 1.0);
 }
