@@ -424,7 +424,7 @@ void main()
     vec3 giAccumulated;
     float aoAccumulated;
     float skyAccumulated;
-    KbScreenSpaceAccumulated(worldPos, giAccumulated, aoAccumulated, skyAccumulated);
+    KbScreenSpaceAccumulatedSmooth(worldPos, giAccumulated, aoAccumulated, skyAccumulated);
     aoAccumulated = mix(1.0, aoAccumulated, step(0.0001, u_aoParams.x));
     // The sky light reaches only as much of the sky as the voxel GI sees (occluded sky light).
     skyAccumulated = mix(1.0, skyAccumulated, step(0.0001, u_giParams.x));

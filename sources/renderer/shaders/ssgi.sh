@@ -45,3 +45,49 @@ float KbScreenSpaceAccumulated(vec3 worldPos, out vec3 gi, out float ao, out flo
     sky = mix(1.0, visibility.y, same);
     return same;
 }
+
+// KbScreenSpaceAccumulated averaged over a 3 x 3 grid of taps two and a half pixels apart (each tap is
+// a bilinear read of four texels, which hides the grid), keeping the ones that
+// belong to the same surface. The gather is a handful of random rays per pixel; the temporal
+// accumulation averages them over frames and this smooths what is left, at the cost of nine reads.
+float KbScreenSpaceAccumulatedSmooth(vec3 worldPos, out vec3 gi, out float ao, out float sky)
+{
+    gi = vec3(0.0, 0.0, 0.0);
+    ao = 1.0;
+    sky = 1.0;
+    vec4 clip = mul(u_giPrevViewProj, vec4(worldPos, 1.0));
+    if (u_giTemporal.z < 0.5 || clip.w <= 0.0001) {
+        return 0.0;
+    }
+    vec2 uv = KbGiUv(clip);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+        return 0.0;
+    }
+    vec2 texel = vec2(1.0, 1.0) / max(u_viewRect.zw, vec2(1.0, 1.0));
+    vec3 giSum = vec3(0.0, 0.0, 0.0);
+    vec2 visibilitySum = vec2(0.0, 0.0);
+    float weightSum = 0.0;
+    float centerWeight = 0.0;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            vec2 sampleUv = uv + vec2(float(dx), float(dy)) * texel * 2.5;
+            vec4 stored = texture2DLod(s_giAccum, sampleUv, 0.0);
+            float same = abs(stored.a - clip.w) < u_giTemporal.y * clip.w ? 1.0 : 0.0;
+            float weight = same * (dx == 0 ? 2.0 : 1.0) * (dy == 0 ? 2.0 : 1.0);
+            if (dx == 0 && dy == 0) {
+                centerWeight = same;
+            }
+            giSum += stored.rgb * weight;
+            visibilitySum += texture2DLod(s_aoAccum, sampleUv, 0.0).xy * weight;
+            weightSum += weight;
+        }
+    }
+    if (weightSum <= 0.0) {
+        return 0.0;
+    }
+    gi = giSum / weightSum;
+    vec2 visibility = visibilitySum / weightSum;
+    ao = visibility.x;
+    sky = visibility.y;
+    return centerWeight;
+}

@@ -119,7 +119,10 @@ vec3 KbVoxelGi(vec3 worldPos, vec3 normal, vec2 pixel, out float skyVisibility)
     skyVisibility = 0.0;
     float voxelSize = u_voxelGrid.w;
     float dimension = u_voxelInfo.z;
-    vec3 total = vec3(0.0, 0.0, 0.0);
+    vec3 emitted = vec3(0.0, 0.0, 0.0);
+    vec3 reflected = vec3(0.0, 0.0, 0.0);
+    float reflectedLuma = 0.0;
+    float albedoWeighted = 0.0;
     // Start one voxel away so the ray does not hit the voxel that holds the surface itself.
     vec3 origin = worldPos + normal * (voxelSize * 0.9);
     float seed = u_giParams.z;
@@ -145,12 +148,38 @@ vec3 KbVoxelGi(vec3 worldPos, vec3 normal, vec2 pixel, out float skyVisibility)
                     KbVoxelOccupied(cell + vec3(1.0, 0.0, 0.0)) - KbVoxelOccupied(cell - vec3(1.0, 0.0, 0.0)),
                     KbVoxelOccupied(cell + vec3(0.0, 1.0, 0.0)) - KbVoxelOccupied(cell - vec3(0.0, 1.0, 0.0)),
                     KbVoxelOccupied(cell + vec3(0.0, 0.0, 1.0)) - KbVoxelOccupied(cell - vec3(0.0, 0.0, 1.0)));
-                vec3 hitNormal = length(gradient) > 0.1 ? normalize(-gradient) : -dir;
+                vec3 hitNormal;
+                if (length(gradient) > 0.1) {
+                    hitNormal = normalize(-gradient);
+                } else {
+                    // A wall or a floor one voxel thick has no gradient: its normal is the axis along
+                    // which it has no neighbours, on the side the ray came from (ties go to the axis
+                    // the ray travels along most).
+                    vec3 neighbours = vec3(
+                        KbVoxelOccupied(cell + vec3(1.0, 0.0, 0.0)) + KbVoxelOccupied(cell - vec3(1.0, 0.0, 0.0)),
+                        KbVoxelOccupied(cell + vec3(0.0, 1.0, 0.0)) + KbVoxelOccupied(cell - vec3(0.0, 1.0, 0.0)),
+                        KbVoxelOccupied(cell + vec3(0.0, 0.0, 1.0)) + KbVoxelOccupied(cell - vec3(0.0, 0.0, 1.0)));
+                    vec3 score = neighbours * 4.0 - abs(dir);
+                    vec3 axis = vec3(0.0, 0.0, 0.0);
+                    if (score.x <= score.y && score.x <= score.z) {
+                        axis.x = 1.0;
+                    } else if (score.y <= score.z) {
+                        axis.y = 1.0;
+                    } else {
+                        axis.z = 1.0;
+                    }
+                    hitNormal = -axis * stepDir;
+                }
                 if (dot(hitNormal, dir) > 0.0) {
                     hitNormal = -hitNormal;
                 }
                 vec3 emissive = texture3DLod(s_voxelEmissive, (cell + vec3_splat(0.5)) / dimension, 0.0).rgb;
-                total += min(emissive + voxel.rgb * KbVoxelDirect(hitCenter - hitNormal * (0.5 * voxelSize), hitNormal), vec3_splat(8.0));
+                vec3 lit = min(voxel.rgb * KbVoxelDirect(hitCenter - hitNormal * (0.5 * voxelSize), hitNormal), vec3_splat(8.0));
+                emitted += min(emissive, vec3_splat(8.0));
+                reflected += lit;
+                float litLuma = dot(lit, vec3(0.2126, 0.7152, 0.0722));
+                reflectedLuma += litLuma;
+                albedoWeighted += litLuma * dot(voxel.rgb, vec3(0.2126, 0.7152, 0.0722));
                 hit = true;
                 break;
             }
@@ -167,5 +196,12 @@ vec3 KbVoxelGi(vec3 worldPos, vec3 normal, vec2 pixel, out float skyVisibility)
         }
         skyVisibility += hit ? 0.0 : (1.0 / 6.0);
     }
-    return total * (1.0 / 6.0);
+    // The light that bounced once is only the start: in a room it bounces on, each time scaled by the
+    // albedo of the surfaces it meets and by how much of the view they fill (the share of rays that hit
+    // something). The series 1 / (1 - albedo * enclosure) stands in for the bounces the single-bounce
+    // gather does not follow.
+    float meanAlbedo = reflectedLuma > 0.0001 ? albedoWeighted / reflectedLuma : 0.0;
+    float multiBounce = 1.0 / (1.0 - clamp(0.7 * (1.0 - skyVisibility) * meanAlbedo, 0.0, 0.8));
+    // An emitter lights its surroundings 0.7 as strongly as a light of the same colour does.
+    return (emitted * 0.7 + reflected * multiBounce) * (1.0 / 6.0);
 }
