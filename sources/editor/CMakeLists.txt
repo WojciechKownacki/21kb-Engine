@@ -866,6 +866,7 @@ add_executable(kb_editor WIN32
     src/inspection/ui/InspectorUIComponentModel.cpp
     src/inspection/InspectorAddComponentBrowserModel.cpp
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
+    src/inspection/InspectorGenericComponentModel.cpp
     src/inspection/InspectorLightTextBuilder.cpp
     src/inspection/InspectorMeshRendererMaterialSlotModel.cpp
     src/inspection/InspectorMaterialTextureSlotFormatter.cpp
@@ -1117,6 +1118,19 @@ if(TARGET kb_basic_lighting_plugin)
     target_compile_definitions(kb_editor
         PRIVATE
             "KB_BASIC_LIGHTING_PLUGIN_PATH=\"${KB_BASIC_LIGHTING_EDITOR_PLUGIN_PATH}\""
+    )
+endif()
+
+if(TARGET kb_ai_plugin)
+    add_dependencies(kb_editor kb_ai_plugin)
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        set(KB_AI_EDITOR_PLUGIN_PATH "$<TARGET_FILE:kb_ai_plugin>")
+    else()
+        set(KB_AI_EDITOR_PLUGIN_PATH "")
+    endif()
+    target_compile_definitions(kb_editor
+        PRIVATE
+            "KB_AI_PLUGIN_PATH=\"${KB_AI_EDITOR_PLUGIN_PATH}\""
     )
 endif()
 

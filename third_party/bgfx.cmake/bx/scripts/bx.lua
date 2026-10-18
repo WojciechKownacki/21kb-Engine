@@ -40,6 +40,10 @@ end
 project "bx"
 	kind "StaticLib"
 
+	flags {
+		"FatalWarnings",
+	}
+
 	includedirs {
 		path.join(BX_DIR, "include"),
 		path.join(BX_DIR, "3rdparty"),
@@ -64,6 +68,7 @@ project "bx"
 	if _OPTIONS["with-amalgamated"] then
 		excludes {
 			path.join(BX_DIR, "src/allocator.cpp"),
+			path.join(BX_DIR, "src/bitarray.cpp"),
 			path.join(BX_DIR, "src/bounds.cpp"),
 			path.join(BX_DIR, "src/bx.cpp"),
 			path.join(BX_DIR, "src/commandline.cpp"),
@@ -74,14 +79,17 @@ project "bx"
 			path.join(BX_DIR, "src/file.cpp"),
 			path.join(BX_DIR, "src/filepath.cpp"),
 			path.join(BX_DIR, "src/hash.cpp"),
+			path.join(BX_DIR, "src/literal-parser.cpp"),
 			path.join(BX_DIR, "src/math.cpp"),
 			path.join(BX_DIR, "src/mutex.cpp"),
 			path.join(BX_DIR, "src/os.cpp"),
 			path.join(BX_DIR, "src/process.cpp"),
+			path.join(BX_DIR, "src/scanner.cpp"),
 			path.join(BX_DIR, "src/semaphore.cpp"),
 			path.join(BX_DIR, "src/settings.cpp"),
 			path.join(BX_DIR, "src/sort.cpp"),
 			path.join(BX_DIR, "src/string.cpp"),
+			path.join(BX_DIR, "src/superluminal.cpp"),
 			path.join(BX_DIR, "src/thread.cpp"),
 			path.join(BX_DIR, "src/timer.cpp"),
 			path.join(BX_DIR, "src/url.cpp"),

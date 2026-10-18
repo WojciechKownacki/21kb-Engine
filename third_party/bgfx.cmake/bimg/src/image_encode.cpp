@@ -5,11 +5,10 @@
 
 #include <bimg/encode.h>
 #include "bimg_p.h"
-#include "etc2_alpha.h"
 
 #include <libsquish/squish.h>
 #include <etc1/etc1.h>
-#include <etc2/ProcessRGB.hpp>
+#include <etcpak/ProcessRGB.hpp>
 #include <nvtt/nvtt.h>
 #include <pvrtc/PvrTcEncoder.h>
 #include <edtaa3/edtaa3func.h>
@@ -20,7 +19,7 @@ BX_PRAGMA_DIAGNOSTIC_IGNORED_MSVC(4100) // warning C4100: 'alloc_context': unref
 BX_PRAGMA_DIAGNOSTIC_IGNORED_MSVC(4702) // warning C4702: unreachable code
 BX_PRAGMA_DIAGNOSTIC_IGNORED_CLANG_GCC("-Wunused-parameter") // warning: unused parameter ‘alloc_context’ [-Wunused-parameter]
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include <stb/stb_image_resize.h>
+#include <stb/stb_image_resize2.h>
 BX_PRAGMA_DIAGNOSTIC_POP();
 
 extern "C" {
@@ -55,91 +54,46 @@ namespace bimg
 	};
 	static_assert(Quality::Count == BX_COUNTOF(s_astcQuality) );
 
-	static uint8_t clampEtc2Alpha(int32_t _value)
+	static uint32_t* etcpakAllocBgraBlocks(
+		  bx::AllocatorI* _allocator
+		, const uint8_t* _src
+		, uint32_t _width
+		, uint32_t _height
+		, uint32_t& _outNumBlocks
+		, uint32_t& _outPaddedWidth
+		)
 	{
-		return uint8_t(bx::clamp(_value, 0, 255) );
-	}
+		const uint32_t blockWidth   = (_width  + 3)/4;
+		const uint32_t blockHeight  = (_height + 3)/4;
+		const uint32_t paddedWidth  = blockWidth *4;
+		const uint32_t paddedHeight = blockHeight*4;
+		const uint32_t srcPitch     = _width*4;
 
-	static void encodeBlockEtc2Alpha(uint8_t _dst[8], const uint8_t _bgra[4*4*4])
-	{
-		uint8_t min = _bgra[3];
-		uint8_t max = min;
-		for (uint32_t ii = 1; ii < 16; ++ii)
+		uint32_t* bgra = (uint32_t*)bx::alloc(_allocator, paddedWidth*paddedHeight*sizeof(uint32_t) );
+
+		for (uint32_t yy = 0; yy < paddedHeight; ++yy)
 		{
-			const uint8_t alpha = _bgra[ii*4+3];
-			min = bx::min(min, alpha);
-			max = bx::max(max, alpha);
-		}
+			const uint32_t sy = bx::min(yy, _height-1);
+			const uint8_t* srcRow = &_src[sy*srcPitch];
+			uint32_t* dstRow = &bgra[yy*paddedWidth];
 
-		if (min == max)
-		{
-			_dst[0] = min;
-			bx::memSet(&_dst[1], 0, 7);
-			return;
-		}
-
-		const uint32_t range = uint32_t(max-min);
-		const uint8_t base = uint8_t(min + range/2);
-		uint32_t bestError = UINT32_MAX;
-		uint8_t bestTable = 0;
-		uint8_t bestMultiplier = 1;
-		uint8_t bestSelectors[16] = {};
-
-		for (uint8_t table = 0; table < 16; ++table)
-		{
-			const int32_t modifierRange = 1 + s_etc2aMod[table][7] - s_etc2aMod[table][3];
-			const uint32_t rangeScale = UINT32_C(0x100ff) / uint32_t(modifierRange);
-			const uint8_t multiplier = uint8_t(bx::min(15u, ((range*rangeScale) >> 16) + 1) );
-			uint8_t reconstructed[8];
-			for (uint8_t jj = 0; jj < 8; ++jj)
+			for (uint32_t xx = 0; xx < paddedWidth; ++xx)
 			{
-				reconstructed[jj] = clampEtc2Alpha(int32_t(base) + s_etc2aMod[table][jj]*multiplier);
-			}
-			uint8_t selectors[16];
-			uint32_t error = 0;
-
-			for (uint32_t ii = 0; ii < 16; ++ii)
-			{
-				const uint8_t alpha = _bgra[ii*4+3];
-				uint8_t selector = 0;
-				int32_t delta = int32_t(alpha) - int32_t(reconstructed[0]);
-				uint32_t localError = uint32_t(delta*delta);
-
-				for (uint8_t jj = 1; jj < 8; ++jj)
-				{
-					delta = int32_t(alpha) - int32_t(reconstructed[jj]);
-					const uint32_t candidateError = uint32_t(delta*delta);
-					if (candidateError < localError)
-					{
-						localError = candidateError;
-						selector = jj;
-					}
-				}
-
-				selectors[ii] = selector;
-				error += localError;
-			}
-
-			if (error < bestError)
-			{
-				bestError = error;
-				bestTable = table;
-				bestMultiplier = multiplier;
-				bx::memCopy(bestSelectors, selectors, sizeof(bestSelectors) );
+				const uint32_t sx = bx::min(xx, _width-1);
+				const uint8_t* px = &srcRow[sx*4];
+				dstRow[xx] = 0
+					| (uint32_t(px[3])<<24) // A
+					| (uint32_t(px[0])<<16) // R
+					| (uint32_t(px[1])<< 8) // G
+					| (uint32_t(px[2])    ) // B
+					;
 			}
 		}
 
-		_dst[0] = base;
-		_dst[1] = uint8_t((bestMultiplier << 4) | bestTable);
-		uint64_t indices = 0;
-		for (uint32_t ii = 0; ii < 16; ++ii)
-		{
-			indices |= uint64_t(bestSelectors[ii]) << (45-ii*3);
-		}
-		for (uint32_t ii = 0; ii < 6; ++ii)
-		{
-			_dst[ii+2] = uint8_t(indices >> (40-ii*8) );
-		}
+		_outNumBlocks   = blockWidth*blockHeight;
+		_outPaddedWidth = paddedWidth;
+
+		return bgra;
 	}
 
 	void imageEncodeFromRgba8(bx::AllocatorI* _allocator, void* _dst, const void* _src, uint32_t _width, uint32_t _height, uint32_t _depth, TextureFormat::Enum _format, Quality::Enum _quality, bx::Error* _err)
@@ -177,39 +131,47 @@ namespace bimg
 				BX_ERROR_SET(_err, BIMG_ERROR, "Unable to convert between input/output formats!");
 				break;
 
+			case TextureFormat::ETC2A1:
+				BX_ERROR_SET(_err, BIMG_ERROR, "Encoding to ETC2A1 is not supported.");
+				break;
+
 			case TextureFormat::ETC1:
 				etc1_encode_image(src, _width, _height, 4, _width*4, dst);
 				break;
 
 			case TextureFormat::ETC2:
+				{
+					uint32_t numBlocks, paddedWidth;
+					uint32_t* bgra = etcpakAllocBgraBlocks(_allocator, src, _width, _height, numBlocks, paddedWidth);
+					CompressEtc2Rgb(bgra, (uint64_t*)dst, numBlocks, paddedWidth, true);
+					bx::free(_allocator, bgra);
+				}
+				break;
+
 			case TextureFormat::ETC2A:
 				{
-					const uint32_t blockWidth  = (_width +3)/4;
-					const uint32_t blockHeight = (_height+3)/4;
-					uint8_t* dstBlock = dst;
-					for (uint32_t yy = 0; yy < blockHeight; ++yy)
-					{
-						for (uint32_t xx = 0; xx < blockWidth; ++xx)
-						{
-							uint8_t block[4*4*4];
-							const uint8_t* ptr = &src[(yy*srcPitch+xx*4)*4];
+					uint32_t numBlocks, paddedWidth;
+					uint32_t* bgra = etcpakAllocBgraBlocks(_allocator, src, _width, _height, numBlocks, paddedWidth);
+					CompressEtc2Rgba(bgra, (uint64_t*)dst, numBlocks, paddedWidth, true);
+					bx::free(_allocator, bgra);
+				}
+				break;
 
-							for (uint32_t ii = 0; ii < 16; ++ii)
-							{ // BGRx
-								bx::memCopy(&block[ii*4], &ptr[(ii%4)*srcPitch + (ii&~3)], 4);
-								bx::swap(block[ii*4+0], block[ii*4+2]);
-							}
+			case TextureFormat::EACR11:
+				{
+					uint32_t numBlocks, paddedWidth;
+					uint32_t* bgra = etcpakAllocBgraBlocks(_allocator, src, _width, _height, numBlocks, paddedWidth);
+					CompressEacR(bgra, (uint64_t*)dst, numBlocks, paddedWidth);
+					bx::free(_allocator, bgra);
+				}
+				break;
 
-							if (_format == TextureFormat::ETC2A)
-							{
-								encodeBlockEtc2Alpha(dstBlock, block);
-								dstBlock += 8;
-							}
-							const uint64_t color = ProcessRGB_ETC2(block);
-							bx::memCopy(dstBlock, &color, sizeof(color) );
-							dstBlock += sizeof(color);
-						}
-					}
+			case TextureFormat::EACRG11:
+				{
+					uint32_t numBlocks, paddedWidth;
+					uint32_t* bgra = etcpakAllocBgraBlocks(_allocator, src, _width, _height, numBlocks, paddedWidth);
+					CompressEacRg(bgra, (uint64_t*)dst, numBlocks, paddedWidth);
+					bx::free(_allocator, bgra);
 				}
 				break;
 
@@ -424,6 +386,8 @@ namespace bimg
 			case TextureFormat::ETC1:
 			case TextureFormat::ETC2:
 			case TextureFormat::ETC2A:
+			case TextureFormat::EACR11:
+			case TextureFormat::EACRG11:
 			case TextureFormat::PTC14:
 			case TextureFormat::PTC14A:
 			case TextureFormat::ASTC4x4:
@@ -458,6 +422,10 @@ namespace bimg
 				}
 				break;
 
+			case bimg::TextureFormat::ETC2A1:
+				BX_ERROR_SET(_err, BIMG_ERROR, "Encoding to ETC2A1 is not supported.");
+				break;
+
 			default:
 				if (!imageConvert(_allocator, _dst, _dstFormat, _src, _srcFormat, _width, _height, 1) )
 				{
@@ -467,25 +435,31 @@ namespace bimg
 		}
 	}
 
-	ImageContainer* imageEncode(bx::AllocatorI* _allocator, TextureFormat::Enum _dstFormat, Quality::Enum _quality, const ImageContainer& _input)
+	ImageContainer* imageEncode(bx::AllocatorI* _allocator, TextureFormat::Enum _dstFormat, Quality::Enum _quality, const ImageContainer& _input, bx::Error* _err)
 	{
+		BX_ERROR_USE_TEMP_WHEN_NULL(_err);
+
 		ImageContainer* output = imageAlloc(_allocator
 			, _dstFormat
-			, uint16_t(_input.m_width)
-			, uint16_t(_input.m_height)
-			, uint16_t(_input.m_depth)
+			, _input.m_width
+			, _input.m_height
+			, _input.m_depth
 			, _input.m_numLayers
 			, _input.m_cubeMap
 			, 1 < _input.m_numMips
 			);
 
+		if (NULL == output)
+		{
+			BX_ERROR_SET(_err, BIMG_ERROR, "Failed to allocate output image.");
+			return NULL;
+		}
+
 		const uint16_t numSides = _input.m_numLayers * (_input.m_cubeMap ? 6 : 1);
 
-		bx::Error err;
-
-		for (uint16_t side = 0; side < numSides && err.isOk(); ++side)
+		for (uint16_t side = 0; side < numSides && _err->isOk(); ++side)
 		{
-			for (uint8_t lod = 0, num = _input.m_numMips; lod < num && err.isOk(); ++lod)
+			for (uint8_t lod = 0, num = _input.m_numMips; lod < num && _err->isOk(); ++lod)
 			{
 				ImageMip mip;
 				if (imageGetRawData(_input, side, lod, _input.m_data, _input.m_size, mip) )
@@ -504,13 +478,13 @@ namespace bimg
 						, mip.m_depth
 						, _dstFormat
 						, _quality
-						, &err
+						, _err
 						);
 				}
 			}
 		}
 
-		if (err.isOk() )
+		if (_err->isOk() )
 		{
 			return output;
 		}
@@ -656,23 +630,20 @@ namespace bimg
 			const uint32_t dstPitch = _dst->m_width*16;
 			const uint32_t dstSlice = _dst->m_height*dstPitch;
 
-			for (uint32_t zz = 0, depth = _dst->m_depth; zz < depth; ++zz, dstData += dstSlice)
+			for (uint32_t zz = 0, depth = dstMip.m_depth; zz < depth; ++zz, dstData += dstSlice)
 			{
-				const uint32_t srcDataStep = uint32_t(bx::floor(zz * _src->m_depth / float(_dst->m_depth) ) );
+				const uint32_t srcDataStep = uint32_t(bx::floor(zz * srcMip.m_depth / float(depth) ) );
 				const uint8_t* srcData = &srcMip.m_data[srcDataStep*srcSlice];
 
-				int result = stbir_resize_float_generic(
+				void* result = stbir_resize(
 					  (const float*)srcData, _src->m_width, _src->m_height, srcPitch
 					, (      float*)dstData, _dst->m_width, _dst->m_height, dstPitch
-					, 4, 3
-					, STBIR_FLAG_ALPHA_PREMULTIPLIED
+					, STBIR_RGBA_PM, STBIR_TYPE_FLOAT
 					, STBIR_EDGE_CLAMP
 					, STBIR_FILTER_BOX
-					, STBIR_COLORSPACE_LINEAR
-					, NULL
 					);
 
-				if (1 != result)
+				if (NULL == result)
 				{
 					return false;
 				}

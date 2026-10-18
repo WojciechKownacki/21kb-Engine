@@ -28,6 +28,11 @@
 #include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/SceneAnimators.hpp"
+#include "inspection/InspectorGenericComponentModel.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
+#include "engine/script/ScriptSceneComponentApi.hpp"
+#include "engine/scene/SocketAttachmentComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
@@ -1810,6 +1815,34 @@ void PaintNavLinkSection(
     section.Field(EditorText("inspector.navLink.area", "Area"), std::to_string(link.area), InspectorPropertyId::NavLinkArea);
     section.Bool(EditorText("inspector.navLink.bothWays", "Both Ways"), link.bidirectional, InspectorPropertyId::NavLinkBidirectional);
     section.Bool(EditorText("inspector.enabled", "Enabled"), link.enabled, InspectorPropertyId::NavLinkEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+// Socket Attachment: which socket holds the object, whether the character above it has one by
+// that name (said in plain words), and the offset in the socket's space.
+void PaintSocketAttachmentSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::scene::SocketAttachmentComponent& attachment,
+    const kb::scene::SocketAttachmentStatus& status,
+    std::string_view characterName) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::SocketAttachment, HeroIconKind::RotationSnap, EditorText("inspector.socketAttachment.title", "Socket Attachment"), true);
+    const std::string_view socket = kb::scene::SocketAttachmentName(attachment);
+    section.Field(EditorText("inspector.socketAttachment.socket", "Socket"),
+        socket.empty() ? EditorText("inspector.socketAttachment.choose", "Choose...") : socket, InspectorPropertyId::SocketAttachmentSocket);
+    const std::string state = status.attached
+        ? (characterName.empty() ? "" : std::string{ characterName } + " / ") + status.resolvedName
+        : status.error;
+    section.Field(EditorText("inspector.socketAttachment.holds", "Holds At"), state);
+    section.Vec3(EditorText("inspector.socketAttachment.position", "Position"), attachment.offset.position,
+        InspectorPropertyId::SocketAttachmentPositionX, InspectorPropertyId::SocketAttachmentPositionY, InspectorPropertyId::SocketAttachmentPositionZ);
+    section.Vec3(EditorText("inspector.socketAttachment.rotation", "Rotation"), kb::math::ToEulerDegrees(attachment.offset.rotation),
+        InspectorPropertyId::SocketAttachmentRotationX, InspectorPropertyId::SocketAttachmentRotationY, InspectorPropertyId::SocketAttachmentRotationZ);
+    section.Bool(EditorText("inspector.enabled", "Enabled"), attachment.enabled, InspectorPropertyId::SocketAttachmentEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -3725,6 +3758,33 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             y += h + kSectionGap;
         }
     }
+    for (const InspectorGenericComponentModel::Section& generic : InspectorGenericComponentModel::Sections()) {
+        if (!kb::scene::SceneComponentAuthoring::Has(scene, selected, generic.component)) continue;
+        const std::vector<InspectorGenericComponentModel::Row> rows =
+            InspectorGenericComponentModel::Rows(const_cast<kb::scene::Scene&>(scene), selected, generic);
+        const int h = SectionHeight(inspector, generic.id, static_cast<int>(rows.size()));
+        if (sectionVisible(y, h)) {
+            SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+                generic.id, generic.icon, EditorText("inspector.generic." + std::string{ generic.component }, generic.title), true);
+            for (const InspectorGenericComponentModel::Row& row : rows) {
+                if (row.isBool) section.Bool(row.label, row.boolValue, InspectorPropertyId::GenericComponentField, row.editIndex);
+                else section.Field(row.label, row.value, InspectorPropertyId::GenericComponentField, row.editIndex);
+            }
+            y = section.Bottom() + kSectionGap;
+        } else {
+            y += h + kSectionGap;
+        }
+    }
+    if (const kb::scene::SocketAttachmentComponent* attachment = scene.Components().SocketAttachments().TryGet(selected); attachment != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::SocketAttachment, 5);
+        if (sectionVisible(y, h)) {
+            const kb::scene::SocketAttachmentStatus status = scene.Animators().SocketAttachment(selected);
+            const std::string characterName = status.character.IsValid() ? std::string{ scene.Entities().Name(status.character) } : std::string{};
+            PaintSocketAttachmentSection(dc, content, y, theme, inspector, *attachment, status, characterName);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody));
         if (sectionVisible(y, h)) {
@@ -3967,6 +4027,14 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (scene.Components().NavLinks().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::NavLink, 7) + kSectionGap;
+    }
+    if (scene.Components().SocketAttachments().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::SocketAttachment, 5) + kSectionGap;
+    }
+    for (const InspectorGenericComponentModel::Section& generic : InspectorGenericComponentModel::Sections()) {
+        if (!kb::scene::SceneComponentAuthoring::Has(scene, selected, generic.component)) continue;
+        const int rows = static_cast<int>(InspectorGenericComponentModel::Rows(const_cast<kb::scene::Scene&>(scene), selected, generic).size());
+        height += SectionHeight(inspector, generic.id, rows) + kSectionGap;
     }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody)) + kSectionGap;
@@ -5937,6 +6005,46 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkBidirectional, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::NavLink, InspectorPropertyId::NavLinkEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+        }
+        y += kSectionGap;
+    }
+
+    for (const InspectorGenericComponentModel::Section& generic : InspectorGenericComponentModel::Sections()) {
+        if (!kb::scene::SceneComponentAuthoring::Has(sceneContext.Scene(), selected, generic.component)) continue;
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, generic.id, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(generic.id)) {
+            const std::vector<InspectorGenericComponentModel::Row> rows =
+                InspectorGenericComponentModel::Rows(const_cast<kb::scene::Scene&>(sceneContext.Scene()), selected, generic);
+            for (const InspectorGenericComponentModel::Row& row : rows) {
+                InspectorPanelRenderer::Hit hit = row.isBool
+                    ? HitBool(RowRect(viewport, y), generic.id, InspectorPropertyId::GenericComponentField, x, scrolledY)
+                    : HitTextRow(RowRect(viewport, y), generic.id, InspectorPropertyId::GenericComponentField, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) {
+                    hit.index = row.editIndex;
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().SocketAttachments().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::SocketAttachment, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::SocketAttachment)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::SocketAttachment, InspectorPropertyId::SocketAttachmentSocket, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::SocketAttachment, InspectorPropertyId::SocketAttachmentPositionX, InspectorPropertyId::SocketAttachmentPositionY, InspectorPropertyId::SocketAttachmentPositionZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::SocketAttachment, InspectorPropertyId::SocketAttachmentRotationX, InspectorPropertyId::SocketAttachmentRotationY, InspectorPropertyId::SocketAttachmentRotationZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::SocketAttachment, InspectorPropertyId::SocketAttachmentEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
         }
         y += kSectionGap;

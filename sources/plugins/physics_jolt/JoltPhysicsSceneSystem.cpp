@@ -618,6 +618,10 @@ struct CharacterRecord {
     // Velocity the character actually moved with in the last step (Unity's
     // CharacterController.velocity); Jolt's own linear velocity is the requested one.
     Vec3 velocity{};
+    // The rotation last written back to the Transform: a different one there means a script or
+    // the AI turned the character (as Unity's CharacterController, rotation is the Transform's).
+    Quat writtenRotation{};
+    bool hasWrittenRotation = false;
 };
 
 struct RootMotionSegment {
@@ -2307,6 +2311,12 @@ private:
         const CharacterSignature signature = MakeCharacterSignature(component, transform);
         const auto existing = characters_.find(entity.Id());
         if (existing != characters_.end() && existing->second.signature == signature) {
+            CharacterRecord& record = existing->second;
+            const Quat turned = transform.worldRotation;
+            if (record.hasWrittenRotation && (turned.x != record.writtenRotation.x || turned.y != record.writtenRotation.y ||
+                                              turned.z != record.writtenRotation.z || turned.w != record.writtenRotation.w)) {
+                record.character->SetRotation(ToJolt(turned));
+            }
             existing->second.character->SetMaxSlopeAngle(JPH::DegreesToRadians(component.slopeLimitDegrees));
             existing->second.stepOffset = component.stepOffset;
             existing->second.gravityScale = component.gravityScale;
@@ -2540,7 +2550,7 @@ private:
     }
 
     void WriteBackCharacters(SceneSystemContext& context) {
-        for (const auto& [entityId, record] : characters_) {
+        for (auto& [entityId, record] : characters_) {
             SceneEntity entity{ entityId };
             if (!context.Transforms().IsAlive(entity)) {
                 continue;
@@ -2552,6 +2562,8 @@ private:
             const kb::math::DVec3 position = FromJoltWorldPosition(record.character->GetPosition());
             const Quat rotation = FromJolt(record.character->GetRotation());
             StageWriteBackWorldPose(*transform, context.Transforms().WorldTranslation(entity, *transform), position, rotation);
+            record.writtenRotation = rotation;
+            record.hasWrittenRotation = true;
             writeBackPoses_.push_back({entity, transform, context.EcsWorld().NativeStorage().StructuralVersion(), position});
         }
     }

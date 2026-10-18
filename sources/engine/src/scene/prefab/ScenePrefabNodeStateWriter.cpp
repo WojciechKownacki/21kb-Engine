@@ -216,6 +216,30 @@ namespace {
     return lhs.skeletonAssetId == rhs.skeletonAssetId &&
         lhs.skeletonCompatibilitySignature == rhs.skeletonCompatibilitySignature && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equals(const SocketAttachmentComponent& lhs, const SocketAttachmentComponent& rhs) noexcept {
+    const auto same = [](Vec3 l, Vec3 r) { return l.x == r.x && l.y == r.y && l.z == r.z; };
+    return SocketAttachmentName(lhs) == SocketAttachmentName(rhs) && same(lhs.offset.position, rhs.offset.position) &&
+        lhs.offset.rotation.x == rhs.offset.rotation.x && lhs.offset.rotation.y == rhs.offset.rotation.y &&
+        lhs.offset.rotation.z == rhs.offset.rotation.z && lhs.offset.rotation.w == rhs.offset.rotation.w &&
+        lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equals(const CombatantComponent& lhs, const CombatantComponent& rhs) noexcept {
+    return lhs.maximumHealth == rhs.maximumHealth && lhs.health == rhs.health && lhs.healthRegeneration == rhs.healthRegeneration &&
+        lhs.maximumMana == rhs.maximumMana && lhs.mana == rhs.mana && lhs.manaRegeneration == rhs.manaRegeneration &&
+        lhs.resistances == rhs.resistances && lhs.team == rhs.team && lhs.sightRange == rhs.sightRange &&
+        lhs.sightAngleDegrees == rhs.sightAngleDegrees && lhs.hearingRange == rhs.hearingRange &&
+        lhs.requireLineOfSight == rhs.requireLineOfSight && lhs.abilities == rhs.abilities &&
+        lhs.invulnerable == rhs.invulnerable && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equals(const AIBrainComponent& lhs, const AIBrainComponent& rhs) noexcept {
+    for (std::size_t index = 0U; index < kAIBrainRuleCount; ++index) {
+        const AIRule& a = lhs.rules[index];
+        const AIRule& b = rhs.rules[index];
+        if (a.when != b.when || a.whenValue != b.whenValue || a.action != b.action || a.actionValue != b.actionValue) return false;
+    }
+    return lhs.preset == rhs.preset && lhs.moveSpeed == rhs.moveSpeed && lhs.wanderRadius == rhs.wanderRadius &&
+        lhs.leashDistance == rhs.leashDistance && lhs.enabled == rhs.enabled;
+}
 [[nodiscard]] bool Equals(const MotionSkeletonRuleComponent& lhs, const MotionSkeletonRuleComponent& rhs) noexcept {
     return lhs.kind == rhs.kind && lhs.constrainedBoneId == rhs.constrainedBoneId &&
         lhs.midBoneId == rhs.midBoneId && lhs.tipBoneId == rhs.tipBoneId && lhs.sourceBoneId == rhs.sourceBoneId &&
@@ -312,6 +336,9 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , audioListeners(scene.Components().AudioListeners())
     , animators(scene.Components().Animators())
     , skeletonBindings(scene.Components().SkeletonBindings())
+    , socketAttachments(scene.Components().SocketAttachments())
+    , combatants(scene.Components().Combatants())
+    , aiBrains(scene.Components().AIBrains())
     , motionSkeletonRules(scene.Components().MotionSkeletonRules())
     , deformedGeometries(scene.Components().DeformedGeometries())
     , navAgents(scene.Components().NavAgents())
@@ -413,6 +440,15 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     if (!componentMask.available || !componentMask.matches || node.components.skeletonBinding.has_value()) {
         WriteOptionalComponent(context.skeletonBindings, entity, node.components.skeletonBinding);
+    }
+    if (!componentMask.available || !componentMask.matches || node.components.socketAttachment.has_value()) {
+        WriteOptionalComponent(context.socketAttachments, entity, node.components.socketAttachment);
+    }
+    if (!componentMask.available || !componentMask.matches || node.components.combatant.has_value()) {
+        WriteOptionalComponent(context.combatants, entity, node.components.combatant);
+    }
+    if (!componentMask.available || !componentMask.matches || node.components.aiBrain.has_value()) {
+        WriteOptionalComponent(context.aiBrains, entity, node.components.aiBrain);
     }
     if (!componentMask.available || !componentMask.matches || node.components.motionSkeletonRule.has_value()) {
         WriteOptionalComponent(context.motionSkeletonRules, entity, node.components.motionSkeletonRule);

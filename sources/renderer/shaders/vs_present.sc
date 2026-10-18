@@ -7,4 +7,8 @@ void main()
 {
     gl_Position = vec4(a_position.xy, 0.0, 1.0);
     v_texcoord0 = a_texcoord0;
+#if BGFX_SHADER_LANGUAGE_GLSL
+    // OpenGL render targets start at the bottom row (caps->originBottomLeft); see screen_uv.sh.
+    v_texcoord0.y = 1.0 - v_texcoord0.y;
+#endif
 }

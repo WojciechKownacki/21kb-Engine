@@ -3,6 +3,7 @@ $output v_currentClip, v_previousClip
 
 #include <bgfx_shader.sh>
 #include "motion_vectors.sh"
+#include "skinning.sh"
 
 SAMPLER2D(s_motionPreviousModels, 13);
 SAMPLER2D(s_skinningPalette, 14);
@@ -33,8 +34,8 @@ void main()
     mat4 previousModel = KbMotionPreviousModel(s_motionPreviousModels, float(gl_InstanceID), column0, column1, column2, column3);
     // The current position is computed as vs_mesh_skinned_instanced.sc computes it, so the fragment lands on
     // the depth the prepass wrote.
-    vec3 skinnedPosition = mul(SkinMatrix(s_skinningPalette, u_skinningPaletteInfo, a_indices, a_weight), vec4(a_position, 1.0)).xyz;
-    vec3 previousSkinnedPosition = mul(SkinMatrix(s_previousSkinningPalette, u_previousSkinningPaletteInfo, a_indices, a_weight), vec4(a_position, 1.0)).xyz;
+    vec3 skinnedPosition = mul(SkinMatrix(s_skinningPalette, u_skinningPaletteInfo, KbSkinJointIndices(a_indices), a_weight), vec4(a_position, 1.0)).xyz;
+    vec3 previousSkinnedPosition = mul(SkinMatrix(s_previousSkinningPalette, u_previousSkinningPaletteInfo, KbSkinJointIndices(a_indices), a_weight), vec4(a_position, 1.0)).xyz;
     vec4 worldPos = mul(model, vec4(skinnedPosition, 1.0));
     vec4 previousWorldPos = mul(previousModel, vec4(previousSkinnedPosition, 1.0));
     gl_Position = mul(u_viewProj, worldPos);

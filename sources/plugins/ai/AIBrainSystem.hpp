@@ -1,0 +1,44 @@
+#pragma once
+
+#include "engine/scene/AIBrainComponent.hpp"
+#include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SceneSystem.hpp"
+#include "engine/scene/TransformComponent.hpp"
+
+#include <cstdint>
+#include <unordered_map>
+
+namespace kb::scene { class Scene; }
+
+namespace kb::ai_plugin {
+
+// Thinks for every AI Brain a few times a second (its rules, top first) and moves it every frame:
+// along the navigation mesh when the scene has one and the object a NavAgent, straight otherwise.
+class AIBrainSystem final : public kb::scene::SceneSystem {
+public:
+    static constexpr float kThinkInterval = 0.2F;
+    void OnUpdate(kb::scene::SceneSystemContext& context) override;
+
+private:
+    struct Mind {
+        kb::scene::SceneEntity entity{};
+        kb::scene::Vec3 home{};
+        kb::scene::Vec3 wanderPoint{};
+        kb::scene::SceneEntity enemy{};
+        kb::scene::AIAction action = kb::scene::AIAction::Idle;
+        float actionValue = 0.0F;
+        float thinkTimer = 0.0F;
+        float wanderTimer = 0.0F;
+        float plainHitTimer = 0.0F;
+        std::uint32_t random = 0U;
+        bool hasWanderPoint = false;
+        bool moving = false;
+    };
+
+    void Think(kb::scene::Scene& scene, Mind& mind, const kb::scene::AIBrainComponent& brain);
+    void Act(kb::scene::Scene& scene, Mind& mind, const kb::scene::AIBrainComponent& brain, float deltaSeconds);
+
+    std::unordered_map<std::uint64_t, Mind> minds_;
+};
+
+} // namespace kb::ai_plugin

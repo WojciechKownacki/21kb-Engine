@@ -2,6 +2,7 @@ $input a_position, a_normal, a_tangent, a_texcoord0, a_color0, a_indices, a_weig
 $output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal
 
 #include <bgfx_shader.sh>
+#include "skinning.sh"
 #include "model_normal.sh"
 
 uniform mat4 u_shadowViewProj;
@@ -16,10 +17,11 @@ void main()
     float instanceFadeAmount = i_data2.w;
     float instanceCustomData = i_data3.w;
     mat4 model = mtxFromCols(vec4(i_data0.xyz, 0.0), vec4(i_data1.xyz, 0.0), vec4(i_data2.xyz, 0.0), vec4(i_data3.xyz, 1.0));
-    float paletteY0 = (u_skinningPaletteInfo.x + a_indices.x + 0.5) * u_skinningPaletteInfo.y;
-    float paletteY1 = (u_skinningPaletteInfo.x + a_indices.y + 0.5) * u_skinningPaletteInfo.y;
-    float paletteY2 = (u_skinningPaletteInfo.x + a_indices.z + 0.5) * u_skinningPaletteInfo.y;
-    float paletteY3 = (u_skinningPaletteInfo.x + a_indices.w + 0.5) * u_skinningPaletteInfo.y;
+    vec4 joints = KbSkinJointIndices(a_indices);
+    float paletteY0 = (u_skinningPaletteInfo.x + joints.x + 0.5) * u_skinningPaletteInfo.y;
+    float paletteY1 = (u_skinningPaletteInfo.x + joints.y + 0.5) * u_skinningPaletteInfo.y;
+    float paletteY2 = (u_skinningPaletteInfo.x + joints.z + 0.5) * u_skinningPaletteInfo.y;
+    float paletteY3 = (u_skinningPaletteInfo.x + joints.w + 0.5) * u_skinningPaletteInfo.y;
     mat4 skin0 = mtxFromCols(texture2DLod(s_skinningPalette, vec2(0.125, paletteY0), 0.0), texture2DLod(s_skinningPalette, vec2(0.375, paletteY0), 0.0), texture2DLod(s_skinningPalette, vec2(0.625, paletteY0), 0.0), texture2DLod(s_skinningPalette, vec2(0.875, paletteY0), 0.0));
     mat4 skin1 = mtxFromCols(texture2DLod(s_skinningPalette, vec2(0.125, paletteY1), 0.0), texture2DLod(s_skinningPalette, vec2(0.375, paletteY1), 0.0), texture2DLod(s_skinningPalette, vec2(0.625, paletteY1), 0.0), texture2DLod(s_skinningPalette, vec2(0.875, paletteY1), 0.0));
     mat4 skin2 = mtxFromCols(texture2DLod(s_skinningPalette, vec2(0.125, paletteY2), 0.0), texture2DLod(s_skinningPalette, vec2(0.375, paletteY2), 0.0), texture2DLod(s_skinningPalette, vec2(0.625, paletteY2), 0.0), texture2DLod(s_skinningPalette, vec2(0.875, paletteY2), 0.0));

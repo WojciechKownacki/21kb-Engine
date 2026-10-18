@@ -200,7 +200,7 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
     attachments[1].init(normalTexture_);
     attachments[2].init(materialTexture_);
     attachments[3].init(surfaceTexture_);
-    attachments[4].init(depthTexture_);
+    attachments[4].init(depthTexture_, bgfx::Access::Write, 0U, 1U, 0U, BGFX_ATTACHMENT_NONE);
     frameBuffer_ = bgfx::createFrameBuffer(static_cast<std::uint8_t>(kSceneGBufferColorAttachmentCount + 1U), attachments, true);
     if (!bgfx::isValid(frameBuffer_)) {
         WriteRendererDebugLog("gbuffer", "Ensure failed create framebuffer");
@@ -301,7 +301,7 @@ bool SceneGBuffer::EnsureCustomData() {
     attachments[2].init(materialTexture_);
     attachments[3].init(surfaceTexture_);
     attachments[4].init(customDataTexture_);
-    attachments[5].init(depthTexture_);
+    attachments[5].init(depthTexture_, bgfx::Access::Write, 0U, 1U, 0U, BGFX_ATTACHMENT_NONE);
     customDataFrameBuffer_ = bgfx::createFrameBuffer(static_cast<std::uint8_t>(kSceneGBufferColorAttachmentCount + 2U), attachments, false);
     if (!bgfx::isValid(customDataFrameBuffer_)) {
         WriteRendererDebugLog("gbuffer", "EnsureCustomData failed create framebuffer");

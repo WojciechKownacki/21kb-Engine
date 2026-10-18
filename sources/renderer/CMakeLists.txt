@@ -401,11 +401,20 @@ add_library(kb_renderer STATIC
     # with. bgfx ships all seventeen files of the release; compiling five of them was what the
     # renderer happened to call, not what the library offers.
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/clusterizer.cpp
+    ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/meshletutils.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/partition.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/simplifier.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/vertexcodec.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/indexcodec.cpp
 )
+# A packaged mesh's cluster bounds are recomputed at load and checked against the cooked ones.
+# Contracting this code into FMA (clang on arm64) gives other bounds than the x64 cooker wrote,
+# and the mesh is refused.
+if(NOT MSVC)
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/meshletutils.cpp
+        PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+endif()
 
 if(NOT ANDROID AND NOT EMSCRIPTEN)
     add_library(kb_runtime_asset_pack_validation STATIC
@@ -565,8 +574,9 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
     )
 
     # The motion vector vertex stages index each instance's previous model by gl_InstanceID, which OpenGL ES
-    # has from 3.0 on (the material graph shaders already require it); every other profile is the default.
-    set(KB_RENDERER_INSTANCE_ID_SHADER_PROFILES spirv 120 300_es)
+    # has from 3.0 on (the material graph shaders already require it); desktop OpenGL needs GLSL 330 or newer
+    # for them, and 430 is the profile the OpenGL renderer is verified with. Every other profile is the default.
+    set(KB_RENDERER_INSTANCE_ID_SHADER_PROFILES spirv 430 300_es)
     if(APPLE)
         list(APPEND KB_RENDERER_INSTANCE_ID_SHADER_PROFILES metal)
     elseif(WIN32 OR MINGW OR MSYS OR CYGWIN)

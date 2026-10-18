@@ -76,7 +76,7 @@ public:
         }
         bgfx::Attachment attachments[2]{};
         attachments[0].init(color->texture);
-        attachments[1].init(depth_);
+        attachments[1].init(depth_, bgfx::Access::Write, 0U, 1U, 0U, BGFX_ATTACHMENT_NONE);
         frameBuffer_ = bgfx::createFrameBuffer(2U, attachments, false);
         if (!bgfx::isValid(frameBuffer_)) {
             Shutdown(resources);
@@ -172,7 +172,7 @@ public:
             }
             bgfx::Attachment attachments[2]{};
             attachments[0].init(color->texture, bgfx::Access::Write, face);
-            attachments[1].init(depths_[face]);
+            attachments[1].init(depths_[face], bgfx::Access::Write, 0U, 1U, 0U, BGFX_ATTACHMENT_NONE);
             frameBuffers_[face] = bgfx::createFrameBuffer(2U, attachments, false);
             if (!bgfx::isValid(frameBuffers_[face])) {
                 Shutdown(resources);
@@ -462,8 +462,7 @@ void AuxFrameRenderer::Collect(
 
 bool AuxFrameRenderer::SubmitPanoramaConversion(AuxFramePanoramaConversion conversion) const {
     const auto found = std::find_if(state_->pendingPanoramas.begin(), state_->pendingPanoramas.end(), [conversion](const State::PendingPanorama& pending) { return pending.viewId == conversion.viewId; });
-    if (found == state_->pendingPanoramas.end() || found->target == nullptr || !bgfx::isValid(found->cubeTexture) || !bgfx::isValid(found->outputTexture) ||
-        (bgfx::getCaps()->supported & BGFX_CAPS_TEXTURE_BLIT) == 0U) {
+    if (found == state_->pendingPanoramas.end() || found->target == nullptr || !bgfx::isValid(found->cubeTexture) || !bgfx::isValid(found->outputTexture)) {
         return false;
     }
     bgfx::setViewName(conversion.viewId, "KB Aux Frame Panorama");
@@ -477,14 +476,20 @@ bool AuxFrameRenderer::SubmitPanoramaConversion(AuxFramePanoramaConversion conve
     for (std::uint16_t face = 0U; face < kAtlasTiles.size(); ++face) {
         bgfx::blit(
             conversion.viewId,
-            found->outputTexture,
-            0U,
-            static_cast<std::uint16_t>(kAtlasTiles[face][0] * found->faceEdge),
-            static_cast<std::uint16_t>(kAtlasTiles[face][1] * found->faceEdge),
-            0U,
-            found->cubeTexture,
-            0U, 0U, 0U, face,
-            found->faceEdge, found->faceEdge, 1U);
+            bgfx::TextureRegion{
+                .handle = found->outputTexture,
+                .x = static_cast<std::uint16_t>(kAtlasTiles[face][0] * found->faceEdge),
+                .y = static_cast<std::uint16_t>(kAtlasTiles[face][1] * found->faceEdge),
+                .width = found->faceEdge,
+                .height = found->faceEdge,
+            },
+            bgfx::TextureRegion{
+                .handle = found->cubeTexture,
+                .z = face,
+                .width = found->faceEdge,
+                .height = found->faceEdge,
+                .depth = 1U,
+            });
     }
     return true;
 }

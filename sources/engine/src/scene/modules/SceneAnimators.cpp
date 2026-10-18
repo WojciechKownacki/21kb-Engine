@@ -15,6 +15,8 @@ std::optional<AnimatorAttachmentTransform> SceneAnimatorQueries::AttachmentTrans
 std::optional<AnimatorAttachmentTransform> SceneAnimatorQueries::SocketTransform(SceneEntity entity, std::string_view socketName) const noexcept { return SceneAnimatorService::SocketTransform(scene_, entity, socketName); }
 std::optional<AnimatorStateInfo> SceneAnimatorQueries::State(SceneEntity entity, std::string_view layer) const { return SceneAnimatorService::State(scene_, entity, layer); }
 std::shared_ptr<const AnimatorDebugSnapshot> SceneAnimatorQueries::DebugSnapshot() const { return SceneAnimatorService::DebugSnapshot(scene_); }
+std::vector<std::string> SceneAnimatorQueries::SocketNames(SceneEntity entity) const { return SceneAnimatorService::SocketNames(scene_, entity); }
+SocketAttachmentStatus SceneAnimatorQueries::SocketAttachment(SceneEntity attachedEntity) const { return SceneAnimatorService::SocketAttachment(scene_, attachedEntity); }
 
 SceneAnimators::SceneAnimators(Scene& scene) noexcept : scene_(scene) {}
 bool SceneAnimators::Exists(SceneEntity entity) const noexcept { return SceneAnimatorService::Exists(scene_, entity); }
@@ -47,5 +49,13 @@ std::optional<AnimatorStateInfo> SceneAnimators::State(SceneEntity entity, std::
 std::shared_ptr<const AnimatorDebugSnapshot> SceneAnimators::DebugSnapshot() const { return SceneAnimatorService::DebugSnapshot(scene_); }
 void SceneAnimators::WaitForDebugSnapshot() { SceneAnimatorService::WaitForDebugSnapshot(scene_); }
 std::vector<AnimationEventRecord> SceneAnimators::DrainEvents() { return SceneAnimatorService::DrainEvents(scene_); }
+std::vector<std::string> SceneAnimators::SocketNames(SceneEntity entity) const { return SceneAnimatorService::SocketNames(scene_, entity); }
+SocketAttachmentStatus SceneAnimators::SocketAttachment(SceneEntity attachedEntity) const { return SceneAnimatorService::SocketAttachment(scene_, attachedEntity); }
+void SceneAnimators::ApplySocketAttachments() { SceneAnimatorService::ApplySocketAttachments(scene_); }
+bool SceneAnimators::AttachToSocket(SceneEntity object, SceneEntity character, std::string_view socket,
+    const SocketAttachmentOffset& offset, std::string* error) {
+    return SceneAnimatorService::AttachToSocket(scene_, object, character, socket, offset, error);
+}
+void SceneAnimators::DetachFromSocket(SceneEntity object) { SceneAnimatorService::DetachFromSocket(scene_, object); }
 
 } // namespace kb::scene

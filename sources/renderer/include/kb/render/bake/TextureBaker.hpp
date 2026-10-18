@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -22,6 +23,12 @@
 // (BakeTargetProfile, AssetBakeKey, IBakedAssetSink) stays in kb_engine where every baker
 // reaches it; only this baker, which needs the image stack, sits on the renderer's side.
 namespace kb::render::bake {
+
+// bimg sizes an image in 64 bits. A chain or level that does not fit 32 bits is refused as 0,
+// the value every caller already treats as "no valid size", rather than truncated.
+[[nodiscard]] inline std::uint32_t TextureImageBytes32(std::uint64_t bytes) noexcept {
+    return bytes > std::numeric_limits<std::uint32_t>::max() ? 0U : static_cast<std::uint32_t>(bytes);
+}
 
 // Identity of this baker inside a bake key. `bakerId` scopes `bakerVersion`, so bumping the
 // version below re-bakes every texture and leaves every other baker's cache untouched.

@@ -6,30 +6,28 @@
 #include <bx/file.h>
 #include <bx/os.h>
 #include <bx/readerwriter.h>
+#include <bx/scanner.h>
 
-#if BX_CRT_MSVC
-#	include <direct.h>   // _getcwd
-#else
+#if BX_PLATFORM_WINDOWS
+#	include <direct.h>   // _wgetcwd
+#elif !BX_CRT_MSVC
 #	include <unistd.h>   // getcwd
-#endif // BX_CRT_MSVC
+#endif // BX_PLATFORM_WINDOWS
 
 #if BX_PLATFORM_WINDOWS
 #if !defined(GetModuleFileName)
-extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void* _module, char* _outFilePath, unsigned long _size);
+extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameW(void* _module, wchar_t* _outFilePath, unsigned long _size);
 #endif
-extern "C" __declspec(dllimport) unsigned long __stdcall GetTempPathA(unsigned long _max, char* _outFilePath);
+extern "C" __declspec(dllimport) unsigned long __stdcall GetTempPathW(unsigned long _max, wchar_t* _outFilePath);
 #elif BX_PLATFORM_OSX
 extern "C" int _NSGetExecutablePath(char* _buf, uint32_t* _bufSize);
 #endif // BX_PLATFORM_WINDOWS
 
 namespace bx
 {
-	static bool isPathSeparator(char _ch)
+	static bool isNotPathSeparator(char _ch)
 	{
-		return false
-			|| '/'  == _ch
-			|| '\\' == _ch
-			;
+		return !isPathSeparator(_ch);
 	}
 
 	static int32_t normalizeFilePath(char* _dst, int32_t _dstSize, const char* _src, int32_t _num)
@@ -38,9 +36,9 @@ namespace bx
 		// - Lexical File Names in Plan 9 or Getting Dot-Dot Right
 		//   https://web.archive.org/web/20180629044444/https://9p.io/sys/doc/lexnames.html
 
-		const int32_t num = strLen(_src, _num);
+		const StringView src(_src, strLen(_src, _num) );
 
-		if (0 == num)
+		if (src.isEmpty() )
 		{
 			return strCopy(_dst, _dstSize, ".");
 		}
@@ -50,91 +48,80 @@ namespace bx
 		StaticMemoryBlockWriter writer(_dst, _dstSize);
 		Error err;
 
-		int32_t idx      = 0;
-		int32_t dotdot   = 0;
+		Scanner scanner(src);
 
-		if (2 <= num
-		&&  ':' == _src[1])
+		// Everything below `dotdot` is a prefix `..` can't back out of.
+		int32_t dotdot = 0;
+
+		if (2 <= src.getLength()
+		&&  ':' == src.getPtr()[1])
 		{
-			size += write(&writer, toUpper(_src[idx]), &err);
+			size += write(&writer, toUpper(src.getPtr()[0]), &err);
 			size += write(&writer, ':', &err);
-			idx  += 2;
+			scanner.seek(2);
 			dotdot = size;
 		}
 
-		const int32_t slashIdx = idx;
+		const bool rooted = !scanner.accept(isPathSeparator).isEmpty();
 
-		bool rooted = isPathSeparator(_src[idx]);
 		if (rooted)
 		{
 			size += write(&writer, '/', &err);
-			++idx;
 			dotdot = size;
 		}
 
+		const int32_t rootSize = size;
+
 		bool trailingSlash = false;
 
-		while (idx < num && err.isOk() )
+		while (!scanner.isDone()
+		&&     err.isOk() )
 		{
-			switch (_src[idx])
+			if (!scanner.acceptWhile(isPathSeparator).isEmpty() )
 			{
-			case '/':
-			case '\\':
-				++idx;
-				trailingSlash = idx == num;
-				break;
-
-			case '.':
-				if (idx+1 == num
-				||  isPathSeparator(_src[idx+1]) )
-				{
-					++idx;
-					break;
-				}
-
-				if ('.' == _src[idx+1]
-				&& (idx+2 == num || isPathSeparator(_src[idx+2]) ) )
-				{
-					idx += 2;
-
-					if (dotdot < size)
-					{
-						for (--size
-							; dotdot < size && !isPathSeparator(_dst[size])
-							; --size)
-						{
-						}
-						seek(&writer, size, Whence::Begin);
-					}
-					else if (!rooted)
-					{
-						if (0 < size)
-						{
-							size += write(&writer, '/', &err);
-						}
-
-						size += write(&writer, "..", &err);
-						dotdot = size;
-					}
-
-					break;
-				}
-				[[fallthrough]];
-
-			default:
-				if ( ( rooted && slashIdx+1 != size)
-				||   (!rooted &&          0 != size) )
-				{
-					size += write(&writer, '/', &err);
-				}
-
-				for (; idx < num && !isPathSeparator(_src[idx]); ++idx)
-				{
-					size += write(&writer, _src[idx], &err);
-				}
-
-				break;
+				trailingSlash = scanner.isDone();
+				continue;
 			}
+
+			const StringView component = scanner.acceptWhile(isNotPathSeparator);
+
+			if (component == ".")
+			{
+				continue;
+			}
+
+			if (component == "..")
+			{
+				if (dotdot < size)
+				{
+					for (--size
+						; dotdot < size && !isPathSeparator(_dst[size])
+						; --size)
+					{
+					}
+
+					seek(&writer, size, Whence::Begin);
+				}
+				else if (!rooted)
+				{
+					if (0 < size)
+					{
+						size += write(&writer, '/', &err);
+					}
+
+					size += write(&writer, "..", &err);
+					dotdot = size;
+				}
+
+				continue;
+			}
+
+			if (rooted ? rootSize != size : 0 != size)
+			{
+				size += write(&writer, '/', &err);
+			}
+
+			size += write(&writer, component, &err);
 		}
 
 		if (0 == size)
@@ -174,13 +161,22 @@ namespace bx
 	static char* pwd(char* _buffer, uint32_t _size)
 	{
 #if BX_PLATFORM_PS4     \
+ || BX_PLATFORM_PS5     \
  || BX_PLATFORM_XBOXONE \
  || BX_PLATFORM_WINRT   \
  || BX_CRT_NONE
 		BX_UNUSED(_buffer, _size);
 		return NULL;
-#elif BX_CRT_MSVC
-		return ::_getcwd(_buffer, (int32_t)_size);
+#elif BX_PLATFORM_WINDOWS
+		wchar_t tmp[kMaxFilePath];
+
+		if (NULL == ::_wgetcwd(tmp, BX_COUNTOF(tmp) )
+		||  0 == fromUtf16(_buffer, int32_t(_size), (const uint16_t*)tmp) )
+		{
+			return NULL;
+		}
+
+		return _buffer;
 #else
 		return ::getcwd(_buffer, _size);
 #endif // BX_PLATFORM_*
@@ -201,10 +197,18 @@ namespace bx
 	static bool getExecutablePath(char* _out, uint32_t* _inOutSize)
 	{
 #if BX_PLATFORM_WINDOWS
-		uint32_t len = ::GetModuleFileNameA(NULL, _out, *_inOutSize);
-		bool result = len != 0 && len < *_inOutSize;
-		*_inOutSize = len;
-		return result;
+		wchar_t tmp[kMaxFilePath];
+		const uint32_t len = ::GetModuleFileNameW(NULL, tmp, BX_COUNTOF(tmp) );
+
+		if (0 == len
+		||  BX_COUNTOF(tmp) <= len)
+		{
+			return false;
+		}
+
+		const int32_t num = fromUtf16(_out, int32_t(*_inOutSize), (const uint16_t*)tmp);
+		*_inOutSize = 0 != num ? num-1 : fromUtf16(NULL, 0, (const uint16_t*)tmp)-1;
+		return 0 != num;
 #elif BX_PLATFORM_LINUX
 		char tmp[64];
 		snprintf(tmp, sizeof(tmp), "/proc/%d/exe", getpid() );
@@ -240,10 +244,18 @@ namespace bx
 	static bool getTempPath(char* _out, uint32_t* _inOutSize)
 	{
 #if BX_PLATFORM_WINDOWS
-		uint32_t len = ::GetTempPathA(*_inOutSize, _out);
-		bool result = len != 0 && len < *_inOutSize;
-		*_inOutSize = len;
-		return result;
+		wchar_t tmp[kMaxFilePath];
+		const uint32_t len = ::GetTempPathW(BX_COUNTOF(tmp), tmp);
+
+		if (0 == len
+		||  BX_COUNTOF(tmp) <= len)
+		{
+			return false;
+		}
+
+		const int32_t num = fromUtf16(_out, int32_t(*_inOutSize), (const uint16_t*)tmp);
+		*_inOutSize = 0 != num ? num-1 : fromUtf16(NULL, 0, (const uint16_t*)tmp)-1;
+		return 0 != num;
 #else
 		static const StringView s_tmp[] =
 		{

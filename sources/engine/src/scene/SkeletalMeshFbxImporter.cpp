@@ -6,8 +6,10 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -27,6 +29,19 @@ template <typename T>
 [[nodiscard]] std::optional<T> Fail(std::string* error, std::string message) {
     if (error != nullptr) *error = std::move(message);
     return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::vector<std::uint8_t>> ReadSourceBytes(const std::filesystem::path& path) {
+    std::error_code sizeError;
+    const std::uintmax_t size = std::filesystem::file_size(path, sizeError);
+    constexpr std::uintmax_t kMaximumSourceBytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
+    if (sizeError || size == 0U || size > kMaximumSourceBytes) return std::nullopt;
+    std::ifstream input{ path, std::ios::binary };
+    if (!input) return std::nullopt;
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+    input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (input.gcount() != static_cast<std::streamsize>(bytes.size())) return std::nullopt;
+    return bytes;
 }
 
 [[nodiscard]] std::string String(const ufbx_string value, std::string fallback = {}) {
@@ -97,6 +112,12 @@ template <typename T>
     return true;
 }
 
+// Blender names an exported action "<armature>|<action>"; the action is the clip's name.
+[[nodiscard]] std::string ClipName(std::string name, std::size_t index) {
+    if (const std::size_t bar = name.rfind('|'); bar != std::string::npos) name.erase(0U, bar + 1U);
+    return name.empty() ? "Animation_" + std::to_string(index) : name;
+}
+
 struct Influence {
     std::uint32_t joint = 0U;
     float weight = 0.0F;
@@ -124,9 +145,12 @@ struct SkinnedMeshNode {
         }
         meshNodes.push_back({ node, node->mesh, skin });
     }
-    if (meshNodes.empty()) return Fail<SkeletalMeshFbxImportResult>(error,
-        "Skeletal FBX import requires at least one skinned mesh node.");
-    if (!options.combineMeshes && meshNodes.size() != 1U) return Fail<SkeletalMeshFbxImportResult>(error,
+    // Without a skinned mesh the source is an armature with animations for a character imported
+    // from another file: its skeleton is every bone node, and it brings clips only.
+    const bool animationsOnly = meshNodes.empty();
+    if (animationsOnly && scene.anim_stacks.count == 0U) return Fail<SkeletalMeshFbxImportResult>(error,
+        "Skeletal FBX source has neither a skinned mesh nor animations.");
+    if (!options.combineMeshes && meshNodes.size() > 1U) return Fail<SkeletalMeshFbxImportResult>(error,
         "Skeletal FBX source contains multiple skinned mesh nodes; enable Combine meshes to import them as one asset.");
 
     SkeletalMeshFbxImportResult result{};
@@ -153,6 +177,45 @@ struct SkinnedMeshNode {
             }
         }
     }
+    // Bones no vertex is weighted to - a root above the hips, a weapon or prop bone below a
+    // hand - still belong to the skeleton: root motion and sockets hang on them. They join it
+    // through the armature's hierarchy, bound where their rest pose puts them.
+    const auto addBone = [&](const ufbx_node* node) {
+        if (node == nullptr || node->bone == nullptr || jointIndex.contains(node)) return;
+        jointIndex.emplace(node, static_cast<std::uint32_t>(boneNodes.size()));
+        boneNodes.push_back(node);
+    };
+    if (animationsOnly) {
+        for (std::size_t index = 0U; index < scene.nodes.count; ++index) addBone(scene.nodes.data[index]);
+    } else {
+        for (std::size_t bone = 0U; bone < boneNodes.size(); ++bone) {
+            for (const ufbx_node* ancestor = boneNodes[bone]->parent; ancestor != nullptr; ancestor = ancestor->parent) {
+                addBone(ancestor);
+            }
+        }
+        for (std::size_t bone = 0U; bone < boneNodes.size(); ++bone) {
+            for (std::size_t child = 0U; child < boneNodes[bone]->children.count; ++child) {
+                addBone(boneNodes[bone]->children.data[child]);
+            }
+        }
+    }
+    if (boneNodes.empty()) return Fail<SkeletalMeshFbxImportResult>(error, "Skeletal FBX source has no bones.");
+    if (boneNodes.size() > static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()) + 1U) {
+        return Fail<SkeletalMeshFbxImportResult>(error, "Skeletal FBX skeleton exceeds the joint palette limit.");
+    }
+    std::unordered_map<const ufbx_node*, ufbx_matrix> bindWorlds;
+    const auto bindWorldOf = [&](const auto& self, const ufbx_node* node) -> ufbx_matrix {
+        if (const auto cluster = clusterByBone.find(node); cluster != clusterByBone.end()) return BoneBindToWorld(*cluster->second);
+        if (const auto known = bindWorlds.find(node); known != bindWorlds.end()) return known->second;
+        ufbx_matrix world = node->node_to_world;
+        if (node->parent != nullptr && jointIndex.contains(node->parent)) {
+            const ufbx_matrix parentWorld = self(self, node->parent);
+            const ufbx_matrix local = ufbx_transform_to_matrix(&node->local_transform);
+            world = ufbx_matrix_mul(&parentWorld, &local);
+        }
+        bindWorlds.emplace(node, world);
+        return world;
+    };
     std::unordered_map<const ufbx_node*, std::int32_t> emitted;
     std::unordered_set<const ufbx_node*> visiting;
     const auto emitBone = [&](const auto& self, const ufbx_node* node) -> bool {
@@ -164,12 +227,11 @@ struct SkinnedMeshNode {
             parent = emitted.at(node->parent);
         }
         const std::uint32_t index = jointIndex.at(node);
-        const ufbx_skin_cluster& cluster = *clusterByBone.at(node);
-        const ufbx_matrix bindWorld = BoneBindToWorld(cluster);
+        const ufbx_matrix bindWorld = bindWorldOf(bindWorldOf, node);
         const ufbx_matrix* parentBindWorld = nullptr;
         ufbx_matrix parentBindWorldStorage{};
         if (node->parent != nullptr && jointIndex.contains(node->parent)) {
-            parentBindWorldStorage = BoneBindToWorld(*clusterByBone.at(node->parent));
+            parentBindWorldStorage = bindWorldOf(bindWorldOf, node->parent);
             parentBindWorld = &parentBindWorldStorage;
         }
         const ufbx_matrix bindLocal = RelativeMatrix(bindWorld, parentBindWorld);
@@ -193,6 +255,9 @@ struct SkinnedMeshNode {
     const SkeletonAssetValidationResult skeletonValidation = ValidateSkeletonAsset(result.skeleton);
     if (!skeletonValidation.valid) return Fail<SkeletalMeshFbxImportResult>(error, skeletonValidation.error);
 
+    result.mesh.skeletonAssetId = skeletonAssetId;
+    result.mesh.skeletonCompatibilitySignature = SkeletonCompatibilitySignature(result.skeleton);
+    if (!animationsOnly) {
     SkeletalMeshLod lod{};
     std::vector<SkeletalMeshSection> sections;
     std::optional<std::uint32_t> previousSourceMaterial;
@@ -350,6 +415,7 @@ struct SkinnedMeshNode {
     result.mesh.fixedBounds = result.mesh.conservativeBounds;
     const SkeletalMeshAssetValidationResult meshValidation = ValidateSkeletalMeshAsset(result.mesh);
     if (!meshValidation.valid) return Fail<SkeletalMeshFbxImportResult>(error, meshValidation.error);
+    }
 
     const double fps = scene.settings.frames_per_second > 0.0 ? scene.settings.frames_per_second : 30.0;
     for (std::size_t stackIndex = 0U; stackIndex < scene.anim_stacks.count; ++stackIndex) {
@@ -427,8 +493,13 @@ struct SkinnedMeshNode {
             for (const AnimationBoneKeyframe& key : track.keyframes) if (!SameTransform(key.transform, bone.referencePose)) { animated = true; break; }
             if (animated) clip.skeletalTracks.push_back(std::move(track));
         }
-        if (!clip.skeletalTracks.empty()) result.clips.push_back(std::move(clip));
+        if (!clip.skeletalTracks.empty()) {
+            result.clips.push_back(std::move(clip));
+            result.clipNames.push_back(ClipName(String(stack->name), stackIndex));
+        }
     }
+    if (animationsOnly && result.clips.empty()) return Fail<SkeletalMeshFbxImportResult>(error,
+        "Skeletal FBX source has no skinned mesh and no animation of its bones.");
     return result;
 }
 
@@ -466,11 +537,40 @@ std::optional<SkeletalMeshFbxImportResult> SkeletalMeshFbxImporter::Import(
     const std::size_t memoryLimit = FbxLoadMemoryLimit(std::filesystem::file_size(path, sizeError));
     loadOptions.temp_allocator.memory_limit = memoryLimit;
     loadOptions.result_allocator.memory_limit = memoryLimit;
+    // Through std::filesystem, so a name the Windows code page cannot spell still opens.
+    const std::optional<std::vector<std::uint8_t>> bytes = ReadSourceBytes(path);
+    if (!bytes) return Fail<SkeletalMeshFbxImportResult>(error, "Skeletal FBX import could not read the source file.");
     ufbx_error loadError{};
-    FbxScene scene{ ufbx_load_file(path.string().c_str(), &loadOptions, &loadError) };
+    FbxScene scene{ ufbx_load_memory(bytes->data(), bytes->size(), &loadOptions, &loadError) };
     if (!scene) return Fail<SkeletalMeshFbxImportResult>(error,
         "Skeletal FBX import could not parse the source file: " + String(loadError.description, "unknown ufbx error"));
     return Build(*scene, skeletonAssetId, options, error);
+}
+
+SkeletalSourceSummary SkeletalMeshFbxImporter::Probe(const std::filesystem::path& path) {
+    SkeletalSourceSummary summary{};
+    const std::optional<std::vector<std::uint8_t>> bytes = ReadSourceBytes(path);
+    if (!bytes) return summary;
+    ufbx_load_opts loadOptions{};
+    loadOptions.ignore_geometry = true;
+    const std::size_t memoryLimit = FbxLoadMemoryLimit(bytes->size());
+    loadOptions.temp_allocator.memory_limit = memoryLimit;
+    loadOptions.result_allocator.memory_limit = memoryLimit;
+    ufbx_error loadError{};
+    const FbxScene scene{ ufbx_load_memory(bytes->data(), bytes->size(), &loadOptions, &loadError) };
+    if (!scene) return summary;
+    summary.readable = true;
+    for (std::size_t index = 0U; index < scene->nodes.count; ++index) {
+        const ufbx_node* node = scene->nodes.data[index];
+        if (node == nullptr) continue;
+        if (node->bone != nullptr) ++summary.boneCount;
+        if (node->mesh != nullptr && node->mesh->skin_deformers.count != 0U) summary.skinned = true;
+    }
+    for (std::size_t index = 0U; index < scene->anim_stacks.count; ++index) {
+        const ufbx_anim_stack* stack = scene->anim_stacks.data[index];
+        if (stack != nullptr && stack->time_end > stack->time_begin) ++summary.animationCount;
+    }
+    return summary;
 }
 
 } // namespace kb::scene

@@ -33,6 +33,13 @@
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneAnimators.hpp"
+#include "engine/scene/SkeletonAsset.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/SocketAttachmentComponent.hpp"
+#include "platform/win32/Utf8Gdi.hpp"
+#include "inspection/InspectorGenericComponentModel.hpp"
+#include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -1506,6 +1513,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::NavObstacleShape && property <= InspectorPropertyId::NavObstacleEnabled;
 }
 
+[[nodiscard]] bool IsSocketAttachmentProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::SocketAttachmentSocket && property <= InspectorPropertyId::SocketAttachmentEnabled;
+}
+
 [[nodiscard]] bool IsNavLinkProperty(InspectorPropertyId property) noexcept {
     return property >= InspectorPropertyId::NavLinkKind && property <= InspectorPropertyId::NavLinkEnabled;
 }
@@ -1588,6 +1599,24 @@ template <typename Mutator>
         return false;
     }
     sceneContext.Scene().Components().NavObstacles().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditSocketAttachment(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::SocketAttachmentComponent* attachment = sceneContext.Scene().Components().SocketAttachments().TryGet(entity);
+    if (attachment == nullptr) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    kb::scene::SocketAttachmentComponent edited = *attachment;
+    if (!mutator(edited) || !kb::scene::IsSocketAttachmentComponentValid(edited) ||
+        !sceneContext.Scene().Components().SocketAttachments().Set(entity, edited)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1792,6 +1821,95 @@ template <typename Mutator>
     case InspectorPropertyId::NavObstacleSizeZ: return FormatCompactFloat(obstacle.size.z);
     default: return {};
     }
+}
+
+[[nodiscard]] std::string SocketAttachmentFieldValue(const kb::scene::SocketAttachmentComponent& attachment, InspectorPropertyId property) {
+    const kb::scene::Vec3 degrees = kb::math::ToEulerDegrees(attachment.offset.rotation);
+    switch (property) {
+    case InspectorPropertyId::SocketAttachmentSocket: return std::string{ kb::scene::SocketAttachmentName(attachment) };
+    case InspectorPropertyId::SocketAttachmentPositionX: return FormatCompactFloat(attachment.offset.position.x);
+    case InspectorPropertyId::SocketAttachmentPositionY: return FormatCompactFloat(attachment.offset.position.y);
+    case InspectorPropertyId::SocketAttachmentPositionZ: return FormatCompactFloat(attachment.offset.position.z);
+    case InspectorPropertyId::SocketAttachmentRotationX: return FormatCompactFloat(degrees.x);
+    case InspectorPropertyId::SocketAttachmentRotationY: return FormatCompactFloat(degrees.y);
+    case InspectorPropertyId::SocketAttachmentRotationZ: return FormatCompactFloat(degrees.z);
+    default: return {};
+    }
+}
+
+// The skeleton of the character above the object (the nearest parent with a Skeleton Binding).
+[[nodiscard]] kb::assets::AssetHandle<kb::scene::SkeletonAsset> SocketCharacterSkeleton(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    for (kb::scene::SceneEntity current = scene.Hierarchy().Parent(entity); current.IsValid(); current = scene.Hierarchy().Parent(current)) {
+        const kb::scene::SkeletonBindingComponent* binding = scene.Components().SkeletonBindings().TryGet(current);
+        if (binding != nullptr && kb::scene::IsSkeletonBindingComponentValid(*binding)) {
+            return scene.Assets().Manager().Load<kb::scene::SkeletonAsset>(kb::assets::AssetId{ binding->skeletonAssetId });
+        }
+    }
+    return {};
+}
+
+// One click: the sockets of the character above, its bones in a submenu, or a name to type.
+[[nodiscard]] bool ChooseSocket(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const kb::scene::SocketAttachmentComponent& attachment) {
+    const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton = SocketCharacterSkeleton(sceneContext.Scene(), entity);
+    constexpr UINT_PTR kTypeName = 1U;
+    constexpr UINT_PTR kFirstSocket = 100U;
+    constexpr UINT_PTR kFirstBone = 10000U;
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) return false;
+    HMENU bones = nullptr;
+    if (!skeleton.IsLoaded()) {
+        kb::editor::AppendMenuUtf8(menu, MF_STRING | MF_GRAYED, 0U,
+            std::string{ EditorText("inspector.socketAttachment.noCharacter", "Put this object under a character first") }.c_str());
+    } else {
+        for (std::size_t index = 0U; index < skeleton->sockets.size(); ++index) {
+            kb::editor::AppendMenuUtf8(menu, MF_STRING, kFirstSocket + index, skeleton->sockets[index].name.c_str());
+        }
+        bones = CreatePopupMenu();
+        if (bones != nullptr) {
+            for (std::size_t index = 0U; index < skeleton->bones.size(); ++index) {
+                kb::editor::AppendMenuUtf8(bones, MF_STRING, kFirstBone + index, skeleton->bones[index].name.c_str());
+            }
+            kb::editor::AppendMenuUtf8(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(bones),
+                std::string{ EditorText("inspector.socketAttachment.bones", "Bones") }.c_str());
+        }
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0U, nullptr);
+    kb::editor::AppendMenuUtf8(menu, MF_STRING, kTypeName, std::string{ EditorText("inspector.socketAttachment.typeName", "Type a Name...") }.c_str());
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    HWND window = GetActiveWindow();
+    const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, cursor.x, cursor.y, 0, window, nullptr);
+    DestroyMenu(menu);
+    if (command == kTypeName) {
+        sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::SocketAttachmentSocket, std::string{ kb::scene::SocketAttachmentName(attachment) });
+        return true;
+    }
+    std::string chosen;
+    if (skeleton.IsLoaded() && command >= kFirstBone && command - kFirstBone < skeleton->bones.size()) {
+        chosen = skeleton->bones[command - kFirstBone].name;
+    } else if (skeleton.IsLoaded() && command >= kFirstSocket && command - kFirstSocket < skeleton->sockets.size()) {
+        chosen = skeleton->sockets[command - kFirstSocket].name;
+    } else {
+        return false;
+    }
+    return EditSocketAttachment(sceneContext, entity, "Choose Socket", [&chosen](kb::scene::SocketAttachmentComponent& value) {
+        return kb::scene::SetSocketAttachmentName(value, chosen);
+    });
+}
+
+[[nodiscard]] bool HandleSocketAttachmentClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::SocketAttachmentComponent* attachment = sceneContext.Scene().Components().SocketAttachments().TryGet(entity);
+    if (attachment == nullptr) return false;
+    if (hit.property == InspectorPropertyId::SocketAttachmentEnabled) {
+        return EditSocketAttachment(sceneContext, entity, "Toggle Socket Attachment", [](kb::scene::SocketAttachmentComponent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (hit.property == InspectorPropertyId::SocketAttachmentSocket) {
+        return ChooseSocket(sceneContext, entity, *attachment);
+    }
+    if (IsSocketAttachmentProperty(hit.property)) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, SocketAttachmentFieldValue(*attachment, hit.property));
+    }
+    return true;
 }
 
 [[nodiscard]] std::string NavLinkFieldValue(const kb::scene::NavLink& link, InspectorPropertyId property) {
@@ -2288,6 +2406,31 @@ template <typename Mutator>
         case InspectorPropertyId::NavObstacleSizeZ: if (value <= 0.0F) return false; obstacle.size.z = value; return true;
         default: return false;
         }
+    });
+}
+
+[[nodiscard]] bool ApplySocketAttachmentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property == InspectorPropertyId::SocketAttachmentSocket) {
+        const std::string name{ text };
+        return EditSocketAttachment(sceneContext, entity, "Edit Socket", [&name](kb::scene::SocketAttachmentComponent& value) {
+            return kb::scene::SetSocketAttachmentName(value, name);
+        });
+    }
+    float number = 0.0F;
+    if (!ParseFloat(text, number) || !std::isfinite(number)) return false;
+    return EditSocketAttachment(sceneContext, entity, "Edit Socket Offset", [property, number](kb::scene::SocketAttachmentComponent& value) {
+        kb::scene::Vec3 degrees = kb::math::ToEulerDegrees(value.offset.rotation);
+        switch (property) {
+        case InspectorPropertyId::SocketAttachmentPositionX: value.offset.position.x = number; return true;
+        case InspectorPropertyId::SocketAttachmentPositionY: value.offset.position.y = number; return true;
+        case InspectorPropertyId::SocketAttachmentPositionZ: value.offset.position.z = number; return true;
+        case InspectorPropertyId::SocketAttachmentRotationX: degrees.x = number; break;
+        case InspectorPropertyId::SocketAttachmentRotationY: degrees.y = number; break;
+        case InspectorPropertyId::SocketAttachmentRotationZ: degrees.z = number; break;
+        default: return false;
+        }
+        value.offset.rotation = kb::math::FromEulerDegrees(degrees);
+        return true;
     });
 }
 
@@ -3133,6 +3276,17 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().NavObstacles().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (const InspectorGenericComponentModel::Section* generic = InspectorGenericComponentModel::Find(hit.section);
+                       generic != nullptr && kb::scene::SceneComponentAuthoring::Has(sceneContext.Scene(), entity, generic->component)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove " + std::string{ generic->title })) {
+                    static_cast<void>(kb::scene::SceneComponentAuthoring::Remove(sceneContext.Scene(), entity, generic->component));
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::SocketAttachment && sceneContext.Scene().Components().SocketAttachments().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Socket Attachment")) {
+                    sceneContext.Scene().Components().SocketAttachments().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (hit.section == InspectorSectionId::NavLink && sceneContext.Scene().Components().NavLinks().Has(entity)) {
                 if (sceneContext.BeginSceneEditTransaction("Remove Nav Link")) {
                     sceneContext.Scene().Components().NavLinks().Remove(entity);
@@ -3473,7 +3627,14 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::NavLink) {
         return HandleNavLinkClick(sceneContext, entity, hit);
+    }    if (hit.section == InspectorSectionId::SocketAttachment) {
+        return HandleSocketAttachmentClick(sceneContext, entity, hit);
     }
+    if (InspectorGenericComponentModel::Find(hit.section) != nullptr) {
+        return hit.property == InspectorPropertyId::GenericComponentField &&
+            InspectorGenericComponentModel::Click(sceneContext, entity, hit.index);
+    }
+
     if (hit.section == InspectorSectionId::RegionShape) {
         return HandleRegionShapeClick(sceneContext, entity, hit);
     }
@@ -3925,6 +4086,18 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsNavObstacleProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyNavObstacleText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            inspector.EditedProperty() == InspectorPropertyId::GenericComponentField) {
+            static_cast<void>(InspectorGenericComponentModel::ApplyText(sceneContext, entity, inspector.EditIndex(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsSocketAttachmentProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplySocketAttachmentText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

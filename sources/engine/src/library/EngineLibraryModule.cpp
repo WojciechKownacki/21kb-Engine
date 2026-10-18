@@ -4,6 +4,7 @@
 #include "engine/library/EngineLibraryModuleNames.hpp"
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
+#include "engine/script/ScriptGameplayApi.hpp"
 #include "engine/script/ScriptAnimatorApi.hpp"
 #include "engine/script/ScriptTimelineApi.hpp"
 #include "engine/script/ScriptCollectionsApi.hpp"
@@ -207,6 +208,11 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Animator",
             .ownerRuntime = "kb::scene::SceneAnimators",
             .Register = &kb::script::ScriptAnimatorApi::Register,
+        },
+        LibraryModuleDesc{
+            .name = "Gameplay",
+            .ownerRuntime = "kb::scene::SceneGameplay",
+            .Register = &kb::script::ScriptGameplayApi::Register,
         },
         LibraryModuleDesc{
             .name = "Timeline",

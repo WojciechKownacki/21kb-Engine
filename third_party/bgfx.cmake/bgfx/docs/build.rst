@@ -137,9 +137,9 @@ There are also many platform-specific options.
   ::
 
       # Unix:
-      export BGFX_CONFIG=RENDERER_OPENGL_MIN_VERSION=40
+      export BGFX_CONFIG=RENDERER_OPENGL_MIN_VERSION=46
       # Windows:
-      set BGFX_CONFIG=RENDERER_OPENGL_MIN_VERSION=40
+      set BGFX_CONFIG=RENDERER_OPENGL_MIN_VERSION=46
 
       ../bx/tools/bin/<platform>/genie <... your options ...>
 
@@ -208,6 +208,53 @@ Linux
 ::
 
     make linux-release64
+
+Android
+~~~~~~~
+
+With ``ANDROID_NDK_ROOT`` set (see `Prerequisites <#prerequisites>`_):
+
+::
+
+    make android-arm64-release
+
+Libraries are in ``.build/android-arm64/bin``. Link ``libbgfxRelease.a``, ``libbimgRelease.a`` and
+``libbxRelease.a`` into your native library, and add ``bgfx/include``, ``bimg/include`` and
+``bx/include`` to its include paths.
+
+iOS
+~~~
+
+For the command line:
+
+::
+
+    make ios-arm64-release
+
+Libraries are in ``.build/ios-arm64/bin``. To use them in your own Xcode project:
+
+1. Link ``libbgfxRelease.a``, ``libbimgRelease.a`` and ``libbxRelease.a``.
+2. Link the ``Foundation``, ``CoreGraphics``, ``QuartzCore``, ``UIKit`` and ``Metal`` frameworks,
+   plus ``VideoToolbox``, ``CoreMedia`` and ``CoreVideo`` for video decode.
+3. Add ``bgfx/include``, ``bimg/include`` and ``bx/include`` to *Header Search Paths*.
+4. Pass a ``CAMetalLayer``, or an ``MTKView``, as ``bgfx::PlatformData::nwh``.
+
+Or build ``src/amalgamated.mm`` directly in your project instead of linking the libraries
+(see `Amalgamated Build <#amalgamated-build>`_).
+
+For the Xcode IDE:
+
+::
+
+    ../bx/tools/bin/darwin/genie --with-combined-examples --xcode=ios xcode9
+    open .build/projects/xcode9-ios/bgfx.xcworkspace
+
+For tvOS, generate gmake projects with ``--gcc=tvos-arm64``:
+
+::
+
+    ../bx/tools/bin/darwin/genie --gcc=tvos-arm64 gmake
+    make -R -C .build/projects/gmake-tvos-arm64 config=release
 
 For more options, see `General (directly with GENie) <#general-directly-with-genie>`_.
 

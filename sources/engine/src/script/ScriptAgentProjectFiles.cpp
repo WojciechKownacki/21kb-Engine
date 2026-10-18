@@ -94,6 +94,56 @@ Open it and enter Play Mode: the ship flies with its camera, Space fires cube
 projectiles and a spatial one-shot, and looping ship/beacon sources demonstrate
 2D playback and distance attenuation.
 
+## Characters, fights and AI from the command line
+
+Everything below is one `kb_cli` call per line; `kb_cli <command>` alone prints its options.
+
+```
+# A character from Blender (glTF/GLB or FBX, skinned mesh or animations only): Skeleton,
+# Skeletal Mesh and one Animation Clip per action, named <file>_<action>.
+kb_cli import --project . --destination /Game/Characters Hero.glb
+kb_cli entity add --project . --name Hero
+kb_cli component set --project . --entity Hero --type MeshRenderer --set mesh=/Game/Characters/Hero.kbskeletalmesh
+
+# Its state machine: one state per clip, a speed blend, transitions; check before use.
+kb_cli animator new --project . --name Hero --clip /Game/Characters/Hero_Idle.kbanim --clip /Game/Characters/Hero_Run.kbanim
+kb_cli animator locomotion --project . --controller /Game/Animation/Hero.kbanimcontroller --parameter Speed --clip 0=/Game/Characters/Hero_Idle.kbanim --clip 4=/Game/Characters/Hero_Run.kbanim
+kb_cli animator check --project . --controller /Game/Animation/Hero.kbanimcontroller --character /Game/Characters/Hero.kbskeletalmesh
+kb_cli component add --project . --entity Hero --type Animator --set controller=/Game/Animation/Hero.kbanimcontroller
+# Clips of another rig (Mixamo, Unreal, Rigify) play too: bones are matched by name and role and
+# retargeted; `animator check --character` shows how many bones follow each clip.
+
+# A sword in the right hand: a socket (or any bone name; hand_r finds hand.R).
+kb_cli skeleton show --project . --skeleton /Game/Characters/Hero.kbskeletalmesh
+kb_cli skeleton socket add --project . --skeleton /Game/Characters/Hero.kbskeletalmesh --name weapon_r --bone hand_r --rotation 0,0,90
+kb_cli entity add --project . --name Sword --create Cube
+kb_cli entity attach --project . --name Sword --to Hero --socket weapon_r --scale 0.05,0.8,0.05
+
+# Fights: an ability, a Combatant (health, mana, resistances, team, senses, 8 ability slots).
+# Teams 1 (players) and 2 (monsters) are enemies; 0 is nobody's.
+kb_cli ability new --project . --name Fireball --set damageType=Fire --set amount=40 --set range=12 --set radius=3 --set manaCost=10 --set animatorTrigger=Cast
+kb_cli component add --project . --entity Hero --type Combatant --set team=1 --set maximumHealth=200 --set maximumMana=50 --set ability1=/Game/Abilities/Fireball.kbability
+
+# A whole AI in one line: Combatant + AI Brain from a preset (Melee, Ranged, Guard, Coward, Wanderer).
+kb_cli entity add --project . --name Goblin --create Capsule --position 0,1,8
+kb_cli ai make --project . --entity Goblin --preset Melee --health 60
+kb_cli ai rule --project . --entity Goblin --rule 4 --when HealthBelowPercent=20 --do Flee
+kb_cli ai show --project . --entity Goblin
+```
+
+The AI Brain is a list of up to 8 rules, "when <condition> do <action>", checked from the top
+(conditions: Always SeesEnemy KnowsEnemy EnemyCloserThan EnemyFartherThan HealthBelowPercent
+ManaAbovePercent AbilityReady FarFromHome; actions: Idle Wander ReturnHome Chase UseAbility
+KeepDistance Flee). It moves along the navigation mesh with a NavAgent, straight without one, and
+drives the Animator: float `Speed`, triggers `Attack`, `Hit`, `Die`, bool `Dead`.
+
+Scripts and C++ see the same: `Gameplay.ApplyDamage`, `Gameplay.Heal`, `Gameplay.UseAbility`,
+`Gameplay.Health` (fractions for health bars), `Gameplay.NearestEnemy`, `Animator.Socket`,
+`Animator.AttachToSocket`; in C++ `scene.Gameplay()` (also `DrainEvents()` for damage, deaths and
+sightings) and `scene.Animators()`. A combatant's script receives its fights as callbacks with the
+details in `event.args` (`other`, `amount`, `damageType`, `ability`): `OnDamaged`, `OnHealed`,
+`OnDeath`, `OnRevived`, `OnAbilityUsed`, `OnEnemySpotted`, `OnEnemyLost`.
+
 ## Verifying your work (always do this before finishing)
 
 ```

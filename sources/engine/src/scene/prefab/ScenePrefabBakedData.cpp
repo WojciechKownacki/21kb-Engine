@@ -80,6 +80,9 @@ namespace {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Animator);
     }
     if (components.skeletonBinding.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::SkeletonBinding);
+    if (components.socketAttachment.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::SocketAttachment);
+    if (components.combatant.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Combatant);
+    if (components.aiBrain.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::AIBrain);
     if (components.motionSkeletonRule.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::MotionSkeletonRule);
     if (components.deformedGeometry.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::DeformedGeometry);
     if (components.navAgent.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavAgent);
@@ -211,6 +214,9 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
             archetype.animators.push_back(*node.components.animator);
         }
         if (node.components.skeletonBinding.has_value()) archetype.skeletonBindings.push_back(*node.components.skeletonBinding);
+        if (node.components.socketAttachment.has_value()) archetype.socketAttachments.push_back(*node.components.socketAttachment);
+        if (node.components.combatant.has_value()) archetype.combatants.push_back(*node.components.combatant);
+        if (node.components.aiBrain.has_value()) archetype.aiBrains.push_back(*node.components.aiBrain);
         if (node.components.motionSkeletonRule.has_value()) archetype.motionSkeletonRules.push_back(*node.components.motionSkeletonRule);
         if (node.components.deformedGeometry.has_value()) archetype.deformedGeometries.push_back(*node.components.deformedGeometry);
         if (node.components.navAgent.has_value()) archetype.navAgents.push_back(*node.components.navAgent);

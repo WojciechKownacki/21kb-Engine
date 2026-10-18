@@ -173,7 +173,7 @@ static const char* getPciIdName(uint16_t _pciId)
 	case BGFX_PCI_ID_ARM:                 return "ARM";
 	case BGFX_PCI_ID_INTEL:               return "Intel";
 	case BGFX_PCI_ID_MICROSOFT:           return "Microsoft";
-	case BGFX_PCI_ID_NVIDIA:              return "nVidia";
+	case BGFX_PCI_ID_NVIDIA:              return "NVIDIA";
 	case BGFX_PCI_ID_SOFTWARE_RASTERIZER: return "Software Rasterizer";
 	default: break;
 	}
@@ -371,7 +371,7 @@ void showExampleDialog(entry::AppI* _app, const char* _errorText)
 				case BGFX_PCI_ID_AMD:                 items[ii] = "AMD";                 break;
 				case BGFX_PCI_ID_APPLE:               items[ii] = "Apple";               break;
 				case BGFX_PCI_ID_INTEL:               items[ii] = "Intel";               break;
-				case BGFX_PCI_ID_NVIDIA:              items[ii] = "nVidia";              break;
+				case BGFX_PCI_ID_NVIDIA:              items[ii] = "Nvidia";              break;
 				case BGFX_PCI_ID_MICROSOFT:           items[ii] = "Microsoft";           break;
 				case BGFX_PCI_ID_ARM:                 items[ii] = "ARM";                 break;
 				case BGFX_PCI_ID_SOFTWARE_RASTERIZER: items[ii] = "Software Rasterizer"; break;
@@ -417,7 +417,11 @@ void showExampleDialog(entry::AppI* _app, const char* _errorText)
 	const bgfx::Stats* stats = bgfx::getStats();
 	const double toMsCpu = 1000.0/stats->cpuTimerFreq;
 	const double toMsGpu = 1000.0/stats->gpuTimerFreq;
-	const double frameMs = double(stats->cpuTimeFrame)*toMsCpu;
+	const bool   fixedTime = bx::Ticks(bx::InitZero) != entry::getFixedTimeStep();
+	const double frameMs   = fixedTime
+		? bx::toMilliseconds<double>(entry::getFixedTimeStep() )
+		: double(stats->cpuTimeFrame)*toMsCpu
+		;
 
 	s_frameTime.pushSample(float(frameMs) );
 
@@ -444,8 +448,8 @@ void showExampleDialog(entry::AppI* _app, const char* _errorText)
 	ImGui::PopStyleColor();
 
 	ImGui::Text("Submit CPU %0.3f, GPU %0.3f (L: %d)"
-		, double(stats->cpuTimeEnd - stats->cpuTimeBegin)*toMsCpu
-		, double(stats->gpuTimeEnd - stats->gpuTimeBegin)*toMsGpu
+		, fixedTime ? 0.0 : double(stats->cpuTimeEnd - stats->cpuTimeBegin)*toMsCpu
+		, fixedTime ? 0.0 : double(stats->gpuTimeEnd - stats->gpuTimeBegin)*toMsGpu
 		, stats->maxGpuLatency
 		);
 

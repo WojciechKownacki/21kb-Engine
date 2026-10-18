@@ -8,11 +8,6 @@
 # You should have received a copy of the CC0 Public Domain Dedication along with
 # this software. If not, see <http://creativecommons.org/publicdomain/zero/1.0/>.
 
-# To prevent this warning: https://cmake.org/cmake/help/git-stage/policy/CMP0072.html
-if(POLICY CMP0072)
-	cmake_policy(SET CMP0072 NEW)
-endif()
-
 # Ensure the directory exists
 if(NOT IS_DIRECTORY ${BGFX_DIR})
 	message(SEND_ERROR "Could not load bgfx, directory does not exist. ${BGFX_DIR}")
@@ -51,15 +46,17 @@ else()
 endif()
 
 if(BGFX_CONFIG_RENDERER_WEBGPU)
+	include(${CMAKE_CURRENT_LIST_DIR}/3rdparty/webgpu.cmake)
 	if(EMSCRIPTEN)
-		# Emdawnwebgpu provides the current webgpu.h ABI and the JavaScript bridge.
-		# The port flag is required while compiling the backend and again at the
-		# final executable link; the obsolete USE_WEBGPU setting no longer exists.
-		target_compile_options(bgfx PRIVATE "--use-port=emdawnwebgpu")
+		# Emscripten's built-in WebGPU bindings (-sUSE_WEBGPU) are deprecated and
+		# expose an outdated webgpu.h that lacks the Dawn C API the current
+		# renderer_webgpu.cpp targets (wgpuInstanceWaitAny, wgpuAdapterRequestDevice,
+		# ...), so linking fails with undefined wgpu* symbols. Use Dawn's maintained
+		# emdawnwebgpu port instead. PUBLIC (not PRIVATE) so the port reaches the
+		# final link of executables that link bgfx -- a link option on a static
+		# archive otherwise never propagates to the consumer.
 		target_link_options(bgfx PUBLIC "--use-port=emdawnwebgpu")
-		target_compile_definitions(bgfx PRIVATE BGFX_CONFIG_RENDERER_WEBGPU=1)
 	else()
-		include(${CMAKE_CURRENT_LIST_DIR}/3rdparty/webgpu.cmake)
 		target_link_libraries(bgfx PRIVATE webgpu)
 	endif()
 endif()
@@ -89,25 +86,9 @@ if(BGFX_WITH_WAYLAND)
 	target_link_libraries(bgfx PRIVATE wayland-egl)
 endif()
 
-set(BGFX_CONFIG_OPTIONS "")
-list(
-	APPEND
-	BGFX_CONFIG_OPTIONS
-	"BGFX_CONFIG_MAX_DRAW_CALLS"
-	"BGFX_CONFIG_MAX_VIEWS"
-	"BGFX_CONFIG_MAX_FRAME_BUFFERS"
-	"BGFX_CONFIG_MAX_VERTEX_LAYOUTS"
-	"BGFX_CONFIG_MAX_VERTEX_BUFFERS"
-	"BGFX_CONFIG_MAX_DYNAMIC_VERTEX_BUFFERS"
-	"BGFX_CONFIG_MAX_INDEX_BUFFERS"
-	"BGFX_CONFIG_MAX_DYNAMIC_INDEX_BUFFERS"
-	"BGFX_CONFIG_MAX_TEXTURES"
-	"BGFX_CONFIG_MAX_TEXTURE_SAMPLERS"
-	"BGFX_CONFIG_MAX_SHADERS"
-	"BGFX_CONFIG_SORT_KEY_NUM_BITS_PROGRAM"
-)
+# Forward the bgfx compile-time options declared in the top level CMakeLists.txt.
 foreach(BGFX_CONFIG_OPTION IN LISTS BGFX_CONFIG_OPTIONS)
-	if(NOT ${${BGFX_CONFIG_OPTION}} STREQUAL "")
+	if(NOT "${${BGFX_CONFIG_OPTION}}" STREQUAL "")
 		target_compile_definitions(bgfx PUBLIC "${BGFX_CONFIG_OPTION}=${${BGFX_CONFIG_OPTION}}")
 	endif()
 endforeach()
@@ -124,6 +105,7 @@ target_compile_definitions(
 		"BX_CONFIG_DEBUG=$<OR:$<CONFIG:Debug>,$<BOOL:${BX_CONFIG_DEBUG}>>"
 		"BGFX_CONFIG_DEBUG_ANNOTATION=$<AND:$<NOT:$<STREQUAL:${CMAKE_SYSTEM_NAME},WindowsStore>>,$<OR:$<CONFIG:Debug>,$<BOOL:${BGFX_CONFIG_DEBUG_ANNOTATION}>>>"
 		"BGFX_CONFIG_MULTITHREADED=$<BOOL:${BGFX_CONFIG_MULTITHREADED}>"
+		"BGFX_CONFIG_VIDEO=$<BOOL:${BGFX_CONFIG_VIDEO}>"
 )
 
 # directx-headers
@@ -159,6 +141,11 @@ if(${CMAKE_SYSTEM_NAME} MATCHES iOS|tvOS)
 		PUBLIC
 			"-framework OpenGLES -framework Metal -framework UIKit -framework CoreGraphics -framework QuartzCore -framework IOKit -framework CoreFoundation"
 	)
+	if(BGFX_CONFIG_VIDEO)
+		target_link_libraries(
+			bgfx PUBLIC "-framework VideoToolbox -framework CoreMedia -framework CoreVideo"
+		)
+	endif()
 elseif(APPLE)
 	find_library(COCOA_LIBRARY Cocoa)
 	find_library(METAL_LIBRARY Metal)
@@ -173,6 +160,17 @@ elseif(APPLE)
 	target_link_libraries(
 		bgfx PUBLIC ${COCOA_LIBRARY} ${METAL_LIBRARY} ${QUARTZCORE_LIBRARY} ${IOKIT_LIBRARY} ${COREFOUNDATION_LIBRARY}
 	)
+	if(BGFX_CONFIG_VIDEO)
+		find_library(VIDEOTOOLBOX_LIBRARY VideoToolbox)
+		find_library(COREMEDIA_LIBRARY CoreMedia)
+		find_library(COREVIDEO_LIBRARY CoreVideo)
+		mark_as_advanced(VIDEOTOOLBOX_LIBRARY)
+		mark_as_advanced(COREMEDIA_LIBRARY)
+		mark_as_advanced(COREVIDEO_LIBRARY)
+		target_link_libraries(
+			bgfx PUBLIC ${VIDEOTOOLBOX_LIBRARY} ${COREMEDIA_LIBRARY} ${COREVIDEO_LIBRARY}
+		)
+	endif()
 endif()
 
 if(UNIX
@@ -202,6 +200,7 @@ if(XCODE)
 	set_source_files_properties(
 		${BGFX_DIR}/src/renderer_vk.cpp
 		${BGFX_DIR}/src/renderer_webgpu.cpp
+		${BGFX_DIR}/src/video_mtl.cpp
 		PROPERTIES
 			LANGUAGE OBJCXX
 			XCODE_EXPLICIT_FILE_TYPE sourcecode.cpp.objcpp

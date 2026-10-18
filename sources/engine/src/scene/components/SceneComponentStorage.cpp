@@ -39,6 +39,9 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , audioListeners_(world, components.AudioListenerComponentId())
     , animators_(world, components.AnimatorComponentId())
     , skeletonBindings_(world, components.SkeletonBindingComponentId())
+    , socketAttachments_(world, components.SocketAttachmentComponentId())
+    , combatants_(world, components.CombatantComponentId())
+    , aiBrains_(world, components.AIBrainComponentId())
     , motionSkeletonRules_(world, components.MotionSkeletonRuleComponentId())
     , deformedGeometries_(world, components.DeformedGeometryComponentId())
     , navigation_(world) {}
@@ -208,6 +211,12 @@ const SceneAnimatorComponentStore& SceneComponentStorage::Animators() const noex
 SceneAnimatorComponentStore& SceneComponentStorage::Animators() noexcept { return animators_; }
 const SceneSkeletonBindingComponentStore& SceneComponentStorage::SkeletonBindings() const noexcept { return skeletonBindings_; }
 SceneSkeletonBindingComponentStore& SceneComponentStorage::SkeletonBindings() noexcept { return skeletonBindings_; }
+const SceneSocketAttachmentComponentStore& SceneComponentStorage::SocketAttachments() const noexcept { return socketAttachments_; }
+SceneSocketAttachmentComponentStore& SceneComponentStorage::SocketAttachments() noexcept { return socketAttachments_; }
+const SceneCombatantComponentStore& SceneComponentStorage::Combatants() const noexcept { return combatants_; }
+SceneCombatantComponentStore& SceneComponentStorage::Combatants() noexcept { return combatants_; }
+const SceneAIBrainComponentStore& SceneComponentStorage::AIBrains() const noexcept { return aiBrains_; }
+SceneAIBrainComponentStore& SceneComponentStorage::AIBrains() noexcept { return aiBrains_; }
 const SceneMotionSkeletonRuleComponentStore& SceneComponentStorage::MotionSkeletonRules() const noexcept { return motionSkeletonRules_; }
 SceneMotionSkeletonRuleComponentStore& SceneComponentStorage::MotionSkeletonRules() noexcept { return motionSkeletonRules_; }
 const SceneDeformedGeometryComponentStore& SceneComponentStorage::DeformedGeometries() const noexcept { return deformedGeometries_; }

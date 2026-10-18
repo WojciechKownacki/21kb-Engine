@@ -59,6 +59,10 @@ enum SceneNodeComponentBits : std::uint64_t {
       UIBit = 1ULL << 37U,
       // Read from version 42 on; written after every other component.
       NavLinkBit = 1ULL << 38U,
+      // Read from version 49 on; written after NavLink.
+      SocketAttachmentBit = 1ULL << 39U,
+      CombatantBit = 1ULL << 40U,
+      AIBrainBit = 1ULL << 41U,
 };
 
 constexpr std::uint64_t KnownComponentBits = CameraBit |
@@ -78,7 +82,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -123,6 +127,9 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.deformedGeometry.has_value(), DeformedGeometryBit);
     include(!components.ui.Empty(), UIBit);
     include(components.navLink.has_value(), NavLinkBit);
+    include(components.socketAttachment.has_value(), SocketAttachmentBit);
+    include(components.combatant.has_value(), CombatantBit);
+    include(components.aiBrain.has_value(), AIBrainBit);
     return componentBits;
 }
 
@@ -551,6 +558,52 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         link.area = static_cast<NavAreaId>(area);
         output.navLink = link;
     }
+    if ((componentBits & SocketAttachmentBit) != 0U) {
+        if (fileVersion < SceneDocument::SocketAttachmentFileVersion) return false;
+        SocketAttachmentComponent attachment{};
+        std::string socket;
+        if (!input.ReadString(socket, static_cast<std::uint32_t>(kMaxSocketAttachmentNameBytes)) ||
+            !SetSocketAttachmentName(attachment, socket) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, attachment.offset.position) ||
+            !SceneAssetPrimitiveCodec::ReadQuat(input, attachment.offset.rotation) ||
+            !input.ReadBool(attachment.enabled) ||
+            !IsSocketAttachmentComponentValid(attachment)) return false;
+        output.socketAttachment = attachment;
+    }
+    if ((componentBits & CombatantBit) != 0U) {
+        if (fileVersion < SceneDocument::CombatantFileVersion) return false;
+        CombatantComponent combatant{};
+        bool ok = input.ReadFloat(combatant.maximumHealth) && input.ReadFloat(combatant.health) &&
+            input.ReadFloat(combatant.healthRegeneration) && input.ReadFloat(combatant.maximumMana) &&
+            input.ReadFloat(combatant.mana) && input.ReadFloat(combatant.manaRegeneration);
+        for (float& resistance : combatant.resistances) ok = ok && input.ReadFloat(resistance);
+        ok = ok && input.ReadUInt32(combatant.team) && input.ReadFloat(combatant.sightRange) &&
+            input.ReadFloat(combatant.sightAngleDegrees) && input.ReadFloat(combatant.hearingRange) &&
+            input.ReadBool(combatant.requireLineOfSight);
+        for (std::uint64_t& ability : combatant.abilities) ok = ok && input.ReadUInt64(ability);
+        ok = ok && input.ReadBool(combatant.invulnerable) && input.ReadBool(combatant.enabled);
+        if (!ok || !IsCombatantComponentValid(combatant)) return false;
+        output.combatant = combatant;
+    }
+    if ((componentBits & AIBrainBit) != 0U) {
+        if (fileVersion < SceneDocument::AIBrainFileVersion) return false;
+        AIBrainComponent brain{};
+        std::uint32_t preset = 0U;
+        bool ok = input.ReadUInt32(preset) && input.ReadFloat(brain.moveSpeed) && input.ReadFloat(brain.wanderRadius) &&
+            input.ReadFloat(brain.leashDistance);
+        for (AIRule& rule : brain.rules) {
+            std::uint32_t when = 0U;
+            std::uint32_t action = 0U;
+            ok = ok && input.ReadUInt32(when) && input.ReadFloat(rule.whenValue) && input.ReadUInt32(action) && input.ReadFloat(rule.actionValue) &&
+                when < kAIConditionCount && action < kAIActionCount;
+            rule.when = static_cast<AICondition>(when);
+            rule.action = static_cast<AIAction>(action);
+        }
+        ok = ok && preset < kAIBrainPresetCount && input.ReadBool(brain.enabled);
+        brain.preset = static_cast<AIBrainPreset>(preset);
+        if (!ok || !IsAIBrainComponentValid(brain)) return false;
+        output.aiBrain = brain;
+    }
     return true;
 }
 
@@ -858,6 +911,43 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteUInt32(output, link.area);
         SceneAssetBinaryIO::WriteBool(output, link.bidirectional);
         SceneAssetBinaryIO::WriteBool(output, link.enabled);
+    }
+    if (components.socketAttachment.has_value()) {
+        const SocketAttachmentComponent& attachment = *components.socketAttachment;
+        SceneAssetBinaryIO::WriteString(output, SocketAttachmentName(attachment));
+        SceneAssetPrimitiveCodec::WriteVec3(output, attachment.offset.position);
+        SceneAssetPrimitiveCodec::WriteQuat(output, attachment.offset.rotation);
+        SceneAssetBinaryIO::WriteBool(output, attachment.enabled);
+    }
+    if (components.combatant.has_value()) {
+        const CombatantComponent& combatant = *components.combatant;
+        for (const float value : { combatant.maximumHealth, combatant.health, combatant.healthRegeneration,
+                 combatant.maximumMana, combatant.mana, combatant.manaRegeneration }) {
+            SceneAssetBinaryIO::WriteFloat(output, value);
+        }
+        for (const float resistance : combatant.resistances) SceneAssetBinaryIO::WriteFloat(output, resistance);
+        SceneAssetBinaryIO::WriteUInt32(output, combatant.team);
+        SceneAssetBinaryIO::WriteFloat(output, combatant.sightRange);
+        SceneAssetBinaryIO::WriteFloat(output, combatant.sightAngleDegrees);
+        SceneAssetBinaryIO::WriteFloat(output, combatant.hearingRange);
+        SceneAssetBinaryIO::WriteBool(output, combatant.requireLineOfSight);
+        for (const std::uint64_t ability : combatant.abilities) SceneAssetBinaryIO::WriteUInt64(output, ability);
+        SceneAssetBinaryIO::WriteBool(output, combatant.invulnerable);
+        SceneAssetBinaryIO::WriteBool(output, combatant.enabled);
+    }
+    if (components.aiBrain.has_value()) {
+        const AIBrainComponent& brain = *components.aiBrain;
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(brain.preset));
+        SceneAssetBinaryIO::WriteFloat(output, brain.moveSpeed);
+        SceneAssetBinaryIO::WriteFloat(output, brain.wanderRadius);
+        SceneAssetBinaryIO::WriteFloat(output, brain.leashDistance);
+        for (const AIRule& rule : brain.rules) {
+            SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(rule.when));
+            SceneAssetBinaryIO::WriteFloat(output, rule.whenValue);
+            SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(rule.action));
+            SceneAssetBinaryIO::WriteFloat(output, rule.actionValue);
+        }
+        SceneAssetBinaryIO::WriteBool(output, brain.enabled);
     }
 }
 

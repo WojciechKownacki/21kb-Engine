@@ -92,13 +92,14 @@ RendererCapabilityReport BuildRendererCapabilityReport(bgfx::RendererType::Enum 
     report.originBottomLeft = caps->originBottomLeft;
     report.computeSupported = SupportedFlagsContain(caps->supported, BGFX_CAPS_COMPUTE);
     report.indirectDrawSupported = SupportedFlagsContain(caps->supported, BGFX_CAPS_DRAW_INDIRECT);
-    report.textureBlitSupported = SupportedFlagsContain(caps->supported, BGFX_CAPS_TEXTURE_BLIT);
-    report.textureReadbackSupported = SupportedFlagsContain(caps->supported, BGFX_CAPS_TEXTURE_READ_BACK);
+    // Texture blit, read back and instancing are part of every backend bgfx supports.
+    report.textureBlitSupported = true;
+    report.textureReadbackSupported = true;
     report.hdrExposureMeteringSupported = report.textureBlitSupported && report.textureReadbackSupported;
     report.gpuDrivenComputeCullingSupported = report.computeSupported;
     report.gpuDrivenIndirectSubmitSupported = false;
     report.gpuDrivenMeshletSubmitSupported = false;
-    report.particleInstancingSupported = SupportedFlagsContain(caps->supported, BGFX_CAPS_INSTANCING);
+    report.particleInstancingSupported = true;
     report.particleGpuDrawingSupported = report.particleInstancingSupported;
     report.particleSubtractiveBlendSupported = report.particleGpuDrawingSupported;
     report.multipleWindowsSupported = SupportedFlagsContain(caps->supported, BGFX_CAPS_SWAP_CHAIN);

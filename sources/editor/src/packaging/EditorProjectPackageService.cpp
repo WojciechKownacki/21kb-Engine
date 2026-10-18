@@ -430,8 +430,8 @@ std::vector<std::wstring> EditorProjectPackageService::BuildArguments(const Edit
         appendText(L"--android-application-id", request.androidApplicationId);
         appendText(L"--android-version-code", std::to_string(request.androidVersionCode));
         appendText(L"--android-label", request.androidLabel);
-        appendText(L"--android-min-sdk", "28");
-        appendText(L"--android-target-sdk", "35");
+        appendText(L"--android-min-sdk", "23");
+        appendText(L"--android-target-sdk", "36");
         if (request.configuration == "Release") {
             append(L"--android-keystore", request.androidKeystore);
             appendText(L"--android-key-alias", request.androidKeyAlias);

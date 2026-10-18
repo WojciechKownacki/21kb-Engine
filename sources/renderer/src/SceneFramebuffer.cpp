@@ -141,7 +141,7 @@ bool SceneFramebuffer::Ensure(std::uint32_t width, std::uint32_t height, SceneCo
 
     bgfx::Attachment attachments[2]{};
     attachments[0].init(colorTexture_);
-    attachments[1].init(depthTexture_);
+    attachments[1].init(depthTexture_, bgfx::Access::Write, 0U, 1U, 0U, BGFX_ATTACHMENT_NONE);
     frameBuffer_ = bgfx::createFrameBuffer(2, attachments, true);
     if (!bgfx::isValid(frameBuffer_)) {
         Shutdown();

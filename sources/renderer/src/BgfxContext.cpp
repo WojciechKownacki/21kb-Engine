@@ -2,7 +2,6 @@
 
 #include "kb/render/RenderSurface.hpp"
 
-#include <bgfx/platform.h>
 #include <bimg/bimg.h>
 #include <bx/error.h>
 #include <bx/file.h>
@@ -403,15 +402,15 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
     bgfx::Init init{};
     resetFlags_ = config.ComputeResetFlags();
     init.callback = callback_.get();
-    init.platformData.ndt = ndt;
-    init.platformData.nwh = nwh;
     init.platformData.context = nullptr;
-    init.platformData.backBuffer = nullptr;
-    init.platformData.backBufferDS = nullptr;
     init.platformData.type = bgfx::NativeWindowHandleType::Default;
-    init.resolution.width = width;
-    init.resolution.height = height;
-    init.resolution.reset = resetFlags_;
+    init.swapChain.ndt = ndt;
+    init.swapChain.nwh = nwh;
+    init.swapChain.width = width;
+    init.swapChain.height = height;
+    // MSAA is a property of the swap chain; the rest are device and frame settings.
+    init.swapChain.flags = resetFlags_ & BGFX_SWAP_CHAIN_MSAA_MASK;
+    init.reset = resetFlags_ & ~BGFX_SWAP_CHAIN_MSAA_MASK;
     init.type = preferredBackend;
     init.vendorId = BGFX_PCI_ID_NONE;
 
@@ -468,7 +467,11 @@ void BgfxContext::Reset(std::uint32_t width, std::uint32_t height, std::uint32_t
     width_ = width;
     height_ = height;
     resetFlags_ = resetFlags;
-    bgfx::reset(width, height, resetFlags);
+    bgfx::SwapChain swapChain{};
+    swapChain.width = width;
+    swapChain.height = height;
+    swapChain.flags = resetFlags & BGFX_SWAP_CHAIN_MSAA_MASK;
+    bgfx::reset(resetFlags & ~BGFX_SWAP_CHAIN_MSAA_MASK, nativeWindowHandle_ != nullptr ? &swapChain : nullptr);
 }
 
 bool BgfxContext::BeginFrame() const noexcept {

@@ -46,7 +46,7 @@ project "bx.test"
 	debugdir (path.join(BX_DIR, "tests"))
 
 	flags {
---		"FatalWarnings",
+		"FatalWarnings",
 	}
 
 	removeflags {
@@ -60,6 +60,7 @@ project "bx.test"
 	files {
 		path.join(BX_DIR, "3rdparty/catch/catch_amalgamated.cpp"),
 		path.join(BX_DIR, "tests/*_test.cpp"),
+		path.join(BX_DIR, "tests/*-test.cpp"),
 		path.join(BX_DIR, "tests/*.h"),
 		path.join(BX_DIR, "tests/dbg.*"),
 	}
@@ -112,6 +113,10 @@ project "bx.test"
 
 project "bx.bench"
 	kind "ConsoleApp"
+
+	flags {
+		"FatalWarnings",
+	}
 
 	debugdir (path.join(BX_DIR, "tests"))
 

@@ -1132,9 +1132,9 @@ struct DebugDrawEncoderImpl
 
 		bgfx::Transform transform;
 		stack.mtx  = m_encoder->allocTransform(&transform, _num);
-		stack.num  = _num;
+		stack.num  = transform.num;
 		stack.data = transform.data;
-		bx::memCopy(transform.data, _mtx, _num*64);
+		bx::memCopy(transform.data, _mtx, transform.num*64);
 	}
 
 	void setTranslate(float _x, float _y, float _z)
@@ -1650,7 +1650,7 @@ struct DebugDrawEncoderImpl
 	void drawFrustum(const float* _viewProj)
 	{
 		bx::Plane planes[6] = { bx::InitNone, bx::InitNone, bx::InitNone, bx::InitNone, bx::InitNone, bx::InitNone };
-		buildFrustumPlanes(planes, _viewProj);
+		buildFrustumPlanes(planes, _viewProj, bgfx::getCaps()->homogeneousDepth);
 
 		const bx::Vec3 points[8] =
 		{

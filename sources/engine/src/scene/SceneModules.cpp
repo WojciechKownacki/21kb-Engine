@@ -6,6 +6,7 @@
 
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneAnimators.hpp"
+#include "engine/scene/SceneGameplay.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -139,6 +140,14 @@ SceneAnimators Scene::Animators() noexcept {
 
 SceneAnimatorQueries Scene::Animators() const noexcept {
     return SceneAnimatorQueries{ *this };
+}
+
+SceneGameplay Scene::Gameplay() noexcept {
+    return SceneGameplay{ *this };
+}
+
+SceneGameplayQueries Scene::Gameplay() const noexcept {
+    return SceneGameplayQueries{ *this };
 }
 
 SceneTimelines Scene::Timelines() noexcept {

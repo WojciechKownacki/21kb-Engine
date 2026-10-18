@@ -15,9 +15,12 @@ enum class DamageType : std::uint8_t {
     Physical,
     Fire,
     Healing,
+    Cold,
+    Lightning,
+    Poison,
 };
 
-inline constexpr std::size_t kDamageTypeCount = 3U;
+inline constexpr std::size_t kDamageTypeCount = 6U;
 
 struct DamageEvent {
     kb::scene::SceneEntity source{};
@@ -29,7 +32,7 @@ struct DamageEvent {
 };
 
 struct DamageResistances {
-    std::array<float, kDamageTypeCount> multipliers{ 1.0F, 1.0F, 1.0F };
+    std::array<float, kDamageTypeCount> multipliers{ 1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 1.0F };
 
     [[nodiscard]] std::optional<float> Multiplier(DamageType type) const noexcept {
         const std::size_t index = static_cast<std::size_t>(type);

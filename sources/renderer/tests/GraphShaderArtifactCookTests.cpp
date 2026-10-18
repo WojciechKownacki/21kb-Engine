@@ -746,6 +746,20 @@ void RunGraphShaderDeepCacheRootCookTest() {
         });
     Require(!leftCompilerFile,
         "The shader compiler must not leave its working files in a project's cache");
+
+    // ... nor in the shared scratch root, where every cook of every process would pile them up.
+    // A probe name carries this process's id the way the compiler's working files do.
+    const std::filesystem::path probe = kb::platform::ToolScratchPath("probe", error);
+    const std::string probeName = probe.filename().string();
+    const std::string processTag = probeName.substr(0U, probeName.rfind('.') + 1U).substr(std::string{ ".kb-probe" }.size());
+    const bool leftScratchFile = std::ranges::any_of(
+        std::filesystem::directory_iterator(probe.parent_path()),
+        [&processTag](const std::filesystem::directory_entry& entry) {
+            const std::string name = entry.path().filename().string();
+            return name.starts_with(".kb-compile.tmp" + processTag) || name.starts_with(".kb-shaderc.tmp" + processTag);
+        });
+    Require(!error && !leftScratchFile,
+        "The shader compiler must not leave its working files in the tool scratch directory");
     std::filesystem::remove_all(kb::platform::ExtendedLengthPath(cacheRoot), error);
 }
 

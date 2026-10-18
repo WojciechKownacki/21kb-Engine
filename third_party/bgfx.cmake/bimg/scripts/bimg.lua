@@ -6,6 +6,11 @@
 project "bimg"
 	kind "StaticLib"
 
+	defines {
+		"ASTCENC_F16C=0",
+		"ASTCENC_NEON=0",
+	}
+
 	includedirs {
 		path.join(BIMG_DIR, "include"),
 		path.join(BIMG_DIR, "3rdparty/astc-encoder/include"),
@@ -13,8 +18,9 @@ project "bimg"
 
 	files {
 		path.join(BIMG_DIR, "include/**"),
-		path.join(BIMG_DIR, "src/image.*"),
-		path.join(BIMG_DIR, "src/image_gnf.cpp"),
+		path.join(BIMG_DIR, "src/image.cpp"),
+		path.join(BIMG_DIR, "src/bimg_p.h"),
+		path.join(BIMG_DIR, "src/config.h"),
 
 		path.join(BIMG_DIR, "3rdparty/astc-encoder/source/**.cpp"),
 		path.join(BIMG_DIR, "3rdparty/astc-encoder/source/**.h"),

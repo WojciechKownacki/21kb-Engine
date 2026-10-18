@@ -42,6 +42,8 @@ namespace kb::scene {
 class SceneAssets;
 class SceneAnimatorQueries;
 class SceneAnimators;
+class SceneGameplay;
+class SceneGameplayQueries;
 class SceneComponentQueries;
 class SceneComponents;
 class SceneEntities;
@@ -130,6 +132,8 @@ public:
     [[nodiscard]] SceneParticleSystemQueries Particles() const noexcept;
     [[nodiscard]] SceneAnimators Animators() noexcept;
     [[nodiscard]] SceneAnimatorQueries Animators() const noexcept;
+    [[nodiscard]] SceneGameplay Gameplay() noexcept;
+    [[nodiscard]] SceneGameplayQueries Gameplay() const noexcept;
     [[nodiscard]] SceneTimelines Timelines() noexcept;
     [[nodiscard]] SceneTimelineQueries Timelines() const noexcept;
     [[nodiscard]] SceneUIAccess UI() noexcept;

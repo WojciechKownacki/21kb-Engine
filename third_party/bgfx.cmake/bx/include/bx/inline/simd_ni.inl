@@ -29,28 +29,29 @@ namespace bx
 		return result;
 	}
 
+	// Without an fma instruction these round twice: the fastest fallback.
+	// simd32_f32_madd_ref is the exact software fma when that is what is needed.
 	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_f32_madd_ni(Ty _a, Ty _b, Ty _c)
 	{
-		const Ty mul    = simd_f32_mul(_a, _b);
-		const Ty result = simd_f32_add(mul, _c);
+		const Ty prod   = simd_f32_mul(_a, _b);
+		const Ty result = simd_f32_add(prod, _c);
 		return result;
 	}
 
 	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_f32_nmsub_ni(Ty _a, Ty _b, Ty _c)
 	{
-		const Ty mul    = simd_f32_mul(_a, _b);
-		const Ty result = simd_f32_sub(_c, mul);
+		const Ty prod   = simd_f32_mul(_a, _b);
+		const Ty result = simd_f32_sub(_c, prod);
 		return result;
 	}
 
 	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_f32_msub_ni(Ty _a, Ty _b, Ty _c)
 	{
-		const Ty mul    = simd_f32_mul(_a, _b);
-		const Ty result = simd_f32_sub(mul, _c);
-
+		const Ty prod   = simd_f32_mul(_a, _b);
+		const Ty result = simd_f32_sub(prod, _c);
 		return result;
 	}
 
@@ -419,8 +420,8 @@ namespace bx
 		const Ty xyzw   = simd_f32_mul(_a, _b);
 		const Ty zwxy   = simd128_x32_swiz_zwxy(xyzw);
 		const Ty tmp0   = simd_f32_add(xyzw, zwxy);
-		const Ty yyyy   = simd128_x32_swiz_yyyy(tmp0);
-		const Ty result = simd_f32_add(tmp0, yyyy);
+		const Ty yxwz   = simd128_x32_swiz_yxwz(tmp0);
+		const Ty result = simd_f32_add(tmp0, yxwz);
 
 		return result;
 	}
@@ -451,53 +452,114 @@ namespace bx
 	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_f32_ceil_ni(Ty _a)
 	{
-		const Ty tmp    = simd_f32_ftoi_trunc(_a);
-		const Ty tmp0   = simd_i32_itof(tmp);
-		const Ty mask   = simd_f32_cmplt(tmp0, _a);
-		const Ty one    = simd_splat<Ty>(1.0f);
-		const Ty tmp1   = simd_and(one, mask);
-		const Ty result = simd_f32_add(tmp0, tmp1);
+		const Ty tmp       = simd_f32_ftoi_trunc(_a);
+		const Ty tmp0      = simd_i32_itof(tmp);
+		const Ty mask      = simd_f32_cmplt(tmp0, _a);
+		const Ty one       = simd_splat<Ty>(1.0f);
+		const Ty tmp1      = simd_and(one, mask);
+		const Ty up        = simd_f32_add(tmp0, tmp1);
+		const Ty absmask   = simd_splat<Ty>(uint32_t(~kFloatSignMask) );
+		const Ty bigLimit  = simd_splat<Ty>(uint32_t(0x4affffff) );
+		const Ty magnitude = simd_and(_a, absmask);
+		const Ty bigMask   = simd_u32_cmpgt(magnitude, bigLimit);
+		const Ty rounded   = simd_selb(bigMask, _a, up);
+		// float->int->float drops the sign of zero; ceil(-0.5) is -0.0.
+		const Ty signmask  = simd_splat<Ty>(kFloatSignMask);
+		const Ty sign      = simd_and(_a, signmask);
+		const Ty result    = simd_or(rounded, sign);
 		return result;
 	}
 
 	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_f32_floor_ni(Ty _a)
 	{
-		const Ty tmp    = simd_f32_ftoi_trunc(_a);
-		const Ty tmp0   = simd_i32_itof(tmp);
-		const Ty mask   = simd_f32_cmpgt(tmp0, _a);
-		const Ty one    = simd_splat<Ty>(1.0f);
-		const Ty tmp1   = simd_and(one, mask);
-		const Ty result = simd_f32_sub(tmp0, tmp1);
+		const Ty tmp       = simd_f32_ftoi_trunc(_a);
+		const Ty tmp0      = simd_i32_itof(tmp);
+		const Ty mask      = simd_f32_cmpgt(tmp0, _a);
+		const Ty one       = simd_splat<Ty>(1.0f);
+		const Ty tmp1      = simd_and(one, mask);
+		const Ty down      = simd_f32_sub(tmp0, tmp1);
+		const Ty absmask   = simd_splat<Ty>(uint32_t(~kFloatSignMask) );
+		const Ty bigLimit  = simd_splat<Ty>(uint32_t(0x4affffff) );
+		const Ty magnitude = simd_and(_a, absmask);
+		const Ty bigMask   = simd_u32_cmpgt(magnitude, bigLimit);
+		const Ty rounded   = simd_selb(bigMask, _a, down);
+		const Ty signmask  = simd_splat<Ty>(kFloatSignMask);
+		const Ty sign      = simd_and(_a, signmask);
+		const Ty result    = simd_or(rounded, sign);
 		return result;
 	}
 
 	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_f32_round_ni(Ty _a)
 	{
-		const Ty half   = simd_splat<Ty>(0.5f);
-		const Ty tmp0   = simd_f32_add(_a, half);
-		const Ty result = simd_f32_floor(tmp0);
+		const Ty half     = simd_splat<Ty>(0.5f);
+		const Ty one      = simd_splat<Ty>(1.0f);
+		const Ty ione     = simd_splat<Ty>(uint32_t(1) );
+		const Ty signmask = simd_splat<Ty>(kFloatSignMask);
+		const Ty fl       = simd_f32_floor(_a);
+		const Ty fr       = simd_f32_sub(_a, fl);
+		const Ty gtMask   = simd_f32_cmpgt(fr, half);
+		const Ty eqMask   = simd_f32_cmpeq(fr, half);
+		const Ty ifl      = simd_f32_ftoi_trunc(fl);
+		const Ty lsb      = simd_and(ifl, ione);
+		const Ty oddMask  = simd_i32_cmpeq(lsb, ione);
+		const Ty tieUp    = simd_and(eqMask, oddMask);
+		const Ty upMask   = simd_or(gtMask, tieUp);
+		const Ty up       = simd_and(upMask, one);
+		const Ty rd       = simd_f32_add(fl, up);
+		const Ty asign    = simd_and(_a, signmask);
+		const Ty result   = simd_or(rd, asign); // rd is 0 or has _a's sign
 		return result;
 	}
 
 	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_f32_ldexp_ni(Ty _a, Ty _b)
 	{
-		const Ty signexpmask = simd_splat<Ty>(uint32_t(kFloatSignMask | kFloatExponentMask) );
-		const Ty mantmask    = simd_splat<Ty>(kFloatMantissaMask);
-		const Ty masked      = simd_and(_a, signexpmask);
-		const Ty expsign0    = simd_x32_sra(masked, kFloatExponentBitShift);
-		const Ty tmp         = simd_i32_add(expsign0, _b);
-		const Ty expsign1    = simd_x32_sll(tmp, kFloatExponentBitShift);
-		const Ty mantissa    = simd_and(_a, mantmask);
-		const Ty result      = simd_or(mantissa, expsign1);
+		constexpr int32_t kMinStep = 1 - int32_t(kFloatExponentBias);
+		constexpr int32_t kMaxStep =     int32_t(kFloatExponentBias);
+		constexpr int32_t kLimit   = 2*int32_t(kFloatExponentBias) + int32_t(kFloatMantissaNumBits) + 2;
+
+		const Ty minStep  = simd_splat<Ty>(uint32_t(kMinStep) );
+		const Ty maxStep  = simd_splat<Ty>(uint32_t(kMaxStep) );
+		const Ty limitHi  = simd_splat<Ty>(uint32_t(kLimit) );
+		const Ty limitLo  = simd_splat<Ty>(uint32_t(-kLimit) );
+		const Ty bias     = simd_splat<Ty>(uint32_t(kFloatExponentBias) );
+
+		const Ty totalLo  = simd_i32_max(_b, limitLo);
+		const Ty total    = simd_i32_min(totalLo, limitHi);
+
+		const Ty step0Lo  = simd_i32_max(total, minStep);
+		const Ty step0    = simd_i32_min(step0Lo, maxStep);
+		const Ty rest0    = simd_i32_sub(total, step0);
+
+		const Ty step1Lo  = simd_i32_max(rest0, minStep);
+		const Ty step1    = simd_i32_min(step1Lo, maxStep);
+		const Ty rest1    = simd_i32_sub(rest0, step1);
+
+		const Ty step2Lo  = simd_i32_max(rest1, minStep);
+		const Ty step2    = simd_i32_min(step2Lo, maxStep);
+
+		const Ty exp0     = simd_i32_add(step0, bias);
+		const Ty exp1     = simd_i32_add(step1, bias);
+		const Ty exp2     = simd_i32_add(step2, bias);
+
+		const Ty scale0   = simd_x32_sll(exp0, kFloatExponentBitShift);
+		const Ty scale1   = simd_x32_sll(exp1, kFloatExponentBitShift);
+		const Ty scale2   = simd_x32_sll(exp2, kFloatExponentBitShift);
+
+		const Ty tmp0     = simd_f32_mul(_a, scale0);
+		const Ty tmp1     = simd_f32_mul(tmp0, scale1);
+		const Ty result   = simd_f32_mul(tmp1, scale2);
 
 		return result;
 	}
 
+BX_FP_PRECISE_BEGIN()
+
+	/// cos(_a) for _bias 0, sin(_a) for _bias 3, matching bx::sinCosPiHalf.
 	template<typename Ty>
-	BX_SIMD_INLINE Ty simd_f32_cos_ni(Ty _a)
+	BX_SIMD_INLINE Ty simd_f32_sincos_pi_half_ni(Ty _a, uint32_t _bias)
 	{
 		const Ty two_over_pi = simd_splat<Ty>(2.0f * kInvPi);
 		const Ty pi_half     = simd_splat<Ty>(kPiHalf);
@@ -506,8 +568,10 @@ namespace bx
 		const Ty tmp_rp      = simd_f32_mul(real, pi_half);
 		const Ty xx          = simd_f32_sub(_a, tmp_rp);
 		const Ty ireal       = simd_f32_ftoi_trunc(real);
+		const Ty ibias       = simd_splat<Ty>(_bias);
+		const Ty ibiased     = simd_i32_add(ireal, ibias);
 		const Ty three       = simd_splat<Ty>(uint32_t(3) );
-		const Ty ibits       = simd_and(ireal, three);
+		const Ty ibits       = simd_and(ibiased, three);
 		const Ty ione        = simd_splat<Ty>(uint32_t(1) );
 		const Ty izero       = simd_zero<Ty>();
 		const Ty bit0        = simd_and(ibits, ione);
@@ -546,36 +610,314 @@ namespace bx
 	}
 
 	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_cos_ni(Ty _a)
+	{
+		return simd_f32_sincos_pi_half_ni(_a, 0);
+	}
+
+	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_f32_sin_ni(Ty _a)
 	{
-		const Ty pi_half = simd_splat<Ty>(kPiHalf);
-		const Ty shifted = simd_f32_sub(_a, pi_half);
-		const Ty result  = simd_f32_cos(shifted);
+		return simd_f32_sincos_pi_half_ni(_a, 3);
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_trunc_ni(Ty _a)
+	{
+		const Ty zero    = simd_zero<Ty>();
+		const Ty negMask = simd_f32_cmplt(_a, zero);
+		const Ty up      = simd_f32_ceil(_a);
+		const Ty down    = simd_f32_floor(_a);
+		const Ty result  = simd_selb(negMask, up, down);
 		return result;
 	}
 
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_fract_ni(Ty _a)
+	{
+		const Ty whole  = simd_f32_trunc(_a);
+		const Ty result = simd_f32_sub(_a, whole);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_sign_ni(Ty _a)
+	{
+		const Ty zero    = simd_zero<Ty>();
+		const Ty one     = simd_splat<Ty>(1.0f);
+		const Ty posMask = simd_f32_cmpgt(_a, zero);
+		const Ty negMask = simd_f32_cmplt(_a, zero);
+		const Ty pos     = simd_and(posMask, one);
+		const Ty neg     = simd_and(negMask, one);
+		const Ty result  = simd_f32_sub(pos, neg);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_step_ni(Ty _edge, Ty _a)
+	{
+		const Ty one    = simd_splat<Ty>(1.0f);
+		const Ty ltMask = simd_f32_cmplt(_a, _edge);
+		const Ty result = simd_andc(one, ltMask);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_smoothstep_ni(Ty _a)
+	{
+		const Ty two    = simd_splat<Ty>(2.0f);
+		const Ty three  = simd_splat<Ty>(3.0f);
+		const Ty sq     = simd_f32_mul(_a, _a);
+		const Ty twoA   = simd_f32_mul(two, _a);
+		const Ty tmp0   = simd_f32_sub(three, twoA);
+		const Ty result = simd_f32_mul(sq, tmp0);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_mod_ni(Ty _a, Ty _b)
+	{
+		const Ty quotient = simd_f32_div(_a, _b);
+		const Ty whole    = simd_f32_floor(quotient);
+		const Ty result   = simd_f32_nmsub(_b, whole, _a);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_tan_ni(Ty _a)
+	{
+		const Ty sine   = simd_f32_sin(_a);
+		const Ty cosine = simd_f32_cos(_a);
+		const Ty result = simd_f32_div(sine, cosine);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_acos_ni(Ty _a)
+	{
+		const Ty acosC0  = simd_splat<Ty>( 1.5707288f);
+		const Ty acosC1  = simd_splat<Ty>(-0.2121144f);
+		const Ty acosC2  = simd_splat<Ty>( 0.0742610f);
+		const Ty acosC3  = simd_splat<Ty>(-0.0187293f);
+		const Ty zero    = simd_zero<Ty>();
+		const Ty one     = simd_splat<Ty>(1.0f);
+		const Ty two     = simd_splat<Ty>(2.0f);
+		const Ty pi      = simd_splat<Ty>(kPi);
+		const Ty absa    = simd_f32_abs(_a);
+		const Ty tmp0    = simd_f32_madd(acosC3, absa, acosC2);
+		const Ty tmp1    = simd_f32_madd(tmp0,   absa, acosC1);
+		const Ty tmp2    = simd_f32_madd(tmp1,   absa, acosC0);
+		const Ty rest    = simd_f32_sub(one, absa);
+		const Ty root    = simd_f32_sqrt(rest);
+		const Ty tmp3    = simd_f32_mul(tmp2, root);
+		const Ty negMask = simd_f32_cmplt(_a, zero);
+		const Ty negate  = simd_and(negMask, one);
+		const Ty twoNeg  = simd_f32_mul(two, negate);
+		const Ty tmp3n   = simd_f32_mul(twoNeg, tmp3);
+		const Ty tmp4    = simd_f32_sub(tmp3, tmp3n);
+		const Ty negPi   = simd_f32_mul(negate, pi);
+		const Ty result  = simd_f32_add(negPi, tmp4);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_asin_ni(Ty _a)
+	{
+		const Ty pi_half = simd_splat<Ty>(kPiHalf);
+		const Ty ac      = simd_f32_acos(_a);
+		const Ty result  = simd_f32_sub(pi_half, ac);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_atan2_ni(Ty _y, Ty _x)
+	{
+		const Ty atan2C0   = simd_splat<Ty>(-0.013480470f);
+		const Ty atan2C1   = simd_splat<Ty>( 0.057477314f);
+		const Ty atan2C2   = simd_splat<Ty>(-0.121239071f);
+		const Ty atan2C3   = simd_splat<Ty>( 0.195635925f);
+		const Ty atan2C4   = simd_splat<Ty>(-0.332994597f);
+		const Ty atan2C5   = simd_splat<Ty>( 0.999995630f);
+		const Ty zero      = simd_zero<Ty>();
+		const Ty signmask  = simd_splat<Ty>(kFloatSignMask);
+		const Ty pi        = simd_splat<Ty>(kPi);
+		const Ty pi_half   = simd_splat<Ty>(kPiHalf);
+		const Ty ax        = simd_f32_abs(_x);
+		const Ty ay        = simd_f32_abs(_y);
+		const Ty maxaxy    = simd_f32_max(ax, ay);
+		const Ty minaxy    = simd_f32_min(ax, ay);
+		const Ty zeroMask  = simd_f32_cmpeq(maxaxy, zero);
+		const Ty ysign     = simd_and(_y, signmask);
+		const Ty mxy       = simd_f32_div(minaxy, maxaxy);
+		const Ty mxysq     = simd_f32_mul(mxy, mxy);
+		const Ty tmp0      = simd_f32_madd(atan2C0, mxysq, atan2C1);
+		const Ty tmp1      = simd_f32_madd(tmp0,    mxysq, atan2C2);
+		const Ty tmp2      = simd_f32_madd(tmp1,    mxysq, atan2C3);
+		const Ty tmp3      = simd_f32_madd(tmp2,    mxysq, atan2C4);
+		const Ty tmp4      = simd_f32_madd(tmp3,    mxysq, atan2C5);
+		const Ty tmp5      = simd_f32_mul(tmp4, mxy);
+		const Ty gtMask    = simd_f32_cmpgt(ay, ax);
+		const Ty fromHalf  = simd_f32_sub(pi_half, tmp5);
+		const Ty tmp6      = simd_selb(gtMask, fromHalf, tmp5);
+		const Ty xNegMask  = simd_f32_cmplt(_x, zero);
+		const Ty fromPi    = simd_f32_sub(pi, tmp6);
+		const Ty tmp7      = simd_selb(xNegMask, fromPi, tmp6);
+		const Ty signed_   = simd_or(tmp7, ysign);
+		const Ty result    = simd_selb(zeroMask, ysign, signed_);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_atan_ni(Ty _a)
+	{
+		const Ty one    = simd_splat<Ty>(1.0f);
+		const Ty result = simd_f32_atan2(_a, one);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_sinh_ni(Ty _a)
+	{
+		const Ty half      = simd_splat<Ty>(0.5f);
+		const Ty one       = simd_splat<Ty>(1.0f);
+		const Ty tiny      = simd_splat<Ty>(0.0625f);
+		const Ty big       = simd_splat<Ty>(9.0f);
+		const Ty noFit     = simd_splat<Ty>(88.0f);
+		const Ty kC3       = simd_splat<Ty>(1.0f/6.0f);
+		const Ty kC5       = simd_splat<Ty>(1.0f/120.0f);
+		const Ty kC7       = simd_splat<Ty>(1.0f/5040.0f);
+		const Ty signmask  = simd_splat<Ty>(uint32_t(kFloatSignMask) );
+
+		const Ty absA      = simd_f32_abs(_a);
+		const Ty nabsA     = simd_f32_neg(absA);
+
+		const Ty zz        = simd_f32_mul(absA, absA);
+		const Ty inn0      = simd_f32_madd(zz, kC7, kC5);
+		const Ty inn1      = simd_f32_madd(zz, inn0, kC3);
+		const Ty poly      = simd_f32_madd(zz, inn1, one);
+		const Ty magSmall  = simd_f32_mul(absA, poly);
+
+		const Ty ep        = simd_f32_exp(absA);
+		const Ty en        = simd_f32_exp(nabsA);
+		const Ty diff      = simd_f32_sub(ep, en);
+		const Ty magMid    = simd_f32_mul(half, diff);
+
+		const Ty magBig    = simd_f32_mul(half, ep);
+
+		constexpr int32_t  kShift = 235;
+		constexpr uint32_t kBits  = uint32_t(int32_t(kFloatExponentBias) + kShift/2) << kFloatExponentBitShift;
+
+		const Ty kKLn2     = simd_splat<Ty>(1.62889587431602213e+02f);
+		const Ty kScale    = simd_splat<Ty>(kBits);
+		const Ty reduced   = simd_f32_sub(absA, kKLn2);
+		const Ty ee        = simd_f32_exp(reduced);
+		const Ty once      = simd_f32_mul(ee, kScale);
+		const Ty magNoFit  = simd_f32_mul(once, kScale);
+
+		const Ty tinyMask  = simd_f32_cmplt(absA, tiny);
+		const Ty bigMask   = simd_f32_cmplt(absA, big);
+		const Ty noFitMask = simd_f32_cmplt(absA, noFit);
+		const Ty mag0      = simd_selb(noFitMask, magBig, magNoFit);
+		const Ty mag1      = simd_selb(bigMask, magMid, mag0);
+		const Ty magnitude = simd_selb(tinyMask, magSmall, mag1);
+
+		const Ty sign      = simd_and(_a, signmask);
+		const Ty result    = simd_or(magnitude, sign);
+
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_cosh_ni(Ty _a)
+	{
+		const Ty half   = simd_splat<Ty>(0.5f);
+		const Ty na     = simd_f32_neg(_a);
+		const Ty ea     = simd_f32_exp(_a);
+		const Ty ena    = simd_f32_exp(na);
+		const Ty sum    = simd_f32_add(ea, ena);
+		const Ty result = simd_f32_mul(half, sum);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_tanh_ni(Ty _a)
+	{
+		const Ty one       = simd_splat<Ty>(1.0f);
+		const Ty two       = simd_splat<Ty>(2.0f);
+		const Ty tiny      = simd_splat<Ty>(0.0625f);
+		const Ty large     = simd_splat<Ty>(10.0f);
+		const Ty kC3       = simd_splat<Ty>( -1.0f/3.0f);
+		const Ty kC5       = simd_splat<Ty>(  2.0f/15.0f);
+		const Ty kC7       = simd_splat<Ty>(-17.0f/315.0f);
+		const Ty signmask  = simd_splat<Ty>(uint32_t(kFloatSignMask) );
+
+		const Ty absA      = simd_f32_abs(_a);
+		const Ty zz        = simd_f32_mul(absA, absA);
+		const Ty inn0      = simd_f32_madd(zz, kC7, kC5);
+		const Ty inn1      = simd_f32_madd(zz, inn0, kC3);
+		const Ty poly      = simd_f32_madd(zz, inn1, one);
+		const Ty magSmall  = simd_f32_mul(absA, poly);
+
+		const Ty twoA      = simd_f32_mul(two, absA);
+		const Ty ee        = simd_f32_exp(twoA);
+		const Ty num       = simd_f32_sub(ee, one);
+		const Ty den       = simd_f32_add(ee, one);
+		const Ty magMid    = simd_f32_div(num, den);
+
+		const Ty tinyMask  = simd_f32_cmplt(absA, tiny);
+		const Ty largeMask = simd_f32_cmplt(absA, large);
+		const Ty mag0      = simd_selb(largeMask, magMid, one);
+		const Ty magnitude = simd_selb(tinyMask, magSmall, mag0);
+
+		const Ty sign      = simd_and(_a, signmask);
+		const Ty signed0   = simd_or(magnitude, sign);
+
+		const Ty self_eq   = simd_f32_cmpeq(_a, _a);
+		const Ty nan_mask  = simd_not(self_eq);
+		const Ty result    = simd_selb(nan_mask, _a, signed0);
+
+		return result;
+	}
 	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_f32_log_ni(Ty _a)
 	{
 		const Ty zero       = simd_zero<Ty>();
 		const Ty one        = simd_splat<Ty>(1.0f);
+		const Ty nanmask    = simd_f32_cmpneq(_a, _a);
 		const Ty negmask    = simd_f32_cmplt(_a, zero);
 		const Ty zeromask   = simd_f32_cmpeq(_a, zero);
+		const Ty pos_inf    = simd_splat<Ty>(uint32_t(kFloatExponentMask) );
+		const Ty infmask    = simd_f32_cmpeq(_a, pos_inf);
 		const Ty nan_val    = simd_splat<Ty>(uint32_t(kFloatSignMask | kFloatExponentMask | kFloatMantissaMask) );
 		const Ty neg_inf    = simd_splat<Ty>(uint32_t(kFloatSignMask | kFloatExponentMask) );
 		const Ty expmask_c  = simd_splat<Ty>(kFloatExponentMask);
 		const Ty mantmask_c = simd_splat<Ty>(kFloatMantissaMask);
 		const Ty exp_half   = simd_splat<Ty>(uint32_t(0x3f000000) );
 		const Ty bias_126   = simd_splat<Ty>(uint32_t(kFloatExponentBias - 1) );
-		const Ty aexp       = simd_and(_a, expmask_c);
+
+		constexpr int32_t  kSubnormalShift = int32_t(kFloatMantissaNumBits) + 2;
+		constexpr uint32_t kSubnormalExp   = uint32_t(int32_t(kFloatExponentBias) + kSubnormalShift);
+		constexpr uint32_t kSubnormalBits  = kSubnormalExp << kFloatExponentBitShift;
+
+		const Ty smallest   = simd_splat<Ty>(uint32_t(uint32_t(1) << kFloatExponentBitShift) );
+		const Ty magnitude  = simd_and(_a, simd_splat<Ty>(uint32_t(~kFloatSignMask) ) );
+		const Ty submask    = simd_i32_cmplt(magnitude, smallest);
+		const Ty subscale   = simd_splat<Ty>(kSubnormalBits);
+		const Ty subscaled  = simd_f32_mul(_a, subscale);
+		const Ty value      = simd_selb(submask, subscaled, _a);
+		const Ty subshift   = simd_splat<Ty>(uint32_t(kSubnormalShift) );
+		const Ty subadj     = simd_and(submask, subshift);
+
+		const Ty aexp       = simd_and(value, expmask_c);
 		const Ty rawexp     = simd_x32_srl(aexp, kFloatExponentBitShift);
-		const Ty exp_i0     = simd_i32_sub(rawexp, bias_126);
-		const Ty mant       = simd_and(_a, mantmask_c);
+		const Ty exp_n      = simd_i32_sub(rawexp, bias_126);
+		const Ty exp_i0     = simd_i32_sub(exp_n, subadj);
+		const Ty mant       = simd_and(value, mantmask_c);
 		const Ty ff0        = simd_or(mant, exp_half);
-		const Ty sqrt2_half = simd_splat<Ty>(kSqrt2 * 0.5f);
+		const Ty sqrt2_half = simd_splat<Ty>(7.07106781186547524401e-01f);
 		const Ty adj_mask   = simd_f32_cmplt(ff0, sqrt2_half);
 		const Ty two        = simd_splat<Ty>(2.0f);
-		const Ty ff_dbl     = simd_f32_mul(ff0, two);
+		const Ty ff_dbl     = simd_f32_add(ff0, ff0);
 		const Ty ff1        = simd_selb(adj_mask, ff_dbl, ff0);
 		const Ty ione       = simd_splat<Ty>(uint32_t(1) );
 		const Ty adj_one    = simd_and(adj_mask, ione);
@@ -587,8 +929,8 @@ namespace bx
 		const Ty kC4        = simd_splat<Ty>(1.818357216161805012e-01f);
 		const Ty kC5        = simd_splat<Ty>(1.531383769920937332e-01f);
 		const Ty kC6        = simd_splat<Ty>(1.479819860511658591e-01f);
-		const Ty log2lo     = simd_splat<Ty>(1.90821492927058770002e-10f);
-		const Ty lognat2    = simd_splat<Ty>(kLogNat2);
+		const Ty log2lo     = simd_splat<Ty>(kFloatLn2Lo);
+		const Ty lognat2    = simd_splat<Ty>(kFloatLn2Hi);
 		const Ty half       = simd_splat<Ty>(0.5f);
 		const Ty ff         = simd_f32_sub(ff1, one);
 		const Ty kk         = simd_i32_itof(exp_i);
@@ -615,7 +957,9 @@ namespace bx
 		const Ty inff       = simd_f32_sub(inner, ff);
 		const Ty raw        = simd_f32_sub(hi, inff);
 		const Ty rz         = simd_selb(zeromask, neg_inf, raw);
-		const Ty result     = simd_selb(negmask, nan_val, rz);
+		const Ty ri         = simd_selb(infmask, _a, rz);
+		const Ty rn         = simd_selb(negmask, nan_val, ri);
+		const Ty result     = simd_selb(nanmask, _a, rn);
 
 		return result;
 	}
@@ -625,26 +969,31 @@ namespace bx
 	{
 		const Ty zero        = simd_zero<Ty>();
 		const Ty one         = simd_splat<Ty>(1.0f);
+		const Ty two         = simd_splat<Ty>(2.0f);
+		const Ty inf         = simd_splat<Ty>(uint32_t(kFloatExponentMask) );
 		const Ty near_zero   = simd_splat<Ty>(kNearZero);
 		const Ty absa        = simd_f32_abs(_a);
 		const Ty near_mask   = simd_f32_cmple(absa, near_zero);
 		const Ty near_result = simd_f32_add(_a, one);
-		const Ty exp_min     = simd_splat<Ty>(-87.33654475f);
-		const Ty clamp_mask  = simd_f32_cmple(_a, exp_min);
+		const Ty overflow    = simd_splat<Ty>(  88.7228394f);
+		const Ty underflow   = simd_splat<Ty>(-103.972084f);
+		const Ty over_mask    = simd_f32_cmpgt(_a, overflow);
+		const Ty under_mask   = simd_f32_cmplt(_a, underflow);
+		const Ty self_eq      = simd_f32_cmpeq(_a, _a);
+		const Ty nan_mask     = simd_not(self_eq);
 		const Ty kC0         = simd_splat<Ty>( 1.66666666666666019037e-01f);
 		const Ty kC1         = simd_splat<Ty>(-2.77777777770155933842e-03f);
 		const Ty kC2         = simd_splat<Ty>( 6.61375632143793436117e-05f);
 		const Ty kC3         = simd_splat<Ty>(-1.65339022054652515390e-06f);
 		const Ty kC4         = simd_splat<Ty>( 4.13813679705723846039e-08f);
-		const Ty log2lo      = simd_splat<Ty>(1.90821492927058770002e-10f);
-		const Ty lognat2     = simd_splat<Ty>(kLogNat2);
+		const Ty ln2Hi       = simd_splat<Ty>(6.9314575195e-01f);
+		const Ty ln2Lo       = simd_splat<Ty>(1.4286067653e-06f);
 		const Ty invlognat2  = simd_splat<Ty>(kInvLogNat2);
-		const Ty two         = simd_splat<Ty>(2.0f);
 		const Ty amul        = simd_f32_mul(_a, invlognat2);
 		const Ty kk          = simd_f32_round(amul);
-		const Ty kkln        = simd_f32_mul(kk, lognat2);
+		const Ty kkln        = simd_f32_mul(kk, ln2Hi);
 		const Ty hi          = simd_f32_sub(_a, kkln);
-		const Ty lo          = simd_f32_mul(kk, log2lo);
+		const Ty lo          = simd_f32_mul(kk, ln2Lo);
 		const Ty hml         = simd_f32_sub(hi, lo);
 		const Ty hmlsq       = simd_f32_mul(hml, hml);
 		const Ty tmp0        = simd_f32_madd(kC4, hmlsq, kC3);
@@ -661,8 +1010,10 @@ namespace bx
 		const Ty tmp6        = simd_f32_sub(one, tmp5b);
 		const Ty ikk         = simd_f32_ftoi_trunc(kk);
 		const Ty raw         = simd_f32_ldexp_ni(tmp6, ikk);
-		const Ty rc          = simd_selb(clamp_mask, zero, raw);
-		const Ty result      = simd_selb(near_mask, near_result, rc);
+		const Ty rNear       = simd_selb(near_mask,  near_result, raw);
+		const Ty rUnder      = simd_selb(under_mask, zero,        rNear);
+		const Ty rOver       = simd_selb(over_mask,  inf,         rUnder);
+		const Ty result      = simd_selb(nan_mask,   _a,          rOver);
 
 		return result;
 	}
@@ -690,24 +1041,48 @@ namespace bx
 	{
 		const Ty zero     = simd_zero<Ty>();
 		const Ty one      = simd_splat<Ty>(1.0f);
-		const Ty smallest = simd_splat<Ty>(kFloatSmallest);
-		const Ty signmask = simd_splat<Ty>(kFloatSignMask);
+		const Ty half     = simd_splat<Ty>(0.5f);
+		const Ty nan      = simd_splat<Ty>(uint32_t(kFloatExponentMask | kFloatMantissaMask) );
+		const Ty inf      = simd_splat<Ty>(uint32_t(kFloatExponentMask) );
 
 		const Ty absa     = simd_f32_abs(_a);
-		const Ty absb     = simd_f32_abs(_b);
 		const Ty loga     = simd_f32_log(absa);
 		const Ty bloga    = simd_f32_mul(_b, loga);
-		const Ty pw       = simd_f32_exp(bloga);
-		const Ty asign    = simd_and(_a, signmask);
-		const Ty pwabs    = simd_f32_abs(pw);
-		const Ty result0  = simd_or(pwabs, asign);
-		const Ty bmask    = simd_f32_cmplt(absb, smallest);
-		const Ty amask    = simd_f32_cmplt(absa, smallest);
-		const Ty result1  = simd_selb(bmask, one, result0);
-		const Ty result   = simd_selb(amask, zero, result1);
+		const Ty mag      = simd_f32_exp(bloga);
+
+		const Ty halfB    = simd_f32_mul(half, _b);
+		const Ty truncB   = simd_f32_trunc(_b);
+		const Ty truncH   = simd_f32_trunc(halfB);
+		const Ty integral = simd_f32_cmpeq(_b, truncB);
+		const Ty halfEq   = simd_f32_cmpeq(halfB, truncH);
+		const Ty odd      = simd_not(halfEq);
+
+		const Ty negA     = simd_f32_cmplt(_a, zero);
+		const Ty negOdd   = simd_and(negA, odd);
+		const Ty negMag   = simd_f32_neg(mag);
+		const Ty signed0  = simd_selb(negOdd, negMag, mag);
+
+		const Ty negNoInt = simd_andc(negA, integral);
+		const Ty result0  = simd_selb(negNoInt, nan, signed0);
+
+		const Ty zeroA    = simd_f32_cmpeq(absa, zero);
+		const Ty bNeg     = simd_f32_cmplt(_b, zero);
+		const Ty zeroMag  = simd_selb(bNeg, inf, zero);
+		const Ty result1  = simd_selb(zeroA, zeroMag, result0);
+
+		const Ty zeroB    = simd_f32_cmpeq(_b, zero);
+		const Ty result2  = simd_selb(zeroB, one, result1);
+
+		const Ty aEq      = simd_f32_cmpeq(_a, _a);
+		const Ty bEq      = simd_f32_cmpeq(_b, _b);
+		const Ty bothEq   = simd_and(aEq, bEq);
+		const Ty nanIn    = simd_not(bothEq);
+		const Ty result   = simd_selb(nanIn, nan, result2);
 
 		return result;
 	}
+
+BX_FP_PRECISE_END()
 
 	template<typename Ty>
 	BX_SIMD_INLINE bool simd128_test_any_ni(Ty _a)
@@ -715,7 +1090,7 @@ namespace bx
 		const Ty tmp0   = simd_x32_srl(_a, 31);
 		const Ty tmp1   = simd128_x32_swiz_yzwx(tmp0);
 		const Ty tmp2   = simd_or(tmp0, tmp1);
-		const Ty tmp3   = simd128_x32_swiz_zwxy(tmp0);
+		const Ty tmp3   = simd128_x32_swiz_zwxy(tmp2);
 		const Ty tmp4   = simd_or(tmp2, tmp3);
 
 		int32_t  ii;
@@ -730,7 +1105,7 @@ namespace bx
 		const Ty tmp0   = simd_x32_srl(_a, 31);
 		const Ty tmp1   = simd128_x32_swiz_yzwx(tmp0);
 		const Ty tmp2   = simd_and(tmp0, tmp1);
-		const Ty tmp3   = simd128_x32_swiz_zwxy(tmp0);
+		const Ty tmp3   = simd128_x32_swiz_zwxy(tmp2);
 		const Ty tmp4   = simd_and(tmp2, tmp3);
 
 		int32_t  ii;
@@ -802,36 +1177,315 @@ namespace bx
 	}
 
 	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_cntbits_ni(Ty _a)
+	{
+		const Ty c55    = simd_splat<Ty>(uint32_t(0x55555555) );
+		const Ty c33    = simd_splat<Ty>(uint32_t(0x33333333) );
+		const Ty c0f    = simd_splat<Ty>(uint32_t(0x0f0f0f0f) );
+		const Ty c3f    = simd_splat<Ty>(uint32_t(0x3f) );
+
+		const Ty p1s    = simd_x32_srl(_a, 1);
+		const Ty p1m    = simd_and(p1s, c55);
+		const Ty p1     = simd_u32_sub(_a, p1m);
+
+		const Ty p2a    = simd_and(p1, c33);
+		const Ty p2s    = simd_x32_srl(p1, 2);
+		const Ty p2m    = simd_and(p2s, c33);
+		const Ty p2     = simd_u32_add(p2a, p2m);
+
+		const Ty p4s    = simd_x32_srl(p2, 4);
+		const Ty p4a    = simd_u32_add(p2, p4s);
+		const Ty p4     = simd_and(p4a, c0f);
+
+		const Ty p8s    = simd_x32_srl(p4,  8);
+		const Ty p8     = simd_u32_add(p4, p8s);
+
+		const Ty p16s   = simd_x32_srl(p8, 16);
+		const Ty p16    = simd_u32_add(p8, p16s);
+
+		const Ty result = simd_and(p16, c3f);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_cnttz_ni(Ty _a)
+	{
+		const Ty one    = simd_splat<Ty>(uint32_t(1) );
+		const Ty na     = simd_i32_neg(_a);
+		const Ty lowest = simd_and(_a, na);
+		const Ty below  = simd_u32_sub(lowest, one);
+		const Ty result = simd_u32_cntbits_ni(below);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_reversebits_ni(Ty _a)
+	{
+		const Ty c55    = simd_splat<Ty>(uint32_t(0x55555555) );
+		const Ty c33    = simd_splat<Ty>(uint32_t(0x33333333) );
+		const Ty c0f    = simd_splat<Ty>(uint32_t(0x0f0f0f0f) );
+		const Ty cff    = simd_splat<Ty>(uint32_t(0x00ff00ff) );
+
+		const Ty r1a    = simd_x32_srl(_a, 1);
+		const Ty r1b    = simd_and(r1a, c55);
+		const Ty r1c    = simd_and(_a, c55);
+		const Ty r1d    = simd_x32_sll(r1c, 1);
+		const Ty r1     = simd_or(r1b, r1d);
+
+		const Ty r2a    = simd_x32_srl(r1, 2);
+		const Ty r2b    = simd_and(r2a, c33);
+		const Ty r2c    = simd_and(r1, c33);
+		const Ty r2d    = simd_x32_sll(r2c, 2);
+		const Ty r2     = simd_or(r2b, r2d);
+
+		const Ty r4a    = simd_x32_srl(r2, 4);
+		const Ty r4b    = simd_and(r4a, c0f);
+		const Ty r4c    = simd_and(r2, c0f);
+		const Ty r4d    = simd_x32_sll(r4c, 4);
+		const Ty r4     = simd_or(r4b, r4d);
+
+		const Ty r8a    = simd_x32_srl(r4, 8);
+		const Ty r8b    = simd_and(r8a, cff);
+		const Ty r8c    = simd_and(r4, cff);
+		const Ty r8d    = simd_x32_sll(r8c, 8);
+		const Ty r8     = simd_or(r8b, r8d);
+
+		const Ty r16a   = simd_x32_srl(r8, 16);
+		const Ty r16b   = simd_x32_sll(r8, 16);
+		const Ty result = simd_or(r16a, r16b);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_i32_cmpneq_ni(Ty _a, Ty _b)
+	{
+		const Ty eq     = simd_i32_cmpeq(_a, _b);
+		const Ty result = simd_not(eq);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_i32_cmple_ni(Ty _a, Ty _b)
+	{
+		const Ty gt     = simd_i32_cmpgt(_a, _b);
+		const Ty result = simd_not(gt);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_i32_cmpge_ni(Ty _a, Ty _b)
+	{
+		const Ty lt     = simd_i32_cmplt(_a, _b);
+		const Ty result = simd_not(lt);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_cmpneq_ni(Ty _a, Ty _b)
+	{
+		const Ty eq     = simd_i32_cmpeq(_a, _b);
+		const Ty result = simd_not(eq);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_cmple_ni(Ty _a, Ty _b)
+	{
+		const Ty gt     = simd_u32_cmpgt(_a, _b);
+		const Ty result = simd_not(gt);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_cmpge_ni(Ty _a, Ty _b)
+	{
+		const Ty lt     = simd_u32_cmplt(_a, _b);
+		const Ty result = simd_not(lt);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_min_ni(Ty _a, Ty _b)
+	{
+		const Ty ltMask = simd_u32_cmplt(_a, _b);
+		const Ty result = simd_selb(ltMask, _a, _b);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_max_ni(Ty _a, Ty _b)
+	{
+		const Ty gtMask = simd_u32_cmpgt(_a, _b);
+		const Ty result = simd_selb(gtMask, _a, _b);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_clamp_ni(Ty _a, Ty _min, Ty _max)
+	{
+		const Ty lo     = simd_u32_max(_a, _min);
+		const Ty result = simd_u32_min(lo, _max);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_i32_div_ni(Ty _a, Ty _b)
+	{
+		constexpr uint32_t kNumLanes = sizeof(Ty)/sizeof(int32_t);
+
+		alignas(sizeof(Ty) ) int32_t a[kNumLanes];
+		alignas(sizeof(Ty) ) int32_t b[kNumLanes];
+		simd_st(a, _a);
+		simd_st(b, _b);
+
+		for (uint32_t ii = 0; ii < kNumLanes; ++ii)
+		{
+			const int32_t aa = a[ii];
+			const int32_t bb = b[ii];
+			a[ii] = 0 == bb ? aa : (INT32_MIN == aa && -1 == bb) ? aa : aa / bb;
+		}
+
+		return simd_ld<Ty>(a);
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_i32_mod_ni(Ty _a, Ty _b)
+	{
+		constexpr uint32_t kNumLanes = sizeof(Ty)/sizeof(int32_t);
+
+		alignas(sizeof(Ty) ) int32_t a[kNumLanes];
+		alignas(sizeof(Ty) ) int32_t b[kNumLanes];
+		simd_st(a, _a);
+		simd_st(b, _b);
+
+		for (uint32_t ii = 0; ii < kNumLanes; ++ii)
+		{
+			const int32_t aa = a[ii];
+			const int32_t bb = b[ii];
+			a[ii] = 0 == bb ? 0 : (INT32_MIN == aa && -1 == bb) ? 0 : aa % bb;
+		}
+
+		return simd_ld<Ty>(a);
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_div_ni(Ty _a, Ty _b)
+	{
+		constexpr uint32_t kNumLanes = sizeof(Ty)/sizeof(uint32_t);
+
+		alignas(sizeof(Ty) ) uint32_t a[kNumLanes];
+		alignas(sizeof(Ty) ) uint32_t b[kNumLanes];
+		simd_st(a, _a);
+		simd_st(b, _b);
+
+		for (uint32_t ii = 0; ii < kNumLanes; ++ii)
+		{
+			const uint32_t aa = a[ii];
+			const uint32_t bb = b[ii];
+			a[ii] = 0 == bb ? aa : aa / bb;
+		}
+
+		return simd_ld<Ty>(a);
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_mod_ni(Ty _a, Ty _b)
+	{
+		constexpr uint32_t kNumLanes = sizeof(Ty)/sizeof(uint32_t);
+
+		alignas(sizeof(Ty) ) uint32_t a[kNumLanes];
+		alignas(sizeof(Ty) ) uint32_t b[kNumLanes];
+		simd_st(a, _a);
+		simd_st(b, _b);
+
+		for (uint32_t ii = 0; ii < kNumLanes; ++ii)
+		{
+			const uint32_t aa = a[ii];
+			const uint32_t bb = b[ii];
+			a[ii] = 0 == bb ? 0u : aa % bb;
+		}
+
+		return simd_ld<Ty>(a);
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_ftoi_sat_ni(Ty _a)
+	{
+		const Ty two31     = simd_splat<Ty>(2147483648.0f);
+		const Ty intMax    = simd_splat<Ty>(uint32_t(0x7fffffff) );
+		const Ty absmask   = simd_splat<Ty>(uint32_t(~kFloatSignMask) );
+		const Ty inf       = simd_splat<Ty>(kFloatExponentMask);
+		const Ty magnitude = simd_and(_a, absmask);
+		const Ty nanMask   = simd_u32_cmpgt(magnitude, inf);
+		const Ty big       = simd_f32_cmpge(_a, two31);
+		const Ty trunc     = simd_f32_ftoi_trunc(_a);
+		const Ty clamped   = simd_selb(big, intMax, trunc);
+		const Ty result    = simd_andc(clamped, nanMask);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_f32_ftou_sat_ni(Ty _a)
+	{
+		const Ty zero    = simd_zero<Ty>();
+		const Ty two31   = simd_splat<Ty>(2147483648.0f);
+		const Ty two32   = simd_splat<Ty>(4294967296.0f);
+		const Ty topBit  = simd_splat<Ty>(uint32_t(0x80000000) );
+		const Ty x       = simd_f32_max(_a, zero);
+		const Ty big     = simd_f32_cmpge(x, two32);
+		const Ty high    = simd_f32_cmpge(x, two31);
+		const Ty shifted = simd_f32_sub(x, two31);
+		const Ty y       = simd_selb(high, shifted, x);
+		const Ty trunc   = simd_f32_ftoi_trunc(y);
+		const Ty bit     = simd_and(high, topBit);
+		const Ty low     = simd_or(trunc, bit);
+		const Ty result  = simd_or(low, big);
+		return result;
+	}
+
+	template<typename Ty>
+	BX_SIMD_INLINE Ty simd_u32_utof_ni(Ty _a)
+	{
+		const Ty lowMask = simd_splat<Ty>(uint32_t(0xffff) );
+		const Ty two16   = simd_splat<Ty>(65536.0f);
+		const Ty hiBits  = simd_x32_srl(_a, 16);
+		const Ty loBits  = simd_and(_a, lowMask);
+		const Ty hi      = simd_i32_itof(hiBits);
+		const Ty lo      = simd_i32_itof(loBits);
+		const Ty hiScaled = simd_f32_mul(hi, two16);
+		const Ty result  = simd_f32_add(hiScaled, lo);
+		return result;
+	}
+
+	template<int32_t BitT, typename Ty>
+	BX_SIMD_INLINE Ty simd_x32_bit_mask_ni(Ty _count)
+	{
+		const Ty shifted = simd_x32_sll(_count, 31-BitT);
+		const Ty result  = simd_x32_sra(shifted, 31);
+
+		return result;
+	}
+
+	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_x32_srl_ni(Ty _a, Ty _count)
 	{
-		const Ty bit0    = simd_splat<Ty>(uint32_t(1) );
-		const Ty bit1    = simd_splat<Ty>(uint32_t(2) );
-		const Ty bit2    = simd_splat<Ty>(uint32_t(4) );
-		const Ty bit3    = simd_splat<Ty>(uint32_t(8) );
-		const Ty bit4    = simd_splat<Ty>(uint32_t(16) );
-
-		const Ty b0      = simd_and(_count, bit0);
-		const Ty mask0   = simd_i32_neg(b0);
+		const Ty mask0   = simd_x32_bit_mask_ni<0, Ty>(_count);
 		const Ty shr0    = simd_x32_srl(_a, 1);
 		const Ty r0      = simd_selb(mask0, shr0, _a);
 
-		const Ty b1      = simd_and(_count, bit1);
-		const Ty mask1   = simd_i32_neg(b1);
+		const Ty mask1   = simd_x32_bit_mask_ni<1, Ty>(_count);
 		const Ty shr1    = simd_x32_srl(r0, 2);
 		const Ty r1      = simd_selb(mask1, shr1, r0);
 
-		const Ty b2      = simd_and(_count, bit2);
-		const Ty mask2   = simd_i32_neg(b2);
+		const Ty mask2   = simd_x32_bit_mask_ni<2, Ty>(_count);
 		const Ty shr2    = simd_x32_srl(r1, 4);
 		const Ty r2      = simd_selb(mask2, shr2, r1);
 
-		const Ty b3      = simd_and(_count, bit3);
-		const Ty mask3   = simd_i32_neg(b3);
+		const Ty mask3   = simd_x32_bit_mask_ni<3, Ty>(_count);
 		const Ty shr3    = simd_x32_srl(r2, 8);
 		const Ty r3      = simd_selb(mask3, shr3, r2);
 
-		const Ty b4      = simd_and(_count, bit4);
-		const Ty mask4   = simd_i32_neg(b4);
+		const Ty mask4   = simd_x32_bit_mask_ni<4, Ty>(_count);
 		const Ty shr4    = simd_x32_srl(r3, 16);
 		const Ty result  = simd_selb(mask4, shr4, r3);
 
@@ -841,34 +1495,23 @@ namespace bx
 	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_x32_sll_ni(Ty _a, Ty _count)
 	{
-		const Ty bit0    = simd_splat<Ty>(uint32_t(1) );
-		const Ty bit1    = simd_splat<Ty>(uint32_t(2) );
-		const Ty bit2    = simd_splat<Ty>(uint32_t(4) );
-		const Ty bit3    = simd_splat<Ty>(uint32_t(8) );
-		const Ty bit4    = simd_splat<Ty>(uint32_t(16) );
-
-		const Ty b0      = simd_and(_count, bit0);
-		const Ty mask0   = simd_i32_neg(b0);
+		const Ty mask0   = simd_x32_bit_mask_ni<0, Ty>(_count);
 		const Ty sll0    = simd_x32_sll(_a, 1);
 		const Ty r0      = simd_selb(mask0, sll0, _a);
 
-		const Ty b1      = simd_and(_count, bit1);
-		const Ty mask1   = simd_i32_neg(b1);
+		const Ty mask1   = simd_x32_bit_mask_ni<1, Ty>(_count);
 		const Ty sll1    = simd_x32_sll(r0, 2);
 		const Ty r1      = simd_selb(mask1, sll1, r0);
 
-		const Ty b2      = simd_and(_count, bit2);
-		const Ty mask2   = simd_i32_neg(b2);
+		const Ty mask2   = simd_x32_bit_mask_ni<2, Ty>(_count);
 		const Ty sll2    = simd_x32_sll(r1, 4);
 		const Ty r2      = simd_selb(mask2, sll2, r1);
 
-		const Ty b3      = simd_and(_count, bit3);
-		const Ty mask3   = simd_i32_neg(b3);
+		const Ty mask3   = simd_x32_bit_mask_ni<3, Ty>(_count);
 		const Ty sll3    = simd_x32_sll(r2, 8);
 		const Ty r3      = simd_selb(mask3, sll3, r2);
 
-		const Ty b4      = simd_and(_count, bit4);
-		const Ty mask4   = simd_i32_neg(b4);
+		const Ty mask4   = simd_x32_bit_mask_ni<4, Ty>(_count);
 		const Ty sll4    = simd_x32_sll(r3, 16);
 		const Ty result  = simd_selb(mask4, sll4, r3);
 
@@ -878,34 +1521,23 @@ namespace bx
 	template<typename Ty>
 	BX_SIMD_INLINE Ty simd_x32_sra_ni(Ty _a, Ty _count)
 	{
-		const Ty bit0    = simd_splat<Ty>(uint32_t(1) );
-		const Ty bit1    = simd_splat<Ty>(uint32_t(2) );
-		const Ty bit2    = simd_splat<Ty>(uint32_t(4) );
-		const Ty bit3    = simd_splat<Ty>(uint32_t(8) );
-		const Ty bit4    = simd_splat<Ty>(uint32_t(16) );
-
-		const Ty b0      = simd_and(_count, bit0);
-		const Ty mask0   = simd_i32_neg(b0);
+		const Ty mask0   = simd_x32_bit_mask_ni<0, Ty>(_count);
 		const Ty sra0    = simd_x32_sra(_a, 1);
 		const Ty r0      = simd_selb(mask0, sra0, _a);
 
-		const Ty b1      = simd_and(_count, bit1);
-		const Ty mask1   = simd_i32_neg(b1);
+		const Ty mask1   = simd_x32_bit_mask_ni<1, Ty>(_count);
 		const Ty sra1    = simd_x32_sra(r0, 2);
 		const Ty r1      = simd_selb(mask1, sra1, r0);
 
-		const Ty b2      = simd_and(_count, bit2);
-		const Ty mask2   = simd_i32_neg(b2);
+		const Ty mask2   = simd_x32_bit_mask_ni<2, Ty>(_count);
 		const Ty sra2    = simd_x32_sra(r1, 4);
 		const Ty r2      = simd_selb(mask2, sra2, r1);
 
-		const Ty b3      = simd_and(_count, bit3);
-		const Ty mask3   = simd_i32_neg(b3);
+		const Ty mask3   = simd_x32_bit_mask_ni<3, Ty>(_count);
 		const Ty sra3    = simd_x32_sra(r2, 8);
 		const Ty r3      = simd_selb(mask3, sra3, r2);
 
-		const Ty b4      = simd_and(_count, bit4);
-		const Ty mask4   = simd_i32_neg(b4);
+		const Ty mask4   = simd_x32_bit_mask_ni<4, Ty>(_count);
 		const Ty sra4    = simd_x32_sra(r3, 16);
 		const Ty result  = simd_selb(mask4, sra4, r3);
 
@@ -920,8 +1552,7 @@ namespace bx
 		alignas(32) uint8_t oBuf[sizeof(Ty)];
 		simd_st<Ty>(aBuf, _a);
 		simd_st<Ty>(iBuf, _indices);
-		// Per-16-byte-lane shuffle: matches PSHUFB / vqtbl1q semantics.
-		// For widths < 16 bytes, the lane is the full register.
+
 		constexpr int kLaneBytes = sizeof(Ty) >= 16 ? 16 : int(sizeof(Ty));
 		constexpr int kLaneMask  = kLaneBytes - 1;
 		for (int lane = 0; lane < int(sizeof(Ty)); lane += kLaneBytes)
@@ -945,11 +1576,9 @@ namespace bx
 		simd_st<Ty>(aBuf, _a);
 		simd_st<Ty>(bBuf, _b);
 		simd_st<Ty>(iBuf, _indices);
-		// Two-source per-16-byte-lane shuffle: indices select from concatenated
-		// [a|b] within the matching 16-byte lane (or full register for < 16 bytes).
-		// Bit 7 of an index byte zeroes the output byte; bits 0..(log2(2*lane)-1)
-		// select within the 2*lane concatenation; remaining bits must be 0.
+
 		constexpr int kLaneBytes = sizeof(Ty) >= 16 ? 16 : int(sizeof(Ty));
+
 		constexpr int kPairMask  = (kLaneBytes * 2) - 1;
 		for (int lane = 0; lane < int(sizeof(Ty)); lane += kLaneBytes)
 		{
@@ -967,6 +1596,7 @@ namespace bx
 				}
 			}
 		}
+
 		return simd_ld<Ty>(oBuf);
 	}
 

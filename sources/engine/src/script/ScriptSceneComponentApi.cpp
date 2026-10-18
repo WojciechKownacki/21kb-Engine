@@ -27,6 +27,9 @@
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/AIBrainComponent.hpp"
+#include "engine/scene/AnimationAssets.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
@@ -57,6 +60,8 @@
 #include "engine/scene/SceneSurfaceCastComponents.hpp"
 #include "engine/scene/SceneFacingPanelComponents.hpp"
 #include "engine/scene/SceneSpaceStrokeComponents.hpp"
+#include "engine/scene/SceneAnimatorComponents.hpp"
+#include "engine/scene/SceneDeformedGeometryComponents.hpp"
 #include "engine/scene/SceneHistoryRibbonComponents.hpp"
 #include "engine/scene/SceneParticleEffectComponents.hpp"
 #include "engine/scene/SceneLensEchoComponents.hpp"
@@ -290,7 +295,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 36> kComponentNames{
+constexpr std::array<std::string_view, 41> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -324,6 +329,11 @@ constexpr std::array<std::string_view, 36> kComponentNames{
     "Trail Renderer",
     "Particle Effect",
     "Lens Flare",
+    "Animator",
+    "DeformedGeometry",
+    "SocketAttachment",
+    "Combatant",
+    "AIBrain",
     // Older names, still accepted (SceneComponentAuthoring::CanonicalName).
     "Kreska przestrzenna",
     "Wst\xC4\x99" "ga historii",
@@ -343,6 +353,7 @@ constexpr std::array<std::string_view, 6> kLightKindNames{ "Directional", "Point
 constexpr std::array<std::string_view, 2> kLightMobilityNames{ "Movable", "Static" };
 constexpr std::array<std::string_view, 6> kTickGroupNames{ "Input", "Gameplay", "Physics", "Animation", "Camera", "Presentation" };
 constexpr std::array<std::string_view, 4> kColliderShapeNames{ "Box", "Sphere", "Capsule", "Mesh" };
+constexpr std::array<std::string_view, 4> kAnimatorRootMotionOwnerNames{ "None", "Animator", "CharacterController", "Rigidbody" };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
     ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int, true, kRegionShapeKindNames },
@@ -655,6 +666,113 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 18> kJointPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "breakForce", ScriptValueType::Float },
 };
 
+// controllerAssetId: kb_cli takes `controller=/Game/...kbanimcontroller`.
+constexpr std::array<ScriptSceneComponentPropertyDesc, 5> kAnimatorPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "controllerAssetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "speed", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "poseUpdateRateHz", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "rootMotionOwner", ScriptValueType::Int, true, kAnimatorRootMotionOwnerNames },
+};
+
+// The mesh is chosen with its skeleton (kb_cli `skeletalMesh=` or MeshRenderer `mesh=`), so it reads only.
+constexpr std::array<ScriptSceneComponentPropertyDesc, 8> kDeformedGeometryPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "skeletalMeshAssetId", ScriptValueType::Hash, false },
+    ScriptSceneComponentPropertyDesc{ "lodBias", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "lodEnabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "fixedBounds", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+// The AI preset (choosing one rewrites the rules), movement, and eight "when ... do ..." rules;
+// editing a rule turns the preset to Custom.
+constexpr std::array<ScriptSceneComponentPropertyDesc, 37> kAIBrainPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "preset", ScriptValueType::Int, true, kb::scene::kAIBrainPresetNames },
+    ScriptSceneComponentPropertyDesc{ "moveSpeed", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "wanderRadius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "leashDistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule1When", ScriptValueType::Int, true, kb::scene::kAIConditionNames },
+    ScriptSceneComponentPropertyDesc{ "rule1WhenValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule1Do", ScriptValueType::Int, true, kb::scene::kAIActionNames },
+    ScriptSceneComponentPropertyDesc{ "rule1DoValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule2When", ScriptValueType::Int, true, kb::scene::kAIConditionNames },
+    ScriptSceneComponentPropertyDesc{ "rule2WhenValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule2Do", ScriptValueType::Int, true, kb::scene::kAIActionNames },
+    ScriptSceneComponentPropertyDesc{ "rule2DoValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule3When", ScriptValueType::Int, true, kb::scene::kAIConditionNames },
+    ScriptSceneComponentPropertyDesc{ "rule3WhenValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule3Do", ScriptValueType::Int, true, kb::scene::kAIActionNames },
+    ScriptSceneComponentPropertyDesc{ "rule3DoValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule4When", ScriptValueType::Int, true, kb::scene::kAIConditionNames },
+    ScriptSceneComponentPropertyDesc{ "rule4WhenValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule4Do", ScriptValueType::Int, true, kb::scene::kAIActionNames },
+    ScriptSceneComponentPropertyDesc{ "rule4DoValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule5When", ScriptValueType::Int, true, kb::scene::kAIConditionNames },
+    ScriptSceneComponentPropertyDesc{ "rule5WhenValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule5Do", ScriptValueType::Int, true, kb::scene::kAIActionNames },
+    ScriptSceneComponentPropertyDesc{ "rule5DoValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule6When", ScriptValueType::Int, true, kb::scene::kAIConditionNames },
+    ScriptSceneComponentPropertyDesc{ "rule6WhenValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule6Do", ScriptValueType::Int, true, kb::scene::kAIActionNames },
+    ScriptSceneComponentPropertyDesc{ "rule6DoValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule7When", ScriptValueType::Int, true, kb::scene::kAIConditionNames },
+    ScriptSceneComponentPropertyDesc{ "rule7WhenValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule7Do", ScriptValueType::Int, true, kb::scene::kAIActionNames },
+    ScriptSceneComponentPropertyDesc{ "rule7DoValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule8When", ScriptValueType::Int, true, kb::scene::kAIConditionNames },
+    ScriptSceneComponentPropertyDesc{ "rule8WhenValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rule8Do", ScriptValueType::Int, true, kb::scene::kAIActionNames },
+    ScriptSceneComponentPropertyDesc{ "rule8DoValue", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+// Health, mana, resistances (percent), team, senses and the eight ability slots (.kbability ids).
+constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kCombatantPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "maximumHealth", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "health", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "healthRegeneration", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "maximumMana", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "mana", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "manaRegeneration", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "physicalResistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "fireResistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "coldResistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "lightningResistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "poisonResistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "team", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "sightRange", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "sightAngleDegrees", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "hearingRange", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "requireLineOfSight", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "ability1", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "ability2", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "ability3", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "ability4", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "ability5", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "ability6", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "ability7", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "ability8", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "invulnerable", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+// The socket (or bone) name and the offset in its space; rotation is a quaternion like Transform's.
+// Scale is the object's own Transform's.
+constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kSocketAttachmentPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "socket", ScriptValueType::String },
+    ScriptSceneComponentPropertyDesc{ "offset.position.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "offset.position.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "offset.position.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "offset.rotation.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "offset.rotation.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "offset.rotation.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "offset.rotation.w", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
 constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kNavAgentPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float },
@@ -874,6 +992,211 @@ constexpr std::array<FieldBinding, 18> kJointFields{
     KB_NESTED_FLOAT(kb::scene::JointComponent, spring, spring),
     KB_NESTED_FLOAT(kb::scene::JointComponent, spring, damper),
     KB_FLOAT(kb::scene::JointComponent, breakForce),
+};
+
+[[nodiscard]] bool FiniteNonNegative(const ScriptValue& value, float& out) noexcept {
+    const float number = value.Type() == ScriptValueType::Float ? value.AsFloat()
+        : value.Type() == ScriptValueType::Int ? static_cast<float>(value.AsInt()) : -1.0F;
+    if (!std::isfinite(number) || number < 0.0F) return false;
+    out = number;
+    return true;
+}
+
+constexpr std::array<FieldBinding, 5> kAnimatorFields{
+    FieldBinding{ "controllerAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::Animator*>(c)->controllerAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::Animator*>(c)->controllerAssetId = v.AsUInt64(); return true; } },
+    FieldBinding{ "speed", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::Animator*>(c)->speed }; }, [](void* c, const ScriptValue& v) noexcept -> bool { return FiniteNonNegative(v, static_cast<kb::scene::Animator*>(c)->speed); } },
+    FieldBinding{ "poseUpdateRateHz", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::Animator*>(c)->poseUpdateRateHz }; }, [](void* c, const ScriptValue& v) noexcept -> bool { return FiniteNonNegative(v, static_cast<kb::scene::Animator*>(c)->poseUpdateRateHz); } },
+    KB_BOOL(kb::scene::Animator, enabled),
+    FieldBinding{ "rootMotionOwner", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::Animator*>(c)->rootMotionOwner) }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() > static_cast<int>(kb::scene::AnimatorRootMotionOwner::Rigidbody)) return false; static_cast<kb::scene::Animator*>(c)->rootMotionOwner = static_cast<kb::scene::AnimatorRootMotionOwner>(v.AsInt()); return true; } },
+};
+
+constexpr std::array<FieldBinding, 8> kDeformedGeometryFields{
+    FieldBinding{ "skeletalMeshAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::DrawD3DeformedGeometryComponent*>(c)->skeletalMeshAssetId, ScriptValueType::Hash }; }, [](void*, const ScriptValue&) noexcept -> bool { return false; } },
+    KB_INT(kb::scene::DrawD3DeformedGeometryComponent, lodBias),
+    KB_BOOL(kb::scene::DrawD3DeformedGeometryComponent, lodEnabled),
+    KB_BOOL(kb::scene::DrawD3DeformedGeometryComponent, fixedBounds),
+    KB_BOOL(kb::scene::DrawD3DeformedGeometryComponent, castsShadow),
+    KB_BOOL(kb::scene::DrawD3DeformedGeometryComponent, receivesShadow),
+    KB_UINT32(kb::scene::DrawD3DeformedGeometryComponent, layer),
+    KB_BOOL(kb::scene::DrawD3DeformedGeometryComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 37> kAIBrainFields{
+    FieldBinding{ "preset", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->preset) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIBrainPresetCount)) return false;
+            kb::scene::ApplyAIBrainPreset(*static_cast<kb::scene::AIBrainComponent*>(c), static_cast<kb::scene::AIBrainPreset>(v.AsInt())); return true; } },
+    KB_FLOAT(kb::scene::AIBrainComponent, moveSpeed),
+    KB_FLOAT(kb::scene::AIBrainComponent, wanderRadius),
+    KB_FLOAT(kb::scene::AIBrainComponent, leashDistance),
+    FieldBinding{ "rule1When", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[0].when) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIConditionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[0].when = static_cast<kb::scene::AICondition>(v.AsInt()); b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule1WhenValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[0].whenValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[0].whenValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[0].whenValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule1Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[0].action) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[0].action = static_cast<kb::scene::AIAction>(v.AsInt());
+            if (b.rules[0].action == kb::scene::AIAction::UseAbility && b.rules[0].actionValue < 1.0F) b.rules[0].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule1DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[0].actionValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[0].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[0].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule2When", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[1].when) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIConditionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[1].when = static_cast<kb::scene::AICondition>(v.AsInt()); b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule2WhenValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[1].whenValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[1].whenValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[1].whenValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule2Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[1].action) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[1].action = static_cast<kb::scene::AIAction>(v.AsInt());
+            if (b.rules[1].action == kb::scene::AIAction::UseAbility && b.rules[1].actionValue < 1.0F) b.rules[1].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule2DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[1].actionValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[1].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[1].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule3When", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[2].when) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIConditionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[2].when = static_cast<kb::scene::AICondition>(v.AsInt()); b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule3WhenValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[2].whenValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[2].whenValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[2].whenValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule3Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[2].action) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[2].action = static_cast<kb::scene::AIAction>(v.AsInt());
+            if (b.rules[2].action == kb::scene::AIAction::UseAbility && b.rules[2].actionValue < 1.0F) b.rules[2].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule3DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[2].actionValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[2].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[2].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule4When", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[3].when) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIConditionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[3].when = static_cast<kb::scene::AICondition>(v.AsInt()); b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule4WhenValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[3].whenValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[3].whenValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[3].whenValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule4Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[3].action) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[3].action = static_cast<kb::scene::AIAction>(v.AsInt());
+            if (b.rules[3].action == kb::scene::AIAction::UseAbility && b.rules[3].actionValue < 1.0F) b.rules[3].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule4DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[3].actionValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[3].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[3].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule5When", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[4].when) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIConditionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[4].when = static_cast<kb::scene::AICondition>(v.AsInt()); b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule5WhenValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[4].whenValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[4].whenValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[4].whenValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule5Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[4].action) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[4].action = static_cast<kb::scene::AIAction>(v.AsInt());
+            if (b.rules[4].action == kb::scene::AIAction::UseAbility && b.rules[4].actionValue < 1.0F) b.rules[4].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule5DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[4].actionValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[4].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[4].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule6When", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[5].when) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIConditionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[5].when = static_cast<kb::scene::AICondition>(v.AsInt()); b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule6WhenValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[5].whenValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[5].whenValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[5].whenValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule6Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[5].action) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[5].action = static_cast<kb::scene::AIAction>(v.AsInt());
+            if (b.rules[5].action == kb::scene::AIAction::UseAbility && b.rules[5].actionValue < 1.0F) b.rules[5].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule6DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[5].actionValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[5].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[5].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule7When", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[6].when) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIConditionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[6].when = static_cast<kb::scene::AICondition>(v.AsInt()); b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule7WhenValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[6].whenValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[6].whenValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[6].whenValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule7Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[6].action) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[6].action = static_cast<kb::scene::AIAction>(v.AsInt());
+            if (b.rules[6].action == kb::scene::AIAction::UseAbility && b.rules[6].actionValue < 1.0F) b.rules[6].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule7DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[6].actionValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[6].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[6].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule8When", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[7].when) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIConditionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[7].when = static_cast<kb::scene::AICondition>(v.AsInt()); b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule8WhenValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[7].whenValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[7].whenValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[7].whenValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule8Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[7].action) }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
+            auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[7].action = static_cast<kb::scene::AIAction>(v.AsInt());
+            if (b.rules[7].action == kb::scene::AIAction::UseAbility && b.rules[7].actionValue < 1.0F) b.rules[7].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    FieldBinding{ "rule8DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[7].actionValue }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
+            if (v.Type() == ScriptValueType::Float) b.rules[7].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[7].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+    KB_BOOL(kb::scene::AIBrainComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 26> kCombatantFields{
+    KB_FLOAT(kb::scene::CombatantComponent, maximumHealth),
+    KB_FLOAT(kb::scene::CombatantComponent, health),
+    KB_FLOAT(kb::scene::CombatantComponent, healthRegeneration),
+    KB_FLOAT(kb::scene::CombatantComponent, maximumMana),
+    KB_FLOAT(kb::scene::CombatantComponent, mana),
+    KB_FLOAT(kb::scene::CombatantComponent, manaRegeneration),
+    FieldBinding{ "physicalResistance", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Physical)] }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { float& r = static_cast<kb::scene::CombatantComponent*>(c)->resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Physical)];
+            if (v.Type() == ScriptValueType::Float) { r = v.AsFloat(); return true; } if (v.Type() == ScriptValueType::Int) { r = static_cast<float>(v.AsInt()); return true; } return false; } },
+    FieldBinding{ "fireResistance", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Fire)] }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { float& r = static_cast<kb::scene::CombatantComponent*>(c)->resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Fire)];
+            if (v.Type() == ScriptValueType::Float) { r = v.AsFloat(); return true; } if (v.Type() == ScriptValueType::Int) { r = static_cast<float>(v.AsInt()); return true; } return false; } },
+    FieldBinding{ "coldResistance", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Cold)] }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { float& r = static_cast<kb::scene::CombatantComponent*>(c)->resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Cold)];
+            if (v.Type() == ScriptValueType::Float) { r = v.AsFloat(); return true; } if (v.Type() == ScriptValueType::Int) { r = static_cast<float>(v.AsInt()); return true; } return false; } },
+    FieldBinding{ "lightningResistance", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Lightning)] }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { float& r = static_cast<kb::scene::CombatantComponent*>(c)->resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Lightning)];
+            if (v.Type() == ScriptValueType::Float) { r = v.AsFloat(); return true; } if (v.Type() == ScriptValueType::Int) { r = static_cast<float>(v.AsInt()); return true; } return false; } },
+    FieldBinding{ "poisonResistance", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Poison)] }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { float& r = static_cast<kb::scene::CombatantComponent*>(c)->resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Poison)];
+            if (v.Type() == ScriptValueType::Float) { r = v.AsFloat(); return true; } if (v.Type() == ScriptValueType::Int) { r = static_cast<float>(v.AsInt()); return true; } return false; } },
+    KB_UINT32(kb::scene::CombatantComponent, team),
+    KB_FLOAT(kb::scene::CombatantComponent, sightRange),
+    KB_FLOAT(kb::scene::CombatantComponent, sightAngleDegrees),
+    KB_FLOAT(kb::scene::CombatantComponent, hearingRange),
+    KB_BOOL(kb::scene::CombatantComponent, requireLineOfSight),
+    FieldBinding{ "ability1", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->abilities[0], ScriptValueType::Hash }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::CombatantComponent*>(c)->abilities[0] = v.AsUInt64(); return true; } },
+    FieldBinding{ "ability2", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->abilities[1], ScriptValueType::Hash }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::CombatantComponent*>(c)->abilities[1] = v.AsUInt64(); return true; } },
+    FieldBinding{ "ability3", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->abilities[2], ScriptValueType::Hash }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::CombatantComponent*>(c)->abilities[2] = v.AsUInt64(); return true; } },
+    FieldBinding{ "ability4", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->abilities[3], ScriptValueType::Hash }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::CombatantComponent*>(c)->abilities[3] = v.AsUInt64(); return true; } },
+    FieldBinding{ "ability5", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->abilities[4], ScriptValueType::Hash }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::CombatantComponent*>(c)->abilities[4] = v.AsUInt64(); return true; } },
+    FieldBinding{ "ability6", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->abilities[5], ScriptValueType::Hash }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::CombatantComponent*>(c)->abilities[5] = v.AsUInt64(); return true; } },
+    FieldBinding{ "ability7", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->abilities[6], ScriptValueType::Hash }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::CombatantComponent*>(c)->abilities[6] = v.AsUInt64(); return true; } },
+    FieldBinding{ "ability8", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::CombatantComponent*>(c)->abilities[7], ScriptValueType::Hash }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::CombatantComponent*>(c)->abilities[7] = v.AsUInt64(); return true; } },
+    KB_BOOL(kb::scene::CombatantComponent, invulnerable),
+    KB_BOOL(kb::scene::CombatantComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 9> kSocketAttachmentFields{
+    FieldBinding{ "socket",
+        [](const void* c) noexcept -> ScriptValue { return ScriptValue{ std::string{ kb::scene::SocketAttachmentName(*static_cast<const kb::scene::SocketAttachmentComponent*>(c)) } }; },
+        [](void* c, const ScriptValue& v) noexcept -> bool {
+            return v.Type() == ScriptValueType::String &&
+                kb::scene::SetSocketAttachmentName(*static_cast<kb::scene::SocketAttachmentComponent*>(c), v.AsString());
+        } },
+    KB_NESTED_FLOAT(kb::scene::SocketAttachmentComponent, offset.position, x),
+    KB_NESTED_FLOAT(kb::scene::SocketAttachmentComponent, offset.position, y),
+    KB_NESTED_FLOAT(kb::scene::SocketAttachmentComponent, offset.position, z),
+    KB_NESTED_FLOAT(kb::scene::SocketAttachmentComponent, offset.rotation, x),
+    KB_NESTED_FLOAT(kb::scene::SocketAttachmentComponent, offset.rotation, y),
+    KB_NESTED_FLOAT(kb::scene::SocketAttachmentComponent, offset.rotation, z),
+    KB_NESTED_FLOAT(kb::scene::SocketAttachmentComponent, offset.rotation, w),
+    KB_BOOL(kb::scene::SocketAttachmentComponent, enabled),
 };
 
 constexpr std::array<FieldBinding, 11> kNavAgentFields{
@@ -1237,6 +1560,11 @@ void MarkJointModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) n
     scene.Components().Joints().MarkModified(entity);
 }
 void MarkNavAgentModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavAgents().MarkModified(entity); }
+void MarkAnimatorModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Animators().MarkModified(entity); }
+void MarkDeformedGeometryModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().DeformedGeometries().MarkModified(entity); }
+void MarkSocketAttachmentModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().SocketAttachments().MarkModified(entity); }
+void MarkCombatantModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Combatants().MarkModified(entity); }
+void MarkAIBrainModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AIBrains().MarkModified(entity); }
 void MarkNavObstacleModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavObstacles().MarkModified(entity); }
 void MarkNavLinkModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavLinks().MarkModified(entity); }
 void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tags().MarkModified(entity); }
@@ -1302,6 +1630,26 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
     if (componentName == "Joint") {
         kb::scene::JointComponent* component = scene.Components().Joints().TryGet(entity);
         return ComponentAccess{ component, component, kJointFields, &MarkJointModified };
+    }
+    if (componentName == "Animator") {
+        kb::scene::Animator* component = scene.Components().Animators().TryGet(entity);
+        return ComponentAccess{ component, component, kAnimatorFields, &MarkAnimatorModified };
+    }
+    if (componentName == "DeformedGeometry") {
+        kb::scene::DrawD3DeformedGeometryComponent* component = scene.Components().DeformedGeometries().TryGet(entity);
+        return ComponentAccess{ component, component, kDeformedGeometryFields, &MarkDeformedGeometryModified };
+    }
+    if (componentName == "SocketAttachment") {
+        kb::scene::SocketAttachmentComponent* component = scene.Components().SocketAttachments().TryGet(entity);
+        return ComponentAccess{ component, component, kSocketAttachmentFields, &MarkSocketAttachmentModified };
+    }
+    if (componentName == "Combatant") {
+        kb::scene::CombatantComponent* component = scene.Components().Combatants().TryGet(entity);
+        return ComponentAccess{ component, component, kCombatantFields, &MarkCombatantModified };
+    }
+    if (componentName == "AIBrain") {
+        kb::scene::AIBrainComponent* component = scene.Components().AIBrains().TryGet(entity);
+        return ComponentAccess{ component, component, kAIBrainFields, &MarkAIBrainModified };
     }
     if (componentName == "NavAgent") {
         kb::scene::NavAgent* component = scene.Components().NavAgents().TryGet(entity);
@@ -1462,6 +1810,11 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
         return kJointPropertyDescs;
     }
     if (componentName == "NavAgent") return kNavAgentPropertyDescs;
+    if (componentName == "Animator") return kAnimatorPropertyDescs;
+    if (componentName == "DeformedGeometry") return kDeformedGeometryPropertyDescs;
+    if (componentName == "SocketAttachment") return kSocketAttachmentPropertyDescs;
+    if (componentName == "Combatant") return kCombatantPropertyDescs;
+    if (componentName == "AIBrain") return kAIBrainPropertyDescs;
     if (componentName == "NavObstacle") return kNavObstaclePropertyDescs;
     if (componentName == "NavLink") return kNavLinkPropertyDescs;
     if (componentName == "Tags") return kTagsPropertyDescs;
@@ -1592,6 +1945,50 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
         if (!kb::scene::IsWorldBackdropComponentValid(candidate)) {
             return ScriptSceneComponentMutationResult{ .error = "World Backdrop value out of range (mode 0..3, gradientExponent > 0, sunDisk 0..2, "
                 "sunSize 0..1, sunSizeConvergence 1..10, atmosphereThickness 0..5, exposure 0..8)" };
+        }
+    }
+    if (componentName == "DeformedGeometry") {
+        kb::scene::DrawD3DeformedGeometryComponent candidate = *static_cast<const kb::scene::DrawD3DeformedGeometryComponent*>(component.immutable);
+        if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        if (!kb::scene::IsDrawD3DeformedGeometryComponentPersistable(candidate) ||
+            (candidate.enabled && !kb::scene::IsDrawD3DeformedGeometryComponentValid(candidate))) {
+            return ScriptSceneComponentMutationResult{ .error = "Deformed Geometry needs its Skeletal Mesh before it can be enabled" };
+        }
+    }
+    if (componentName == "AIBrain") {
+        kb::scene::AIBrainComponent candidate = *static_cast<const kb::scene::AIBrainComponent*>(component.immutable);
+        if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        if (!kb::scene::IsAIBrainComponentValid(candidate)) {
+            return ScriptSceneComponentMutationResult{ .error = "AI Brain values must be finite and not negative; an ability slot is 1 to 8" };
+        }
+        *static_cast<kb::scene::AIBrainComponent*>(component.mutableComponent) = candidate;
+        component.markModified(scene, entity);
+        return ScriptSceneComponentMutationResult{ .succeeded = true };
+    }
+    if (componentName == "Combatant") {
+        kb::scene::CombatantComponent candidate = *static_cast<const kb::scene::CombatantComponent*>(component.immutable);
+        if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        // A larger maximum fills a full bar; a smaller one caps what is left.
+        const kb::scene::CombatantComponent& before = *static_cast<const kb::scene::CombatantComponent*>(component.immutable);
+        if (propertyName == "maximumHealth" && (before.health >= before.maximumHealth || candidate.health > candidate.maximumHealth)) {
+            candidate.health = candidate.maximumHealth;
+        }
+        if (propertyName == "maximumMana" && (before.mana >= before.maximumMana || candidate.mana > candidate.maximumMana)) {
+            candidate.mana = candidate.maximumMana;
+        }
+        if (!kb::scene::IsCombatantComponentValid(candidate)) {
+            return ScriptSceneComponentMutationResult{ .error = "Combatant values must be finite: health and mana from 0 to their maximum, "
+                "ranges not negative, sight angle 0..360, resistances at most 100" };
+        }
+        *static_cast<kb::scene::CombatantComponent*>(component.mutableComponent) = candidate;
+        component.markModified(scene, entity);
+        return ScriptSceneComponentMutationResult{ .succeeded = true };
+    }
+    if (componentName == "SocketAttachment") {
+        kb::scene::SocketAttachmentComponent candidate = *static_cast<const kb::scene::SocketAttachmentComponent*>(component.immutable);
+        if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        if (!kb::scene::IsSocketAttachmentComponentValid(candidate)) {
+            return ScriptSceneComponentMutationResult{ .error = "Socket Attachment needs a socket name up to 128 bytes, a finite offset and a non-zero rotation" };
         }
     }
     if (componentName == "Particle Effect") {

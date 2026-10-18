@@ -267,7 +267,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 25U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 26U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -279,7 +279,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation" };
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Gameplay", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation" };
     kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must list every domain module");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
@@ -2821,6 +2821,21 @@ void RunEngineLibraryComponentRegistryTest() {
         .maxParticlesOverride = 512U, .ownerDeathPolicy = kb::scene::ParticleOwnerDeathPolicy::Clear,
         .enabled = true, .autoPlay = false, .followTransform = false, .restartOnActivate = false,
     });
+    source.Components().Animators().Set(object.Entity(), kb::scene::Animator{ .controllerAssetId = 909U, .speed = 1.5F, .enabled = false });
+    static_cast<void>(source.Components().DeformedGeometries().Set(object.Entity(), kb::scene::DrawD3DeformedGeometryComponent{ .skeletalMeshAssetId = 910U, .layer = 3U }));
+    kb::scene::CombatantComponent registryCombatant{};
+    registryCombatant.maximumHealth = 250.0F;
+    registryCombatant.health = 200.0F;
+    registryCombatant.team = 2U;
+    registryCombatant.resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Fire)] = 50.0F;
+    registryCombatant.abilities[0] = 4242U;
+    static_cast<void>(source.Components().Combatants().Set(object.Entity(), registryCombatant));
+    kb::scene::AIBrainComponent registryBrain{};
+    kb::scene::ApplyAIBrainPreset(registryBrain, kb::scene::AIBrainPreset::Ranged);
+    static_cast<void>(source.Components().AIBrains().Set(object.Entity(), registryBrain));
+    const kb::scene::SceneObject socketChild = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistrySocketChild", .parent = object });
+    static_cast<void>(source.Components().SocketAttachments().Set(socketChild.Entity(),
+        kb::scene::MakeSocketAttachment("hand.R", kb::scene::Vec3{ 0.0F, 0.25F, 0.0F })));
     for (const kb::scene::UIComponentDescriptor& component : kb::scene::UIComponentCatalog()) {
         const kb::scene::SceneObject uiObject = source.Entities().CreateObject(kb::scene::SceneObjectDesc{
             .name = "Registry UI " + std::string{ component.displayName }, .parent = object,
@@ -2990,6 +3005,30 @@ void RunEngineLibraryComponentRegistryTest() {
                     kb::scene::CaptureSceneUIComponents(target.Components().UI(), *restoredUIEntity), component.type),
             "A cataloged UI component marked serializable must survive a real scene save/load round trip");
     }
+
+    const kb::scene::Animator* restoredAnimator = target.Components().Animators().TryGet(restored);
+    kb::tests::Require(restoredAnimator != nullptr && restoredAnimator->controllerAssetId == 909U &&
+            kb::tests::NearlyEqual(restoredAnimator->speed, 1.5F) && !restoredAnimator->enabled,
+        "Engine21kbLibrary component registry: Animator must survive a save/load round trip");
+    const kb::scene::DrawD3DeformedGeometryComponent* restoredSkin = target.Components().DeformedGeometries().TryGet(restored);
+    kb::tests::Require(restoredSkin != nullptr && restoredSkin->skeletalMeshAssetId == 910U && restoredSkin->layer == 3U,
+        "Engine21kbLibrary component registry: DeformedGeometry must survive a save/load round trip");
+    const kb::scene::CombatantComponent* restoredCombatant = target.Components().Combatants().TryGet(restored);
+    kb::tests::Require(restoredCombatant != nullptr && restoredCombatant->maximumHealth == 250.0F && restoredCombatant->health == 200.0F &&
+            restoredCombatant->team == 2U && restoredCombatant->resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Fire)] == 50.0F &&
+            restoredCombatant->abilities[0] == 4242U,
+        "Engine21kbLibrary component registry: Combatant must survive a save/load round trip");
+    const kb::scene::AIBrainComponent* restoredBrain = target.Components().AIBrains().TryGet(restored);
+    kb::tests::Require(restoredBrain != nullptr && restoredBrain->preset == kb::scene::AIBrainPreset::Ranged &&
+            restoredBrain->rules[0].action == kb::scene::AIAction::KeepDistance && restoredBrain->rules[0].actionValue == 8.0F,
+        "Engine21kbLibrary component registry: AIBrain must survive a save/load round trip");
+    const kb::scene::SocketAttachmentComponent* restoredSocket = nullptr;
+    for (const kb::scene::SceneEntity child : target.Hierarchy().ChildEntities(restored)) {
+        if (target.Entities().Name(child) == "ComponentRegistrySocketChild") restoredSocket = target.Components().SocketAttachments().TryGet(child);
+    }
+    kb::tests::Require(restoredSocket != nullptr && kb::scene::SocketAttachmentName(*restoredSocket) == "hand.R" &&
+            kb::tests::NearlyEqual(restoredSocket->offset.position.y, 0.25F) && restoredSocket->enabled,
+        "Engine21kbLibrary component registry: SocketAttachment must survive a save/load round trip");
 
     for (const kb::library::LibraryComponentDesc& desc : catalog) {
         kb::tests::Require(desc.serializable,
@@ -3334,7 +3373,7 @@ void RunComponentInspectorDescCatalogTest() {
     // Particle Effect contributes nine authoring and playback fields.
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
-    kb::tests::Require(fieldsChecked == 681U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (681, including the collision mesh and the compatibility aliases) across all components");
+    kb::tests::Require(fieldsChecked == 766U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (766, including the collision mesh and the compatibility aliases) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

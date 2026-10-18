@@ -298,6 +298,23 @@ private:
     std::filesystem::path path_;
 };
 
+// The compiler's own binary and log in the shared scratch root: gone however the compile ends,
+// since the published binary is a copy and a scratch file outlives the cook otherwise.
+class ScopedShaderScratchFile final {
+public:
+    explicit ScopedShaderScratchFile(std::filesystem::path path) noexcept
+        : path_{ std::move(path) } {}
+    ScopedShaderScratchFile(const ScopedShaderScratchFile&) = delete;
+    ScopedShaderScratchFile& operator=(const ScopedShaderScratchFile&) = delete;
+    ~ScopedShaderScratchFile() {
+        std::error_code error;
+        std::filesystem::remove(path_, error);
+    }
+
+private:
+    std::filesystem::path path_;
+};
+
 class ShaderCacheFileLock final {
 public:
     ShaderCacheFileLock() = default;
@@ -618,6 +635,12 @@ private:
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
     return static_cast<int>(exitCode);
+#elif defined(__ANDROID__) && __ANDROID_API__ < 28
+    // A packaged game reads prebuilt shaders; posix_spawn only exists from API 28.
+    static_cast<void>(executable);
+    static_cast<void>(arguments);
+    static_cast<void>(diagnosticPath);
+    return -1;
 #else
     posix_spawn_file_actions_t actions{};
     if (posix_spawn_file_actions_init(&actions) != 0) {
@@ -1919,6 +1942,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                 std::string{ RenderMaterialGraphShaderBackendName(backend) });
             continue;
         }
+        const ScopedShaderScratchFile stagingBinaryCleanup{ stagingBinary };
+        const ScopedShaderScratchFile errorPathCleanup{ errorPath };
         std::vector<std::string> arguments{
             "--type", "fragment",
             "--platform", std::string{ kb::assets::bake::ShaderBakePlatformShadercToken(artifact.shaderPlatform) },
@@ -2086,6 +2111,8 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
                     std::string{ RenderMaterialGraphShaderBackendName(backend) });
                 continue;
             }
+            const ScopedShaderScratchFile stagingVsBinaryCleanup{ stagingVsBinary };
+            const ScopedShaderScratchFile vsErrorPathCleanup{ vsErrorPath };
             std::vector<std::string> arguments{
                 "--type", "vertex",
                 "--platform", std::string{ kb::assets::bake::ShaderBakePlatformShadercToken(artifact.shaderPlatform) },

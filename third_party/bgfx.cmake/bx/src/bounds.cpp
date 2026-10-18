@@ -326,7 +326,11 @@ namespace bx
 					center.x += xx * radiusStep;
 					center.y += yy * radiusStep;
 					center.z += zz * radiusStep;
-					maxDistSq = lerp(maxDistSq, distSq, _step);
+					const float newMaxDistSq = lerp(maxDistSq, distSq, _step);
+					maxDistSq = newMaxDistSq > maxDistSq
+						? newMaxDistSq
+						: distSq
+						;
 
 					break;
 				}
@@ -338,7 +342,7 @@ namespace bx
 		_sphere.radius = sqrt(maxDistSq);
 	}
 
-	void buildFrustumPlanes(Plane* _result, const float* _viewProj)
+	void buildFrustumPlanes(Plane* _result, const float* _viewProj, bool _homogeneousNdc)
 	{
 		const float xw = _viewProj[ 3];
 		const float yw = _viewProj[ 7];
@@ -366,6 +370,14 @@ namespace bx
 		far.normal.y = yw + yz;
 		far.normal.z = zw + zz;
 		far.dist     = ww + wz;
+
+		if (!_homogeneousNdc)
+		{
+			far.normal.x = xz;
+			far.normal.y = yz;
+			far.normal.z = zz;
+			far.dist     = wz;
+		}
 
 		const float xx = _viewProj[ 0];
 		const float yx = _viewProj[ 4];
@@ -2037,7 +2049,12 @@ namespace bx
 			return true;
 		}
 
-		const Vec3 pos = closestPoint(plane, hit.pos);
+		const Vec3 nearest = abs(distance(plane, line.pos) ) <= abs(distance(plane, line.end) )
+			? line.pos
+			: line.end
+			;
+
+		const Vec3 pos = closestPoint(plane, nearest);
 		const Vec3 uvw = barycentric(_triangle, pos);
 
 		const float nr = -_ty.radius;

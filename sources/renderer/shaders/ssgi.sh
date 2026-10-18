@@ -1,3 +1,4 @@
+#include "screen_uv.sh"
 // Screen-space diffuse global illumination and ambient occlusion: the accumulated results shared by the
 // resolve pass (which writes them) and the deferred lighting shader (which reads them).
 // s_giAccum holds rgb = incoming diffuse radiance (before the surface albedo) and a = the view depth
@@ -19,7 +20,7 @@ float KbGiHash(vec2 p, float seed)
 vec2 KbGiUv(vec4 clip)
 {
     vec2 ndc = clip.xy / clip.w;
-    return vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    return KbNdcToScreenUv(ndc);
 }
 
 // Accumulated bounce light, ambient visibility and sky visibility at a world position. Returns 1 when

@@ -35,8 +35,8 @@ constexpr std::uint32_t kStreamedTextureHeaderVersion = 1U;
 // Bytes of one full-chain level of a block-compressed texture, padded to whole blocks exactly as
 // the baker encodes it.
 [[nodiscard]] std::uint32_t LevelBytes(bimg::TextureFormat::Enum format, std::uint32_t width, std::uint32_t height) noexcept {
-    return bimg::imageGetSize(nullptr, static_cast<std::uint16_t>(width), static_cast<std::uint16_t>(height), 1U, false,
-        false, 1U, format);
+    return TextureImageBytes32(bimg::imageGetSize(nullptr, static_cast<std::uint16_t>(width), static_cast<std::uint16_t>(height), 1U, false,
+        false, 1U, format));
 }
 
 [[nodiscard]] bool ReadBakedKtx(std::span<const std::uint8_t> primaryBlock, RenderTextureAssetData& out);
@@ -108,7 +108,11 @@ bool ReadBakedTexture(std::span<const std::uint8_t> primaryBlock, RenderTextureA
         if (std::max(levelWidth, levelHeight) <= kStreamedTextureTailEdge) {
             return false;
         }
-        layout.streamedLevelBytes.push_back(LevelBytes(format, levelWidth, levelHeight));
+        const std::uint32_t levelBytes = LevelBytes(format, levelWidth, levelHeight);
+        if (levelBytes == 0U) {
+            return false;
+        }
+        layout.streamedLevelBytes.push_back(levelBytes);
     }
     if (std::max(tail.width, tail.height) > kStreamedTextureTailEdge) {
         return false;
@@ -168,7 +172,7 @@ bool ReadBakedKtx(std::span<const std::uint8_t> primaryBlock, RenderTextureAsset
         !parseError.isOk()) {
         return false;
     }
-    if (!container.m_ktx || container.m_cubeMap || container.m_depth != 1U || container.m_numLayers != 1U) {
+    if (!container.m_ktx || container.m_cubeMap || container.m_depth > 1U || container.m_numLayers != 1U) {
         return false;
     }
     if (container.m_width == 0U || container.m_height == 0U ||
@@ -188,7 +192,7 @@ bool ReadBakedKtx(std::span<const std::uint8_t> primaryBlock, RenderTextureAsset
         return false;
     }
 
-    const std::uint32_t payloadSize = bimg::imageGetSize(nullptr, width, height, 1U, false, true, 1U, format);
+    const std::uint32_t payloadSize = TextureImageBytes32(bimg::imageGetSize(nullptr, width, height, 1U, false, true, 1U, format));
     const std::uint64_t expectedSize = static_cast<std::uint64_t>(container.m_offset) +
         static_cast<std::uint64_t>(container.m_numMips) * sizeof(std::uint32_t) + payloadSize;
     if (payloadSize == 0U || primaryBlock.size() < expectedSize) {

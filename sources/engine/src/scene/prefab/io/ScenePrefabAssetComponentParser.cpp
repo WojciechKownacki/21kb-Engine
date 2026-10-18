@@ -5,6 +5,9 @@
 #include "scene/prefab/io/ScenePrefabAssetLightParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetMeshRendererParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetTagsParser.hpp"
+#include "scene/prefab/io/ScenePrefabAssetNodeFieldParser.hpp"
+#include "scene/CombatantFields.hpp"
+#include "scene/AIBrainFields.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
 
 #include <cmath>
@@ -655,6 +658,50 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseSocketAttachment(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "socketAttachment", present)) return false;
+    if (!present) return true;
+    SocketAttachmentComponent attachment{};
+    std::string socket;
+    if (!ScenePrefabAssetNodeFieldParser::ParseEscapedString(fields, "socketAttachment.socket", socket) ||
+        !SetSocketAttachmentName(attachment, socket) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "socketAttachment.position", attachment.offset.position) ||
+        !ScenePrefabAssetNodeFieldParser::ParseQuat(fields, "socketAttachment.rotation", attachment.offset.rotation) ||
+        !ParseOptionalBool(fields, "socketAttachment.enabled", attachment.enabled) ||
+        !IsSocketAttachmentComponentValid(attachment)) return false;
+    components.socketAttachment = attachment;
+    return true;
+}
+
+[[nodiscard]] bool ParseAIBrain(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "aiBrain", present)) return false;
+    if (!present) return true;
+    AIBrainComponent brain{};
+    for (const AIBrainTextField& field : AIBrainTextFields()) {
+        const auto value = fields.find("aiBrain." + field.name);
+        if (value != fields.end() && !field.set(brain, field.rule, value->second)) return false;
+    }
+    if (!IsAIBrainComponentValid(brain)) return false;
+    components.aiBrain = brain;
+    return true;
+}
+
+[[nodiscard]] bool ParseCombatant(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "combatant", present)) return false;
+    if (!present) return true;
+    CombatantComponent combatant{};
+    for (const CombatantTextField& field : CombatantTextFields()) {
+        const auto value = fields.find("combatant." + std::string{ field.name });
+        if (value != fields.end() && !field.set(combatant, value->second)) return false;
+    }
+    if (!IsCombatantComponentValid(combatant)) return false;
+    components.combatant = combatant;
+    return true;
+}
+
 [[nodiscard]] bool ParseDeformedGeometry(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool present = false;
     if (!ParseOptionalComponentFlag(fields, "deformedGeometry", present)) return false;
@@ -714,6 +761,9 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseAudioListener(fields, components)
         && ParseAnimator(fields, components)
         && ParseSkeletonBinding(fields, components)
+        && ParseSocketAttachment(fields, components)
+        && ParseCombatant(fields, components)
+        && ParseAIBrain(fields, components)
         && ParseDeformedGeometry(fields, components);
 }
 

@@ -1,6 +1,10 @@
 #include "TestSupport.hpp"
 
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/AnimationRetargeting.hpp"
+#include "engine/gameplay/AbilityAsset.hpp"
+#include "engine/scene/SceneGameplay.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -24,10 +28,12 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/SocketAttachmentComponent.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -53,7 +59,471 @@ void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
 
 } // namespace
 
+// The state machine a character needs: locomotion blended from clips of different lengths, a
+// hit reaction from any state, and a one-shot that returns when it ends with no condition.
+void RunCharacterStateMachineTest(const std::filesystem::path& root) {
+    std::filesystem::create_directories(root / "Assets" / "Animation");
+    const auto clipMoving = [](float length, float distance, bool looping) {
+        kb::scene::AnimationClip clip{};
+        clip.durationSeconds = length;
+        clip.looping = looping;
+        clip.tracks = { kb::scene::AnimationTransformTrack{ .targetPath = "", .keyframes = {
+            { .timeSeconds = 0.0F, .transform = {} },
+            { .timeSeconds = length, .transform = { .position = { distance, 0.0F, 0.0F } } },
+        } } };
+        return clip;
+    };
+    Require(kb::scene::AnimationAssetIO::SaveClip(root / "Assets/Animation/Idle.kbanim", clipMoving(2.0F, 0.0F, true)) &&
+            kb::scene::AnimationAssetIO::SaveClip(root / "Assets/Animation/Walk.kbanim", clipMoving(1.0F, 10.0F, true)) &&
+            kb::scene::AnimationAssetIO::SaveClip(root / "Assets/Animation/Run.kbanim", clipMoving(0.5F, 10.0F, true)) &&
+            kb::scene::AnimationAssetIO::SaveClip(root / "Assets/Animation/Hit.kbanim", clipMoving(0.25F, -1.0F, false)),
+        "State machine test clips could not be saved");
+    kb::scene::AnimatorController controller{};
+    controller.parameters = {
+        { .name = "Speed", .type = kb::scene::AnimatorParameterType::Float },
+        { .name = "Hit", .type = kb::scene::AnimatorParameterType::Trigger },
+    };
+    controller.layers = { { .name = "Base", .defaultState = "Locomotion", .states = {
+        { .id = 1U, .name = "Locomotion", .blendParameter = "Speed", .blendChildren = {
+            { .threshold = 0.0F, .clipReference = "/Game/Animation/Walk.kbanim" },
+            { .threshold = 1.0F, .clipReference = "/Game/Animation/Run.kbanim" },
+        } },
+        { .id = 2U, .name = "Hit", .clipReference = "/Game/Animation/Hit.kbanim" },
+    }, .transitions = {
+        { .id = 3U, .fromState = std::string{ kb::scene::kAnimatorAnyState }, .toState = "Hit", .durationSeconds = 0.0F,
+          .conditions = { { .parameter = "Hit", .mode = kb::scene::AnimatorConditionMode::TriggerSet } } },
+        { .id = 4U, .fromState = "Hit", .toState = "Locomotion", .durationSeconds = 0.0F, .exitNormalizedTime = 1.0F },
+    } } };
+    std::string error;
+    Require(kb::scene::AnimationAssetIO::ValidateController(controller, &error),
+        ("A controller with an any-state and an exit-time transition was refused: " + error).c_str());
+    kb::scene::AnimatorController conditionless = controller;
+    conditionless.layers[0].transitions[1].exitNormalizedTime = -1.0F;
+    Require(!kb::scene::AnimationAssetIO::ValidateController(conditionless),
+        "A transition with neither a condition nor an exit time was accepted");
+    Require(kb::scene::AnimationAssetIO::SaveController(root / "Assets/Animation/Hero.kbanimcontroller", controller),
+        "State machine test controller could not be saved");
+
+    kb::scene::Scene scene;
+    Require(scene.Assets().MountProject(root) && scene.Assets().Discover() >= 5U, "State machine test project could not be mounted");
+    const kb::assets::AssetMetadata* metadata =
+        scene.Assets().Manager().Registry().FindByPath("/Game/Animation/Hero.kbanimcontroller");
+    Require(metadata != nullptr, "State machine test controller was not discovered");
+    const kb::scene::SceneObject hero = scene.Entities().CreateObject({ .name = "Hero" });
+    scene.Components().Animators().Set(hero.Entity(), kb::scene::Animator{ .controllerAssetId = metadata->id.value, .enabled = true });
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.Animators().Exists(hero.Entity()), "A blend of clips of different lengths was refused at binding");
+
+    // Halfway between a 1 s walk and a 0.5 s run the cycle lasts 0.75 s: after 0.375 s both clips
+    // are halfway through their own lengths.
+    Require(scene.Animators().SetFloat(hero.Entity(), "Speed", 0.5F), "Speed could not be set");
+    static_cast<void>(scene.Runtime().Update(0.375F));
+    const auto locomotion = scene.Animators().State(hero.Entity(), "Base");
+    Require(locomotion.has_value() && locomotion->state == "Locomotion" && std::abs(locomotion->normalizedTime - 0.5F) < 0.001F &&
+            std::abs(scene.Transforms().Get(hero.Entity()).localPosition.x - 5.0F) < 0.001F,
+        "A blend of clips of different lengths did not play them at one phase and the blended length");
+
+    Require(scene.Animators().SetTrigger(hero.Entity(), "Hit"), "Hit could not be triggered");
+    static_cast<void>(scene.Runtime().Update(0.01F));
+    const auto hit = scene.Animators().State(hero.Entity(), "Base");
+    Require(hit.has_value() && hit->state == "Hit", "An any-state transition did not leave the active state");
+    static_cast<void>(scene.Runtime().Update(0.3F));
+    static_cast<void>(scene.Runtime().Update(0.01F));
+    const auto recovered = scene.Animators().State(hero.Entity(), "Base");
+    Require(recovered.has_value() && recovered->state == "Locomotion",
+        "A one-shot did not return through its exit-time transition");
+}
+
+// A sword on a socket and a shield on a bone (named the way another tool writes it), the shield
+// through a scaled holder: both follow the animated hand, keep their own size, and a socket that
+// does not exist is reported, not guessed.
+void RunSocketAttachmentTest(const std::filesystem::path& root) {
+    std::filesystem::create_directories(root / "Assets" / "Rig");
+    std::filesystem::create_directories(root / "Assets" / "Animation");
+    const kb::math::Mat4 identity{ .columns = {
+        { 1.0F, 0.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F, 0.0F }, { 0.0F, 0.0F, 0.0F, 1.0F } } };
+    kb::scene::SkeletonAsset skeleton{};
+    skeleton.bones = {
+        { .id = 1U, .parentIndex = -1, .name = "Root", .referencePose = {}, .inverseBind = identity },
+        { .id = 2U, .parentIndex = 0, .name = "hand.R", .referencePose = { .position = { 1.0F, 0.0F, 0.0F } }, .inverseBind = { .columns = {
+            { 1.0F, 0.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F, 0.0F }, { -1.0F, 0.0F, 0.0F, 1.0F } } } },
+    };
+    skeleton.sockets = { { .name = "weapon_r", .boneId = 2U, .localTransform = { .position = { 0.0F, 0.5F, 0.0F } } } };
+    const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(skeleton);
+    Require(signature != 0U && kb::scene::SkeletonAssetIO::Save(root / "Assets/Rig/Hero.kbskeleton", skeleton),
+        "Socket test skeleton could not be saved");
+    std::string skeletonError;
+    Require(kb::scene::SkeletonAssetIO::Load(root / "Assets/Rig/Hero.kbskeleton", &skeletonError).has_value(),
+        ("Socket test skeleton could not be read back: " + skeletonError).c_str());
+
+    kb::scene::Scene scene;
+    Require(scene.Assets().MountProject(root) && scene.Assets().Discover() == 1U, "Socket test project could not be mounted");
+    const kb::assets::AssetMetadata* skeletonMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Rig/Hero.kbskeleton");
+    Require(skeletonMetadata != nullptr, "Socket test skeleton was not discovered");
+    // Discover() below may move the registry's records: keep the id, not the record.
+    const std::uint64_t skeletonId = skeletonMetadata->id.value;
+
+    // The hand rises from y=0 to y=2 over one second.
+    kb::scene::AnimationClip clip{};
+    clip.durationSeconds = 1.0F;
+    clip.looping = true;
+    clip.targetSkeletonAssetId = skeletonId;
+    clip.targetSkeletonCompatibilitySignature = signature;
+    clip.skeletalTracks = { { .boneId = 2U, .bindingMask = 1U, .keyframes = {
+        { .timeSeconds = 0.0F, .transform = { .position = { 1.0F, 0.0F, 0.0F } } },
+        { .timeSeconds = 1.0F, .transform = { .position = { 1.0F, 2.0F, 0.0F } } },
+    } } };
+    kb::scene::AnimatorController controller{};
+    controller.layers = { { .name = "Base", .defaultState = "Raise", .states = {
+        { .id = 1U, .name = "Raise", .clipReference = "/Game/Animation/Raise.kbanim" } } } };
+    Require(kb::scene::AnimationAssetIO::SaveClip(root / "Assets/Animation/Raise.kbanim", clip) &&
+            kb::scene::AnimationAssetIO::SaveController(root / "Assets/Animation/Hero.kbanimcontroller", controller) &&
+            scene.Assets().Discover() == 3U,
+        "Socket test clip and controller could not be saved");
+    const kb::assets::AssetMetadata* controllerMetadata =
+        scene.Assets().Manager().Registry().FindByPath("/Game/Animation/Hero.kbanimcontroller");
+    Require(controllerMetadata != nullptr, "Socket test controller was not discovered");
+
+    const kb::scene::SceneObject hero = scene.Entities().CreateObject({ .name = "Hero" });
+    scene.Transforms().Set(hero.Entity(), kb::scene::TransformComponent{ .localPosition = { 10.0F, 0.0F, 0.0F } });
+    Require(scene.Components().SkeletonBindings().Set(hero.Entity(), kb::scene::SkeletonBindingComponent{
+                .skeletonAssetId = skeletonId, .skeletonCompatibilitySignature = signature, .enabled = true }),
+        "Socket test character could not bind its skeleton");
+    scene.Components().Animators().Set(hero.Entity(), kb::scene::Animator{ .controllerAssetId = controllerMetadata->id.value, .enabled = true });
+
+    const auto child = [&scene](const char* name, kb::scene::SceneObject parent, kb::scene::Vec3 position, kb::scene::Vec3 scale) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject({ .name = name, .parent = parent });
+        scene.Transforms().Set(object.Entity(), kb::scene::TransformComponent{ .localPosition = position, .localScale = scale });
+        return object;
+    };
+    const kb::scene::SceneObject sword = child("Sword", hero, {}, { 0.1F, 2.0F, 0.1F });
+    Require(scene.Components().SocketAttachments().Set(sword.Entity(), kb::scene::MakeSocketAttachment("weapon_r", { 0.0F, 0.0F, 1.0F })),
+        "Socket test sword could not be attached");
+    const kb::scene::SceneObject holder = child("Holder", hero, { 0.0F, 5.0F, 0.0F }, { 2.0F, 2.0F, 2.0F });
+    const kb::scene::SceneObject shield = child("Shield", holder, {}, { 1.0F, 1.0F, 1.0F });
+    Require(scene.Components().SocketAttachments().Set(shield.Entity(), kb::scene::MakeSocketAttachment("Hand_R")),
+        "Socket test shield could not be attached");
+    const kb::scene::SceneObject lost = child("Lost", hero, { 7.0F, 7.0F, 7.0F }, { 1.0F, 1.0F, 1.0F });
+    Require(scene.Components().SocketAttachments().Set(lost.Entity(), kb::scene::MakeSocketAttachment("tail")),
+        "Socket test bad attachment could not be authored");
+    const kb::scene::SceneObject parked = child("Parked", hero, { 3.0F, 3.0F, 3.0F }, { 1.0F, 1.0F, 1.0F });
+    kb::scene::SocketAttachmentComponent disabled = kb::scene::MakeSocketAttachment("weapon_r");
+    disabled.enabled = false;
+    Require(scene.Components().SocketAttachments().Set(parked.Entity(), disabled), "Socket test disabled attachment could not be authored");
+
+    // Before anything is posed (the editor), names are judged against the authored skeleton.
+    const kb::scene::SocketAttachmentStatus beforePlay = scene.Animators().SocketAttachment(shield.Entity());
+    Require(beforePlay.attached && beforePlay.resolvedName == "hand.R" && beforePlay.character == hero.Entity() &&
+            scene.Animators().SocketNames(hero.Entity()).size() == 3U &&
+            !scene.Animators().SocketAttachment(lost.Entity()).attached,
+        "Socket attachments must be judged against the authored skeleton before Play");
+
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    static_cast<void>(scene.Runtime().Update(0.5F));
+    const std::vector<std::string> errors = scene.Runtime().DrainSceneSystemErrors();
+    Require(errors.empty(), ("Socket attachments produced scene system errors: " + (errors.empty() ? std::string{} : errors.front())).c_str());
+
+    const auto near = [](kb::scene::Vec3 actual, kb::scene::Vec3 expected) {
+        return std::abs(actual.x - expected.x) < 0.001F && std::abs(actual.y - expected.y) < 0.001F && std::abs(actual.z - expected.z) < 0.001F;
+    };
+    // Hand at (1,1,0) halfway up, socket 0.5 above it, offset 1 forward - in the hero's space.
+    const kb::scene::TransformComponent swordTransform = scene.Transforms().Get(sword.Entity());
+    Require(near(swordTransform.localPosition, { 1.0F, 1.5F, 1.0F }) && near(swordTransform.localScale, { 0.1F, 2.0F, 0.1F }),
+        "A socket attachment did not follow its animated socket, or lost its own scale");
+    // The bone itself, seen from a holder 5 up and twice as large.
+    const kb::scene::TransformComponent shieldTransform = scene.Transforms().Get(shield.Entity());
+    Require(near(shieldTransform.localPosition, { 0.5F, -2.0F, 0.0F }),
+        "A bone attachment named another way did not resolve, or ignored the objects between it and the character");
+    const kb::scene::SocketAttachmentStatus shieldStatus = scene.Animators().SocketAttachment(shield.Entity());
+    Require(shieldStatus.attached && shieldStatus.character == hero.Entity() && shieldStatus.error.empty(),
+        "A resolved attachment must report its character");
+
+    const kb::scene::SocketAttachmentStatus lostStatus = scene.Animators().SocketAttachment(lost.Entity());
+    Require(!lostStatus.attached && lostStatus.error.find("'tail'") != std::string::npos &&
+            near(scene.Transforms().Get(lost.Entity()).localPosition, { 7.0F, 7.0F, 7.0F }),
+        "An attachment to a missing socket must stay put and say which name is missing");
+    Require(near(scene.Transforms().Get(parked.Entity()).localPosition, { 3.0F, 3.0F, 3.0F }),
+        "A disabled attachment must not move its object");
+    const std::vector<std::string> names = scene.Animators().SocketNames(hero.Entity());
+    Require(names.size() == 3U && names[0] == "weapon_r" && names[2] == "hand.R",
+        "Socket names must list sockets first, then bones");
+    const auto socketPose = scene.Animators().SocketTransform(hero.Entity(), "weapon_r");
+    const auto bonePose = scene.Animators().SocketTransform(hero.Entity(), "HAND_R");
+    Require(socketPose.has_value() && near(socketPose->componentSpace.position, { 1.0F, 1.5F, 0.0F }) &&
+            near(socketPose->worldSpace.position, { 11.0F, 1.5F, 0.0F }) &&
+            bonePose.has_value() && near(bonePose->componentSpace.position, { 1.0F, 1.0F, 0.0F }),
+        "SocketTransform must resolve sockets, bones and other spellings of their names");
+
+    // Picking an object up at runtime: a wrong name changes nothing, a right one parents and places it.
+    const kb::scene::SceneObject loose = scene.Entities().CreateObject({ .name = "Loose" });
+    std::string attachError;
+    Require(!scene.Animators().AttachToSocket(loose.Entity(), hero.Entity(), "wing", {}, &attachError) &&
+            attachError.find("'wing'") != std::string::npos && !scene.Hierarchy().Parent(loose.Entity()).IsValid() &&
+            !scene.Components().SocketAttachments().Has(loose.Entity()),
+        "A failed AttachToSocket must leave the object as it was and say which name is missing");
+    Require(scene.Animators().AttachToSocket(loose.Entity(), hero.Entity(), "hand_r", {}, &attachError) &&
+            scene.Hierarchy().Parent(loose.Entity()) == hero.Entity() &&
+            near(scene.Transforms().Get(loose.Entity()).localPosition, { 1.0F, 1.0F, 0.0F }),
+        ("AttachToSocket must parent the object under the character and place it at once: " + attachError).c_str());
+    Require(!scene.Animators().AttachToSocket(hero.Entity(), loose.Entity(), "hand_r", {}, &attachError),
+        "A character must not be hung on an object below it");
+    scene.Animators().DetachFromSocket(loose.Entity());
+    Require(!scene.Components().SocketAttachments().Has(loose.Entity()) && scene.Hierarchy().Parent(loose.Entity()) == hero.Entity(),
+        "DetachFromSocket must stop following the socket and keep the object where it is");
+}
+
+// A Mixamo-named clip on an Unreal-named character twice as tall whose arm bone points another
+// way at rest: the hips travel twice as far, the arm turns the same way in the world, and a
+// character with too few matching bones is refused with the reason.
+void RunAnimationRetargetTest(const std::filesystem::path& root) {
+    Require(kb::scene::CanonicalBoneName("mixamorig:LeftForeArm") == "l:forearm" &&
+            kb::scene::CanonicalBoneName("lowerarm_l") == "l:forearm" &&
+            kb::scene::CanonicalBoneName("DEF-forearm.L") == "l:forearm" &&
+            kb::scene::CanonicalBoneName("Bip01 L UpperArm") == "l:upperarm" &&
+            kb::scene::CanonicalBoneName("mixamorig:LeftArm") == "l:upperarm" &&
+            kb::scene::CanonicalBoneName("pelvis") == "hips" && kb::scene::CanonicalBoneName("Hips") == "hips" &&
+            kb::scene::CanonicalBoneName("RightUpLeg") == "r:thigh" && kb::scene::CanonicalBoneName("thigh.R") == "r:thigh" &&
+            kb::scene::CanonicalBoneName("LeftToeBase") == "l:toe" &&
+            kb::scene::CanonicalBoneName("spine_01") == kb::scene::CanonicalBoneName("Spine1"),
+        "Bone roles must agree across Mixamo, Unreal, Rigify and 3ds Max names");
+
+    const auto inverseBindAt = [](kb::scene::Vec3 position) {
+        return kb::math::Mat4{ .columns = { { 1.0F, 0.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F, 0.0F },
+            { -position.x, -position.y, -position.z, 1.0F } } };
+    };
+    const kb::scene::Quat quarterZ = kb::math::FromEulerDegrees(kb::scene::Vec3{ 0.0F, 0.0F, 90.0F });
+    kb::scene::SkeletonAsset source{};
+    source.bones.push_back({ .id = 11U, .parentIndex = -1, .name = "mixamorig:Hips", .referencePose = { .position = { 0.0F, 1.0F, 0.0F } },
+        .inverseBind = inverseBindAt({ 0.0F, 1.0F, 0.0F }) });
+    source.bones.push_back({ .id = 12U, .parentIndex = 0, .name = "mixamorig:Spine", .referencePose = { .position = { 0.0F, 0.2F, 0.0F } },
+        .inverseBind = inverseBindAt({ 0.0F, 1.2F, 0.0F }) });
+    source.bones.push_back({ .id = 13U, .parentIndex = 1, .name = "mixamorig:LeftArm", .referencePose = { .position = { 0.2F, 0.3F, 0.0F } },
+        .inverseBind = inverseBindAt({ 0.2F, 1.5F, 0.0F }) });
+    source.bones.push_back({ .id = 14U, .parentIndex = 0, .name = "mixamorig:Tail", .referencePose = { .position = { 0.0F, 0.0F, -0.2F } },
+        .inverseBind = inverseBindAt({ 0.0F, 1.0F, -0.2F }) });
+    kb::scene::SkeletonAsset target{};
+    target.bones.push_back({ .id = 21U, .parentIndex = -1, .name = "root", .referencePose = {}, .inverseBind = inverseBindAt({}) });
+    target.bones.push_back({ .id = 22U, .parentIndex = 0, .name = "pelvis", .referencePose = { .position = { 0.0F, 2.0F, 0.0F } },
+        .inverseBind = inverseBindAt({ 0.0F, 2.0F, 0.0F }) });
+    target.bones.push_back({ .id = 23U, .parentIndex = 1, .name = "spine_01", .referencePose = { .position = { 0.0F, 0.4F, 0.0F } },
+        .inverseBind = inverseBindAt({ 0.0F, 2.4F, 0.0F }) });
+    // The arm points another way at rest (a quarter turn about Z).
+    target.bones.push_back({ .id = 24U, .parentIndex = 2, .name = "upperarm_l",
+        .referencePose = { .position = { 0.4F, 0.6F, 0.0F }, .rotation = quarterZ }, .inverseBind = inverseBindAt({ 0.4F, 3.0F, 0.0F }) });
+    const std::uint64_t sourceSignature = kb::scene::SkeletonCompatibilitySignature(source);
+    const std::uint64_t targetSignature = kb::scene::SkeletonCompatibilitySignature(target);
+    Require(sourceSignature != 0U && targetSignature != 0U, "Retarget test skeletons are invalid");
+
+    // The hips walk 1 m along X while the arm turns a quarter about X, both in one second.
+    const kb::scene::Quat quarterX = kb::math::FromEulerDegrees(kb::scene::Vec3{ 90.0F, 0.0F, 0.0F });
+    kb::scene::AnimationClip clip{};
+    clip.durationSeconds = 1.0F;
+    clip.looping = true;
+    clip.targetSkeletonCompatibilitySignature = sourceSignature;
+    clip.skeletalTracks = {
+        { .boneId = 11U, .keyframes = {
+            { .timeSeconds = 0.0F, .transform = { .position = { 0.0F, 1.0F, 0.0F } } },
+            { .timeSeconds = 1.0F, .transform = { .position = { 1.0F, 1.0F, 0.0F } } } } },
+        { .boneId = 13U, .keyframes = {
+            { .timeSeconds = 0.0F, .transform = { .position = { 0.2F, 0.3F, 0.0F } } },
+            { .timeSeconds = 1.0F, .transform = { .position = { 0.2F, 0.3F, 0.0F }, .rotation = quarterX } } } },
+        { .boneId = 14U, .keyframes = {
+            { .timeSeconds = 0.0F, .transform = { .position = { 0.0F, 0.0F, -0.2F } } },
+            { .timeSeconds = 1.0F, .transform = { .position = { 0.0F, 0.0F, -0.3F } } } } },
+    };
+
+    kb::scene::AnimationRetargetReport report;
+    std::string error;
+    const std::optional<kb::scene::AnimationClip> retargeted =
+        kb::scene::RetargetAnimationClip(clip, source, target, 77U, targetSignature, &report, &error);
+    Require(retargeted.has_value() && retargeted->targetSkeletonAssetId == 77U &&
+            retargeted->targetSkeletonCompatibilitySignature == targetSignature && report.mappedBones == 3U &&
+            report.unmappedAnimatedBones == std::vector<std::string>{ "mixamorig:Tail" } &&
+            std::abs(report.translationScale - 2.0F) < 0.0001F,
+        ("A Mixamo clip did not retarget onto an Unreal-named character: " + error).c_str());
+    const auto lastKey = [&](kb::scene::SkeletonBoneId bone) -> const kb::scene::LocalTransform* {
+        for (const kb::scene::AnimationBoneTrack& track : retargeted->skeletalTracks) {
+            if (track.boneId == bone && !track.keyframes.empty()) return &track.keyframes.back().transform;
+        }
+        return nullptr;
+    };
+    const kb::scene::LocalTransform* pelvis = lastKey(22U);
+    Require(pelvis != nullptr && std::abs(pelvis->position.x - 2.0F) < 0.001F && std::abs(pelvis->position.y - 2.0F) < 0.001F,
+        "Retargeted hips must travel by the source's motion scaled to the character's hip height");
+    // The arm turned a quarter about X in the world: target global = quarterX * targetRest.
+    const kb::scene::LocalTransform* arm = lastKey(24U);
+    const kb::scene::Quat expected = kb::math::Normalize(quarterX * quarterZ);
+    const float alignment = arm == nullptr ? 0.0F : std::abs(arm->rotation.x * expected.x + arm->rotation.y * expected.y +
+        arm->rotation.z * expected.z + arm->rotation.w * expected.w);
+    Require(arm != nullptr && alignment > 0.9999F && std::abs(arm->position.x - 0.4F) < 0.001F,
+        "A retargeted bone must turn as the source bone turned in the world and keep its own proportions");
+
+    // Too little in common: refused, with the numbers.
+    kb::scene::SkeletonAsset stranger{};
+    stranger.bones.push_back({ .id = 31U, .parentIndex = -1, .name = "Tentacle", .referencePose = {}, .inverseBind = inverseBindAt({}) });
+    std::string strangerError;
+    Require(!kb::scene::RetargetAnimationClip(clip, source, stranger, 78U, kb::scene::SkeletonCompatibilitySignature(stranger), nullptr, &strangerError) &&
+            strangerError.find("animated bones") != std::string::npos,
+        "A character with too few matching bones must be refused with the reason");
+
+    // Played through an Animator: the clip names the Mixamo skeleton, the character binds its own.
+    std::filesystem::create_directories(root / "Assets" / "Rig");
+    std::filesystem::create_directories(root / "Assets" / "Animation");
+    Require(kb::scene::SkeletonAssetIO::Save(root / "Assets/Rig/Mixamo.kbskeleton", source) &&
+            kb::scene::SkeletonAssetIO::Save(root / "Assets/Rig/Knight.kbskeleton", target),
+        "Retarget test skeletons could not be saved");
+    kb::scene::Scene scene;
+    Require(scene.Assets().MountProject(root) && scene.Assets().Discover() == 2U, "Retarget test project could not be mounted");
+    const std::uint64_t sourceId = scene.Assets().Manager().Registry().FindByPath("/Game/Rig/Mixamo.kbskeleton")->id.value;
+    const std::uint64_t targetId = scene.Assets().Manager().Registry().FindByPath("/Game/Rig/Knight.kbskeleton")->id.value;
+    clip.targetSkeletonAssetId = sourceId;
+    kb::scene::AnimatorController controller{};
+    controller.layers = { { .name = "Base", .defaultState = "Walk", .states = {
+        { .id = 1U, .name = "Walk", .clipReference = "/Game/Animation/MixamoWalk.kbanim" } } } };
+    Require(kb::scene::AnimationAssetIO::SaveClip(root / "Assets/Animation/MixamoWalk.kbanim", clip) &&
+            kb::scene::AnimationAssetIO::SaveController(root / "Assets/Animation/Knight.kbanimcontroller", controller) &&
+            scene.Assets().Discover() == 4U,
+        "Retarget test clip and controller could not be saved");
+    const std::uint64_t controllerId = scene.Assets().Manager().Registry().FindByPath("/Game/Animation/Knight.kbanimcontroller")->id.value;
+    const kb::scene::SceneObject knight = scene.Entities().CreateObject({ .name = "Knight" });
+    Require(scene.Components().SkeletonBindings().Set(knight.Entity(), kb::scene::SkeletonBindingComponent{
+                .skeletonAssetId = targetId, .skeletonCompatibilitySignature = targetSignature, .enabled = true }),
+        "Retarget test character could not bind its skeleton");
+    scene.Components().Animators().Set(knight.Entity(), kb::scene::Animator{ .controllerAssetId = controllerId, .enabled = true });
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    static_cast<void>(scene.Runtime().Update(0.5F));
+    const std::vector<std::string> errors = scene.Runtime().DrainSceneSystemErrors();
+    Require(errors.empty(), ("A clip of another skeleton did not bind through retargeting: " + (errors.empty() ? std::string{} : errors.front())).c_str());
+    const auto pose = scene.Animators().InstanceSkeleton(knight.Entity());
+    Require(pose.has_value() && pose->currentComponentPose.positions.size() == 4U &&
+            std::abs(pose->currentComponentPose.positions[1].x - 1.0F) < 0.01F &&
+            std::abs(pose->currentComponentPose.positions[1].y - 2.0F) < 0.01F,
+        "A retargeted clip must pose the character halfway (hips 1 m along X at 0.5 s)");
+}
+
+// A hero (team 1) and two goblins (team 2) and a barrel (team 0): damage goes through
+// resistances, death happens once, senses find the goblin in front and not the one behind,
+// a fireball without a target picks the seen goblin, costs mana, cools down and splashes.
+void RunCombatGameplayTest(const std::filesystem::path& root) {
+    std::filesystem::create_directories(root / "Assets" / "Abilities");
+    kb::gameplay::AbilityAsset fireball{ .name = "Fireball", .target = kb::gameplay::AbilityTarget::Enemy, .range = 12.0F, .radius = 3.0F,
+        .amount = 40.0F, .damageType = kb::gameplay::DamageType::Fire, .manaCost = 10.0F, .cooldownSeconds = 2.0F };
+    Require(kb::gameplay::AbilityAssetIO::Save(root / "Assets/Abilities/Fireball.kbability", fireball), "Fireball could not be saved");
+    std::string abilityError;
+    const auto reread = kb::gameplay::AbilityAssetIO::Load(root / "Assets/Abilities/Fireball.kbability", &abilityError);
+    Require(reread.has_value() && reread->damageType == kb::gameplay::DamageType::Fire && reread->radius == 3.0F,
+        ("An ability did not survive its text file: " + abilityError).c_str());
+    kb::gameplay::AbilityAsset typo{};
+    Require(!kb::gameplay::AbilityAssetIO::Set(typo, "damgeType", "Fire", &abilityError) && abilityError.find("unknown key") != std::string::npos,
+        "A misspelt ability key must be refused with the list of keys");
+
+    kb::scene::Scene scene;
+    Require(scene.Assets().MountProject(root) && scene.Assets().Discover() == 1U, "Combat test project could not be mounted");
+    const std::uint64_t fireballId = scene.Assets().Manager().Registry().FindByPath("/Game/Abilities/Fireball.kbability")->id.value;
+
+    const auto spawn = [&scene](const char* name, kb::scene::Vec3 position, kb::scene::CombatantComponent combatant) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject({ .name = name });
+        scene.Transforms().Set(object.Entity(), kb::scene::TransformComponent{ .localPosition = position });
+        Require(scene.Components().Combatants().Set(object.Entity(), combatant), "A combatant could not be authored");
+        return object.Entity();
+    };
+    kb::scene::CombatantComponent heroStats{};
+    heroStats.team = 1U;
+    heroStats.maximumMana = 15.0F;
+    heroStats.mana = 15.0F;
+    heroStats.abilities[0] = fireballId;
+    heroStats.requireLineOfSight = false;
+    heroStats.sightAngleDegrees = 90.0F;
+    heroStats.hearingRange = 0.0F;
+    kb::scene::CombatantComponent goblinStats{};
+    goblinStats.team = 2U;
+    goblinStats.maximumHealth = 50.0F;
+    goblinStats.health = 50.0F;
+    goblinStats.resistances[static_cast<std::size_t>(kb::gameplay::DamageType::Fire)] = 50.0F;
+    const kb::scene::SceneEntity hero = spawn("Hero", { 0.0F, 0.0F, 0.0F }, heroStats);
+    const kb::scene::SceneEntity front = spawn("Front Goblin", { 0.0F, 0.0F, 8.0F }, goblinStats);
+    const kb::scene::SceneEntity beside = spawn("Beside Goblin", { 2.0F, 0.0F, 8.0F }, goblinStats);
+    const kb::scene::SceneEntity behind = spawn("Behind Goblin", { 0.0F, 0.0F, -8.0F }, goblinStats);
+    kb::scene::CombatantComponent barrelStats{};
+    barrelStats.maximumHealth = 10.0F;
+    barrelStats.health = 10.0F;
+    const kb::scene::SceneEntity barrel = spawn("Barrel", { 0.0F, 0.0F, 9.0F }, barrelStats);
+
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(scene.Runtime().Update(0.25F));
+    Require(scene.Runtime().DrainSceneSystemErrors().empty(), "Combat produced scene system errors");
+    const auto enemy = scene.Gameplay().NearestEnemy(hero);
+    Require(enemy.has_value() && enemy->entity == front && enemy->sensed && enemy->sense == kb::scene::PerceptionSense::Sight,
+        "The hero must see the goblin in front of it as its nearest enemy");
+    bool seesBehind = false;
+    for (const kb::scene::PerceivedCombatant& seen : scene.Gameplay().Perceived(hero)) seesBehind = seesBehind || seen.entity == behind;
+    Require(!seesBehind && !scene.Gameplay().AreHostile(hero, barrel) && scene.Gameplay().AreHostile(hero, front),
+        "Sight must keep to its cone, and team 0 must be nobody's enemy");
+
+    // Fireball: 40 fire damage, halved by 50% fire resistance; the goblin beside is in the splash, the barrel is no enemy.
+    const kb::scene::AbilityOutcome cast = scene.Gameplay().UseAbility(hero, 1U);
+    Require(cast.used && cast.target == front && cast.hits == 2U, ("A fireball without a target must hit the seen goblin and splash: " + cast.reason).c_str());
+    const auto health = [&scene](kb::scene::SceneEntity entity) { return scene.Components().Combatants().TryGet(entity)->health; };
+    Require(std::abs(health(front) - 30.0F) < 0.001F && std::abs(health(beside) - 30.0F) < 0.001F && health(barrel) == 10.0F &&
+            std::abs(scene.Components().Combatants().TryGet(hero)->mana - 5.0F) < 0.001F &&
+            std::abs(scene.Gameplay().AbilityCooldown(hero, 1U) - 2.0F) < 0.001F,
+        "A fireball must deal its damage through resistances, cost its mana and start its cooldown");
+    const kb::scene::AbilityOutcome again = scene.Gameplay().UseAbility(hero, 1U);
+    Require(!again.used && again.reason.find("cooling down") != std::string::npos, "A cooling ability must be refused with the reason");
+
+    // Death happens once.
+    static_cast<void>(scene.Gameplay().DrainEvents());
+    const kb::scene::DamageOutcome kill = scene.Gameplay().ApplyDamage(front, 100.0F, kb::gameplay::DamageType::Physical, hero);
+    const kb::scene::DamageOutcome overkill = scene.Gameplay().ApplyDamage(front, 5.0F);
+    std::size_t deaths = 0U;
+    for (const kb::scene::GameplayEvent& event : scene.Gameplay().DrainEvents()) {
+        if (event.kind == kb::scene::GameplayEventKind::Died && event.target == front && event.source == hero) ++deaths;
+    }
+    static_cast<void>(scene.Runtime().Update(0.25F));
+    for (const kb::scene::GameplayEvent& event : scene.Gameplay().DrainEvents()) {
+        if (event.kind == kb::scene::GameplayEventKind::Died) ++deaths;
+    }
+    Require(kill.killed && std::abs(kill.amount - 30.0F) < 0.001F && !overkill.applied && deaths == 1U && !scene.Gameplay().IsAlive(front),
+        "A combatant must die once, lose only the health it had, and take no damage when dead");
+    const auto next = scene.Gameplay().NearestEnemy(hero);
+    Require(next.has_value() && next->entity == beside, "The dead must be forgotten by the senses");
+
+    // Regeneration fills mana back up.
+    scene.Components().Combatants().TryGet(hero)->manaRegeneration = 4.0F;
+    static_cast<void>(scene.Runtime().Update(1.0F));
+    Require(std::abs(scene.Components().Combatants().TryGet(hero)->mana - 9.0F) < 0.01F, "Mana must regenerate per second");
+    const kb::scene::DamageOutcome revived = scene.Gameplay().Revive(front);
+    Require(revived.applied && health(front) == 50.0F && scene.Gameplay().IsAlive(front), "Revive must bring a combatant back at full health");
+}
+
 void RunAnimationRuntimeTests() {
+    {
+        const std::filesystem::path stateMachineRoot = std::filesystem::temp_directory_path() / "21kb-animation-state-machine-tests";
+        std::filesystem::remove_all(stateMachineRoot);
+        RunCharacterStateMachineTest(stateMachineRoot);
+        std::filesystem::remove_all(stateMachineRoot);
+    }
+    {
+        const std::filesystem::path socketRoot = std::filesystem::temp_directory_path() / "21kb-animation-socket-tests";
+        std::filesystem::remove_all(socketRoot);
+        RunSocketAttachmentTest(socketRoot);
+        std::filesystem::remove_all(socketRoot);
+    }
+    {
+        const std::filesystem::path retargetRoot = std::filesystem::temp_directory_path() / "21kb-animation-retarget-tests";
+        std::filesystem::remove_all(retargetRoot);
+        RunAnimationRetargetTest(retargetRoot);
+        std::filesystem::remove_all(retargetRoot);
+    }
+    {
+        const std::filesystem::path combatRoot = std::filesystem::temp_directory_path() / "21kb-combat-gameplay-tests";
+        std::filesystem::remove_all(combatRoot);
+        RunCombatGameplayTest(combatRoot);
+        std::filesystem::remove_all(combatRoot);
+    }
     constexpr kb::scene::AnimationEventId kFootstepEvent = 0xA11CE001U;
     const kb::scene::Animator authoredAnimator{
         .controllerAssetId = 73U,

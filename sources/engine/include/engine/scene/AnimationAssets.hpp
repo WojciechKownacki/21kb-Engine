@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kb::scene {
@@ -140,8 +141,14 @@ struct AnimatorTransitionCondition {
     float floatValue = 0.0F;
 };
 
+// A transition from this "state" leaves whichever state the layer is in (but never re-enters
+// its own target): hit reactions, death, a jump. Any-state transitions are checked before the
+// active state's own, as in Unity.
+inline constexpr std::string_view kAnimatorAnyState = "*";
+
 struct AnimatorControllerTransition {
     std::uint64_t id = 0U;
+    // A state of the layer, or kAnimatorAnyState.
     std::string fromState;
     std::string toState;
     float durationSeconds = 0.1F;

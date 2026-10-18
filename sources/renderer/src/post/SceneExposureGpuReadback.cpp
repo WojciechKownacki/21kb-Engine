@@ -55,8 +55,7 @@ bool SceneExposureGpuReadback::Initialize() {
         return false;
     }
     const bgfx::Caps* caps = bgfx::getCaps();
-    if (caps == nullptr || (caps->supported & BGFX_CAPS_TEXTURE_READ_BACK) == 0U ||
-        (caps->supported & BGFX_CAPS_TEXTURE_BLIT) == 0U) {
+    if (caps == nullptr) {
         return false;
     }
 
@@ -133,9 +132,9 @@ SceneHdrExposureReadbackResult SceneExposureGpuReadback::Submit(const SceneHdrEx
     bgfx::setVertexBuffer(0, fullscreenVertexBuffer_);
     bgfx::submit(desc.viewId, hdrLuminanceProgram_);
     // Blits precede draws within a view. Copy after the histogram draw has finished.
-    bgfx::blit(ViewId::ScreenCapture, hdrReadbackTexture_, 0U, 0U, hdrReadbackRenderTexture_);
+    bgfx::blit(ViewId::ScreenCapture, bgfx::TextureRegion{ .handle = hdrReadbackTexture_ }, bgfx::TextureRegion{ .handle = hdrReadbackRenderTexture_ });
     std::ranges::fill(hdrReadbackBytes_, 0U);
-    hdrReadbackReadyFrame_ = bgfx::readTexture(hdrReadbackTexture_, hdrReadbackBytes_.data());
+    hdrReadbackReadyFrame_ = bgfx::read(bgfx::TextureRegion{ .handle = hdrReadbackTexture_ }, hdrReadbackBytes_.data());
     hdrReadbackPending_ = true;
     result.submitted = true;
     return result;

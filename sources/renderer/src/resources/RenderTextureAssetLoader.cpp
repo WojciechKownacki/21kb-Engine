@@ -288,7 +288,6 @@ constexpr std::uint32_t kMaximumDecodedTextureExtent = 16384U;
     RenderTextureAssetData asset{};
     if (image->m_width == 0U ||
         image->m_height == 0U ||
-        image->m_depth == 0U ||
         image->m_numLayers == 0U ||
         image->m_numMips == 0U ||
         image->m_width > std::numeric_limits<std::uint16_t>::max() ||
@@ -302,7 +301,8 @@ constexpr std::uint32_t kMaximumDecodedTextureExtent = 16384U;
 
     asset.width = static_cast<std::uint16_t>(image->m_width);
     asset.height = static_cast<std::uint16_t>(image->m_height);
-    asset.depth = static_cast<std::uint16_t>(image->m_depth);
+    // bimg reports a 2D image with depth 0 or 1.
+    asset.depth = static_cast<std::uint16_t>(std::max<std::uint32_t>(image->m_depth, 1U));
     asset.layers = image->m_numLayers;
     // The runtime raw-texture API accepts only a hasMips bit and therefore requires a complete
     // chain. Preserve the legacy loader contract (LOD0 only), but collect LOD0 from every
@@ -846,8 +846,8 @@ std::optional<RenderTextureAssetData> DecodeRenderTextureToRgba8(const RenderTex
     if (format < 0 || format >= bimg::TextureFormat::Count || !bimg::isCompressed(format)) {
         return std::nullopt;
     }
-    const std::uint32_t levelBytes = bimg::imageGetSize(
-        nullptr, asset.width, asset.height, 1U, false, false, 1U, format);
+    const std::uint32_t levelBytes = bake::TextureImageBytes32(bimg::imageGetSize(
+        nullptr, asset.width, asset.height, 1U, false, false, 1U, format));
     if (levelBytes == 0U || asset.gpuBlocks->blocks.size() < levelBytes) {
         return std::nullopt;
     }

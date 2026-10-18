@@ -399,11 +399,11 @@ public:
 #endif
         bgfx::Init init;
         init.type = renderer;
-        init.resolution.width = 64U;
-        init.resolution.height = 64U;
-        init.resolution.reset = BGFX_RESET_NONE;
+        init.swapChain.width = 64U;
+        init.swapChain.height = 64U;
+        init.reset = BGFX_RESET_NONE;
 #if defined(_WIN32)
-        init.platformData.nwh = window_;
+        init.swapChain.nwh = window_;
 #endif
         if (!bgfx::init(init)) {
             return false;
@@ -538,9 +538,9 @@ public:
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | extraState);
         bgfx::submit(0, program);
         bgfx::frame();
-        bgfx::blit(1, readTex_, 0U, 0U, rt_, 0U, 0U, 64U, 64U);
+        bgfx::blit(1, bgfx::TextureRegion{ .handle = readTex_ }, bgfx::TextureRegion{ .handle = rt_, .width = 64U, .height = 64U });
         std::vector<std::uint8_t> pixels(64U * 64U * 4U, 0U);
-        const std::uint32_t readyFrame = bgfx::readTexture(readTex_, pixels.data());
+        const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{ .handle = readTex_ }, pixels.data());
         std::uint32_t frame = bgfx::frame();
         int guard = 0;
         while (frame < readyFrame && guard < 8) { frame = bgfx::frame(); ++guard; }
@@ -557,41 +557,51 @@ public:
         bgfx::UniformHandle currentViewProjection,
         bgfx::UniformHandle shadowViewProjection,
         bool motionVectors = false) {
+        // Every vertex follows the palette's second bone: a joint index read wrongly lands on the
+        // first, the identity, and the triangle stays undeformed.
         const std::array<RenderStaticMeshVertexSkinned, 3U> vertices{{
-            { .x = -1.0F, .y = -3.0F, .z = 0.0F, .nx = 0.0F, .ny = 0.0F, .nz = 1.0F, .tx = 1.0F, .ty = 0.0F, .tz = 0.0F, .tw = 1.0F, .u = 0.0F, .v = 2.0F, .r = 1.0F, .g = 1.0F, .b = 1.0F },
-            { .x = -1.0F, .y =  1.0F, .z = 0.0F, .nx = 0.0F, .ny = 0.0F, .nz = 1.0F, .tx = 1.0F, .ty = 0.0F, .tz = 0.0F, .tw = 1.0F, .u = 0.0F, .v = 0.0F, .r = 1.0F, .g = 1.0F, .b = 1.0F },
-            { .x =  3.0F, .y =  1.0F, .z = 0.0F, .nx = 0.0F, .ny = 0.0F, .nz = 1.0F, .tx = 1.0F, .ty = 0.0F, .tz = 0.0F, .tw = 1.0F, .u = 2.0F, .v = 0.0F, .r = 1.0F, .g = 1.0F, .b = 1.0F },
+            { .x = -1.0F, .y = -3.0F, .z = 0.0F, .nx = 0.0F, .ny = 0.0F, .nz = 1.0F, .tx = 1.0F, .ty = 0.0F, .tz = 0.0F, .tw = 1.0F, .u = 0.0F, .v = 2.0F, .r = 1.0F, .g = 1.0F, .b = 1.0F, .joints = { 1U, 0U, 0U, 0U } },
+            { .x = -1.0F, .y =  1.0F, .z = 0.0F, .nx = 0.0F, .ny = 0.0F, .nz = 1.0F, .tx = 1.0F, .ty = 0.0F, .tz = 0.0F, .tw = 1.0F, .u = 0.0F, .v = 0.0F, .r = 1.0F, .g = 1.0F, .b = 1.0F, .joints = { 1U, 0U, 0U, 0U } },
+            { .x =  3.0F, .y =  1.0F, .z = 0.0F, .nx = 0.0F, .ny = 0.0F, .nz = 1.0F, .tx = 1.0F, .ty = 0.0F, .tz = 0.0F, .tw = 1.0F, .u = 2.0F, .v = 0.0F, .r = 1.0F, .g = 1.0F, .b = 1.0F, .joints = { 1U, 0U, 0U, 0U } },
         }};
         const bgfx::VertexLayout layout = RenderStaticMeshVertexLayout(RenderVertexFormat::SkinnedP3N3T4UV2J4W4);
         const bgfx::VertexBufferHandle vertexBuffer = bgfx::createVertexBuffer(bgfx::copy(vertices.data(), sizeof(vertices)), layout);
-        const std::array<float, 16U> palette{
+        const std::array<float, 32U> palette{
+            1.0F, 0.0F, 0.0F, 0.0F,
+            0.0F, 1.0F, 0.0F, 0.0F,
+            0.0F, 0.0F, 1.0F, 0.0F,
+            0.0F, 0.0F, 0.0F, 1.0F,
             0.5F, 0.0F, 0.0F, 0.0F,
             0.0F, 1.0F, 0.0F, 0.0F,
             0.0F, 0.0F, 1.0F, 0.0F,
             0.0F, 0.0F, 0.0F, 1.0F,
         };
         const bgfx::TextureHandle paletteTexture = bgfx::createTexture2D(
-            4U, 1U, false, 1U, bgfx::TextureFormat::RGBA32F,
+            4U, 2U, false, 1U, bgfx::TextureFormat::RGBA32F,
             BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
                 BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-        const std::array<float, 16U> previousPalette{
+        const std::array<float, 32U> previousPalette{
+            1.0F, 0.0F, 0.0F, 0.0F,
+            0.0F, 1.0F, 0.0F, 0.0F,
+            0.0F, 0.0F, 1.0F, 0.0F,
+            0.0F, 0.0F, 0.0F, 1.0F,
             1.0F, 0.0F, 0.0F, 0.0F,
             0.0F, 1.0F, 0.0F, 0.0F,
             0.0F, 0.0F, 1.0F, 0.0F,
             0.0F, 0.0F, 0.0F, 1.0F,
         };
         const bgfx::TextureHandle previousPaletteTexture = bgfx::createTexture2D(
-            4U, 1U, false, 1U, bgfx::TextureFormat::RGBA32F,
+            4U, 2U, false, 1U, bgfx::TextureFormat::RGBA32F,
             BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
                 BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
         Require(bgfx::isValid(paletteTexture) && bgfx::isValid(previousPaletteTexture),
             "SMA-38: GPU test could not create skinning palette textures");
-        bgfx::updateTexture2D(paletteTexture, 0U, 0U, 0U, 0U, 4U, 1U,
+        bgfx::updateTexture2D(paletteTexture, 0U, 0U, 0U, 0U, 4U, 2U,
             bgfx::copy(palette.data(), sizeof(palette)));
-        bgfx::updateTexture2D(previousPaletteTexture, 0U, 0U, 0U, 0U, 4U, 1U,
+        bgfx::updateTexture2D(previousPaletteTexture, 0U, 0U, 0U, 0U, 4U, 2U,
             bgfx::copy(previousPalette.data(), sizeof(previousPalette)));
         bgfx::frame();
-        const std::array<float, 4U> info{ 0.0F, 1.0F, 1.0F, 0.0F };
+        const std::array<float, 4U> info{ 0.0F, 0.5F, 1.0F, 0.0F };
         const std::array<float, 16U> identity{
             1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F,
             0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
@@ -623,9 +633,9 @@ public:
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
         bgfx::submit(0U, program);
         bgfx::frame();
-        bgfx::blit(1U, readTex_, 0U, 0U, rt_, 0U, 0U, 64U, 64U);
+        bgfx::blit(1U, bgfx::TextureRegion{ .handle = readTex_ }, bgfx::TextureRegion{ .handle = rt_, .width = 64U, .height = 64U });
         std::vector<std::uint8_t> pixels(64U * 64U * 4U);
-        const std::uint32_t readyFrame = bgfx::readTexture(readTex_, pixels.data());
+        const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{ .handle = readTex_ }, pixels.data());
         std::uint32_t frame = bgfx::frame();
         std::uint32_t guard = 0U;
         while (frame < readyFrame && guard < 8U) {
@@ -701,9 +711,9 @@ public:
         submitHalf(rightProgram, false);
 
         bgfx::frame();
-        bgfx::blit(1, readTex_, 0U, 0U, rt_, 0U, 0U, 64U, 64U);
+        bgfx::blit(1, bgfx::TextureRegion{ .handle = readTex_ }, bgfx::TextureRegion{ .handle = rt_, .width = 64U, .height = 64U });
         std::vector<std::uint8_t> pixels(64U * 64U * 4U, 0U);
-        const std::uint32_t readyFrame = bgfx::readTexture(readTex_, pixels.data());
+        const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{ .handle = readTex_ }, pixels.data());
         std::uint32_t frame = bgfx::frame();
         int guard = 0;
         while (frame < readyFrame && guard < 8) { frame = bgfx::frame(); ++guard; }
@@ -828,8 +838,8 @@ void RunTerrainLayerWeightTextureUpdatesGpuTest() {
     Require(bgfx::isValid(readback), "Terrain layer weight readback texture was not created");
     const auto readWeights = [readback, resource]() {
         std::array<std::uint8_t, 16U> pixels{};
-        bgfx::blit(0U, readback, 0U, 0U, resource->terrainLayerWeightTexture, 0U, 0U, 2U, 2U);
-        const std::uint32_t readyFrame = bgfx::readTexture(readback, pixels.data());
+        bgfx::blit(0U, bgfx::TextureRegion{ .handle = readback }, bgfx::TextureRegion{ .handle = resource->terrainLayerWeightTexture, .width = 2U, .height = 2U });
+        const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{ .handle = readback }, pixels.data());
         std::uint32_t frame = bgfx::frame();
         for (int guard = 0; frame < readyFrame && guard < 8; ++guard) {
             frame = bgfx::frame();
@@ -867,11 +877,11 @@ public:
 #endif
         bgfx::Init init;
         init.type = bgfx::RendererType::Direct3D11;
-        init.resolution.width = 64U;
-        init.resolution.height = 64U;
-        init.resolution.reset = BGFX_RESET_NONE;
+        init.swapChain.width = 64U;
+        init.swapChain.height = 64U;
+        init.reset = BGFX_RESET_NONE;
 #if defined(_WIN32)
-        init.platformData.nwh = window_;
+        init.swapChain.nwh = window_;
 #endif
         if (!bgfx::init(init)) {
             return false;
@@ -894,7 +904,7 @@ public:
         for (std::uint32_t index = 0; index < 4U; ++index) {
             attachments[index].init(targets_[index]);
         }
-        attachments[4].init(depth_);
+        attachments[4].init(depth_, bgfx::Access::Write, 0U, 1U, 0U, BGFX_ATTACHMENT_NONE);
         fb_ = bgfx::createFrameBuffer(5U, attachments, false);
         // The G-buffer with the custom data target (Subsurface Color / Fuzz Color) as the renderer
         // binds it in frames that draw such a material.
@@ -904,7 +914,7 @@ public:
             customAttachments[index].init(targets_[index]);
         }
         customAttachments[4].init(customTarget_);
-        customAttachments[5].init(depth_);
+        customAttachments[5].init(depth_, bgfx::Access::Write, 0U, 1U, 0U, BGFX_ATTACHMENT_NONE);
         customFb_ = bgfx::createFrameBuffer(6U, customAttachments, false);
         customSampler_ = bgfx::createUniform("s_gbufferCustom", bgfx::UniformType::Sampler);
         customUniform_ = bgfx::createUniform("u_deferredCustomData", bgfx::UniformType::Vec4);
@@ -985,8 +995,8 @@ public:
         };
         std::array<std::uint32_t, 4U> readyFrames{};
         for (std::uint32_t index = 0; index < 4U; ++index) {
-            bgfx::blit(static_cast<bgfx::ViewId>(1U + index), readbacks_[index], 0U, 0U, targets_[index], 0U, 0U, 64U, 64U);
-            readyFrames[index] = bgfx::readTexture(readbacks_[index], pixels[index].data());
+            bgfx::blit(static_cast<bgfx::ViewId>(1U + index), bgfx::TextureRegion{ .handle = readbacks_[index] }, bgfx::TextureRegion{ .handle = targets_[index], .width = 64U, .height = 64U });
+            readyFrames[index] = bgfx::read(bgfx::TextureRegion{ .handle = readbacks_[index] }, pixels[index].data());
         }
         std::uint32_t frame = bgfx::frame();
         const std::uint32_t readyFrame = (std::max)({ readyFrames[0], readyFrames[1], readyFrames[2], readyFrames[3] });
@@ -1069,9 +1079,9 @@ public:
         bgfx::submit(0U, program);
         bgfx::frame();
 
-        bgfx::blit(1U, resolveReadback_, 0U, 0U, resolveTarget_, 0U, 0U, 64U, 64U);
+        bgfx::blit(1U, bgfx::TextureRegion{ .handle = resolveReadback_ }, bgfx::TextureRegion{ .handle = resolveTarget_, .width = 64U, .height = 64U });
         std::vector<std::uint8_t> pixels(64U * 64U * 4U, 0U);
-        const std::uint32_t readyFrame = bgfx::readTexture(resolveReadback_, pixels.data());
+        const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{ .handle = resolveReadback_ }, pixels.data());
         std::uint32_t frame = bgfx::frame();
         int guard = 0;
         while (frame < readyFrame && guard < 8) {
@@ -5325,11 +5335,11 @@ public:
 #endif
         bgfx::Init init;
         init.type = bgfx::RendererType::Direct3D11;
-        init.resolution.width = kSize;
-        init.resolution.height = kSize;
-        init.resolution.reset = BGFX_RESET_NONE;
+        init.swapChain.width = kSize;
+        init.swapChain.height = kSize;
+        init.reset = BGFX_RESET_NONE;
 #if defined(_WIN32)
-        init.platformData.nwh = window_;
+        init.swapChain.nwh = window_;
 #endif
         if (!bgfx::init(init)) {
             return false;
@@ -5397,9 +5407,9 @@ public:
             Submit(1U, draw, BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A, true, rows);
         }
         bgfx::frame();
-        bgfx::blit(2U, readback_, 0U, 0U, velocity_, 0U, 0U, kSize, kSize);
+        bgfx::blit(2U, bgfx::TextureRegion{ .handle = readback_ }, bgfx::TextureRegion{ .handle = velocity_, .width = kSize, .height = kSize });
         std::vector<float> pixels(static_cast<std::size_t>(kSize) * kSize * 4U, 0.0F);
-        const std::uint32_t readyFrame = bgfx::readTexture(readback_, pixels.data());
+        const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{ .handle = readback_ }, pixels.data());
         std::uint32_t frame = bgfx::frame();
         for (int guard = 0; frame < readyFrame && guard < 8; ++guard) {
             frame = bgfx::frame();
@@ -5846,11 +5856,11 @@ public:
 #endif
         bgfx::Init init;
         init.type = bgfx::RendererType::Direct3D11;
-        init.resolution.width = kSize;
-        init.resolution.height = kSize;
-        init.resolution.reset = BGFX_RESET_NONE;
+        init.swapChain.width = kSize;
+        init.swapChain.height = kSize;
+        init.reset = BGFX_RESET_NONE;
 #if defined(_WIN32)
-        init.platformData.nwh = window_;
+        init.swapChain.nwh = window_;
 #endif
         if (!bgfx::init(init)) {
             return false;
@@ -5888,9 +5898,9 @@ public:
             bgfx::submit(0U, program);
         }
         bgfx::frame();
-        bgfx::blit(1U, readback_, 0U, 0U, target_, 0U, 0U, kSize, kSize);
+        bgfx::blit(1U, bgfx::TextureRegion{ .handle = readback_ }, bgfx::TextureRegion{ .handle = target_, .width = kSize, .height = kSize });
         std::vector<float> pixels(static_cast<std::size_t>(kSize) * kSize * 4U, 0.0F);
-        const std::uint32_t readyFrame = bgfx::readTexture(readback_, pixels.data());
+        const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{ .handle = readback_ }, pixels.data());
         std::uint32_t frame = bgfx::frame();
         for (int guard = 0; frame < readyFrame && guard < 8; ++guard) {
             frame = bgfx::frame();
@@ -7267,7 +7277,7 @@ void RunPrebuiltSkinnedShadersOnVulkanAndOpenGlTest() {
     };
     constexpr std::array<Backend, 2U> backends{
         Backend{ bgfx::RendererType::Vulkan, "spirv", "spirv" },
-        Backend{ bgfx::RendererType::OpenGL, "glsl", "120" },
+        Backend{ bgfx::RendererType::OpenGL, "glsl", "440" },
     };
     const std::filesystem::path prebuilt =
         std::filesystem::path{ KB_RENDERER_TEST_SOURCE_ROOT } / "sources" / "renderer" / "prebuilt_shaders";

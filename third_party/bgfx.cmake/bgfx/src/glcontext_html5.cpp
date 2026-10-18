@@ -64,14 +64,15 @@ namespace bgfx { namespace gl
 		char* m_canvas;
 	};
 
-	void GlContext::create(const Resolution& _resolution)
+	bool GlContext::create(const SwapChain& _swapChain, uint32_t _reset)
 	{
 		if (NULL != m_primary)
 		{
-			return;
+			return true;
 		}
-		const bimg::ImageBlockInfo& colorBlockInfo       = bimg::getBlockInfo(bimg::TextureFormat::Enum(_resolution.formatColor) );
-		const bimg::ImageBlockInfo& depthStecilBlockInfo = bimg::getBlockInfo(bimg::TextureFormat::Enum(_resolution.formatDepthStencil) );
+
+		const bimg::ImageBlockInfo& colorBlockInfo       = bimg::getBlockInfo(bimg::TextureFormat::Enum(_swapChain.formatColor) );
+		const bimg::ImageBlockInfo& depthStecilBlockInfo = bimg::getBlockInfo(bimg::TextureFormat::Enum(_swapChain.formatDepthStencil) );
 
 		emscripten_webgl_init_context_attributes(&s_attrs);
 		s_attrs.alpha                     = 0 != colorBlockInfo.aBits;
@@ -82,36 +83,47 @@ namespace bgfx { namespace gl
 		s_attrs.antialias                 = false;
 		s_attrs.minorVersion = 0;
 
-		const char* canvas = (const char*)g_platformData.nwh;
+		const char* canvas = (const char*)_swapChain.nwh;
 		EMSCRIPTEN_WEBGL_CONTEXT_HANDLE context = bx::narrowCast<EMSCRIPTEN_WEBGL_CONTEXT_HANDLE>( (uintptr_t) g_platformData.context);
 		if (context > 0)
 		{
-			if (emscripten_webgl_get_context_attributes(context, &s_attrs) >= 0)
+			if (emscripten_webgl_get_context_attributes(context, &s_attrs) < 0)
 			{
-				import(s_attrs.majorVersion);
-				m_primary = BX_NEW(g_allocator, SwapChainGL)(context, canvas);
+				BX_TRACE("Init error: Invalid WebGL context. (Canvas handle: '%s', context handle: %d)", canvas, context);
+				return false;
 			}
-			else
+
+			if (!import() )
 			{
-				BX_TRACE("Invalid WebGL context. (Canvas handle: '%s', context handle: %d)", canvas, context);
+				return false;
 			}
+
+			m_primary = BX_NEW(g_allocator, SwapChainGL)(context, canvas);
 		}
 		else
 		{
-			m_primary = createSwapChain( (void*)canvas, _resolution.width, _resolution.height);
+			m_primary = createSwapChain( (void*)canvas, _swapChain.width, _swapChain.height);
+
+			if (NULL == m_primary)
+			{
+				BX_TRACE("Init error: Failed to create WebGL context.");
+				return false;
+			}
 		}
 
-		if (0 != _resolution.width
-		&&  0 != _resolution.height)
+		if (0 != _swapChain.width
+		&&  0 != _swapChain.height)
 		{
 			EMSCRIPTEN_CHECK(emscripten_set_canvas_element_size(
 				  canvas
-				, _resolution.width
-				, _resolution.height
+				, _swapChain.width
+				, _swapChain.height
 				) );
 		}
 
 		makeCurrent(m_primary);
+
+		return true;
 	}
 
 	void GlContext::destroy()
@@ -128,7 +140,7 @@ namespace bgfx { namespace gl
 		}
 	}
 
-	void GlContext::resize(const Resolution& _resolution)
+	void GlContext::resize(const SwapChain& _swapChain, uint32_t _reset)
 	{
 		if (m_primary == NULL)
 		{
@@ -137,8 +149,8 @@ namespace bgfx { namespace gl
 
 		EMSCRIPTEN_CHECK(emscripten_set_canvas_element_size(
 			  m_primary->m_canvas
-			, _resolution.width
-			, _resolution.height
+			, _swapChain.width
+			, _swapChain.height
 			) );
 	}
 
@@ -147,29 +159,26 @@ namespace bgfx { namespace gl
 		BX_UNUSED(_width, _height);
 
 		const char* canvas = (const char*)_nwh;
-		int32_t error = 0;
 
-		for (int version = 2; version >= 1; --version)
+		s_attrs.majorVersion = 2;
+		EMSCRIPTEN_WEBGL_CONTEXT_HANDLE context = emscripten_webgl_create_context(canvas, &s_attrs);
+
+		if (context > 0)
 		{
-			s_attrs.majorVersion = version;
-			EMSCRIPTEN_WEBGL_CONTEXT_HANDLE context = emscripten_webgl_create_context(canvas, &s_attrs);
+			EMSCRIPTEN_CHECK(emscripten_webgl_make_context_current(context) );
 
-			if (context > 0)
+			SwapChainGL* swapChain = BX_NEW(g_allocator, SwapChainGL)(context, canvas);
+
+			if (!import() )
 			{
-				EMSCRIPTEN_CHECK(emscripten_webgl_make_context_current(context) );
-
-				SwapChainGL* swapChain = BX_NEW(g_allocator, SwapChainGL)(context, canvas);
-
-				import(version);
-
-				return swapChain;
+				bx::deleteObject(g_allocator, swapChain);
+				return NULL;
 			}
 
-			error = (int32_t)context;
+			return swapChain;
 		}
 
-		BX_TRACE("Failed to create WebGL context. (Canvas handle: '%s', last attempt error %d)", canvas, error);
-		BX_UNUSED(error);
+		BX_TRACE("Failed to create WebGL 2 context. (Canvas handle: '%s', error %d)", canvas, (int32_t)context);
 
 		return NULL;
 	}
@@ -209,10 +218,10 @@ namespace bgfx { namespace gl
 	}
 
 	template<typename Fn>
-	static Fn getProcAddress(int _version, const char* _name)
+	static Fn getProcAddress(const char* _name)
 	{
 		Fn func = reinterpret_cast<Fn>(emscripten_webgl1_get_proc_address(_name) );
-		if (NULL == func && _version >= 2)
+		if (NULL == func)
 		{
 			func = reinterpret_cast<Fn>(emscripten_webgl2_get_proc_address(_name) );
 		}
@@ -220,20 +229,24 @@ namespace bgfx { namespace gl
 		return func;
 	}
 
-	void GlContext::import(int _webGLVersion)
+	bool GlContext::import()
 	{
 		BX_TRACE("Import:");
+
+		bool imported = true;
 
 #	define GL_EXTENSION(_optional, _proto, _func, _import)                          \
 	{                                                                               \
 		if (NULL == _func)                                                          \
 		{                                                                           \
-			_func = getProcAddress<_proto>(_webGLVersion, #_import);                \
+			_func = getProcAddress<_proto>(#_import);                               \
 			BX_TRACE("\t%p " #_func " (" #_import ")", _func);                      \
-			BGFX_FATAL(_optional || NULL != _func, Fatal::UnableToInitialize        \
-				, "Failed to create WebGL/OpenGLES context. GetProcAddress(\"%s\")" \
-				, #_import                                                          \
-				);                                                                  \
+			if (!BX_IGNORE_C4127(_optional)                                         \
+			&&  NULL == _func)                                                      \
+			{                                                                       \
+				BX_TRACE("Init error: Failed to import %s.", #_import);             \
+				imported = false;                                                   \
+			}                                                                       \
 		}                                                                           \
 	}
 
@@ -241,6 +254,7 @@ namespace bgfx { namespace gl
 
 #	undef GL_EXTENSION
 
+		return imported;
 	}
 
 } /* namespace gl */ } // namespace bgfx

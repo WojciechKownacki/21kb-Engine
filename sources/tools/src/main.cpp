@@ -104,6 +104,62 @@ Commands:
   scene-post-process Give a scene (the startup scene unless --scene) its post-process
                profile, or none for the renderer's defaults.
                  --project <dir> [--scene <path>] --profile /Game/<path>.kbppfx|none
+)"
+R"(  animator     Build an Animator Controller, the state machine that picks a character's
+               animation; every change is validated and saved at once.
+                 new --project <dir> --name <Name> --clip <clip> [--clip ...]
+                     [--folder Assets/Animation]   (a state per clip, named after it:
+                     Hero_Walk -> Walk; starts in Idle when there is one)
+                 show|check --project <dir> --controller <path> [--character <.kbskeletalmesh>]
+                 param add|remove --project <dir> --controller <path> --name <Name>
+                     [--type float|int|bool|trigger] [--default <value>]
+                 state add|remove|default --project <dir> --controller <path> --name <State>
+                     [--clip <clip> | --blend <FloatParameter> --child <threshold>=<clip> ...]
+                 transition add|remove --project <dir> --controller <path> --from <State|Any>
+                     --to <State> [--when <condition> ...] [--exit-time 0..1] [--duration <s>]
+                     (conditions: Speed>0.1 Speed<0.1 Lives==3 Grounded !Grounded Jump;
+                     Any = from every state, checked first; --exit-time 1 = when the
+                     source state's clip ends, with or without a condition)
+                 locomotion --project <dir> --controller <path> --parameter Speed
+                     --clip 0=<idle> --clip 1.5=<walk> --clip 4=<run>
+                     (one state blending the clips by Speed, at one phase whatever
+                     their lengths; the layer starts in it unless --default no)
+               A character in a scene: entity add --name Hero, then
+               component set --entity Hero --type MeshRenderer --set mesh=<.kbskeletalmesh>
+               (draws it with its skeleton), component add --type Animator and
+               component set --type Animator --set controller=<.kbanimcontroller>.
+               Its clips may come from another character, even one rigged and named another
+               way (Mixamo, Unreal, Blender/Rigify): bones are matched by name and role and the
+               motion is retargeted; check --character shows how many bones follow each clip.
+  skeleton     Read a character's bones and edit its sockets (named grip points on a bone).
+                 show --project <dir> --skeleton <.kbskeleton | .kbskeletalmesh>
+                 socket add --project <dir> --skeleton <path> --name <Socket> --bone <Bone>
+                     [--position x,y,z] [--rotation x,y,z (degrees)]
+                 socket remove --project <dir> --skeleton <path> --name <Socket>
+  ability      Make what a combatant can do (a swing, a fireball, a heal) as a .kbability.
+                 new --project <dir> --name <Name> [--folder Assets/Abilities] [--set key=value ...]
+                 set --project <dir> --ability <path> --set key=value [...]
+                 show --project <dir> --ability <path>
+                 (keys: name, target Enemy|Ally|Self, range, radius (0 = one target), amount,
+                 damageType Physical|Fire|Cold|Lightning|Poison|Healing, manaCost, cooldown,
+                 animatorTrigger. A fighter: component add --entity Hero --type Combatant
+                 --set team=1 --set maximumHealth=200 --set ability1=/Game/Abilities/Fireball.kbability;
+                 teams 1 and 2 are enemies, 0 fights nobody)
+  ai           Give an object a whole AI at once: a Combatant (health, team, senses) and an
+               AI Brain - "when <condition>, do <action>" rules checked from the top, filled
+               by a preset. The Gameplay.AI plugin runs it (added to the project if missing).
+                 presets --project <dir>
+                 make --project <dir> --entity <Name> [--preset Melee|Ranged|Guard|Coward|Wanderer]
+                      [--team <n>] [--health <n>] [--mana <n>] [--speed <m/s>] [--sight <m>]
+                      [--ability1 <.kbability> ...]
+                 rule --project <dir> --entity <Name> --rule <1-8> --when <Condition>[=value]
+                      --do <Action>[=value]   (conditions: Always SeesEnemy KnowsEnemy
+                      EnemyCloserThan=m EnemyFartherThan=m HealthBelowPercent=p ManaAbovePercent=p
+                      AbilityReady=slot FarFromHome=m Never; actions: Idle Wander ReturnHome Chase
+                      UseAbility=slot KeepDistance=m Flee)
+                 show --project <dir> --entity <Name>
+               e.g. a goblin pack: entity add --name Goblin --create Capsule; ai make --entity Goblin
+               --preset Melee --health 60 --ability1 /Game/Abilities/Slash.kbability
   vfx-new      Create a particle effect (.kbvfx) as the editor's New Particle Effect.
                  --project <dir> --name <Name> [--folder Assets/Particles] [--set key=value ...]
   vfx-show     Print a particle effect: every key=value of its file.
@@ -130,6 +186,12 @@ Commands:
                  remove --project <dir> [--scene <path>] --name <Name>
                  rename --project <dir> [--scene <path>] --name <Name> --to <NewName>
                         [--occurrence <n>]
+                 attach --project <dir> [--scene <path>] --name <Object> --to <Character>
+                        --socket <Socket|Bone> [--position x,y,z] [--rotation x,y,z] [--scale x,y,z]
+                        (a sword in a hand: parents the object under the character and holds it
+                        at the socket - or bone - every frame after animation; the offset is in
+                        the socket's space, --scale is the object's own size)
+                 detach --project <dir> [--scene <path>] --name <Object>
                  (--name, --parent and --entity take a name or a path: Parent/Child;
                  names are unique among siblings, --occurrence picks one of several
                  same-named entities made elsewhere)
@@ -152,9 +214,13 @@ Commands:
                  --project <dir> --destination /Game/<folder> <file> [more files...]
                  [--preset /Game/<path>.kbimportpreset] [--scale <factor>]
                  [--rotation x,y,z (degrees)] [--import-materials yes|no]
-                 [--import-textures yes|no]
+                 [--import-textures yes|no] [--skeletal auto|yes|no]
                (a model keeps its scale and rotation in its import, as Unity's
-               Scale Factor; flags override the preset)
+               Scale Factor; flags override the preset. --skeletal auto, the default,
+               imports a skinned model - or an armature with animations and no mesh -
+               as a character: Skeleton, Skeletal Mesh and one Animation Clip per
+               source animation, named after it, all listed with '+'; FBX, glTF and
+               GLB as Blender exports them)
   import-preset-new Create an import preset (.kbimportpreset), as the editor's
                Create > Import Preset; the import dialog and import --preset use it.
                  --project <dir> --name <Name> [--folder Assets/ImportPresets]
@@ -311,6 +377,18 @@ int Dispatch(int argc, char** argv) {
     }
     const kb::cli::CommandIo io{ .out = std::cout, .err = std::cerr };
 
+    if (command == "animator") {
+        return kb::cli::RunAnimatorCommand(arguments, io);
+    }
+    if (command == "skeleton") {
+        return kb::cli::RunSkeletonCommand(arguments, io);
+    }
+    if (command == "ability") {
+        return kb::cli::RunAbilityCommand(arguments, io);
+    }
+    if (command == "ai") {
+        return kb::cli::RunAiCommand(arguments, io);
+    }
     if (command == "api") {
         return kb::cli::RunApiCommand(arguments, io);
     }

@@ -141,6 +141,15 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const SkeletonBindingComponent* binding = sceneComponents.SkeletonBindings().TryGet(entity)) {
         components.skeletonBinding = *binding;
     }
+    if (const SocketAttachmentComponent* attachment = sceneComponents.SocketAttachments().TryGet(entity)) {
+        components.socketAttachment = *attachment;
+    }
+    if (const CombatantComponent* combatant = sceneComponents.Combatants().TryGet(entity)) {
+        components.combatant = *combatant;
+    }
+    if (const AIBrainComponent* aiBrain = sceneComponents.AIBrains().TryGet(entity)) {
+        components.aiBrain = *aiBrain;
+    }
     if (const MotionSkeletonRuleComponent* rule = sceneComponents.MotionSkeletonRules().TryGet(entity)) {
         components.motionSkeletonRule = *rule;
     }

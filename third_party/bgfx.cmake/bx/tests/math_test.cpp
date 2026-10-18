@@ -6,31 +6,35 @@
 #include "test.h"
 #include <bx/math.h>
 #include <bx/file.h>
+#include <bx/rng.h>
 
 #include <math.h>
 #include <stdint.h> // intXX_t
 #include <limits.h> // UCHAR_*
+#include <float.h>  // LDBL_MANT_DIG
+
+TEST_CASE("fast-math is disabled", "[math][config]")
+{
+#if (defined(__FAST_MATH__) && __FAST_MATH__) || defined(_M_FP_FAST)
+	FAIL("Built with fast math enabled. bx math requires IEEE semantics: drop"
+		" `-ffast-math` / `/fp:fast` (`FloatFast` in scripts/toolchain.lua)."
+		);
+#else
+	SUCCEED("IEEE semantics available.");
+#endif // (defined(__FAST_MATH__) && __FAST_MATH__) || defined(_M_FP_FAST)
+}
 
 TEST_CASE("isFinite, isInfinite, isNan", "[math]")
 {
-#if defined(__FAST_MATH__) && __FAST_MATH__
-	SKIP("This unit test fails with fast math is enabled.");
-#endif // !defined(__FAST_MATH__) || !__FAST_MATH__
-
 	for (uint64_t ii = 0; ii < UINT32_MAX; ii += rand()%(1<<13)+1)
 	{
 		union { uint32_t ui; float f; } u = { uint32_t(ii) };
 		BX_UNUSED(u);
 
-#if BX_PLATFORM_OSX || BX_PLATFORM_IOS
-		REQUIRE(::__isnanf(u.f)    == bx::isNan(u.f) );
-		REQUIRE(::__isfinitef(u.f) == bx::isFinite(u.f) );
-		REQUIRE(::__isinff(u.f)    == bx::isInfinite(u.f) );
-#elif BX_COMPILER_MSVC
-		REQUIRE(!!::isnan(u.f)    == bx::isNan(u.f) );
-		REQUIRE(!!::isfinite(u.f) == bx::isFinite(u.f) );
-		REQUIRE(!!::isinf(u.f)    == bx::isInfinite(u.f) );
-#elif BX_PLATFORM_ANDROID
+#if BX_PLATFORM_OSX     \
+ || BX_PLATFORM_IOS     \
+ || BX_COMPILER_MSVC    \
+ || BX_PLATFORM_ANDROID
 		REQUIRE(!!::isnan(u.f)    == bx::isNan(u.f) );
 		REQUIRE(!!::isfinite(u.f) == bx::isFinite(u.f) );
 		REQUIRE(!!::isinf(u.f)    == bx::isInfinite(u.f) );
@@ -199,6 +203,65 @@ TEST_CASE("countTrailingZeros", "[math]")
 	STATIC_REQUIRE(31 == bx::countTrailingZeros<uint32_t>(1u<<31) );
 	STATIC_REQUIRE( 0 == bx::countTrailingZeros<uint64_t>(1) );
 	STATIC_REQUIRE(64 == bx::countTrailingZeros<uint64_t>(0) );
+}
+
+template<typename Ty>
+static uint8_t countLeadingZerosRef(Ty _val)
+{
+	uint8_t count = 0;
+
+	for (int32_t ii = sizeof(Ty)*8 - 1; ii >= 0 && 0 == ( (_val >> ii) & 1); --ii)
+	{
+		++count;
+	}
+
+	return count;
+}
+
+template<typename Ty>
+static uint8_t countTrailingZerosRef(Ty _val)
+{
+	uint8_t count = 0;
+
+	for (uint32_t ii = 0; ii < sizeof(Ty)*8 && 0 == ( (_val >> ii) & 1); ++ii)
+	{
+		++count;
+	}
+
+	return count;
+}
+
+template<typename Ty>
+static void testCountZeros(Ty _val)
+{
+	volatile Ty val = _val;
+	REQUIRE(countLeadingZerosRef<Ty>(_val)  == bx::countLeadingZeros<Ty>(val) );
+	REQUIRE(countTrailingZerosRef<Ty>(_val) == bx::countTrailingZeros<Ty>(val) );
+}
+
+TEST_CASE("countLeadingZeros/countTrailingZeros runtime", "[math]")
+{
+	testCountZeros<uint32_t>(0);
+	testCountZeros<uint64_t>(0);
+
+	for (uint32_t ii = 0; ii < 64; ++ii)
+	{
+		testCountZeros<uint32_t>(uint32_t(1) << (ii & 31) );
+		testCountZeros<uint64_t>(uint64_t(1) << ii);
+		testCountZeros<uint64_t>(UINT64_MAX << ii);
+		testCountZeros<uint64_t>(UINT64_MAX >> ii);
+	}
+
+	bx::RngMwc rng;
+
+	for (uint32_t ii = 0; ii < 10000; ++ii)
+	{
+		const uint64_t val   = (uint64_t(rng.gen() ) << 32) | rng.gen();
+		const uint32_t shift = rng.gen() % 64;
+		testCountZeros<uint32_t>(uint32_t(val) >> (shift & 31) );
+		testCountZeros<uint64_t>(val >> shift);
+		testCountZeros<uint64_t>(val << shift);
+	}
 }
 
 TEST_CASE("countLeadingZeros", "[math]")
@@ -421,9 +484,7 @@ TEST_CASE("rsqrt", "[math][libm]")
 	}
 
 	// rsqrtSimd
-#if !defined(__FAST_MATH__) || !__FAST_MATH__
 	REQUIRE(bx::isInfinite(bx::rsqrtSimd(0.0f) ) );
-#endif // !defined(__FAST_MATH__) || !__FAST_MATH__
 
 	for (float xx = bx::kNearZero; xx < 100.0f; xx += 0.1f)
 	{
@@ -433,10 +494,8 @@ TEST_CASE("rsqrt", "[math][libm]")
 	}
 
 	// rsqrt
-#if !defined(__FAST_MATH__) || !__FAST_MATH__
 	REQUIRE(bx::isInfinite(1.0f / ::sqrtf(0.0f) ) );
 	REQUIRE(bx::isInfinite(bx::rsqrt(0.0f) ) );
-#endif // !defined(__FAST_MATH__) || !__FAST_MATH__
 
 	for (float xx = bx::kNearZero; xx < 100.0f; xx += 0.1f)
 	{
@@ -523,6 +582,99 @@ TEST_CASE("mod", "[math][libm]")
 	STATIC_REQUIRE(  1.0f == bx::mod(1389.0f, 2.0f) );
 }
 
+static float madSplit(float _a, float _b, float _c)
+{
+	volatile float ab = _a * _b;
+	return ab + _c;
+}
+
+static constexpr float maddRef(float _a, float _b, float _c)
+{
+	return bx::bitCast<float>(
+		bx::simd32_f32_madd_ref(bx::simd32_ld(_a), bx::simd32_ld(_b), bx::simd32_ld(_c) )
+		);
+}
+
+TEST_CASE("mad", "[math]")
+{
+	constexpr float kA     = 0x1.000002p+0f;
+	constexpr float kB     = 0x1.fffffcp-1f;
+	constexpr float kFused = -0x1p-46f;
+
+	STATIC_REQUIRE(kFused == maddRef(kA, kB, -1.0f) );
+
+	volatile float va = kA;
+	volatile float vb = kB;
+	volatile float vc = -1.0f;
+	REQUIRE(kFused == maddRef(va, vb, vc) );
+
+	STATIC_REQUIRE( kFused == bx::mad(kA, kB, -1.0f) );
+	STATIC_REQUIRE(-kFused == bx::nms(kA, kB,  1.0f) );
+
+#if BX_CONFIG_FMA
+	REQUIRE(kFused == bx::mad(va, vb, vc) );
+#else
+	REQUIRE(0.0f   == bx::mad(va, vb, vc) );
+#endif // BX_CONFIG_FMA
+
+	REQUIRE(0.0f == madSplit(va, vb, vc) );
+
+	REQUIRE(bx::isNan(bx::mad(bx::kFloatInfinity, 0.0f, 1.0f) ) );
+	REQUIRE(bx::isNan(bx::mad(bx::kFloatInfinity, 1.0f, -bx::kFloatInfinity) ) );
+
+	REQUIRE(bx::kFloatExponentMask == bx::bitCast<uint32_t>(bx::mad(3.0e38f, 2.0f, 0.0f) ) );
+
+#if BX_CONFIG_FMA
+	REQUIRE( (bx::kFloatSignMask|bx::kFloatExponentMask) == bx::bitCast<uint32_t>(bx::mad(3.0e38f, 2.0f, -bx::kFloatInfinity) ) );
+#else
+	REQUIRE(bx::isNan(bx::mad(3.0e38f, 2.0f, -bx::kFloatInfinity) ) );
+#endif // BX_CONFIG_FMA
+
+	STATIC_REQUIRE( (bx::kFloatSignMask|bx::kFloatExponentMask) == bx::bitCast<uint32_t>(maddRef(3.0e38f, 2.0f, -bx::kFloatInfinity) ) );
+	REQUIRE(0                   == bx::bitCast<uint32_t>(bx::mad( 1.0f, 1.0f, -1.0f) ) );
+
+	REQUIRE(bx::kFloatSignMask  == bx::bitCast<uint32_t>(bx::mad(-1.0f, 0.0f, -0.0f) ) );
+
+	REQUIRE(0                   == bx::bitCast<uint32_t>(bx::mad(-1.0f, 0.0f,  0.0f) ) );
+
+	STATIC_REQUIRE(bx::bitCast<uint32_t>(0x1p-140f) == bx::bitCast<uint32_t>(maddRef(0x1p-100f, 0x1p-40f, 0.0f) ) );
+	STATIC_REQUIRE(bx::bitCast<uint32_t>(0x1p-149f) == bx::bitCast<uint32_t>(maddRef(0x1p-75f, 0x1.000002p-75f, 0.0f) ) );
+	STATIC_REQUIRE(bx::bitCast<uint32_t>(0.0f)      == bx::bitCast<uint32_t>(maddRef(0x1p-75f, 0x1p-75f, 0.0f) ) );
+	STATIC_REQUIRE(bx::bitCast<uint32_t>(0x1p-148f) == bx::bitCast<uint32_t>(maddRef(0x1p-75f, 0x1p-75f, 0x1p-149f) ) );
+
+	STATIC_REQUIRE(0x1p-46f == maddRef(0x1.000002p+0f, 0x1.000002p+0f, -0x1.000004p+0f) );
+	STATIC_REQUIRE(1.0f     == maddRef(0x1.fffffep+22f, 2.0f, -0x1.fffffcp+23f) );
+
+	bx::RngMwc rng;
+
+	for (uint32_t ii = 0; ii < 65536; ++ii)
+	{
+		auto gen = [&rng]() -> float
+		{
+			const uint32_t bits = rng.gen();
+			const uint32_t exp  = 96 + (bits>>23)%64;
+			return bx::bitCast<float>( (bits & 0x807fffff) | (exp<<23) );
+		};
+
+		const float aa = gen();
+		const float bb = gen();
+		const float cc = gen();
+
+#if LDBL_MANT_DIG >= 64
+		const float ref = float( (long double)(aa) * (long double)(bb) + (long double)(cc) );
+#else
+		const float ref = ::fmaf(aa, bb, cc);
+#endif // LDBL_MANT_DIG >= 64
+		const float sw  = maddRef(aa, bb, cc);
+		REQUIRE(bx::bitCast<uint32_t>(ref) == bx::bitCast<uint32_t>(sw) );
+
+#if BX_CONFIG_FMA
+		const float mad = bx::mad(aa, bb, cc);
+		REQUIRE(bx::bitCast<uint32_t>(ref) == bx::bitCast<uint32_t>(mad) );
+#endif // BX_CONFIG_FMA
+	}
+}
+
 typedef float (*MathFloatFn)(float);
 
 template<MathFloatFn BxT, MathFloatFn CrtT>
@@ -554,6 +706,14 @@ TEST_CASE("round", "[math][libm]")
 	STATIC_REQUIRE( 14.0f == bx::round(  13.89f) );
 	STATIC_REQUIRE(-14.0f == bx::round( -13.89f) );
 
+	STATIC_REQUIRE(  2.0f == bx::round(   2.5f) );
+	STATIC_REQUIRE(  4.0f == bx::round(   3.5f) );
+	STATIC_REQUIRE( -2.0f == bx::round(  -2.5f) );
+	STATIC_REQUIRE(  0.0f == bx::round(   0.49999997f) );
+	STATIC_REQUIRE(  0x1p22f        == bx::round(0x1p22f + 0.5f) );
+	STATIC_REQUIRE(  0x1p22f + 2.0f == bx::round(0x1p22f + 1.5f) );
+	STATIC_REQUIRE(bx::kFloatSignMask == bx::bitCast<uint32_t>(bx::round(-0.4f) ) );
+
 	testMathFunc1Float<bx::round, ::roundf>( 13.89f);
 	testMathFunc1Float<bx::round, ::roundf>(-13.89f);
 }
@@ -562,6 +722,17 @@ TEST_CASE("trunc", "[math][libm]")
 {
 	STATIC_REQUIRE( 13.0f == bx::trunc( 13.89f) );
 	STATIC_REQUIRE(-13.0f == bx::trunc(-13.89f) );
+
+	STATIC_REQUIRE( 1.0e10f == bx::trunc( 1.0e10f) );
+	STATIC_REQUIRE(-1.0e10f == bx::trunc(-1.0e10f) );
+	STATIC_REQUIRE( 1.0e10f == bx::floor( 1.0e10f) );
+	STATIC_REQUIRE(-1.0e10f == bx::ceil( -1.0e10f) );
+	STATIC_REQUIRE(bx::kFloatSignMask == bx::bitCast<uint32_t>(bx::trunc(-0.5f) ) );
+	STATIC_REQUIRE(bx::kFloatSignMask == bx::bitCast<uint32_t>(bx::ceil( -0.5f) ) );
+	STATIC_REQUIRE(bx::kFloatExponentMask == bx::bitCast<uint32_t>(bx::floor(bx::kFloatInfinity) ) );
+	volatile float nan = bx::bitCast<float>(0x7fc00000u);
+	REQUIRE(bx::isNan(bx::trunc(nan) ) );
+	REQUIRE(bx::isNan(bx::floor(nan) ) );
 
 	testMathFunc1Float<bx::trunc, ::truncf>( 13.89f);
 	testMathFunc1Float<bx::trunc, ::truncf>(-13.89f);
@@ -600,7 +771,7 @@ TEST_CASE("exp", "[math][libm]")
 {
 	STATIC_REQUIRE( 1.0f == bx::exp(-0.0f) );
 	STATIC_REQUIRE( 0.0f == bx::exp(-bx::kFloatInfinity) );
-	STATIC_REQUIRE( 0.0f == bx::exp(bx::log(bx::kFloatSmallest) ) );
+	STATIC_REQUIRE(bx::exp(bx::log(bx::kFloatSmallest) ) <= bx::kFloatSmallest);
 
 	bx::WriterI* writer = bx::getNullOut();
 	bx::Error err;
@@ -623,9 +794,9 @@ TEST_CASE("pow", "[math][libm]")
 	STATIC_REQUIRE(0.0f == bx::pow(0.0f, 2.0f) );
 
 	STATIC_REQUIRE(   4.0f == bx::pow( 2.0f,  2.0f) );
-	STATIC_REQUIRE(  -4.0f == bx::pow(-2.0f,  2.0f) );
+	STATIC_REQUIRE(   4.0f == bx::pow(-2.0f,  2.0f) );
 	STATIC_REQUIRE(  0.25f == bx::pow( 2.0f, -2.0f) );
-	STATIC_REQUIRE( -0.25f == bx::pow(-2.0f, -2.0f) );
+	STATIC_REQUIRE(  0.25f == bx::pow(-2.0f, -2.0f) );
 	STATIC_REQUIRE(   8.0f == bx::pow( 2.0f,  3.0f) );
 	STATIC_REQUIRE(  -8.0f == bx::pow(-2.0f,  3.0f) );
 	STATIC_REQUIRE( 0.125f == bx::pow( 2.0f, -3.0f) );
@@ -840,6 +1011,7 @@ TEST_CASE("signBit", "[math][libm]")
 {
 	STATIC_REQUIRE( bx::signBit(-0.1389f) );
 	STATIC_REQUIRE(!bx::signBit( 0.0000f) );
+	STATIC_REQUIRE( bx::signBit(-0.0000f) );
 	STATIC_REQUIRE(!bx::signBit( 0.1389f) );
 
 	STATIC_REQUIRE( bx::signBit(-bx::kFloatInfinity) );
@@ -855,10 +1027,663 @@ TEST_CASE("copySign", "[math][libm]")
 	STATIC_REQUIRE(-bx::kFloatInfinity == bx::copySign(bx::kFloatInfinity, -1389) );
 }
 
+typedef double (*MathDoubleFn)(double);
+
+template<MathDoubleFn BxT, MathDoubleFn CrtT>
+static void testMathFunc1Double(double _value)
+{
+	REQUIRE(CrtT(_value) == BxT(_value) );
+}
+
+TEST_CASE("floor, ceil, trunc, round double", "[math][libm]")
+{
+	STATIC_REQUIRE( 13.0 == bx::floor( 13.89) );
+	STATIC_REQUIRE(-14.0 == bx::floor(-13.89) );
+	STATIC_REQUIRE( 14.0 == bx::ceil(  13.89) );
+	STATIC_REQUIRE(-13.0 == bx::ceil( -13.89) );
+	STATIC_REQUIRE( 13.0 == bx::trunc( 13.89) );
+	STATIC_REQUIRE(-13.0 == bx::trunc(-13.89) );
+
+	STATIC_REQUIRE(  2.0 == bx::round(  2.5) );
+	STATIC_REQUIRE(  4.0 == bx::round(  3.5) );
+	STATIC_REQUIRE( -2.0 == bx::round( -2.5) );
+	STATIC_REQUIRE(  0.0 == bx::round(  0.49999999999999994) );
+
+	STATIC_REQUIRE( 1.0e300 == bx::trunc( 1.0e300) );
+	STATIC_REQUIRE(-1.0e300 == bx::floor(-1.0e300) );
+	STATIC_REQUIRE( 0x1p52  == bx::round(0x1p52) );
+
+	STATIC_REQUIRE(bx::kDoubleSignMask == bx::bitCast<uint64_t>(bx::trunc(-0.5) ) );
+	STATIC_REQUIRE(bx::kDoubleSignMask == bx::bitCast<uint64_t>(bx::ceil( -0.5) ) );
+	STATIC_REQUIRE(bx::kDoubleSignMask == bx::bitCast<uint64_t>(bx::round(-0.4) ) );
+	STATIC_REQUIRE(bx::kDoubleExponentMask == bx::bitCast<uint64_t>(bx::floor(bx::kDoubleInfinity) ) );
+
+	testMathFunc1Double<bx::floor, ::floor>( 13.89);
+	testMathFunc1Double<bx::floor, ::floor>(-13.89);
+	testMathFunc1Double<bx::ceil,  ::ceil >( 13.89);
+	testMathFunc1Double<bx::ceil,  ::ceil >(-13.89);
+	testMathFunc1Double<bx::trunc, ::trunc>( 13.89);
+	testMathFunc1Double<bx::trunc, ::trunc>(-13.89);
+
+	bx::RngMwc rng;
+
+	for (uint32_t ii = 0; ii < 100000; ++ii)
+	{
+		const uint64_t hi   = uint64_t(rng.gen() );
+		const uint64_t lo   = uint64_t(rng.gen() );
+		const uint64_t bits = (hi<<32) | lo;
+		const double   vv   = bx::bitsToDouble(bits);
+
+		if (bx::isNan(vv) )
+		{
+			continue;
+		}
+
+		REQUIRE(::floor(vv) == bx::floor(vv) );
+		REQUIRE(::ceil(vv)  == bx::ceil(vv)  );
+		REQUIRE(::trunc(vv) == bx::trunc(vv) );
+		REQUIRE(::nearbyint(vv) == bx::round(vv) );
+	}
+}
+
+TEST_CASE("abs, sign, copySign double", "[math][libm]")
+{
+	STATIC_REQUIRE(13.89 == bx::abs(-13.89) );
+	STATIC_REQUIRE(13.89 == bx::abs( 13.89) );
+	STATIC_REQUIRE(0.0   == bx::abs(-0.0) );
+	STATIC_REQUIRE(!bx::signBit(bx::abs(-0.0) ) );
+
+	STATIC_REQUIRE(-1 == bx::sign(-0.1389) );
+	STATIC_REQUIRE( 0 == bx::sign( 0.0000) );
+	STATIC_REQUIRE( 1 == bx::sign( 0.1389) );
+
+	STATIC_REQUIRE( bx::signBit(-0.0) );
+	STATIC_REQUIRE(!bx::signBit( 0.0) );
+	STATIC_REQUIRE( bx::signBit(-bx::kDoubleInfinity) );
+
+	STATIC_REQUIRE(-13.89 == bx::copySign(13.89, -1.0) );
+	STATIC_REQUIRE( 13.89 == bx::copySign(13.89,  1.0) );
+	STATIC_REQUIRE(bx::signBit(bx::copySign(0.0, -1.0) ) );
+}
+
+TEST_CASE("ldexp double", "[math][libm]")
+{
+	STATIC_REQUIRE(48.0     == bx::ldexp(3.0, 4) );
+	STATIC_REQUIRE(0.4375   == bx::ldexp(7.0, -4) );
+	STATIC_REQUIRE(0x1p1023 == bx::ldexp(1.0,  1023) );
+	STATIC_REQUIRE(0x1p-1022 == bx::ldexp(1.0, -1022) );
+
+	STATIC_REQUIRE(0x1p-1074 == bx::ldexp(1.0, -1074) );
+	STATIC_REQUIRE(0.0       == bx::ldexp(1.0, -1200) );
+	STATIC_REQUIRE(1.0       == bx::ldexp(0x1p-1074, 1074) );
+	REQUIRE(bx::kDoubleInfinity == bx::ldexp(1.0, 1200) );
+	STATIC_REQUIRE(bx::signBit(bx::ldexp(-0.0, 10) ) );
+
+	for (int32_t yy = -1100; yy < 1100; ++yy)
+	{
+		for (double xx = -100.0; xx < 100.0; xx += 7.3)
+		{
+			REQUIRE(::ldexp(xx, yy) == bx::ldexp(xx, yy) );
+		}
+	}
+}
+
+TEST_CASE("frexp", "[math][libm]")
+{
+	constexpr auto frexpConst = []()
+	{
+		int32_t exp = 0;
+		const double frac = bx::frexp(12.0, &exp);
+
+		return 0.75 == frac && 4 == exp;
+	}();
+	STATIC_REQUIRE(frexpConst);
+
+	bx::RngMwc rng;
+
+	for (uint32_t ii = 0; ii < 100000; ++ii)
+	{
+		const uint64_t hi   = uint64_t(rng.gen() );
+		const uint64_t lo   = uint64_t(rng.gen() );
+		const uint64_t bits = (hi<<32) | lo;
+		const double   vv   = bx::bitsToDouble(bits);
+
+		if (bx::isNan(vv) )
+		{
+			continue;
+		}
+
+		int32_t mine   = 0;
+		int     theirs = 0;
+		const double fa = bx::frexp(vv, &mine);
+		const double fb = ::frexp(vv, &theirs);
+
+		REQUIRE(fa == fb);
+		REQUIRE(mine == theirs);
+	}
+
+	for (uint32_t ii = 0; ii < 100000; ++ii)
+	{
+		const float vv = bx::bitsToFloat(rng.gen() );
+
+		if (bx::isNan(vv) )
+		{
+			continue;
+		}
+
+		int32_t mine   = 0;
+		int     theirs = 0;
+		const float fa = bx::frexp(vv, &mine);
+		const float fb = ::frexpf(vv, &theirs);
+
+		REQUIRE(fa == fb);
+		REQUIRE(mine == theirs);
+	}
+}
+
+TEST_CASE("modf, fmod, mod double", "[math][libm]")
+{
+	constexpr auto modfConst = []()
+	{
+		double integral = 0.0;
+		const double frac = bx::modf(-2.5, &integral);
+
+		return -2.0 == integral && -0.5 == frac;
+	}();
+	STATIC_REQUIRE(modfConst);
+
+	STATIC_REQUIRE(-1.0 == bx::fmod(-7.0, 3.0) );
+	STATIC_REQUIRE( 2.0 == bx::mod( -7.0, 3.0) );
+	STATIC_REQUIRE( 1.0 == bx::fmod( 7.0, -3.0) );
+	STATIC_REQUIRE( 1.0 == bx::fmod( 7.0,  3.0) );
+	STATIC_REQUIRE( 1.0 == bx::mod(  7.0,  3.0) );
+
+	STATIC_REQUIRE(-1.0f == bx::fmod(-7.0f, 3.0f) );
+	STATIC_REQUIRE( 2.0f == bx::mod( -7.0f, 3.0f) );
+}
+
+TEST_CASE("sqrt, log, exp double", "[math][libm]")
+{
+	STATIC_REQUIRE(4.0 == bx::sqrt(16.0) );
+	STATIC_REQUIRE(0.0 == bx::sqrt(0.0) );
+	STATIC_REQUIRE(bx::signBit(bx::sqrt(-0.0) ) );
+	STATIC_REQUIRE(bx::isNan(bx::sqrt(-1.0) ) );
+	STATIC_REQUIRE(bx::isEqual(1.4142135623730951, bx::sqrt(2.0), 1.0e-15) );
+
+	STATIC_REQUIRE(bx::isEqual(0.0,          bx::log(1.0), 1.0e-15) );
+	STATIC_REQUIRE(bx::isEqual(1.0,          bx::log(2.71828182845904524), 1.0e-15) );
+	STATIC_REQUIRE(bx::isEqual(0.69314718055994531, bx::log(2.0), 1.0e-15) );
+	STATIC_REQUIRE(-bx::kDoubleInfinity == bx::log(0.0) );
+	STATIC_REQUIRE(bx::isNan(bx::log(-1.0) ) );
+
+	STATIC_REQUIRE( 8.0 == bx::log2(256.0) );
+	STATIC_REQUIRE(10.0 == bx::log2(1024.0) );
+
+	STATIC_REQUIRE(bx::isEqual(1.0,    bx::exp(0.0), 1.0e-15) );
+	STATIC_REQUIRE(bx::isEqual(2.71828182845904524, bx::exp(1.0), 1.0e-15) );
+	STATIC_REQUIRE(0.0 == bx::exp(-800.0) );
+	STATIC_REQUIRE(bx::kDoubleInfinity == bx::exp(800.0) );
+
+	STATIC_REQUIRE(1024.0 == bx::exp2(10.0) );
+
+	STATIC_REQUIRE(  81.0 == bx::pow( 3.0, 4.0) );
+	STATIC_REQUIRE(  -8.0 == bx::pow(-2.0, 3.0) );
+	STATIC_REQUIRE(   4.0 == bx::pow(-2.0, 2.0) );
+	STATIC_REQUIRE(0.0625 == bx::pow( 2.0, -4.0) );
+	STATIC_REQUIRE(   1.0 == bx::pow( 7.0, 0.0) );
+	STATIC_REQUIRE(bx::isNan(bx::pow(-2.0, 0.5) ) );
+	STATIC_REQUIRE(bx::isEqual(1.4142135623730951, bx::pow(2.0, 0.5), 1.0e-15) );
+
+	for (double xx = 0.125; xx < 1.0e12; xx *= 1.7)
+	{
+		REQUIRE(bx::isEqual(::sqrt(xx), bx::sqrt(xx), 1.0e-15*xx) );
+		REQUIRE(bx::isEqual(::log(xx),  bx::log(xx),  1.0e-14) );
+	}
+
+	for (double xx = -700.0; xx < 700.0; xx += 3.1)
+	{
+		const double ref = ::exp(xx);
+
+		REQUIRE(bx::isEqual(ref, bx::exp(xx), 1.0e-14*ref) );
+	}
+}
+
+TEST_CASE("sin, cos, tan double", "[math][libm]")
+{
+	STATIC_REQUIRE(0.0 == bx::sin(0.0) );
+	STATIC_REQUIRE(1.0 == bx::cos(0.0) );
+	STATIC_REQUIRE(0.0 == bx::tan(0.0) );
+
+	for (double xx = -100.0; xx < 100.0; xx += 0.37)
+	{
+		REQUIRE(bx::isEqual(::sin(xx), bx::sin(xx), 1.0e-14) );
+		REQUIRE(bx::isEqual(::cos(xx), bx::cos(xx), 1.0e-14) );
+	}
+
+	REQUIRE(bx::isEqual(::sin(1.0e6), bx::sin(1.0e6), 1.0e-12) );
+	REQUIRE(bx::isEqual(::cos(1.0e6), bx::cos(1.0e6), 1.0e-12) );
+}
+
+TEST_CASE("asin, acos, atan double", "[math][libm]")
+{
+	STATIC_REQUIRE(0.0 == bx::asin(0.0) );
+	STATIC_REQUIRE(0.0 == bx::atan(0.0) );
+	STATIC_REQUIRE(0.0 == bx::acos(1.0) );
+	STATIC_REQUIRE(bx::isNan(bx::asin(1.5) ) );
+	STATIC_REQUIRE(bx::isNan(bx::acos(1.5) ) );
+
+	STATIC_REQUIRE(bx::isEqual(1.57079632679489662,  bx::asin(1.0),      1.0e-15) );
+	STATIC_REQUIRE(bx::isEqual(3.14159265358979324,  bx::acos(-1.0),     1.0e-15) );
+	STATIC_REQUIRE(bx::isEqual(0.78539816339744831, bx::atan(1.0),      1.0e-15) );
+	STATIC_REQUIRE(bx::isEqual(0.78539816339744831, bx::atan2(1.0,1.0), 1.0e-15) );
+
+	for (double xx = -1.0; xx < 1.0; xx += 0.013)
+	{
+		REQUIRE(bx::isEqual(::asin(xx), bx::asin(xx), 1.0e-14) );
+		REQUIRE(bx::isEqual(::acos(xx), bx::acos(xx), 1.0e-14) );
+	}
+
+	for (double xx = -1000.0; xx < 1000.0; xx += 7.3)
+	{
+		REQUIRE(bx::isEqual(::atan(xx), bx::atan(xx), 1.0e-14) );
+	}
+
+	for (double yy = -10.0; yy < 10.0; yy += 1.3)
+	{
+		for (double xx = -10.0; xx < 10.0; xx += 1.3)
+		{
+			REQUIRE(bx::isEqual(::atan2(yy, xx), bx::atan2(yy, xx), 1.0e-14) );
+		}
+	}
+
+	REQUIRE(::atan2( 0.0,  1.0) == bx::atan2( 0.0,  1.0) );
+	REQUIRE(::atan2(-0.0,  1.0) == bx::atan2(-0.0,  1.0) );
+	REQUIRE(::atan2( 0.0, -1.0) == bx::atan2( 0.0, -1.0) );
+	REQUIRE(::atan2(-0.0, -1.0) == bx::atan2(-0.0, -1.0) );
+	REQUIRE(::atan2( 1.0,  0.0) == bx::atan2( 1.0,  0.0) );
+	REQUIRE(::atan2(-1.0,  0.0) == bx::atan2(-1.0,  0.0) );
+}
+
+TEST_CASE("sinh, cosh, tanh double", "[math][libm]")
+{
+	STATIC_REQUIRE(0.0 == bx::sinh(0.0) );
+	STATIC_REQUIRE(1.0 == bx::cosh(0.0) );
+	STATIC_REQUIRE(0.0 == bx::tanh(0.0) );
+
+	for (double xx = -20.0; xx < 20.0; xx += 0.17)
+	{
+		const double sh = ::sinh(xx);
+		const double ch = ::cosh(xx);
+
+		REQUIRE(bx::isEqual(sh, bx::sinh(xx), 1.0e-13*bx::abs(sh) ) );
+		REQUIRE(bx::isEqual(ch, bx::cosh(xx), 1.0e-13*ch) );
+		REQUIRE(bx::isEqual(::tanh(xx), bx::tanh(xx), 1.0e-14) );
+	}
+
+	for (double xx = 1.0e-9; xx < 0.1; xx *= 1.3)
+	{
+		REQUIRE(bx::isEqual(::sinh(xx), bx::sinh(xx), 1.0e-13*xx) );
+		REQUIRE(bx::isEqual(::tanh(xx), bx::tanh(xx), 1.0e-13*xx) );
+	}
+}
+
+TEST_CASE("log1p, asinh, acosh, atanh", "[math][libm]")
+{
+	STATIC_REQUIRE(0.0 == bx::log1p(0.0) );
+	STATIC_REQUIRE(0.0 == bx::asinh(0.0) );
+	STATIC_REQUIRE(0.0 == bx::acosh(1.0) );
+	STATIC_REQUIRE(0.0 == bx::atanh(0.0) );
+	STATIC_REQUIRE(-bx::kDoubleInfinity == bx::log1p(-1.0) );
+	STATIC_REQUIRE(bx::kDoubleInfinity  == bx::atanh(1.0) );
+	STATIC_REQUIRE(bx::isNan(bx::acosh(0.5) ) );
+	STATIC_REQUIRE(bx::isNan(bx::atanh(1.5) ) );
+
+	STATIC_REQUIRE(bx::isEqual(0.88137358701954303, bx::asinh(1.0), 1.0e-15) );
+	STATIC_REQUIRE(bx::isEqual(1.31695789692481670, bx::acosh(2.0), 1.0e-15) );
+	STATIC_REQUIRE(bx::isEqual(0.54930614433405489, bx::atanh(0.5), 1.0e-15) );
+
+	for (double xx = 1.0e-9; xx < 1.0e9; xx *= 1.7)
+	{
+		REQUIRE(bx::isEqual(::log1p(xx), bx::log1p(xx), 1.0e-14*bx::abs(::log1p(xx) ) ) );
+		REQUIRE(bx::isEqual(::asinh(xx), bx::asinh(xx), 1.0e-14*::asinh(xx) ) );
+		REQUIRE(bx::isEqual(::asinh(-xx), bx::asinh(-xx), 1.0e-14*::asinh(xx) ) );
+	}
+
+	for (double xx = 0.0; xx < 1.0; xx += 0.0131)
+	{
+		REQUIRE(bx::isEqual(::atanh(xx), bx::atanh(xx), 1.0e-14) );
+	}
+
+	for (double tt = 0x1p-40; tt < 0x1p-18; tt *= 2.0)
+	{
+		const double xx    = 1.0 + tt;
+		const double poly  = 1.0 - tt/12.0 + 3.0*tt*tt/160.0;
+		const double ref   = bx::sqrt(2.0*tt) * poly;
+
+		REQUIRE(bx::isEqual(ref, bx::acosh(xx), 1.0e-14*ref) );
+	}
+}
+
+TEST_CASE("ldexp float range", "[math][libm]")
+{
+	STATIC_REQUIRE(0x1p127f  == bx::ldexp(1.0f,  127) );
+	STATIC_REQUIRE(0x1p-126f == bx::ldexp(1.0f, -126) );
+	STATIC_REQUIRE(0x1p-149f == bx::ldexp(1.0f, -149) );
+	STATIC_REQUIRE(0.0f      == bx::ldexp(1.0f, -150) );
+	STATIC_REQUIRE(0.0f      == bx::ldexp(1.0f, -400) );
+	STATIC_REQUIRE(1.0f      == bx::ldexp(0x1p-149f, 149) );
+	STATIC_REQUIRE(bx::signBit(bx::ldexp(-0.0f, 10) ) );
+
+	REQUIRE(bx::isInfinite(bx::ldexp(1.0f,  128) ) );
+	REQUIRE(bx::isInfinite(bx::ldexp(1.0f,  400) ) );
+
+	for (int32_t yy = -300; yy < 300; ++yy)
+	{
+		for (float xx = -100.0f; xx < 100.0f; xx += 3.7f)
+		{
+			REQUIRE(::ldexpf(xx, yy) == bx::ldexp(xx, yy) );
+		}
+	}
+}
+
+TEST_CASE("exp float overflow", "[math][libm]")
+{
+	REQUIRE(bx::isInfinite(bx::exp( 89.0f) ) );
+	REQUIRE(bx::isInfinite(bx::exp(100.0f) ) );
+	REQUIRE(bx::isInfinite(bx::exp(500.0f) ) );
+	REQUIRE(0.0f == bx::exp(-500.0f) );
+
+	REQUIRE(bx::isInfinite(bx::exp( 800.0) ) );
+	REQUIRE(0.0 == bx::exp(-800.0) );
+}
+
+TEST_CASE("sinh, cosh, tanh saturation", "[math][libm]")
+{
+	REQUIRE( 1.0f == bx::tanh( 90.0f) );
+	REQUIRE(-1.0f == bx::tanh(-90.0f) );
+	REQUIRE( 1.0  == bx::tanh( 9876.0) );
+	REQUIRE(-1.0  == bx::tanh(-9876.0) );
+
+	REQUIRE(bx::isFinite(bx::cosh(88.5f) ) );
+	REQUIRE(bx::isFinite(bx::sinh(88.5f) ) );
+	REQUIRE(bx::isFinite(bx::cosh(710.0) ) );
+	REQUIRE(bx::isFinite(bx::sinh(710.0) ) );
+	REQUIRE(bx::isInfinite(bx::cosh(720.0) ) );
+
+	for (float xx = 1.0e-7f; xx < 1.0f; xx *= 1.3f)
+	{
+		const float ref = float(bx::tanh(double(xx) ) );
+
+		REQUIRE(bx::isEqual(ref, bx::tanh(xx), 1.0e-6f*ref) );
+	}
+}
+
+TEST_CASE("log1p, asinh, acosh, atanh float", "[math][libm]")
+{
+	STATIC_REQUIRE(0.0f == bx::log1p(0.0f) );
+	STATIC_REQUIRE(0.0f == bx::asinh(0.0f) );
+	STATIC_REQUIRE(0.0f == bx::acosh(1.0f) );
+	STATIC_REQUIRE(0.0f == bx::atanh(0.0f) );
+	STATIC_REQUIRE(-bx::kFloatInfinity == bx::log1p(-1.0f) );
+	STATIC_REQUIRE( bx::kFloatInfinity == bx::atanh(1.0f) );
+	STATIC_REQUIRE(bx::isNan(bx::acosh(0.5f) ) );
+	STATIC_REQUIRE(bx::isNan(bx::atanh(1.5f) ) );
+
+	for (float xx = 1.0e-6f; xx < 1.0e6f; xx *= 1.7f)
+	{
+		const float rl = float(bx::log1p(double(xx) ) );
+		const float ra = float(bx::asinh(double(xx) ) );
+
+		REQUIRE(bx::isEqual(rl, bx::log1p(xx), 1.0e-6f*bx::abs(rl) ) );
+		REQUIRE(bx::isEqual(ra, bx::asinh(xx), 1.0e-6f*ra) );
+		REQUIRE(bx::isEqual(-ra, bx::asinh(-xx), 1.0e-6f*ra) );
+	}
+
+	for (float tt = 1.0e-6f; tt < 100.0f; tt *= 1.7f)
+	{
+		const float xx  = 1.0f + tt;
+		const float ref = float(bx::acosh(double(xx) ) );
+
+		REQUIRE(bx::isEqual(ref, bx::acosh(xx), 1.0e-6f*ref) );
+	}
+
+	for (float xx = 0.0f; xx < 1.0f; xx += 0.013f)
+	{
+		const float ref = float(bx::atanh(double(xx) ) );
+
+		REQUIRE(bx::isEqual(ref, bx::atanh(xx), 1.0e-6f) );
+	}
+}
+
+TEST_CASE("odd and even symmetry", "[math][libm]")
+{
+	bx::RngMwc rng;
+
+	for (uint32_t ii = 0; ii < 20000; ++ii)
+	{
+		const double uu = double(rng.gen() ) / 4294967296.0;
+		const double xx = bx::pow(10.0, uu*14.0 - 7.0);
+
+		REQUIRE(bx::sin(-xx)   == -bx::sin(xx) );
+		REQUIRE(bx::cos(-xx)   ==  bx::cos(xx) );
+		REQUIRE(bx::tan(-xx)   == -bx::tan(xx) );
+		REQUIRE(bx::sinh(-xx)  == -bx::sinh(xx) );
+		REQUIRE(bx::cosh(-xx)  ==  bx::cosh(xx) );
+		REQUIRE(bx::tanh(-xx)  == -bx::tanh(xx) );
+		REQUIRE(bx::atan(-xx)  == -bx::atan(xx) );
+		REQUIRE(bx::asinh(-xx) == -bx::asinh(xx) );
+		REQUIRE(bx::atan2(-xx, 3.0) == -bx::atan2(xx, 3.0) );
+		REQUIRE(bx::atan2(-xx,-3.0) == -bx::atan2(xx,-3.0) );
+
+		const double ss = uu*2.0 - 1.0;
+
+		REQUIRE(bx::asin(-ss) == -bx::asin(ss) );
+		REQUIRE(bx::atanh(-ss*0.999) == -bx::atanh(ss*0.999) );
+	}
+
+	STATIC_REQUIRE(bx::signBit(bx::sin(-0.0) ) );
+	STATIC_REQUIRE(bx::signBit(bx::tan(-0.0) ) );
+	STATIC_REQUIRE(bx::signBit(bx::asin(-0.0) ) );
+	STATIC_REQUIRE(bx::signBit(bx::atan(-0.0) ) );
+	STATIC_REQUIRE(bx::signBit(bx::sinh(-0.0) ) );
+	STATIC_REQUIRE(bx::signBit(bx::tanh(-0.0) ) );
+	STATIC_REQUIRE(bx::signBit(bx::asinh(-0.0) ) );
+	STATIC_REQUIRE(bx::signBit(bx::atanh(-0.0) ) );
+	STATIC_REQUIRE(bx::signBit(bx::log1p(-0.0) ) );
+	STATIC_REQUIRE(bx::signBit(bx::log1p(-0.0f) ) );
+
+	for (double xx = 1.0e-9; xx < 0.4375; xx *= 1.3)
+	{
+		REQUIRE(bx::atan(-xx) == -bx::atan(xx) );
+		REQUIRE(bx::isEqual(::atan(-xx), bx::atan(-xx), 1.0e-14) );
+	}
+}
+
+TEST_CASE("pow negative base", "[math][libm]")
+{
+	STATIC_REQUIRE(  4.0f == bx::pow(-2.0f, 2.0f) );
+	STATIC_REQUIRE( -8.0f == bx::pow(-2.0f, 3.0f) );
+	STATIC_REQUIRE( 16.0f == bx::pow(-2.0f, 4.0f) );
+	STATIC_REQUIRE(-0.125f == bx::pow(-2.0f, -3.0f) );
+	STATIC_REQUIRE(bx::isNan(bx::pow(-2.0f, 0.5f) ) );
+	STATIC_REQUIRE(bx::isNan(bx::pow(-2.0f, 1.5f) ) );
+
+	STATIC_REQUIRE(  4.0 == bx::pow(-2.0, 2.0) );
+	STATIC_REQUIRE( -8.0 == bx::pow(-2.0, 3.0) );
+	STATIC_REQUIRE(bx::isNan(bx::pow(-2.0, 0.5) ) );
+
+	STATIC_REQUIRE(   81.0f == bx::pow(3.0f, 4.0f) );
+	STATIC_REQUIRE( 1024.0f == bx::pow(2.0f, 10.0f) );
+	STATIC_REQUIRE( 0.0625f == bx::pow(2.0f, -4.0f) );
+	STATIC_REQUIRE( 1024.0f == bx::exp2(10.0f) );
+	STATIC_REQUIRE(    1.0f == bx::pow(7.0f, 0.0f) );
+	STATIC_REQUIRE(    4.0f == bx::sqrt(16.0f) );
+
+	STATIC_REQUIRE(bx::kFloatInfinity == bx::pow(0.0f, -2.0f) );
+	STATIC_REQUIRE(0.0f == bx::pow(0.0f, 2.0f) );
+}
+
+TEST_CASE("exp float accuracy", "[math][libm]")
+{
+	for (float xx = -103.0f; xx < 88.0f; xx += 0.37f)
+	{
+		const float ref = float(bx::exp(double(xx) ) );
+
+		if (ref >= bx::kFloatSmallest)
+		{
+			REQUIRE(bx::isEqual(ref, bx::exp(xx), 1.0e-6f*ref) );
+		}
+	}
+
+	REQUIRE(::expf(-100.0f)   == bx::exp(-100.0f) );
+	REQUIRE(::expf(-103.9f)   == bx::exp(-103.9f) );
+	REQUIRE(0.0f              == bx::exp(-104.1f) );
+	REQUIRE(bx::isFinite(bx::exp(88.7f) ) );
+	REQUIRE(bx::isInfinite(bx::exp(88.8f) ) );
+}
+
+TEST_CASE("sinh, cosh near overflow", "[math][libm]")
+{
+	for (float xx = 88.0f; xx < 89.4f; xx += 0.013f)
+	{
+		const float rs = float(bx::sinh(double(xx) ) );
+		const float rc = float(bx::cosh(double(xx) ) );
+
+		if (bx::isFinite(rs) )
+		{
+			REQUIRE(bx::isEqual(rs, bx::sinh(xx), 1.0e-6f*rs) );
+			REQUIRE(bx::isEqual(rc, bx::cosh(xx), 1.0e-6f*rc) );
+		}
+	}
+
+	REQUIRE(bx::isFinite(bx::sinh(709.5) ) );
+	REQUIRE(bx::isFinite(bx::cosh(709.5) ) );
+	REQUIRE(bx::isInfinite(bx::cosh(711.0) ) );
+	REQUIRE(bx::signBit(bx::sinh(-709.5) ) );
+}
+
+TEST_CASE("trig large argument reduction", "[math][libm]")
+{
+	REQUIRE(bx::isFinite(bx::sin(1.0e308) ) );
+	REQUIRE(bx::isFinite(bx::cos(1.0e308) ) );
+	REQUIRE(bx::isFinite(bx::tan(1.0e308) ) );
+	REQUIRE(bx::isFinite(bx::sin(7.8145278949113378e+202) ) );
+	REQUIRE(bx::isFinite(bx::cos(7.8145278949113378e+202) ) );
+
+	{
+		int32_t quadrant = 0;
+		const double reduced = bx::reducePiHalfLarge(1.0e16, &quadrant);
+
+		REQUIRE(1 == quadrant);
+		REQUIRE(bx::isEqual(0.4307553505349006*1.5707963267948966, reduced, 1.0e-16) );
+	}
+
+	{
+		int32_t quadrant = 0;
+		const double reduced = bx::reducePiHalfLarge(1.0e22, &quadrant);
+
+		REQUIRE(3 == quadrant);
+		REQUIRE(bx::isEqual(0.35053490057448137839*1.5707963267948966, reduced, 1.0e-16) );
+	}
+
+	for (double xx = 1.0e3; xx < 1.6e6; xx *= 1.3)
+	{
+		int32_t quadrant = 0;
+
+		const double large = bx::reducePiHalfLarge(xx, &quadrant);
+		const double small = bx::sin(xx);
+
+		switch (quadrant)
+		{
+			case  0: REQUIRE(bx::isEqual(small,  bx::sinPiQuarter(large), 1.0e-15) ); break;
+			case  1: REQUIRE(bx::isEqual(small,  bx::cosPiQuarter(large), 1.0e-15) ); break;
+			case  2: REQUIRE(bx::isEqual(small, -bx::sinPiQuarter(large), 1.0e-15) ); break;
+			default: REQUIRE(bx::isEqual(small, -bx::cosPiQuarter(large), 1.0e-15) ); break;
+		}
+	}
+
+	for (int32_t pp = 21; pp <= 52; ++pp)
+	{
+		const double xx = bx::ldexp(1.0, pp) + 1.0;
+		const double dd = bx::ldexp(1.0, -8);
+
+		if (xx + dd - xx != dd)
+		{
+			continue;
+		}
+
+		const double lhs = bx::sin(xx + dd);
+		const double rhs = bx::sin(xx)*bx::cos(dd) + bx::cos(xx)*bx::sin(dd);
+
+		REQUIRE(bx::isEqual(lhs, rhs, 1.0e-15) );
+	}
+
+	bx::RngMwc rng;
+
+	for (uint32_t ii = 0; ii < 50000; ++ii)
+	{
+		const uint64_t hi   = uint64_t(rng.gen() );
+		const uint64_t lo   = uint64_t(rng.gen() );
+		const uint64_t bits = (hi<<32) | lo;
+		const double   xx   = bx::bitsToDouble(bits);
+
+		if (bx::isNan(xx) || bx::isInfinite(xx) )
+		{
+			continue;
+		}
+
+		const double ss = bx::sin(xx);
+		const double cc = bx::cos(xx);
+
+		REQUIRE(bx::isFinite(ss) );
+		REQUIRE(bx::isFinite(cc) );
+		REQUIRE(bx::abs(ss) <= 1.0);
+		REQUIRE(bx::abs(cc) <= 1.0);
+		REQUIRE(bx::isEqual(1.0, ss*ss + cc*cc, 1.0e-15) );
+	}
+}
+
 TEST_CASE("bitsToFloat, floatToBits, bitsToDouble, doubleToBits", "[math]")
 {
 	STATIC_REQUIRE(0x12345678u           == bx::floatToBits( bx::bitsToFloat (0x12345678u) ) );
 	STATIC_REQUIRE(0x123456789abcdef0ull == bx::doubleToBits(bx::bitsToDouble(0x123456789abcdef0ull) ) );
+}
+
+TEST_CASE("floatFlip", "[math]")
+{
+	const float values[] =
+	{
+		bx::LimitsT<float>::min,
+		-1000.0f,
+		  -30.0f,
+		  -10.0f,
+		   -1.0f,
+		   -0.5f,
+		   -0.0f,
+		    0.0f,
+		    0.5f,
+		    1.0f,
+		   10.0f,
+		   30.0f,
+		 1000.0f,
+		 bx::LimitsT<float>::max,
+	};
+
+	for (uint32_t ii = 1; ii < BX_COUNTOF(values); ++ii)
+	{
+		const uint32_t prev = bx::floatFlip(bx::floatToBits(values[ii-1]) );
+		const uint32_t curr = bx::floatFlip(bx::floatToBits(values[ii  ]) );
+
+		INFO("values[" << ii-1 << "] = " << values[ii-1] << " -> " << prev);
+		INFO("values[" << ii   << "] = " << values[ii  ] << " -> " << curr);
+
+		REQUIRE(prev <= curr);
+	}
+
+	REQUIRE(bx::floatFlip(bx::floatToBits(-0.0f) ) < bx::floatFlip(bx::floatToBits(0.0f) ) );
+
+	REQUIRE(bx::floatFlip(bx::floatToBits( 1.0f) ) != bx::floatFlip(bx::floatToBits(bx::bitsToFloat(bx::floatToBits( 1.0f)+1) ) ) );
+	REQUIRE(bx::floatFlip(bx::floatToBits(-1.0f) ) != bx::floatFlip(bx::floatToBits(bx::bitsToFloat(bx::floatToBits(-1.0f)+1) ) ) );
 }
 
 TEST_CASE("lerp", "[math]")

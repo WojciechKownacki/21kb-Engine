@@ -250,21 +250,26 @@ namespace entry
 			initTranslateKey(XK_Insert,       Key::Insert);
 			initTranslateKey(XK_Delete,       Key::Delete);
 			initTranslateKey(XK_Home,         Key::Home);
-			initTranslateKey(XK_KP_End,       Key::End);
+			initTranslateKey(XK_End,          Key::End);
 			initTranslateKey(XK_Page_Up,      Key::PageUp);
 			initTranslateKey(XK_Page_Down,    Key::PageDown);
 			initTranslateKey(XK_Print,        Key::Print);
 			initTranslateKey(XK_equal,        Key::Plus);
+			initTranslateKey(XK_KP_Add,       Key::Plus);
 			initTranslateKey(XK_minus,        Key::Minus);
+			initTranslateKey(XK_KP_Subtract,  Key::Minus);
 			initTranslateKey(XK_bracketleft,  Key::LeftBracket);
 			initTranslateKey(XK_bracketright, Key::RightBracket);
 			initTranslateKey(XK_semicolon,    Key::Semicolon);
 			initTranslateKey(XK_apostrophe,   Key::Quote);
 			initTranslateKey(XK_comma,        Key::Comma);
 			initTranslateKey(XK_period,       Key::Period);
+			initTranslateKey(XK_KP_Decimal,   Key::Period);
 			initTranslateKey(XK_slash,        Key::Slash);
+			initTranslateKey(XK_KP_Divide,    Key::Slash);
 			initTranslateKey(XK_backslash,    Key::Backslash);
 			initTranslateKey(XK_grave,        Key::Tilde);
+			initTranslateKey(XK_KP_Enter,     Key::Return);
 			initTranslateKey(XK_F1,           Key::F1);
 			initTranslateKey(XK_F2,           Key::F2);
 			initTranslateKey(XK_F3,           Key::F3);
@@ -350,6 +355,9 @@ namespace entry
 			m_visual = DefaultVisual(m_display, screen);
 			m_root   = RootWindow(m_display, screen);
 
+			m_netWmState           = XInternAtom(m_display, "_NET_WM_STATE",            False);
+			m_netWmStateFullscreen = XInternAtom(m_display, "_NET_WM_STATE_FULLSCREEN", False);
+
 			bx::memSet(&m_windowAttrs, 0, sizeof(m_windowAttrs) );
 			m_windowAttrs.background_pixel = 0;
 			m_windowAttrs.border_pixel     = 0;
@@ -358,6 +366,7 @@ namespace entry
 				| ButtonPressMask
 				| ButtonReleaseMask
 				| ExposureMask
+				| FocusChangeMask
 				| KeyPressMask
 				| KeyReleaseMask
 				| PointerMotionMask
@@ -521,7 +530,8 @@ namespace entry
 										{
 											Status status = 0;
 											uint8_t utf8[4];
-											int len = Xutf8LookupString(ic, &xkey, (char*)utf8, sizeof(utf8), &keysym, &status);
+											KeySym textKeysym = 0;
+											int len = Xutf8LookupString(ic, &xkey, (char*)utf8, sizeof(utf8), &textKeysym, &status);
 											switch (status)
 											{
 											case XLookupChars:
@@ -547,6 +557,28 @@ namespace entry
 									break;
 								}
 							}
+							break;
+
+						case FocusIn:
+							{
+								WindowHandle handle = findHandle(event.xfocus.window);
+								m_eventQueue.postSuspendEvent(handle, Suspend::WillResume);
+								m_eventQueue.postSuspendEvent(handle, Suspend::DidResume);
+							}
+							break;
+
+						case FocusOut:
+							{
+								m_modifiers = Modifier::None;
+
+								WindowHandle handle = findHandle(event.xfocus.window);
+								m_eventQueue.postSuspendEvent(handle, Suspend::WillSuspend);
+								m_eventQueue.postSuspendEvent(handle, Suspend::DidSuspend);
+							}
+							break;
+
+						case MappingNotify:
+							XRefreshKeyboardMapping(&event.xmapping);
 							break;
 
 						case ConfigureNotify:
@@ -578,7 +610,8 @@ namespace entry
 			XUnmapWindow(m_display, m_window[0]);
 			XDestroyWindow(m_display, m_window[0]);
 
-			XCloseDisplay(m_display);
+			// The graphics driver registers Xlib extension hooks on the display,
+			// and it is unloaded during renderer shutdown.
 			m_display = NULL;
 
 			return thread.getExitCode();
@@ -668,6 +701,9 @@ namespace entry
 		int32_t m_depth;
 		Visual* m_visual;
 		Window  m_root;
+
+		Atom    m_netWmState;
+		Atom    m_netWmStateFullscreen;
 
 		XSetWindowAttributes m_windowAttrs;
 
@@ -767,7 +803,31 @@ namespace entry
 
 	void toggleFullscreen(WindowHandle _handle)
 	{
-		BX_UNUSED(_handle);
+		Display* display = s_ctx.m_display;
+		Window   window  = s_ctx.m_window[_handle.idx];
+
+		constexpr long kNetWmStateToggle  = 2;
+		constexpr long kSourceApplication = 1;
+
+		XEvent event;
+		bx::memSet(&event, 0, sizeof(event) );
+		event.type                 = ClientMessage;
+		event.xclient.window       = window;
+		event.xclient.message_type = s_ctx.m_netWmState;
+		event.xclient.format       = 32;
+		event.xclient.data.l[0]    = kNetWmStateToggle;
+		event.xclient.data.l[1]    = long(s_ctx.m_netWmStateFullscreen);
+		event.xclient.data.l[2]    = 0;
+		event.xclient.data.l[3]    = kSourceApplication;
+		event.xclient.data.l[4]    = 0;
+
+		XSendEvent(display
+			, s_ctx.m_root
+			, False
+			, SubstructureNotifyMask|SubstructureRedirectMask
+			, &event
+			);
+		XFlush(display);
 	}
 
 	void setMouseLock(WindowHandle _handle, bool _lock)

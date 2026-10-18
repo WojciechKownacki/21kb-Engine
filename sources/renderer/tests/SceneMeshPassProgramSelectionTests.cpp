@@ -25,9 +25,9 @@ namespace {
 [[nodiscard]] bool InitHeadlessNoopBgfx() {
     bgfx::Init init;
     init.type = bgfx::RendererType::Noop;
-    init.resolution.width = 64U;
-    init.resolution.height = 64U;
-    init.resolution.reset = BGFX_RESET_NONE;
+    init.swapChain.width = 64U;
+    init.swapChain.height = 64U;
+    init.reset = BGFX_RESET_NONE;
     return bgfx::init(init);
 }
 

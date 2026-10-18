@@ -235,9 +235,9 @@ public:
     }
 
     [[nodiscard]] std::vector<std::uint8_t> ReadPixels() const {
-        bgfx::blit(kReadbackView, readback_, 0U, 0U, color_, 0U, 0U, width_, height_);
+        bgfx::blit(kReadbackView, bgfx::TextureRegion{ .handle = readback_ }, bgfx::TextureRegion{ .handle = color_, .width = width_, .height = height_ });
         std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width_) * height_ * 4U);
-        const std::uint32_t readyFrame = bgfx::readTexture(readback_, pixels.data());
+        const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{ .handle = readback_ }, pixels.data());
         std::uint32_t frame = bgfx::frame();
         for (std::uint32_t guard = 0U; frame < readyFrame && guard < 8U; ++guard) {
             frame = bgfx::frame();
@@ -334,19 +334,13 @@ public:
     [[nodiscard]] std::vector<std::uint8_t> ReadPixels() const {
         bgfx::blit(
             kReadbackView,
-            readback_,
-            0U,
-            0U,
-            output_,
-            0U,
-            0U,
-            NativeTestSurface::kExtent,
-            NativeTestSurface::kExtent);
+            bgfx::TextureRegion{ .handle = readback_ },
+            bgfx::TextureRegion{ .handle = output_, .width = NativeTestSurface::kExtent, .height = NativeTestSurface::kExtent });
         std::vector<std::uint8_t> pixels(
             static_cast<std::size_t>(NativeTestSurface::kExtent) *
             NativeTestSurface::kExtent * 4U);
         const std::uint32_t readyFrame =
-            bgfx::readTexture(readback_, pixels.data());
+            bgfx::read(bgfx::TextureRegion{ .handle = readback_ }, pixels.data());
         std::uint32_t frame = bgfx::frame();
         for (std::uint32_t guard = 0U;
              frame < readyFrame && guard < 8U;

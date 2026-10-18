@@ -10,65 +10,6 @@
 
 namespace bx
 {
-	inline bool isInRange(char _ch, char _from, char _to)
-	{
-		return unsigned(_ch - _from) <= unsigned(_to-_from);
-	}
-
-	bool isSpace(char _ch)
-	{
-		return ' '  == _ch // Space.
-			|| '\t' == _ch // Horizontal tab.
-			|| '\n' == _ch // Line feed / new line.
-			|| '\r' == _ch // Carriage return.
-			|| '\v' == _ch // Vertical tab.
-			|| '\f' == _ch // Form feed / new page.
-			;
-	}
-
-	bool isUpper(char _ch)
-	{
-		return isInRange(_ch, 'A', 'Z');
-	}
-
-	bool isLower(char _ch)
-	{
-		return isInRange(_ch, 'a', 'z');
-	}
-
-	bool isAlpha(char _ch)
-	{
-		return isLower(_ch) || isUpper(_ch);
-	}
-
-	bool isNumeric(char _ch)
-	{
-		return isInRange(_ch, '0', '9');
-	}
-
-	bool isAlphaNum(char _ch)
-	{
-		return false
-			|| isAlpha(_ch)
-			|| isNumeric(_ch)
-			;
-	}
-
-	bool isHexNum(char _ch)
-	{
-		return false
-			|| isInRange(toLower(_ch), 'a', 'f')
-			|| isNumeric(_ch)
-			;
-	}
-
-	bool isPrint(char _ch)
-	{
-		return isInRange(_ch, ' ', '~');
-	}
-
-	typedef bool (*CharTestFn)(char _ch);
-
 	template<CharTestFn fn>
 	inline bool isCharTest(const StringView& _str)
 	{
@@ -125,11 +66,6 @@ namespace bx
 		return isCharTest<isPrint>(_str);
 	}
 
-	char toLower(char _ch)
-	{
-		return _ch + (isUpper(_ch) ? 0x20 : 0);
-	}
-
 	void toLowerUnsafe(char* _inOutStr, int32_t _len)
 	{
 		for (int32_t ii = 0; ii < _len; ++ii)
@@ -142,11 +78,6 @@ namespace bx
 	{
 		const int32_t len = strLen(_inOutStr, _max);
 		toLowerUnsafe(_inOutStr, len);
-	}
-
-	char toUpper(char _ch)
-	{
-		return _ch - (isLower(_ch) ? 0x20 : 0);
 	}
 
 	void toUpperUnsafe(char* _inOutStr, int32_t _len)
@@ -165,7 +96,7 @@ namespace bx
 
 	typedef char (*CharFn)(char _ch);
 
-	inline constexpr char toNoop(char _ch)
+	inline BX_CONSTEXPR_FUNC char toNoop(char _ch)
 	{
 		return _ch;
 	}
@@ -479,6 +410,19 @@ namespace bx
 		return StringView(_str.getTerm(), _str.getTerm() );
 	}
 
+	StringView strLTrimSpaceHoriz(const StringView& _str)
+	{
+		for (const char* ptr = _str.getPtr(), *term = _str.getTerm(); ptr != term; ++ptr)
+		{
+			if (!isSpaceHoriz(*ptr) )
+			{
+				return StringView(ptr, term);
+			}
+		}
+
+		return StringView(_str.getTerm(), _str.getTerm() );
+	}
+
 	StringView strLTrimNonSpace(const StringView& _str)
 	{
 		for (const char* ptr = _str.getPtr(), *term = _str.getTerm(); ptr != term; ++ptr)
@@ -560,8 +504,6 @@ namespace bx
 				);
 	}
 
-	constexpr uint32_t kFindStep = 1024;
-
 	StringView strFindNl(const StringView& _str)
 	{
 		StringView str(_str);
@@ -578,23 +520,19 @@ namespace bx
 
 	StringView strFindEol(const StringView& _str)
 	{
-		StringView str(_str);
+		const StringView eol = strFind(_str, '\n');
 
-		for (; str.getPtr() != _str.getTerm()
-			 ; str = StringView(min(str.getPtr() + kFindStep, _str.getTerm() ), min(str.getPtr() + kFindStep*2, _str.getTerm() ) )
-			)
+		if (!eol.isEmpty() )
 		{
-			StringView eol = strFind(str, "\r\n");
-			if (!eol.isEmpty() )
+			const char* ptr = eol.getPtr();
+
+			if (ptr != _str.getPtr()
+			&&  '\r' == ptr[-1])
 			{
-				return StringView(eol.getPtr(), _str.getTerm() );
+				--ptr;
 			}
 
-			eol = strFind(str, '\n');
-			if (!eol.isEmpty() )
-			{
-				return StringView(eol.getPtr(), _str.getTerm() );
-			}
+			return StringView(ptr, _str.getTerm() );
 		}
 
 		return StringView(_str.getTerm(), _str.getTerm() );
@@ -611,6 +549,17 @@ namespace bx
 		const char* ptr  = _str.getPtr();
 		const char* term = strSkipWord(ptr, _str.getLength() );
 		return StringView(ptr, term);
+	}
+
+	StringView strIdentifier(const StringView& _str)
+	{
+		if (_str.isEmpty()
+		||  !(isAlpha(*_str.getPtr() ) || '_' == *_str.getPtr() ) )
+		{
+			return StringView(_str.getPtr(), _str.getPtr() );
+		}
+
+		return strWord(_str);
 	}
 
 	StringView strFindBlock(const StringView& _str, char _open, char _close)
@@ -1000,11 +949,19 @@ namespace bx
 				char* fracBegin = &str[dot - str + min(prec + _param.spec, 1)];
 				const int32_t curPrec = int32_t(fracEnd - fracBegin);
 
+				const int32_t exponentLen = int32_t(strEnd - fracEnd);
+				const int32_t maxPrec     = int32_t(sizeof(str) ) - 1
+					- int32_t(fracBegin - str)
+					- exponentLen
+					;
+
+				const int32_t reqPrec = 'g' == _param.fmt ? min(prec, curPrec) : prec;
+				const int32_t outPrec = min(reqPrec, maxPrec);
+
 				// Move exponent to its final location after trimming or adding extra 0s.
 				if (fracEnd != strEnd)
 				{
-					const int32_t exponentLen = int32_t(strEnd - fracEnd);
-					char* finalExponentPtr = &fracBegin[prec];
+					char* finalExponentPtr = &fracBegin[outPrec];
 					memMove(finalExponentPtr, fracEnd, exponentLen);
 
 					finalExponentPtr[exponentLen] = '\0';
@@ -1012,12 +969,12 @@ namespace bx
 				}
 				else
 				{
-					len = (int32_t)(fracBegin + prec - str);
+					len = (int32_t)(fracBegin + outPrec - str);
 				}
 
-				if (curPrec < prec)
+				if (curPrec < outPrec)
 				{
-					for (int32_t ii = curPrec; ii < prec; ++ii)
+					for (int32_t ii = curPrec; ii < outPrec; ++ii)
 					{
 						fracBegin[ii] = '0';
 					}
@@ -1479,6 +1436,196 @@ namespace bx
 		}
 
 		return formatHumanNumber(_out, _count, double(_value), 0, 1024.0, "iB", "BKMGTPEZY");
+	}
+
+	static uint32_t decodeUtf8(const uint8_t*& _ptr, const uint8_t* _end)
+	{
+		const uint8_t ch = *_ptr++;
+
+		if (ch < 0x80)
+		{
+			return ch;
+		}
+
+		uint32_t codePoint;
+		int32_t  num;
+
+		if (0xc0 == (ch & 0xe0) )
+		{
+			codePoint = ch & 0x1f;
+			num       = 1;
+		}
+		else if (0xe0 == (ch & 0xf0) )
+		{
+			codePoint = ch & 0x0f;
+			num       = 2;
+		}
+		else if (0xf0 == (ch & 0xf8) )
+		{
+			codePoint = ch & 0x07;
+			num       = 3;
+		}
+		else
+		{
+			return UINT32_MAX;
+		}
+
+		if (_end - _ptr < num)
+		{
+			return UINT32_MAX;
+		}
+
+		for (int32_t ii = 0; ii < num; ++ii)
+		{
+			const uint8_t cc = *_ptr++;
+
+			if (0x80 != (cc & 0xc0) )
+			{
+				return UINT32_MAX;
+			}
+
+			codePoint = (codePoint << 6) | (cc & 0x3f);
+		}
+
+		static const uint32_t kMinCodePoint[] = { 0x80, 0x800, 0x10000 };
+
+		if (codePoint <  kMinCodePoint[num-1]
+		||  codePoint >  0x10ffff
+		|| (codePoint >= 0xd800 && codePoint <= 0xdfff) )
+		{
+			return UINT32_MAX;
+		}
+
+		return codePoint;
+	}
+
+	int32_t toUtf16(uint16_t* _out, int32_t _max, const StringView& _str)
+	{
+		const uint8_t* ptr = (const uint8_t*)_str.getPtr();
+		const uint8_t* end = ptr + _str.getLength();
+
+		int32_t len = 0;
+
+		while (ptr < end)
+		{
+			const uint32_t codePoint = decodeUtf8(ptr, end);
+
+			if (UINT32_MAX == codePoint)
+			{
+				return 0;
+			}
+
+			const int32_t num = codePoint < 0x10000 ? 1 : 2;
+
+			if (0 != _max)
+			{
+				if (len + num >= _max)
+				{
+					return 0;
+				}
+
+				if (1 == num)
+				{
+					_out[len] = uint16_t(codePoint);
+				}
+				else
+				{
+					const uint32_t vv = codePoint - 0x10000;
+					_out[len+0] = uint16_t(0xd800 | (vv >>   10) );
+					_out[len+1] = uint16_t(0xdc00 | (vv & 0x3ff) );
+				}
+			}
+
+			len += num;
+		}
+
+		if (0 != _max)
+		{
+			_out[len] = 0;
+		}
+
+		return len+1;
+	}
+
+	int32_t fromUtf16(char* _out, int32_t _max, const uint16_t* _str)
+	{
+		int32_t len = 0;
+
+		for (const uint16_t* ptr = _str; 0 != *ptr;)
+		{
+			uint32_t codePoint = *ptr++;
+
+			if (codePoint >= 0xd800
+			&&  codePoint <= 0xdbff)
+			{
+				const uint32_t lo = *ptr;
+
+				if (lo < 0xdc00
+				||  lo > 0xdfff)
+				{
+					return 0;
+				}
+
+				++ptr;
+				codePoint = 0x10000 + ( (codePoint - 0xd800) << 10) + (lo - 0xdc00);
+			}
+			else if (codePoint >= 0xdc00
+			     &&  codePoint <= 0xdfff)
+			{
+				return 0;
+			}
+
+			const int32_t num =
+				  codePoint <    0x80 ? 1
+				: codePoint <   0x800 ? 2
+				: codePoint < 0x10000 ? 3
+				:                       4
+				;
+
+			if (0 != _max)
+			{
+				if (len + num >= _max)
+				{
+					return 0;
+				}
+
+				char* out = &_out[len];
+
+				switch (num)
+				{
+				case 1:
+					out[0] = char(codePoint);
+					break;
+
+				case 2:
+					out[0] = char(0xc0 | (codePoint >> 6) );
+					out[1] = char(0x80 | (codePoint & 0x3f) );
+					break;
+
+				case 3:
+					out[0] = char(0xe0 |   (codePoint >> 12) );
+					out[1] = char(0x80 | ( (codePoint >>  6) & 0x3f) );
+					out[2] = char(0x80 |   (codePoint        & 0x3f) );
+					break;
+
+				default:
+					out[0] = char(0xf0 |   (codePoint >> 18) );
+					out[1] = char(0x80 | ( (codePoint >> 12) & 0x3f) );
+					out[2] = char(0x80 | ( (codePoint >>  6) & 0x3f) );
+					out[3] = char(0x80 |   (codePoint        & 0x3f) );
+					break;
+				}
+			}
+
+			len += num;
+		}
+
+		if (0 != _max)
+		{
+			_out[len] = '\0';
+		}
+
+		return len+1;
 	}
 
 } // namespace bx

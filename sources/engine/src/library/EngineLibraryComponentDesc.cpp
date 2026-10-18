@@ -123,6 +123,31 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
+            .name = "Animator",
+            .id = ComputeLibraryComponentId("Animator"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "DeformedGeometry",
+            .id = ComputeLibraryComponentId("DeformedGeometry"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "SocketAttachment",
+            .id = ComputeLibraryComponentId("SocketAttachment"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Combatant",
+            .id = ComputeLibraryComponentId("Combatant"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "AIBrain",
+            .id = ComputeLibraryComponentId("AIBrain"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "Tags",
             .id = ComputeLibraryComponentId("Tags"),
             .serializable = true,

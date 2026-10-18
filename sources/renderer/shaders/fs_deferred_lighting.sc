@@ -360,32 +360,14 @@ vec3 ApplyFog(vec3 color, vec3 worldPos, vec2 pixel)
     return color * transmittance + u_fogColor.rgb * (1.0 - transmittance) + inScattered;
 }
 
-void main()
+// The lit colour of the G-buffer surface at this pixel; an unlit surface comes back without fog.
+vec3 ShadeSurface(vec2 uv, vec2 pixel, vec4 albedo, vec4 encodedNormal, float depth, out vec3 worldPos, out bool fogged)
 {
-    vec4 albedo = texture2D(s_gbufferAlbedo, v_texcoord0);
-    vec4 encodedNormal = texture2D(s_gbufferNormal, v_texcoord0);
-    float depth = texture2D(s_gbufferDepth, v_texcoord0).x;
-    // The normal attachment reserves alpha 0 for its clear value, while every
-    // opaque G-buffer write stores 1. This is independent from both depth
-    // conventions and authored material opacity.
-    bool background = encodedNormal.a < 0.5;
-    if (background) {
-        vec3 backdropDirection = normalize(ReconstructWorldPosition(v_texcoord0, depth) - u_deferredCameraPosition.xyz);
-        // The sky is as far away as the fog is marched: it takes the fog (and its light shafts) in front of it.
-        vec3 skyEnd = u_deferredCameraPosition.xyz + backdropDirection * u_fogVolumetric.y;
-        if (u_deferredBackdropParams.x > 0.5) {
-            gl_FragColor = vec4(ApplyFog(KbBackdropRadiance(backdropDirection), skyEnd, gl_FragCoord.xy), 1.0);
-            return;
-        }
-        if (u_fogSky.w > 0.5) {
-            gl_FragColor = vec4(ApplyFog(u_fogSky.rgb, skyEnd, gl_FragCoord.xy), 1.0);
-            return;
-        }
-        discard;
-    }
+    worldPos = vec3_splat(0.0);
+    fogged = false;
     vec3 normal = normalize(encodedNormal.xyz * 2.0 - 1.0);
-    vec4 material = texture2D(s_gbufferMaterial, v_texcoord0);
-    vec4 surface = texture2D(s_gbufferSurface, v_texcoord0);
+    vec4 material = texture2D(s_gbufferMaterial, uv);
+    vec4 surface = texture2D(s_gbufferSurface, uv);
     float metallic = clamp(material.x, 0.0, 1.0);
     float roughness = clamp(material.y, 0.04, 1.0);
     float occlusion = clamp(material.z, 0.0, 1.0);
@@ -397,7 +379,7 @@ void main()
     vec3 irisNormal = normal;
     vec2 iris = vec2_splat(0.0);
     if (u_deferredCustomData.x > 0.5) {
-        vec4 customData = texture2D(s_gbufferCustom, v_texcoord0);
+        vec4 customData = texture2D(s_gbufferCustom, uv);
         if (abs(shadingModel - KB_GBUFFER_SHADING_MODEL_EYE) < 0.5) {
             // Iris normal (octahedral), mask, distance; zero = an eye without iris data.
             if (dot(customData, vec4_splat(1.0)) > 0.0) {
@@ -410,11 +392,11 @@ void main()
     }
 
     if (abs(shadingModel - KB_GBUFFER_SHADING_MODEL_UNLIT) < 0.5) {
-        gl_FragColor = vec4(albedo.rgb + surface.rgb, 1.0);
-        return;
+        return albedo.rgb + surface.rgb;
     }
 
-    vec3 worldPos = ReconstructWorldPosition(v_texcoord0, depth);
+    fogged = true;
+    worldPos = ReconstructWorldPosition(uv, depth);
     vec3 viewDir = normalize(u_deferredCameraPosition.xyz - worldPos);
 
     float shadowVisible = 1.0;
@@ -437,7 +419,7 @@ void main()
     aoAccumulated = mix(1.0, aoAccumulated, step(0.0001, u_aoParams.x));
     // The sky light reaches only as much of the sky as the voxel GI sees (occluded sky light).
     skyAccumulated = mix(1.0, skyAccumulated, step(0.0001, u_giParams.x));
-    vec4 reflection = KbScreenSpaceReflection(worldPos, normal, viewDir, roughness, gl_FragCoord.xy);
+    vec4 reflection = KbScreenSpaceReflection(worldPos, normal, viewDir, roughness, pixel);
     vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, specular, occlusion * aoAccumulated * skyAccumulated, reflection);
     if (KbIsShadingModel(shadingModel, KB_GBUFFER_SHADING_MODEL_CLEAR_COAT) && u_deferredEnvironmentParams.x > 0.5) {
         vec3 coatDirection = reflect(-viewDir, normal);
@@ -459,6 +441,39 @@ void main()
     if (u_giParams.x > 0.0) {
         lighting += giAccumulated * albedo.rgb * ((1.0 - metallic) * occlusion * aoAccumulated * u_giParams.x);
     }
+    return lighting + surface.rgb;
+}
 
-    gl_FragColor = vec4(ApplyFog(lighting + surface.rgb, worldPos, gl_FragCoord.xy), 1.0);
+void main()
+{
+    vec4 albedo = texture2D(s_gbufferAlbedo, v_texcoord0);
+    vec4 encodedNormal = texture2D(s_gbufferNormal, v_texcoord0);
+    float depth = texture2D(s_gbufferDepth, v_texcoord0).x;
+    // The normal attachment reserves alpha 0 for its clear value, while every
+    // opaque G-buffer write stores 1. This is independent from both depth
+    // conventions and authored material opacity.
+    bool background = encodedNormal.a < 0.5;
+    vec3 color;
+    vec3 fogEnd;
+    bool fogged = true;
+    if (background) {
+        if (u_deferredBackdropParams.x <= 0.5 && u_fogSky.w <= 0.5) {
+            discard;
+        }
+        vec3 backdropDirection = normalize(ReconstructWorldPosition(v_texcoord0, depth) - u_deferredCameraPosition.xyz);
+        // The sky is as far away as the fog is marched: it takes the fog (and its light shafts) in front of it.
+        fogEnd = u_deferredCameraPosition.xyz + backdropDirection * u_fogVolumetric.y;
+        if (u_deferredBackdropParams.x > 0.5) {
+            color = KbBackdropRadiance(backdropDirection);
+        } else {
+            color = u_fogSky.rgb;
+        }
+    } else {
+        color = ShadeSurface(v_texcoord0, gl_FragCoord.xy, albedo, encodedNormal, depth, fogEnd, fogged);
+    }
+    // One call: the volumetric fog march is the bulk of this shader, and each call is inlined.
+    if (fogged) {
+        color = ApplyFog(color, fogEnd, gl_FragCoord.xy);
+    }
+    gl_FragColor = vec4(color, 1.0);
 }

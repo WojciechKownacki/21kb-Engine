@@ -423,8 +423,8 @@ void RunBakedTextureEtc2AlphaTest() {
     Require(kb::render::bake::ReadBakedTexture(baked.primaryBlock, asset) && asset.gpuBlocks.has_value(),
         "The ETC2 RGBA8 KTX payload could not be read back");
     Require(asset.mipCount == ExpectedMipCount(edge, edge) &&
-            asset.gpuBlocks->blocks.size() == bimg::imageGetSize(
-                nullptr, edge, edge, 1U, false, true, 1U, bimg::TextureFormat::ETC2A),
+            asset.gpuBlocks->blocks.size() == static_cast<std::uint32_t>(bimg::imageGetSize(
+                nullptr, edge, edge, 1U, false, true, 1U, bimg::TextureFormat::ETC2A)),
         "The ETC2 RGBA8 payload does not contain one complete, correctly sized mip chain");
 
     const std::optional<RenderTextureAssetData> decoded = DecodeRenderTextureToRgba8(asset);
@@ -1190,7 +1190,7 @@ void RunBakedTextureReadBackTest() {
         VectorWriter writer{ uncompressedKtx };
         bx::Error error;
         const std::uint32_t chainBytes =
-            bimg::imageGetSize(nullptr, edge, edge, 1U, false, true, 1U, bimg::TextureFormat::RGBA8);
+            static_cast<std::uint32_t>(bimg::imageGetSize(nullptr, edge, edge, 1U, false, true, 1U, bimg::TextureFormat::RGBA8));
         const std::vector<std::uint8_t> pixels(chainBytes, 0x40U);
         bimg::imageWriteKtx(&writer,
             bimg::TextureFormat::RGBA8,
@@ -1222,8 +1222,8 @@ void RunBakedTextureReadBackTest() {
     const std::uint32_t ktxHeaderBytes = 64U;
     const std::size_t mipCountFieldOffset = 56U; // KTX 1.1: numberOfMipmapLevels
     const std::size_t internalFormatFieldOffset = 28U; // KTX 1.1: glInternalFormat
-    const std::uint32_t completeChainBytes = bimg::imageGetSize(
-        nullptr, edge, edge, 1U, false, true, 1U, static_cast<bimg::TextureFormat::Enum>(baked.format));
+    const std::uint32_t completeChainBytes = static_cast<std::uint32_t>(bimg::imageGetSize(
+        nullptr, edge, edge, 1U, false, true, 1U, static_cast<bimg::TextureFormat::Enum>(baked.format)));
 
     const auto withDeclaredMipCount = [&](std::uint32_t declaredMips, bool padToImpliedLength) {
         std::vector<std::uint8_t> container = baked.primaryBlock;
@@ -2267,8 +2267,8 @@ void RunBakedTextureGpuUploadTest() {
         "The GPU upload fixture did not load as baked blocks");
 
     // What the same bytes decode to on the CPU, for the comparison below.
-    const std::uint32_t level0Bytes = bimg::imageGetSize(
-        nullptr, kExtent, kExtent, 1U, false, false, 1U, bimg::TextureFormat::BC1);
+    const std::uint32_t level0Bytes = static_cast<std::uint32_t>(bimg::imageGetSize(
+        nullptr, kExtent, kExtent, 1U, false, false, 1U, bimg::TextureFormat::BC1));
     const std::vector<std::uint8_t> expected = DecodeLevelToRgba8(
         std::span<const std::uint8_t>{ asset->gpuBlocks->blocks.data(), level0Bytes },
         kExtent,
@@ -2340,10 +2340,10 @@ void RunBakedTextureGpuUploadTest() {
     Require(surface.IsValid(), "The GPU upload test could not create a native surface");
     bgfx::Init init;
     init.type = bgfx::RendererType::Direct3D11;
-    init.resolution.width = NativeTestSurface::kExtent;
-    init.resolution.height = NativeTestSurface::kExtent;
-    init.resolution.reset = BGFX_RESET_NONE;
-    init.platformData.nwh = surface.NativeWindowHandle();
+    init.swapChain.width = NativeTestSurface::kExtent;
+    init.swapChain.height = NativeTestSurface::kExtent;
+    init.reset = BGFX_RESET_NONE;
+    init.swapChain.nwh = surface.NativeWindowHandle();
     Require(bgfx::init(init), "The GPU upload test requires a Direct3D11 device");
 
     bool sampledMatches = false;
@@ -2417,8 +2417,8 @@ void RunBakedTextureGpuUploadTest() {
 
             std::vector<std::uint8_t> pixels(
                 static_cast<std::size_t>(NativeTestSurface::kExtent) * NativeTestSurface::kExtent * 4U, 0U);
-            bgfx::blit(1U, readback, 0U, 0U, color, 0U, 0U, NativeTestSurface::kExtent, NativeTestSurface::kExtent);
-            const std::uint32_t readyFrame = bgfx::readTexture(readback, pixels.data());
+            bgfx::blit(1U, bgfx::TextureRegion{ .handle = readback }, bgfx::TextureRegion{ .handle = color, .width = NativeTestSurface::kExtent, .height = NativeTestSurface::kExtent });
+            const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{ .handle = readback }, pixels.data());
             std::uint32_t frame = bgfx::frame();
             for (std::uint32_t guard = 0U; frame < readyFrame && guard < 8U; ++guard) {
                 frame = bgfx::frame();

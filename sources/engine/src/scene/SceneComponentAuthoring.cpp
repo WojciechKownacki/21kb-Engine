@@ -60,6 +60,23 @@ const std::array kEntries{
         KB_COMPONENT(CharacterControllers, characterController, CharacterControllerComponent{}) },
     Entry{ { "Joint", "Joint", "Physics.Jolt" }, KB_COMPONENT(Joints, joint, JointComponent{}) },
     Entry{ { "SkeletonBinding", "Skeleton Binding", {} }, KB_CHECKED_COMPONENT(SkeletonBindings, skeletonBinding, SkeletonBindingComponent{}) },
+    Entry{ { "SocketAttachment", "Socket Attachment", {} }, KB_CHECKED_COMPONENT(SocketAttachments, socketAttachment, SocketAttachmentComponent{}) },
+    Entry{ { "Combatant", "Combatant", {} }, KB_CHECKED_COMPONENT(Combatants, combatant, CombatantComponent{}) },
+    // A brain needs a body to fight with: without a Combatant it gets one on the monsters' team (2),
+    // the players' (1) enemies, as the default Melee preset expects.
+    Entry{ { "AIBrain", "AI Brain", "Gameplay.AI" },
+        [](const Scene& scene, SceneEntity entity) { return scene.Components().AIBrains().Has(entity); },
+        [](Scene& scene, SceneEntity entity) {
+            if (!scene.Components().AIBrains().Set(entity, AIBrainComponent{})) return false;
+            if (!scene.Components().Combatants().Has(entity)) {
+                CombatantComponent combatant{};
+                combatant.team = 2U;
+                static_cast<void>(scene.Components().Combatants().Set(entity, combatant));
+            }
+            return true;
+        },
+        [](Scene& scene, SceneEntity entity) { scene.Components().AIBrains().Remove(entity); },
+        [](const ScenePrefabNodeComponents& node) { return node.aiBrain.has_value(); } },
     Entry{ { "DeformedGeometry", "Deformed Geometry", {} },
         KB_CHECKED_COMPONENT(DeformedGeometries, deformedGeometry, DrawD3DeformedGeometryComponent{}) },
     Entry{ { "Tags", "Object Classification", {} }, KB_COMPONENT(Tags, tags, TagsComponent{}) },

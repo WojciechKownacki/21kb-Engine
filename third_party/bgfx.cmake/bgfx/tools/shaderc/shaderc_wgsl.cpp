@@ -7,8 +7,6 @@
 
 #if SHADERC_CONFIG_HAS_TINT && SHADERC_CONFIG_HAS_GLSLANG
 
-#include <iostream> // std::cout
-
 BX_PRAGMA_DIAGNOSTIC_PUSH()
 BX_PRAGMA_DIAGNOSTIC_IGNORED_MSVC(4100) // error C4100: 'inclusionDepth' : unreferenced formal parameter
 BX_PRAGMA_DIAGNOSTIC_IGNORED_MSVC(4265) // error C4265: 'spv::spirvbin_t': class has virtual functions, but destructor is not virtual
@@ -190,15 +188,24 @@ namespace bgfx { namespace wgsl
 		return bgfx::TextureComponentType::Float;
 	}
 
-	bgfx::TextureDimension::Enum spirvDimToTextureViewDimension(spv::Dim _dim, bool _textureArray)
+	bgfx::TextureDimension::Enum spirvDimToTextureViewDimension(spv::Dim _dim, bool _textureArray, bool _multisampled)
 	{
 		switch (_dim)
 		{
 		case spv::Dim::Dim1D: return bgfx::TextureDimension::Dimension1D;
-		case spv::Dim::Dim2D: return _textureArray
-			? bgfx::TextureDimension::Dimension2DArray
-			: bgfx::TextureDimension::Dimension2D
-			;
+		case spv::Dim::Dim2D:
+			if (_multisampled)
+			{
+				return _textureArray
+					? bgfx::TextureDimension::Dimension2DMSArray
+					: bgfx::TextureDimension::Dimension2DMS
+					;
+			}
+
+			return _textureArray
+				? bgfx::TextureDimension::Dimension2DArray
+				: bgfx::TextureDimension::Dimension2D
+				;
 		case spv::Dim::Dim3D: return bgfx::TextureDimension::Dimension3D;
 
 		case spv::Dim::DimCube: return _textureArray
@@ -292,6 +299,14 @@ namespace bgfx { namespace wgsl
 		"a_texcoord5",
 		"a_texcoord6",
 		"a_texcoord7",
+		"a_texcoord8",
+		"a_texcoord9",
+		"a_texcoord10",
+		"a_texcoord11",
+		"a_texcoord12",
+		"a_texcoord13",
+		"a_texcoord14",
+		"a_texcoord15",
 	};
 	static_assert(bgfx::Attrib::Count == BX_COUNTOF(s_attribName) );
 
@@ -320,8 +335,10 @@ namespace bgfx { namespace wgsl
 		"BgfxISampler3D",
 		"BgfxUSampler3D",
 		"BgfxSamplerCube",
+		"BgfxSamplerCubeArray",
 		"BgfxSamplerCubeShadow",
 		"BgfxSampler2DMS",
+		"BgfxSampler2DMSArray",
 	};
 
 	static uint16_t writeUniformArray(bx::WriterI* _shaderWriter, const UniformArray& uniforms, bool isFragmentShader)
@@ -329,6 +346,8 @@ namespace bgfx { namespace wgsl
 		uint16_t size = 0;
 
 		bx::ErrorAssert err;
+
+		RawBindings().write(_shaderWriter, &err);
 
 		uint16_t count = uint16_t(uniforms.size() );
 		bx::write(_shaderWriter, count, &err);
@@ -819,7 +838,7 @@ namespace bgfx { namespace wgsl
 									);
 
 							un.texComponent = textureComponentTypeToId(spirvCrossBaseTypeToFormatType(componentType, imageType.depth) );
-							un.texDimension = textureDimensionToId(spirvDimToTextureViewDimension(imageType.dim, imageType.arrayed) );
+							un.texDimension = textureDimensionToId(spirvDimToTextureViewDimension(imageType.dim, imageType.arrayed, imageType.ms) );
 							un.texFormat    = uint16_t(s_textureFormats[imageType.format]);
 
 							un.regIndex = uint16_t(binding_index);
@@ -849,7 +868,7 @@ namespace bgfx { namespace wgsl
 							un.type = type;
 
 							un.texComponent = textureComponentTypeToId(spirvCrossBaseTypeToFormatType(componentType, imageType.depth) );
-							un.texDimension = textureDimensionToId(spirvDimToTextureViewDimension(imageType.dim, imageType.arrayed) );
+							un.texDimension = textureDimensionToId(spirvDimToTextureViewDimension(imageType.dim, imageType.arrayed, imageType.ms) );
 							un.texFormat = uint16_t(s_textureFormats[imageType.format]);
 							un.texFormat |= 0
 								| (spv::AccessQualifierReadOnly  == imageType.access ? kAccessRead  : 0)

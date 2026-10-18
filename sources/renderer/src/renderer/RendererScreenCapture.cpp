@@ -102,8 +102,6 @@ void RendererScreenCapture::Process(const kb::scene::Scene& scene, const RenderS
 
     const bgfx::Caps* caps = bgfx::getCaps();
     const bool capsSupported = caps != nullptr
-        && (caps->supported & BGFX_CAPS_TEXTURE_READ_BACK) != 0U
-        && (caps->supported & BGFX_CAPS_TEXTURE_BLIT) != 0U
         && bgfx::getRendererType() != bgfx::RendererType::Noop;
     // An MSAA color target cannot be blitted directly; the capture needs the submit's
     // resolved single-sample texture. Without MSAA the scene color texture itself is the
@@ -136,8 +134,8 @@ void RendererScreenCapture::Process(const kb::scene::Scene& scene, const RenderS
         return;
     }
     bytes_.resize(static_cast<std::size_t>(width) * height * bytesPerPixel);
-    bgfx::blit(blitView, staging_, 0U, 0U, source);
-    readyFrame_ = bgfx::readTexture(staging_, bytes_.data());
+    bgfx::blit(blitView, bgfx::TextureRegion{ .handle = staging_ }, bgfx::TextureRegion{ .handle = source });
+    readyFrame_ = bgfx::read(bgfx::TextureRegion{ .handle = staging_ }, bytes_.data());
     inFlight_ = true;
     activeScene_ = &const_cast<kb::scene::Scene&>(scene);
     sceneId_ = scene.Id();

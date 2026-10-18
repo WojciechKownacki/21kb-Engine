@@ -12,7 +12,7 @@ builds the same for the editor and tools. Add a dependency there before it is bu
 
 - Repository: https://github.com/bkaradzic/bgfx
 - Local path: `third_party/bgfx`
-- Revision: `0d4141d`
+- Revision: `4410cdf`
 - License: BSD 2-Clause
 - License file: `third_party/bgfx/LICENSE`
 
@@ -124,9 +124,9 @@ reproduced with the shipped licenses.
 ## etcpak
 
 - Repository: https://github.com/wolfpld/etcpak
-- Local path: `third_party/bgfx.cmake/bimg/3rdparty/etc2`
+- Local path: `third_party/bgfx.cmake/bimg/3rdparty/etcpak`
 - License: BSD 3-Clause
-- License file: `third_party/bgfx.cmake/bimg/3rdparty/etc2/LICENSE.txt`
+- License file: `third_party/bgfx.cmake/bimg/3rdparty/etcpak/LICENSE.txt`
 
 The ETC2 codec is the copy embedded by bimg. Its copyright notice, license
 conditions, and disclaimer must accompany source and binary distributions.
@@ -184,9 +184,14 @@ Compiled into every player:
 - stb (stb_image, stb_truetype) (MIT or Unlicense)
 - meshoptimizer (MIT), also compiled into the renderer's mesh baker
 - cgltf (with jsmn) (MIT), the glTF reader
+- dav1d (BSD 2-Clause), bimg's AV1 decoder for AVIF images
+- libavif (with libyuv) (BSD 2-Clause and BSD 3-Clause), bimg's AVIF reader
+- NanoSVG (zlib), bimg's SVG reader
+- SimpleWebP (BSD 3-Clause), bimg's WebP reader
 
-21kb patches cgltf, bimg and stb_image in place to harden them against malformed files; each change is
-marked with a `21kb:` comment and described under `modified` in `third_party_manifest.json`.
+21kb patches cgltf, bimg and stb_image to harden them against malformed files; the patches live in
+`third_party/bgfx-patches`, each change is marked with a `21kb:` comment and described under `modified`
+in `third_party_manifest.json`.
 - DirectX-Headers (MIT), Windows players
 - Khronos API headers (OpenGL, OpenGL ES, EGL, Vulkan) (MIT and Apache 2.0; text in `licenses/khronos.txt`)
 - RenderDoc in-application API header (MIT; text in `licenses/renderdoc.txt`)
@@ -201,8 +206,6 @@ Compiled only into the editor, the cooker and the shader compiler:
 - libsquish (MIT)
 - NVIDIA Texture Tools (BC6H/BC7 codecs) (MIT and Apache 2.0)
 - PVRTC codec (BSD 2-Clause)
-- fcpp (BSD 2-Clause)
-- GLSL Optimizer (MIT)
 - glslang (BSD 3-Clause, BSD 2-Clause, MIT and Apache 2.0)
 - SPIRV-Cross (Apache 2.0)
 - SPIRV-Tools (Apache 2.0)

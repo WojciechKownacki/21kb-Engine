@@ -1,5 +1,7 @@
 #include "inspection/InspectorPanelTextBuilder.hpp"
 
+#include "engine/scene/SceneAnimators.hpp"
+#include "engine/scene/SocketAttachmentComponent.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -242,6 +244,13 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
         text += "\n\nNav Obstacle\nRadius: " + std::to_string(obstacle->radius) +
             "\nArea: " + std::to_string(obstacle->area) +
             "\nCarve: " + std::string{ obstacle->carve ? "true" : "false" };
+    }
+    if (const kb::scene::SocketAttachmentComponent* attachment = sceneContext.Scene().Components().SocketAttachments().TryGet(selected);
+        attachment != nullptr) {
+        const kb::scene::SocketAttachmentStatus status = sceneContext.Scene().Animators().SocketAttachment(selected);
+        text += "\n\nSocket Attachment\nSocket: " + std::string{ kb::scene::SocketAttachmentName(*attachment) } +
+            "\nStatus: " + (status.attached ? "follows '" + status.resolvedName + "'" : status.error) +
+            "\nEnabled: " + std::string{ attachment->enabled ? "true" : "false" };
     }
     if (const kb::scene::NavLink* link = sceneContext.Scene().Components().NavLinks().TryGet(selected); link != nullptr) {
         text += "\n\nNav Link\nKind: " + std::string{ link->kind == kb::scene::NavLinkKind::Jump ? "Jump" : link->kind == kb::scene::NavLinkKind::Ladder ? "Ladder" : "Walk" } +

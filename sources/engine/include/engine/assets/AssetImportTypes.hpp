@@ -94,6 +94,9 @@ struct AssetImportItemResult {
     std::uint64_t sourceHash = 0;
     std::uint64_t assetHash = 0;
     std::string error;
+    // Further assets the same source produced beside `id`: a skeletal model's skeleton and
+    // animation clips, its textures and materials.
+    std::vector<AssetId> producedAssets;
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return error.empty() &&

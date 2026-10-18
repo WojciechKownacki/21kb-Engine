@@ -10,6 +10,10 @@
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/SceneAnimators.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneSkeletalMeshSetup.hpp"
+#include "engine/scene/SceneObject.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
@@ -19,14 +23,19 @@
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletalMeshFbxImporter.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -216,8 +225,220 @@ void RunSkeletalFbxImportStopsAtMemoryCeilingTest(const std::filesystem::path& r
 
 namespace kb::tests {
 
+// A glTF document with its buffer written beside it: each added array becomes one accessor.
+class GltfFixtureWriter final {
+public:
+    std::size_t Add(std::span<const float> values, std::string_view type) {
+        return Append(values.data(), values.size_bytes(), values.size() / Components(type), 5126, type);
+    }
+    std::size_t AddJoints(std::span<const std::uint16_t> values) {
+        return Append(values.data(), values.size_bytes(), values.size() / 4U, 5123, "VEC4");
+    }
+    std::size_t AddIndices(std::span<const std::uint16_t> values) {
+        return Append(values.data(), values.size_bytes(), values.size(), 5123, "SCALAR");
+    }
+    // `body` is the rest of the document after "accessors".
+    void Write(const std::filesystem::path& gltf, std::string_view body) const {
+        std::filesystem::create_directories(gltf.parent_path());
+        const std::string bin = gltf.stem().string() + ".bin";
+        std::ofstream{ gltf.parent_path() / bin, std::ios::binary | std::ios::trunc }
+            .write(bytes_.data(), static_cast<std::streamsize>(bytes_.size()));
+        std::string json = R"({"asset":{"version":"2.0"},"buffers":[{"uri":")" + bin + R"(","byteLength":)" +
+            std::to_string(bytes_.size()) + R"(}],"bufferViews":[)" + views_ + R"(],"accessors":[)" + accessors_ + "]";
+        json += body;
+        json += "}";
+        WriteTextFile(gltf, json);
+    }
+
+private:
+    [[nodiscard]] static std::size_t Components(std::string_view type) {
+        return type == "SCALAR" ? 1U : type == "VEC3" ? 3U : type == "VEC4" ? 4U : 16U;
+    }
+    std::size_t Append(const void* data, std::size_t size, std::size_t count, int componentType, std::string_view type) {
+        while (bytes_.size() % 4U != 0U) bytes_.push_back('\0');
+        const std::size_t offset = bytes_.size();
+        bytes_.append(static_cast<const char*>(data), size);
+        const std::size_t index = count_++;
+        views_ += std::string{ index == 0U ? "" : "," } + R"({"buffer":0,"byteOffset":)" + std::to_string(offset) +
+            R"(,"byteLength":)" + std::to_string(size) + "}";
+        accessors_ += std::string{ index == 0U ? "" : "," } + R"({"bufferView":)" + std::to_string(index) +
+            R"(,"componentType":)" + std::to_string(componentType) + R"(,"count":)" + std::to_string(count) +
+            R"(,"type":")" + std::string{ type } + "\"}";
+        return index;
+    }
+    std::string bytes_;
+    std::string views_;
+    std::string accessors_;
+    std::size_t count_ = 0U;
+};
+
+// What Blender writes: stepped constant channels, channels keyed at different instants, a
+// channel on the armature object itself; then the same rig's animations exported alone.
+void RunBlenderStyleGltfImportTest(const std::filesystem::path& root) {
+    const std::array<float, 9U> positions{ 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F };
+    const std::array<std::uint16_t, 12U> joints{ 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 1U, 0U, 0U, 0U };
+    const std::array<float, 12U> weights{ 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F };
+    const std::array<std::uint16_t, 3U> indices{ 0U, 1U, 2U };
+    const std::array<float, 32U> inverseBinds{
+        1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F,
+        1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, -1.0F, 0.0F, 1.0F,
+    };
+    const std::array<float, 2U> rotationTimes{ 0.0F, 1.0F };
+    const std::array<float, 8U> rotations{ 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.7071068F, 0.7071068F };
+    const std::array<float, 2U> stepTimes{ 0.0F, 0.5F };
+    const std::array<float, 6U> steppedTranslations{ 0.0F, 1.0F, 0.0F, 0.0F, 2.0F, 0.0F };
+    const std::array<float, 6U> armatureTranslations{ 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 5.0F };
+    const auto animations = [](std::size_t rotationTime, std::size_t rotation, std::size_t stepTime,
+                                std::size_t stepped, std::size_t armatureMove, int spine, int armature) {
+        const std::string spineNode = std::to_string(spine);
+        return R"(,"animations":[{"name":"Walk","samplers":[{"input":)" + std::to_string(rotationTime) + R"(,"output":)" +
+            std::to_string(rotation) + R"(,"interpolation":"LINEAR"},{"input":)" + std::to_string(stepTime) +
+            R"(,"output":)" + std::to_string(stepped) + R"(,"interpolation":"STEP"},{"input":)" +
+            std::to_string(rotationTime) + R"(,"output":)" + std::to_string(armatureMove) +
+            R"(,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":)" + spineNode +
+            R"(,"path":"rotation"}},{"sampler":1,"target":{"node":)" + spineNode +
+            R"(,"path":"translation"}},{"sampler":2,"target":{"node":)" + std::to_string(armature) +
+            R"(,"path":"translation"}}]}])";
+    };
+
+    GltfFixtureWriter character;
+    const std::size_t position = character.Add(positions, "VEC3");
+    const std::size_t joint = character.AddJoints(joints);
+    const std::size_t weight = character.Add(weights, "VEC4");
+    const std::size_t index = character.AddIndices(indices);
+    const std::size_t bind = character.Add(inverseBinds, "MAT4");
+    const std::size_t rotationTime = character.Add(rotationTimes, "SCALAR");
+    const std::size_t rotation = character.Add(rotations, "VEC4");
+    const std::size_t stepTime = character.Add(stepTimes, "SCALAR");
+    const std::size_t stepped = character.Add(steppedTranslations, "VEC3");
+    const std::size_t armatureMove = character.Add(armatureTranslations, "VEC3");
+    const std::filesystem::path characterSource = root / "BlenderSources" / "Knight.gltf";
+    character.Write(characterSource,
+        R"(,"meshes":[{"primitives":[{"attributes":{"POSITION":)" + std::to_string(position) + R"(,"JOINTS_0":)" +
+        std::to_string(joint) + R"(,"WEIGHTS_0":)" + std::to_string(weight) + R"(},"indices":)" + std::to_string(index) +
+        R"(}]}],"nodes":[{"name":"Armature","children":[1,3]},{"name":"Root","children":[2]},{"name":"Spine","translation":[0,1,0]},)" +
+        R"({"mesh":0,"skin":0}],"skins":[{"joints":[1,2],"inverseBindMatrices":)" + std::to_string(bind) + "}]" +
+        animations(rotationTime, rotation, stepTime, stepped, armatureMove, 2, 0));
+
+    std::string importError;
+    kb::scene::SkeletalMeshGltfImportReport report;
+    const auto imported = kb::scene::SkeletalMeshGltfImporter::Import(characterSource, 777U, {}, &importError, &report);
+    const std::string importFailure = "A Blender-style glTF character was refused: " + importError;
+    Require(imported.has_value(), importFailure.c_str());
+    Require(imported->clips.size() == 1U && imported->clipNames == std::vector<std::string>{ "Walk" },
+        "Skeletal glTF import lost the source animation's name");
+    const kb::scene::AnimationBoneTrack& spine = imported->clips[0].skeletalTracks.front();
+    // Keys at 0, 0.5 and 1 from the two channels, and the stepped channel's hold just before 0.5.
+    Require(imported->clips[0].skeletalTracks.size() == 1U && spine.keyframes.size() == 4U &&
+            std::abs(spine.keyframes[1].timeSeconds - 0.4999F) < 0.00001F &&
+            spine.keyframes[1].transform.position.y == 1.0F && spine.keyframes[2].transform.position.y == 2.0F &&
+            spine.keyframes[3].transform.position.y == 2.0F && std::abs(spine.keyframes[3].transform.rotation.w - 0.7071068F) < 0.0001F,
+        "Skeletal glTF import did not merge channel keys or hold a stepped channel");
+    Require(!report.HasErrors() && std::ranges::any_of(report.diagnostics, [](const auto& diagnostic) {
+                return diagnostic.message.find("not a bone of the skeleton") != std::string::npos;
+            }),
+        "Skeletal glTF import did not skip the armature object's own channel with a warning");
+
+    // The rig's animations alone: no mesh and no skin, the armature as Blender keeps it.
+    GltfFixtureWriter animationsOnly;
+    const std::size_t onlyRotationTime = animationsOnly.Add(rotationTimes, "SCALAR");
+    const std::size_t onlyRotation = animationsOnly.Add(rotations, "VEC4");
+    const std::size_t onlyStepTime = animationsOnly.Add(stepTimes, "SCALAR");
+    const std::size_t onlyStepped = animationsOnly.Add(steppedTranslations, "VEC3");
+    const std::size_t onlyArmatureMove = animationsOnly.Add(armatureTranslations, "VEC3");
+    const std::filesystem::path animationsSource = root / "BlenderSources" / "KnightMoves.gltf";
+    animationsOnly.Write(animationsSource,
+        R"(,"nodes":[{"name":"Armature","children":[1]},{"name":"Root","children":[2]},{"name":"Spine","translation":[0,1,0]}])" +
+        animations(onlyRotationTime, onlyRotation, onlyStepTime, onlyStepped, onlyArmatureMove, 2, 0));
+    const kb::scene::SkeletalSourceSummary summary = kb::scene::SkeletalMeshGltfImporter::Probe(animationsSource);
+    Require(summary.AnimationsOnly() && summary.boneCount == 2U && summary.animationCount == 1U,
+        "Probing a glTF of animations without a mesh did not recognize it");
+    const auto movesImported = kb::scene::SkeletalMeshGltfImporter::Import(animationsSource, 778U, {}, &importError);
+    // Without a skin the armature object is a bone too: Armature, Root, Spine.
+    Require(movesImported.has_value() && movesImported->mesh.lods.empty() &&
+            movesImported->skeleton.bones.size() == 3U && movesImported->clips.size() == 1U,
+        "Skeletal glTF import refused animations exported without their mesh");
+
+    // Imported after the character, they land on its skeleton: one rig, one set of bone ids.
+    const auto project = root / "BlenderProject";
+    std::filesystem::create_directories(project / "Assets" / "Characters");
+    kb::scene::Scene scene;
+    Require(scene.Assets().MountProject(project), "Blender-style import project could not be mounted");
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const auto characterPlan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+        manager, characterSource, "/Game/Characters", {}, &importError);
+    const auto characterPublished = characterPlan
+        ? kb::scene::SkeletalMeshGltfImportPublisher::Publish(manager, *characterPlan, &importError) : std::nullopt;
+    Require(characterPublished.has_value() && manager.Registry().FindByPath("/Game/Characters/Knight_Walk.kbanim") != nullptr,
+        "A character's clip was not published under its source animation's name");
+    const auto movesPlan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+        manager, animationsSource, "/Game/Characters", {}, &importError);
+    Require(movesPlan.has_value() && movesPlan->reusesSkeleton &&
+            movesPlan->skeletonAssetId == characterPublished->skeletonAssetId &&
+            movesPlan->imported.clips[0].targetSkeletonAssetId == characterPublished->skeletonAssetId.value,
+        "Animations of a character's rig were not planned onto its existing skeleton");
+    const auto movesPublished = kb::scene::SkeletalMeshGltfImportPublisher::Publish(manager, *movesPlan, &importError);
+    const kb::assets::AssetMetadata* movesClip = manager.Registry().FindByPath("/Game/Characters/KnightMoves_Walk.kbanim");
+    Require(movesPublished.has_value() && !movesPublished->meshAssetId.IsValid() && movesClip != nullptr &&
+            manager.Registry().FindByPath("/Game/Characters/KnightMoves.kbskeletalmesh") == nullptr,
+        "Animations without a mesh did not publish their clips alone");
+    const auto movesLoaded = kb::scene::AnimationAssetIO::LoadClip(movesClip->physicalPath);
+    const auto characterSkeleton = kb::scene::SkeletonAssetIO::Load(project / "Assets" / "Characters" / "Knight.kbskeleton");
+    Require(movesLoaded.has_value() && characterSkeleton.has_value() &&
+            movesLoaded->targetSkeletonCompatibilitySignature == kb::scene::SkeletonCompatibilitySignature(*characterSkeleton) &&
+            std::ranges::all_of(movesLoaded->skeletalTracks, [&](const kb::scene::AnimationBoneTrack& track) {
+                return std::ranges::any_of(characterSkeleton->bones, [&](const kb::scene::SkeletonBone& bone) {
+                    return bone.id == track.boneId && bone.name == "Spine";
+                });
+            }),
+        "Animations moved onto a character's rig do not address its bones");
+
+    // The imported character plays its clip: the skin matrices the renderer reads move.
+    kb::scene::AnimatorController controller{};
+    controller.layers = { { .name = "Base", .defaultState = "Walk", .states = {
+        { .id = 1U, .name = "Walk", .clipReference = "/Game/Characters/Knight_Walk.kbanim" },
+    } } };
+    Require(kb::scene::AnimationAssetIO::SaveController(project / "Assets/Characters/Knight.kbanimcontroller", controller) &&
+            scene.Assets().Discover() > 0U,
+        "The imported character's controller could not be saved");
+    const kb::assets::AssetMetadata* controllerAsset = manager.Registry().FindByPath("/Game/Characters/Knight.kbanimcontroller");
+    const kb::scene::SceneObject knight = scene.Entities().CreateObject({ .name = "Knight" });
+    const kb::scene::SkeletalMeshSetupResult attached =
+        kb::scene::SceneSkeletalMeshSetup::Attach(scene, knight.Entity(), characterPublished->meshAssetId);
+    Require(attached.succeeded && controllerAsset != nullptr, ("The imported character could not be placed: " + attached.error).c_str());
+    scene.Components().Animators().Set(knight.Entity(), kb::scene::Animator{ .controllerAssetId = controllerAsset->id.value, .enabled = true });
+    scene.Runtime().SetPlaying(true);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const auto pose = [&]() {
+        const std::optional<kb::scene::AnimatorInstanceSkeletonView> view = scene.Animators().InstanceSkeleton(knight.Entity());
+        return view.has_value() ? std::vector<kb::math::Mat4>(view->currentSkinMatrices.begin(), view->currentSkinMatrices.end())
+                                : std::vector<kb::math::Mat4>{};
+    };
+    static_cast<void>(scene.Runtime().Update(0.1F));
+    const std::vector<kb::math::Mat4> early = pose();
+    static_cast<void>(scene.Runtime().Update(0.5F));
+    const std::vector<kb::math::Mat4> late = pose();
+    Require(scene.Animators().Exists(knight.Entity()) && early.size() == 2U && late.size() == 2U,
+        "The imported character's Animator did not bind its skeleton");
+    const auto spineMoved = [&]() {
+        for (std::size_t column = 0U; column < 4U; ++column) {
+            const kb::math::Vec4 a = early[1].columns[column];
+            const kb::math::Vec4 b = late[1].columns[column];
+            if (std::abs(a.x - b.x) + std::abs(a.y - b.y) + std::abs(a.z - b.z) + std::abs(a.w - b.w) > 0.01F) return true;
+        }
+        return false;
+    };
+    Require(spineMoved(), "The imported character's clip did not move its skin matrices");
+}
+
 void RunSkeletalMeshAssetTests() {
     RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest();
+    {
+        const auto blenderRoot = std::filesystem::temp_directory_path() / "21kb-skeletal-blender-style-import";
+        std::filesystem::remove_all(blenderRoot);
+        RunBlenderStyleGltfImportTest(blenderRoot);
+        std::filesystem::remove_all(blenderRoot);
+    }
     const auto root=std::filesystem::temp_directory_path()/"21kb-skeletal-mesh-asset-tests";
     std::filesystem::remove_all(root); const auto path=root/"Assets/Characters/Hero.kbskeletalmesh";
     RunLegacyFbxInwardWindingMigrationTest(root);
@@ -571,10 +792,15 @@ void RunSkeletalMeshAssetTests() {
     ReplaceOnce(multipleSkins, "\"skins\":[{\"joints\":[0,1],\"inverseBindMatrices\":4}]",
         "\"skins\":[{\"joints\":[0,1],\"inverseBindMatrices\":4},{\"joints\":[0,1],\"inverseBindMatrices\":4}]");
     WriteTextFile(multipleSkinsRoot / "Hero.gltf", multipleSkins);
+    // One skin per mesh object of one character - the same joints bound the same way - is one skeleton.
+    Require(kb::scene::SkeletalMeshGltfImporter::Import(multipleSkinsRoot / "Hero.gltf", 777U, &importError).has_value(),
+        "Skeletal glTF import refused several skins of one skeleton");
+    ReplaceOnce(multipleSkins, "{\"joints\":[0,1],\"inverseBindMatrices\":4}]", "{\"joints\":[1,0],\"inverseBindMatrices\":4}]");
+    WriteTextFile(multipleSkinsRoot / "Hero.gltf", multipleSkins);
     Require(!kb::scene::SkeletalMeshGltfImporter::Import(
                 multipleSkinsRoot / "Hero.gltf", 777U, &importError).has_value() &&
-            importError.find("exactly one") != std::string::npos,
-        "Skeletal glTF import accepted multiple skins");
+            importError.find("more than one skeleton") != std::string::npos,
+        "Skeletal glTF import accepted skins of different skeletons");
     const auto cyclicHierarchyRoot = root / "GltfCyclicHierarchy";
     WriteSkeletalGltfFixture(cyclicHierarchyRoot);
     std::string cyclicHierarchy = ReadTextFile(cyclicHierarchyRoot / "Hero.gltf");

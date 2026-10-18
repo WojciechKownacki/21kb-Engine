@@ -201,13 +201,21 @@ namespace bgfx { namespace spirv
 		}
 	}
 
-	bgfx::TextureDimension::Enum SpirvDimToTextureViewDimension(spv::Dim _dim, bool _arrayed)
+	bgfx::TextureDimension::Enum SpirvDimToTextureViewDimension(spv::Dim _dim, bool _arrayed, bool _multisampled)
 	{
 		switch (_dim)
 		{
 		case spv::Dim::Dim1D:
 			return bgfx::TextureDimension::Dimension1D;
 		case spv::Dim::Dim2D:
+			if (_multisampled)
+			{
+				return _arrayed
+					? bgfx::TextureDimension::Dimension2DMSArray
+					: bgfx::TextureDimension::Dimension2DMS
+					;
+			}
+
 			return _arrayed
 				? bgfx::TextureDimension::Dimension2DArray
 				: bgfx::TextureDimension::Dimension2D
@@ -302,6 +310,14 @@ namespace bgfx { namespace spirv
 		"a_texcoord5",
 		"a_texcoord6",
 		"a_texcoord7",
+		"a_texcoord8",
+		"a_texcoord9",
+		"a_texcoord10",
+		"a_texcoord11",
+		"a_texcoord12",
+		"a_texcoord13",
+		"a_texcoord14",
+		"a_texcoord15",
 	};
 	static_assert(bgfx::Attrib::Count == BX_COUNTOF(s_attribName) );
 
@@ -330,8 +346,10 @@ namespace bgfx { namespace spirv
 		"BgfxISampler3D",
 		"BgfxUSampler3D",
 		"BgfxSamplerCube",
+		"BgfxSamplerCubeArray",
 		"BgfxSamplerCubeShadow",
 		"BgfxSampler2DMS",
+		"BgfxSampler2DMSArray",
 	};
 
 	static uint16_t writeUniformArray(bx::WriterI* _shaderWriter, const UniformArray& uniforms, bool isFragmentShader)
@@ -339,6 +357,8 @@ namespace bgfx { namespace spirv
 		uint16_t size = 0;
 
 		bx::ErrorAssert err;
+
+		RawBindings().write(_shaderWriter, &err);
 
 		uint16_t count = uint16_t(uniforms.size());
 		bx::write(_shaderWriter, count, &err);
@@ -471,6 +491,7 @@ namespace bgfx { namespace spirv
 			| EShMsgVulkanRules
 			| EShMsgSpvRules
 			| EShMsgDebugInfo
+			| (_options.uses16BitTypes ? EShMsgHlslEnable16BitTypes : EShMsgDefault)
 			);
 
 		shader->setEntryPoint("main");
@@ -793,7 +814,7 @@ namespace bgfx { namespace spirv
 								);
 
 						un.texComponent = textureComponentTypeToId(SpirvCrossBaseTypeToFormatType(componentType, imageType.depth) );
-						un.texDimension = textureDimensionToId(SpirvDimToTextureViewDimension(imageType.dim, imageType.arrayed) );
+						un.texDimension = textureDimensionToId(SpirvDimToTextureViewDimension(imageType.dim, imageType.arrayed, imageType.ms) );
 						un.texFormat = uint16_t(s_textureFormats[imageType.format]);
 
 						un.regIndex = uint16_t(binding_index);
@@ -822,7 +843,7 @@ namespace bgfx { namespace spirv
 						un.type = type;
 
 						un.texComponent = textureComponentTypeToId(SpirvCrossBaseTypeToFormatType(componentType, imageType.depth) );
-						un.texDimension = textureDimensionToId(SpirvDimToTextureViewDimension(imageType.dim, imageType.arrayed) );
+						un.texDimension = textureDimensionToId(SpirvDimToTextureViewDimension(imageType.dim, imageType.arrayed, imageType.ms) );
 						un.texFormat = uint16_t(s_textureFormats[imageType.format]);
 
 						un.regIndex = uint16_t(binding_index);

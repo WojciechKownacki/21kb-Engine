@@ -18,6 +18,9 @@
 #include "engine/scene/ScenePrefabNode.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneSkeletonBindingComponents.hpp"
+#include "engine/scene/SceneSocketAttachmentComponents.hpp"
+#include "engine/scene/SceneCombatantComponents.hpp"
+#include "engine/scene/SceneAIBrainComponents.hpp"
 #include "engine/scene/SceneMotionSkeletonRuleComponents.hpp"
 #include "engine/scene/SceneRegionShapeComponents.hpp"
 #include "engine/scene/SceneGuideCurveComponents.hpp"
@@ -86,6 +89,9 @@ struct ScenePrefabNodeStateWriterContext {
     SceneAudioListenerComponents audioListeners;
     SceneAnimatorComponents animators;
     SceneSkeletonBindingComponents skeletonBindings;
+    SceneSocketAttachmentComponents socketAttachments;
+    SceneCombatantComponents combatants;
+    SceneAIBrainComponents aiBrains;
     SceneMotionSkeletonRuleComponents motionSkeletonRules;
     SceneDeformedGeometryComponents deformedGeometries;
     SceneNavAgentComponents navAgents;

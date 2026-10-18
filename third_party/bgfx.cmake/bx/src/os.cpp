@@ -6,11 +6,11 @@
 #include <bx/string.h>
 #include <bx/os.h>
 
-#if BX_CRT_MSVC
-#	include <direct.h>
-#else
+#if BX_PLATFORM_WINDOWS
+#	include <direct.h> // _wchdir
+#elif !BX_CRT_MSVC
 #	include <unistd.h> // syscall, _SC_PAGESIZE
-#endif // BX_CRT_MSVC
+#endif // BX_PLATFORM_WINDOWS
 
 #if BX_PLATFORM_WINDOWS || BX_PLATFORM_WINRT
 #	ifndef WIN32_LEAN_AND_MEAN
@@ -23,14 +23,15 @@
 #	if BX_PLATFORM_IOS       \
 	|| BX_PLATFORM_OSX       \
 	|| BX_PLATFORM_PS4       \
+	|| BX_PLATFORM_PS5       \
 	|| BX_PLATFORM_VISIONOS
 #		include <pthread.h> // mach_port_t
 #	endif // BX_PLATFORM_*
 
 #	include <time.h> // nanosleep
-#	if !BX_PLATFORM_PS4
+#	if !BX_PLATFORM_PS4 && !BX_PLATFORM_PS5
 #		include <dlfcn.h> // dlopen, dlclose, dlsym
-#	endif // !BX_PLATFORM_PS4
+#	endif // !BX_PLATFORM_PS4 && !BX_PLATFORM_PS5
 
 #	if BX_PLATFORM_ANDROID
 #		include <malloc.h> // mallinfo
@@ -73,6 +74,68 @@ namespace bx
 		BX_ASSERT(false, "Function '%s' is not implemented!", BX_FUNCTION);
 #else
 		::sched_yield();
+#endif // BX_PLATFORM_
+	}
+
+#if BX_PLATFORM_WINDOWS
+	typedef uint32_t (__stdcall* TimePeriodFn)(uint32_t _ms);
+
+	static void timePeriod(const StringView& _name, uint32_t _ms)
+	{
+		if (0 == _ms)
+		{
+			return;
+		}
+
+		// Loaded on demand, so that users of bx don't have to link with winmm.
+		static void* s_winmm = dlopen("winmm.dll");
+
+		if (NULL != s_winmm)
+		{
+			TimePeriodFn fn = dlsym<TimePeriodFn>(s_winmm, _name);
+
+			if (NULL != fn)
+			{
+				fn(_ms);
+			}
+		}
+	}
+
+	void timerResolutionBegin(uint32_t _ms)
+	{
+		timePeriod("timeBeginPeriod", _ms);
+	}
+
+	void timerResolutionEnd(uint32_t _ms)
+	{
+		timePeriod("timeEndPeriod", _ms);
+	}
+#else
+	void timerResolutionBegin(uint32_t _ms)
+	{
+		BX_UNUSED(_ms);
+	}
+
+	void timerResolutionEnd(uint32_t _ms)
+	{
+		BX_UNUSED(_ms);
+	}
+#endif // BX_PLATFORM_WINDOWS
+
+	uint32_t getHardwareThreads()
+	{
+#if BX_CRT_NONE
+		return 1;
+#elif BX_PLATFORM_WINDOWS || BX_PLATFORM_WINRT
+		SYSTEM_INFO si;
+		memSet(&si, 0, sizeof(si) );
+		::GetNativeSystemInfo(&si);
+		return max<uint32_t>(1, si.dwNumberOfProcessors);
+#elif BX_PLATFORM_POSIX && defined(_SC_NPROCESSORS_ONLN)
+		const long num = ::sysconf(_SC_NPROCESSORS_ONLN);
+		return uint32_t(max<long>(1, num) );
+#else
+		return 1;
 #endif // BX_PLATFORM_
 	}
 
@@ -153,9 +216,22 @@ namespace bx
 	void* dlopen(const FilePath& _filePath)
 	{
 #if BX_PLATFORM_WINDOWS
-		return (void*)::LoadLibraryA(_filePath.getCPtr() );
+		wchar_t filePath[kMaxFilePath];
+
+		if (0 == toUtf16( (uint16_t*)filePath, BX_COUNTOF(filePath), _filePath) )
+		{
+			return NULL;
+		}
+
+		// LOAD_LIBRARY_SEARCH_DEFAULT_DIRS excludes CWD and %PATH% from the search order.
+		HMODULE handle = ::LoadLibraryExW(filePath, NULL, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+
+		BX_WARN(NULL != handle, "dlopen failed: \"%s\" 0x%x.", _filePath.getCPtr(), ::GetLastError() );
+
+		return (void*)handle;
 #elif  BX_PLATFORM_EMSCRIPTEN \
 	|| BX_PLATFORM_PS4        \
+	|| BX_PLATFORM_PS5        \
 	|| BX_PLATFORM_XBOXONE    \
 	|| BX_PLATFORM_WINRT      \
 	|| BX_PLATFORM_NX         \
@@ -164,7 +240,7 @@ namespace bx
 		return NULL;
 #else
 		void* so = ::dlopen(_filePath.getCPtr(), RTLD_LOCAL|RTLD_LAZY);
-		BX_WARN(NULL != so, "dlopen failed: \"%s\".", ::dlerror() );
+		BX_WARN(NULL != so, "dlopen failed: \"%s\" %s.", _filePath.getCPtr(), ::dlerror() );
 		return so;
 #endif // BX_PLATFORM_
 	}
@@ -180,6 +256,7 @@ namespace bx
 		::FreeLibrary( (HMODULE)_handle);
 #elif  BX_PLATFORM_EMSCRIPTEN \
 	|| BX_PLATFORM_PS4        \
+	|| BX_PLATFORM_PS5        \
 	|| BX_PLATFORM_XBOXONE    \
 	|| BX_PLATFORM_WINRT      \
 	|| BX_PLATFORM_NX         \
@@ -200,6 +277,7 @@ namespace bx
 		return (void*)::GetProcAddress( (HMODULE)_handle, symbol);
 #elif  BX_PLATFORM_EMSCRIPTEN \
 	|| BX_PLATFORM_PS4        \
+	|| BX_PLATFORM_PS5        \
 	|| BX_PLATFORM_XBOXONE    \
 	|| BX_PLATFORM_WINRT      \
 	|| BX_PLATFORM_NX         \
@@ -218,12 +296,32 @@ namespace bx
 		strCopy(name, nameMax, _name);
 
 #if BX_PLATFORM_WINDOWS
-		DWORD len = ::GetEnvironmentVariableA(name, _out, *_inOutSize);
-		bool result = len != 0 && len < *_inOutSize;
+		wchar_t* wname = (wchar_t*)BX_STACK_ALLOC(nameMax*sizeof(wchar_t) );
+
+		if (0 == toUtf16( (uint16_t*)wname, nameMax, name) )
+		{
+			*_inOutSize = 0;
+			return false;
+		}
+
+		const uint32_t max = NULL != _out ? *_inOutSize : 0;
+		wchar_t* value = (wchar_t*)BX_STACK_ALLOC(max*sizeof(wchar_t) );
+
+		DWORD len = ::GetEnvironmentVariableW(wname, value, max);
+		bool result = len != 0 && len < max;
+
+		if (result)
+		{
+			const int32_t num = fromUtf16(_out, int32_t(max), (const uint16_t*)value);
+			result = 0 != num;
+			len    = 0 != num ? num-1 : fromUtf16(NULL, 0, (const uint16_t*)value);
+		}
+
 		*_inOutSize = len;
 		return result;
 #elif  BX_PLATFORM_EMSCRIPTEN \
 	|| BX_PLATFORM_PS4        \
+	|| BX_PLATFORM_PS5        \
 	|| BX_PLATFORM_XBOXONE    \
 	|| BX_PLATFORM_WINRT      \
 	|| BX_PLATFORM_NX         \
@@ -265,9 +363,29 @@ namespace bx
 		}
 
 #if BX_PLATFORM_WINDOWS
-		::SetEnvironmentVariableA(name, value);
+		wchar_t* wname  = (wchar_t*)BX_STACK_ALLOC(nameMax*sizeof(wchar_t) );
+		wchar_t* wvalue = NULL;
+
+		if (0 == toUtf16( (uint16_t*)wname, nameMax, name) )
+		{
+			return;
+		}
+
+		if (NULL != value)
+		{
+			const int32_t valueMax = _value.getLength()+1;
+			wvalue = (wchar_t*)BX_STACK_ALLOC(valueMax*sizeof(wchar_t) );
+
+			if (0 == toUtf16( (uint16_t*)wvalue, valueMax, value) )
+			{
+				return;
+			}
+		}
+
+		::SetEnvironmentVariableW(wname, wvalue);
 #elif  BX_PLATFORM_EMSCRIPTEN \
 	|| BX_PLATFORM_PS4        \
+	|| BX_PLATFORM_PS5        \
 	|| BX_PLATFORM_XBOXONE    \
 	|| BX_PLATFORM_WINRT      \
 	|| BX_PLATFORM_NX         \
@@ -288,13 +406,21 @@ namespace bx
 	int chdir(const char* _path)
 	{
 #if BX_PLATFORM_PS4     \
+ || BX_PLATFORM_PS5     \
  || BX_PLATFORM_XBOXONE \
  || BX_PLATFORM_WINRT   \
  || BX_CRT_NONE
 		BX_UNUSED(_path);
 		return -1;
-#elif BX_CRT_MSVC
-		return ::_chdir(_path);
+#elif BX_PLATFORM_WINDOWS
+		wchar_t path[kMaxFilePath];
+
+		if (0 == toUtf16( (uint16_t*)path, BX_COUNTOF(path), _path) )
+		{
+			return -1;
+		}
+
+		return ::_wchdir(path);
 #else
 		return ::chdir(_path);
 #endif // BX_COMPILER_
@@ -372,6 +498,8 @@ namespace bx
 #else
 		_Exit(_exitCode);
 #endif // BX_PLATFORM_*
+
+		BX_UNREACHABLE;
 	}
 
 	namespace
@@ -425,9 +553,9 @@ namespace bx
 		const uint32_t advise  = _flags & Memory::AdviseMask;
 		const uint32_t page    = _flags & Memory::PageMask;
 
-		const size_t pageSize = memoryPageSize();
-		BX_ASSERT(_alignment <= pageSize, "Alignments greater than the page size are not implemented (requested %zu, page %zu).", _alignment, pageSize);
-		BX_UNUSED(_alignment, pageSize);
+		const size_t granularity = memoryAllocationGranularity();
+		BX_ASSERT(_alignment <= granularity, "Alignments greater than the allocation granularity are not implemented (requested %zu, granularity %zu).", _alignment, granularity);
+		BX_UNUSED(_alignment, granularity);
 
 #if BX_PLATFORM_LINUX || BX_PLATFORM_OSX
 		if (NULL == _address)
@@ -594,7 +722,7 @@ namespace bx
 		BX_UNUSED(advise);
 		return _address;
 #else
-		BX_UNUSED(_address, _size, _alignment, _flags, state, protect, advise, page, pageSize);
+		BX_UNUSED(_address, _size, _alignment, _flags, state, protect, advise, page, granularity);
 		BX_ERROR_SET(_err, kErrorMemoryMapFailed, "memoryMap: Not implemented!");
 		return NULL;
 #endif // BX_PLATFORM_*
@@ -653,10 +781,22 @@ namespace bx
 		SYSTEM_INFO si;
 		memSet(&si, 0, sizeof(si) );
 		::GetSystemInfo(&si);
-		return si.dwAllocationGranularity;
+		return si.dwPageSize;
 #else
 		BX_UNUSED(page);
 		return 16<<10;
+#endif // BX_PLATFORM_WINDOWS
+	}
+
+	size_t memoryAllocationGranularity()
+	{
+#if BX_PLATFORM_WINDOWS
+		SYSTEM_INFO si;
+		memSet(&si, 0, sizeof(si) );
+		::GetSystemInfo(&si);
+		return si.dwAllocationGranularity;
+#else
+		return memoryPageSize();
 #endif // BX_PLATFORM_WINDOWS
 	}
 

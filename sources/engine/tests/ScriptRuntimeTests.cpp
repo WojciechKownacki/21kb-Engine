@@ -12490,6 +12490,11 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().NavAgents().Set(object.Entity(), kb::scene::NavAgent{});
     scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
     scene.Components().NavLinks().Set(object.Entity(), kb::scene::NavLink{});
+    scene.Components().Animators().Set(object.Entity(), kb::scene::Animator{});
+    static_cast<void>(scene.Components().DeformedGeometries().Set(object.Entity(), kb::scene::DrawD3DeformedGeometryComponent{ .skeletalMeshAssetId = 5U }));
+    static_cast<void>(scene.Components().SocketAttachments().Set(object.Entity(), kb::scene::MakeSocketAttachment("hand_r")));
+    static_cast<void>(scene.Components().Combatants().Set(object.Entity(), kb::scene::CombatantComponent{}));
+    static_cast<void>(scene.Components().AIBrains().Set(object.Entity(), kb::scene::AIBrainComponent{}));
     scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
     scene.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{});
     scene.Components().GuideCurves().Set(object.Entity(), kb::scene::GuideCurveComponent{});
@@ -12625,7 +12630,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // NavLink adds eleven fields.
     // WorldBackdrop grew eleven procedural sky fields, and the older names of Line Renderer
     // (10), Trail Renderer (9) and Lens Flare (7) are accepted aliases: 628 -> 665.
-    kb::tests::Require(fieldsChecked == 681U, "Script component API generated accessor coverage test did not exercise the expected total field count (681, including collision mesh assets and the compatibility aliases)");
+    // Animator (5), DeformedGeometry (8), SocketAttachment (9), Combatant (26) and AIBrain (37) fields: 681 -> 766.
+    kb::tests::Require(fieldsChecked == 766U, "Script component API generated accessor coverage test did not exercise the expected total field count (766, including collision mesh assets and the compatibility aliases)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12658,6 +12664,11 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().NavAgents().Set(object.Entity(), kb::scene::NavAgent{});
     scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
     scene.Components().NavLinks().Set(object.Entity(), kb::scene::NavLink{});
+    scene.Components().Animators().Set(object.Entity(), kb::scene::Animator{});
+    static_cast<void>(scene.Components().DeformedGeometries().Set(object.Entity(), kb::scene::DrawD3DeformedGeometryComponent{ .skeletalMeshAssetId = 5U }));
+    static_cast<void>(scene.Components().SocketAttachments().Set(object.Entity(), kb::scene::MakeSocketAttachment("hand_r")));
+    static_cast<void>(scene.Components().Combatants().Set(object.Entity(), kb::scene::CombatantComponent{}));
+    static_cast<void>(scene.Components().AIBrains().Set(object.Entity(), kb::scene::AIBrainComponent{}));
     scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
     scene.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{});
     scene.Components().GuideCurves().Set(object.Entity(), kb::scene::GuideCurveComponent{});
@@ -12707,7 +12718,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 681U, "LIB-082 raw-pointer audit did not exercise the expected total field count (681, including collision mesh assets and the compatibility aliases)");
+    kb::tests::Require(propertiesChecked == 766U, "LIB-082 raw-pointer audit did not exercise the expected total field count (766, including collision mesh assets and the compatibility aliases)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

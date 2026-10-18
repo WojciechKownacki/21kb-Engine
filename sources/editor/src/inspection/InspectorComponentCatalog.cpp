@@ -38,6 +38,9 @@ namespace {
         InspectorComponentTile{ .id = "AudioListener", .category = "Audio", .label = "Audio Listener", .icon = HeroIconKind::SpeakerWave },
         InspectorComponentTile{ .id = "Animator", .category = "Animation", .label = "Animator", .icon = HeroIconKind::Play },
         InspectorComponentTile{ .id = "SkeletonBinding", .category = "Animation", .label = "Skeleton Binding", .icon = HeroIconKind::AdjustmentsHorizontal },
+        InspectorComponentTile{ .id = "SocketAttachment", .category = "Animation", .label = "Socket Attachment", .icon = HeroIconKind::RotationSnap },
+        InspectorComponentTile{ .id = "Combatant", .category = "Gameplay", .label = "Combatant", .icon = HeroIconKind::Gamepad2 },
+        InspectorComponentTile{ .id = "AIBrain", .category = "Gameplay", .label = "AI Brain", .icon = HeroIconKind::Gamepad2 },
         InspectorComponentTile{ .id = "DeformedGeometry", .category = "Rendering", .label = "Deformed Geometry", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Rigidbody", .category = "Physics", .label = "Rigidbody", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Collider", .category = "Physics", .label = "Collider", .icon = HeroIconKind::Cube },
@@ -182,6 +185,9 @@ std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile
     if (tile.id == "AudioListener") return std::string{ EditorText("component.audioListener", "Audio Listener") };
     if (tile.id == "Animator") return std::string{ EditorText("component.animator", "Animator") };
     if (tile.id == "SkeletonBinding") return std::string{ EditorText("component.skeletonBinding", "Skeleton Binding") };
+    if (tile.id == "SocketAttachment") return std::string{ EditorText("component.socketAttachment", "Socket Attachment") };
+    if (tile.id == "Combatant") return std::string{ EditorText("component.combatant", "Combatant") };
+    if (tile.id == "AIBrain") return std::string{ EditorText("component.aiBrain", "AI Brain") };
     if (tile.id == "DeformedGeometry") return std::string{ EditorText("component.deformedGeometry", "Deformed Geometry") };
     if (tile.id == "Rigidbody") return std::string{ EditorText("component.rigidbody", "Rigidbody") };
     if (tile.id == "Collider") return std::string{ EditorText("component.collider", "Collider") };

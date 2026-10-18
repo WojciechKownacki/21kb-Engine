@@ -16,6 +16,12 @@
     #endif
     #include <Windows.h>
     #include <bcrypt.h>
+#elif defined(__ANDROID__) && __ANDROID_API__ < 28
+    // bionic gains getrandom() at API 28: older devices use the system call itself.
+    #include <cerrno>
+    #include <fcntl.h>
+    #include <sys/syscall.h>
+    #include <unistd.h>
 #elif defined(__linux__) || defined(__ANDROID__)
     #include <cerrno>
     #include <sys/random.h>
@@ -70,6 +76,36 @@ bool SecureRandom(std::span<std::uint8_t> out) noexcept {
             return false;
         }
         offset += chunk;
+    }
+    return true;
+#elif defined(__ANDROID__) && __ANDROID_API__ < 28
+    std::size_t offset = 0U;
+    int urandom = -1;
+    while (offset < out.size()) {
+        // Kernels before 3.17 have no getrandom system call; /dev/urandom is seeded by then.
+        const ssize_t written = urandom < 0
+            ? static_cast<ssize_t>(syscall(SYS_getrandom, out.data() + offset, out.size() - offset, 0U))
+            : read(urandom, out.data() + offset, out.size() - offset);
+        if (written < 0 && errno == ENOSYS && urandom < 0) {
+            urandom = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+            if (urandom >= 0) {
+                continue;
+            }
+        }
+        if (written <= 0) {
+            if (written < 0 && errno == EINTR) {
+                continue;
+            }
+            if (urandom >= 0) {
+                close(urandom);
+            }
+            SecureWipe(out);
+            return false;
+        }
+        offset += static_cast<std::size_t>(written);
+    }
+    if (urandom >= 0) {
+        close(urandom);
     }
     return true;
 #elif defined(__linux__) || defined(__ANDROID__)

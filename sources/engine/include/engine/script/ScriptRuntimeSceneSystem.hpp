@@ -126,6 +126,7 @@ private:
     // marker ids remain typed Hash payload data and are never invoked as
     // reflected method names.
     void DispatchPendingAnimationEvents(kb::scene::Scene& scene, float deltaSeconds);
+    void DispatchPendingGameplayEvents(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchPendingTimelineMarkerEvents(
         kb::scene::Scene& scene, float deltaSeconds);
     void DispatchPendingUIEvents(kb::scene::Scene& scene, float deltaSeconds);
@@ -142,6 +143,7 @@ private:
     [[nodiscard]] static BehaviourLifecycleKey MakeKey(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour) noexcept;
 
     std::vector<kb::scene::PendingCollisionEvent> collisionEventScratch_;
+    std::uint64_t lastGameplayEventSequence_ = 0U;
     ScriptRuntime& runtime_;
     ScriptRuntimeAssetPreparer* assetPreparer_ = nullptr;
     kb::scene::Scene* attachedScene_ = nullptr;

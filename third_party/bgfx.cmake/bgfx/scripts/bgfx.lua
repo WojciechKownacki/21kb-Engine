@@ -71,6 +71,9 @@ function bgfxProjectBase(_kind, _defines)
 
 		configuration { "android*" }
 			targetextension ".so"
+			linkoptions {
+				"-shared",
+			}
 
 		configuration { "android*" ,"Debug"}
 			linkoptions {
@@ -136,6 +139,9 @@ function bgfxProjectBase(_kind, _defines)
 			"-Wno-microsoft-const-init", -- default initialization of an object of const type '' without a user-provided default constructor is a Microsoft extension
 		}
 
+	configuration { "ios* or tvos* or xros*" }
+		buildoptions { "-x objective-c++" }
+
 	configuration { "osx*" }
 		buildoptions { "-x objective-c++" }  -- additional build option for osx
 		linkoptions {
@@ -145,6 +151,9 @@ function bgfxProjectBase(_kind, _defines)
 			"-framework QuartzCore",
 			"-weak_framework Metal",
 			"-weak_framework MetalKit",
+			"-weak_framework VideoToolbox",
+			"-weak_framework CoreMedia",
+			"-weak_framework CoreVideo",
 		}
 
 	configuration { "not NX32", "not NX64" }
@@ -198,6 +207,7 @@ function bgfxProjectBase(_kind, _defines)
 			path.join(BGFX_DIR, "src/shader**.cpp"),
 			path.join(BGFX_DIR, "src/topology.cpp"),
 			path.join(BGFX_DIR, "src/vertexlayout.cpp"),
+			path.join(BGFX_DIR, "src/video_**.cpp"),
 		}
 	else
 		excludes {

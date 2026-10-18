@@ -1,6 +1,8 @@
 #ifndef KB_MOTION_VECTORS_SH
 #define KB_MOTION_VECTORS_SH
 
+#include "screen_uv.sh"
+
 // The motion vector pass (Unreal's velocity pass), shared by the builtin and the material graph programs.
 // A mesh rasterizes with this frame's jittered u_viewProj - exactly as the depth prepass drew it - and
 // writes the jitter-free screen motion between its previous and current positions.
@@ -56,8 +58,8 @@ vec2 KbMotionVelocity(vec4 currentClip, vec4 previousClip)
 {
     vec2 currentNdc = currentClip.xy / max(abs(currentClip.w), 0.000001);
     vec2 previousNdc = previousClip.xy / max(abs(previousClip.w), 0.000001);
-    vec2 currentUv = vec2(currentNdc.x * 0.5 + 0.5, 0.5 - currentNdc.y * 0.5);
-    vec2 previousUv = vec2(previousNdc.x * 0.5 + 0.5, 0.5 - previousNdc.y * 0.5);
+    vec2 currentUv = KbNdcToScreenUv(currentNdc);
+    vec2 previousUv = KbNdcToScreenUv(previousNdc);
     return currentUv - previousUv;
 }
 #endif // BGFX_SHADER_TYPE_FRAGMENT

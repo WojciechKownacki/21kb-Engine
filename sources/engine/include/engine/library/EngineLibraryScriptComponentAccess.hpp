@@ -28,6 +28,11 @@
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/AnimationAssets.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
+#include "engine/scene/SocketAttachmentComponent.hpp"
+#include "engine/scene/CombatantComponent.hpp"
+#include "engine/scene/AIBrainComponent.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -488,6 +493,46 @@ struct ScriptComponentAccess<kb::scene::LensEchoComponent> {
     [[nodiscard]] static kb::scene::LensEchoComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().LensEchoes().TryGet(entity); }
     static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::LensEchoComponent& value) { scene.Components().LensEchoes().Set(entity, value); }
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().LensEchoes().Has(entity)) return false; scene.Components().LensEchoes().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::Animator> {
+    [[nodiscard]] static const kb::scene::Animator* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Animators().TryGet(entity); }
+    [[nodiscard]] static kb::scene::Animator* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Animators().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::Animator& value) { scene.Components().Animators().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().Animators().Has(entity)) return false; scene.Components().Animators().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::DrawD3DeformedGeometryComponent> {
+    [[nodiscard]] static const kb::scene::DrawD3DeformedGeometryComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().DeformedGeometries().TryGet(entity); }
+    [[nodiscard]] static kb::scene::DrawD3DeformedGeometryComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().DeformedGeometries().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::DrawD3DeformedGeometryComponent& value) { static_cast<void>(scene.Components().DeformedGeometries().Set(entity, value)); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().DeformedGeometries().Has(entity)) return false; scene.Components().DeformedGeometries().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::SocketAttachmentComponent> {
+    [[nodiscard]] static const kb::scene::SocketAttachmentComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().SocketAttachments().TryGet(entity); }
+    [[nodiscard]] static kb::scene::SocketAttachmentComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().SocketAttachments().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::SocketAttachmentComponent& value) { static_cast<void>(scene.Components().SocketAttachments().Set(entity, value)); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().SocketAttachments().Has(entity)) return false; scene.Components().SocketAttachments().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::AIBrainComponent> {
+    [[nodiscard]] static const kb::scene::AIBrainComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().AIBrains().TryGet(entity); }
+    [[nodiscard]] static kb::scene::AIBrainComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().AIBrains().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::AIBrainComponent& value) { static_cast<void>(scene.Components().AIBrains().Set(entity, value)); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().AIBrains().Has(entity)) return false; scene.Components().AIBrains().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::CombatantComponent> {
+    [[nodiscard]] static const kb::scene::CombatantComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Combatants().TryGet(entity); }
+    [[nodiscard]] static kb::scene::CombatantComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Combatants().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::CombatantComponent& value) { static_cast<void>(scene.Components().Combatants().Set(entity, value)); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().Combatants().Has(entity)) return false; scene.Components().Combatants().Remove(entity); return true; }
 };
 
 template <typename Component>

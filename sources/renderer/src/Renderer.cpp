@@ -257,8 +257,8 @@ void ApplyPostProcessSettingsOverride(PostProcessOutput& output, const std::opti
         WriteRendererBreadcrumb("aa_trace", message.str());
     }
     const bgfx::Caps* caps = bgfx::getCaps();
-    if (caps == nullptr || (caps->supported & BGFX_CAPS_TEXTURE_BLIT) == 0U) {
-        WriteRendererBreadcrumb("aa_trace", "MSAA color resolve failed: BGFX_CAPS_TEXTURE_BLIT unavailable");
+    if (caps == nullptr) {
+        WriteRendererBreadcrumb("aa_trace", "MSAA color resolve failed: renderer caps unavailable");
         return false;
     }
     if (!bgfx::isValid(desc.target.colorTexture) || !bgfx::isValid(desc.target.resolvedColorTexture)) {
@@ -272,7 +272,7 @@ void ApplyPostProcessSettingsOverride(PostProcessOutput& output, const std::opti
         return false;
     }
 
-    bgfx::blit(viewportPlan.viewIds.sceneOverlays, desc.target.resolvedColorTexture, 0U, 0U, desc.target.colorTexture);
+    bgfx::blit(viewportPlan.viewIds.sceneOverlays, bgfx::TextureRegion{ .handle = desc.target.resolvedColorTexture }, bgfx::TextureRegion{ .handle = desc.target.colorTexture });
     sampledSceneColor = desc.target.resolvedColorTexture;
     if (RendererDebugLogEnabled("aa_trace")) {
         std::ostringstream message;
@@ -1313,8 +1313,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         // backdrop is captured over a few frames; until then the lighting uses the environment colour.
         const SceneBackdropUniformValues backdropUniforms = BuildSceneBackdropUniforms(
             worldBackdrop.has_value() ? &*worldBackdrop : nullptr, bgfx::isValid(worldBackdropEnvironment), renderScene);
-        const bgfx::Caps* caps = bgfx::getCaps();
-        skyReflection_.Update(backdropUniforms, worldBackdropEnvironment, caps != nullptr && caps->originBottomLeft);
+        // vs_present.sc already turns the OpenGL rows around, so the faces need no flip of their own.
+        skyReflection_.Update(backdropUniforms, worldBackdropEnvironment, false);
         effectiveLightingConfig.skyReflection = skyReflection_.ReflectionFor(backdropUniforms, worldBackdropEnvironment);
         effectiveLightingConfig.skyReflectionMaxMip = SceneSkyReflection::MaxMip();
     }
@@ -1623,7 +1623,7 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         const bool terrainLayersOnly = desc.meshPassMode == SceneRenderMeshPassMode::OpaqueAndTerrainLayers;
         if (!terrainLayersOnly && bgfx::isValid(desc.target.colorTexture) && bgfx::isValid(desc.postProcess.pingTexture)) {
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit begin");
-            bgfx::blit(viewportPlan.viewIds.transparentScene, desc.postProcess.pingTexture, 0U, 0U, desc.target.colorTexture);
+            bgfx::blit(viewportPlan.viewIds.transparentScene, bgfx::TextureRegion{ .handle = desc.postProcess.pingTexture }, bgfx::TextureRegion{ .handle = desc.target.colorTexture });
             sceneRenderer_->SetSceneColorTexture(desc.postProcess.pingTexture);
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit end");
         }
@@ -2438,7 +2438,7 @@ bgfx::TextureHandle Renderer::TransparentDepthCopy(bgfx::ViewId viewId, const Re
         if (!bgfx::isValid(transparentDepthCopy_)) return BGFX_INVALID_HANDLE;
         bgfx::setName(transparentDepthCopy_, "KB Transparent Scene Depth Copy");
     }
-    bgfx::blit(viewId, transparentDepthCopy_, 0U, 0U, target.depthTexture);
+    bgfx::blit(viewId, bgfx::TextureRegion{ .handle = transparentDepthCopy_ }, bgfx::TextureRegion{ .handle = target.depthTexture });
     return transparentDepthCopy_;
 }
 

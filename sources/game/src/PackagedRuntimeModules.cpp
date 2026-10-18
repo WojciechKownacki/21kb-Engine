@@ -2,6 +2,7 @@
 
 #include "PackagedRuntimeModuleContract.hpp"
 
+#include "AIModule.hpp"
 #include "BasicLightingModule.hpp"
 #include "JoltPhysicsModule.hpp"
 #include "MiniaudioModule.hpp"
@@ -53,6 +54,9 @@ bool CreatePackagedRuntimeModules(
             break;
         case PackagedRuntimeModuleKind::Particle21kb:
             candidate.modules.push_back(std::make_unique<kb::particle_plugin::ParticleModule>());
+            break;
+        case PackagedRuntimeModuleKind::AI:
+            candidate.modules.push_back(std::make_unique<kb::ai_plugin::AIModule>());
             break;
         }
     }

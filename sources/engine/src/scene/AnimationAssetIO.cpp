@@ -329,10 +329,14 @@ bool ValidateAnimatorController(const AnimatorController& controller, std::strin
         }
         std::unordered_set<std::uint64_t> transitionIds;
         for (const AnimatorControllerTransition& transition : layer.transitions) {
-            if (!stateNames.contains(transition.fromState) || !stateNames.contains(transition.toState) ||
+            // A transition needs something that fires it: a condition, or its source state reaching
+            // the exit time (an attack that returns to idle when it ends).
+            const bool fromAnyState = transition.fromState == kAnimatorAnyState;
+            if ((!fromAnyState && !stateNames.contains(transition.fromState)) || !stateNames.contains(transition.toState) ||
                 transition.fromState == transition.toState || !std::isfinite(transition.durationSeconds) ||
                 transition.durationSeconds < 0.0F || !std::isfinite(transition.exitNormalizedTime) ||
-                transition.exitNormalizedTime > 1.0F || transition.conditions.empty() || transition.id == 0U ||
+                transition.exitNormalizedTime > 1.0F ||
+                (transition.conditions.empty() && transition.exitNormalizedTime < 0.0F) || transition.id == 0U ||
                 !transitionIds.insert(transition.id).second) {
                 setError("Transition " + std::to_string(transition.id) + " in layer \"" + layer.name + "\" has an invalid definition.");
                 return false;

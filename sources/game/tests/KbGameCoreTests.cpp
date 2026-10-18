@@ -384,6 +384,33 @@ void RunTextureReuseCookTests() {
     const auto warm = cook();
     Require(warm.first.succeeded && Mentions(warm.second, "reusing texture:") &&
         !Mentions(warm.second, "cooking texture:"), "Same-output texture reuse failed");
+    Require(Mentions(cold.second, " 0 from the cook cache,") && Mentions(warm.second, "from the cook cache, 0 compiled"),
+        "A second cook must take every fixed shader from the cook cache");
+    {
+        // A corrupted entry and two entries swapped with each other are misses, never package bytes.
+        std::vector<std::filesystem::path> entries;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                 fixture.root / ".kb-cook-cache" / "Windows.x64" / "fixed-shaders")) {
+            if (entry.is_regular_file() && entry.path().extension() == ".bin") entries.push_back(entry.path());
+        }
+        std::ranges::sort(entries);
+        Require(entries.size() >= 3U, "The fixed shader cache holds no entries");
+        const auto readBytes = [](const std::filesystem::path& path) {
+            std::ifstream input{ path, std::ios::binary };
+            return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+        };
+        std::string corrupted = readBytes(entries[0]);
+        corrupted.back() = static_cast<char>(corrupted.back() ^ 1);
+        WriteTextFile(entries[0], corrupted);
+        const std::string first = readBytes(entries[1]);
+        WriteTextFile(entries[1], readBytes(entries[2]));
+        WriteTextFile(entries[2], first);
+        const auto warmPack = readBytes(request.outputPackPath);
+        const auto repaired = cook();
+        Require(repaired.first.succeeded && Mentions(repaired.second, " 3 compiled") &&
+            readBytes(request.outputPackPath) == warmPack,
+            "A damaged fixed shader cache entry must be recompiled into the same package");
+    }
     std::uint64_t corruptOffset = 0U;
     {
         bake::AssetPackReader before, after;

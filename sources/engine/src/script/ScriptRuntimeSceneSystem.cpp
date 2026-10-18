@@ -2,6 +2,8 @@
 #include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptWorldApi.hpp"
 
+#include "engine/gameplay/AbilityAsset.hpp"
+#include "engine/scene/SceneGameplay.hpp"
 #include "engine/scene/BehaviourExecutionOrder.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
@@ -121,6 +123,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     DispatchPendingAudioMarkerEvents(scene, clampedDeltaSeconds);
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
+    DispatchPendingGameplayEvents(scene, clampedDeltaSeconds);
     DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
     DispatchPendingUIEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
@@ -175,6 +178,7 @@ void ScriptRuntimeSceneSystem::BeginFrame(kb::scene::Scene& scene, float deltaSe
     DispatchPendingAudioMarkerEvents(scene, clampedDeltaSeconds);
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
+    DispatchPendingGameplayEvents(scene, clampedDeltaSeconds);
     DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
     DispatchPendingUIEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
@@ -197,6 +201,7 @@ void ScriptRuntimeSceneSystem::ExecuteVariableFrame(kb::scene::Scene& scene, flo
     DispatchPendingParticleEvents(scene, clampedDeltaSeconds);
     DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
+    DispatchPendingGameplayEvents(scene, clampedDeltaSeconds);
     DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
     DispatchPendingUIEvents(scene, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds);
@@ -458,6 +463,38 @@ void ScriptRuntimeSceneSystem::DispatchPendingPrefabInstantiatedEvents(kb::scene
         event.target = pending.caller;
         event.arguments.push_back(ScriptEventArgument{ .name = "root", .value = ScriptValue{ pending.root.Id(), ScriptValueType::Entity } });
         event.arguments.push_back(ScriptEventArgument{ .name = "count", .value = ScriptValue{ pending.count } });
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+// Fights reach the scripts of the combatants in them: OnDamaged/OnHealed/OnDeath/OnRevived on the
+// one it happened to (other = who did it), OnAbilityUsed on the caster (other = its target),
+// OnEnemySpotted/OnEnemyLost on the one that senses (other = the enemy). Events stay for C++
+// readers (SceneGameplay::DrainEvents); scripts read each once by its sequence number.
+void ScriptRuntimeSceneSystem::DispatchPendingGameplayEvents(kb::scene::Scene& scene, float deltaSeconds) {
+    std::vector<kb::scene::GameplayEvent> fresh;
+    for (const kb::scene::GameplayEvent& pending : scene.Gameplay().PendingEvents()) {
+        if (pending.sequence > lastGameplayEventSequence_) fresh.push_back(pending);
+    }
+    for (const kb::scene::GameplayEvent& pending : fresh) {
+        lastGameplayEventSequence_ = pending.sequence;
+        ScriptEvent event;
+        kb::scene::SceneEntity other{};
+        switch (pending.kind) {
+        case kb::scene::GameplayEventKind::Damaged: event.name = "OnDamaged"; event.target = pending.target; other = pending.source; break;
+        case kb::scene::GameplayEventKind::Healed: event.name = "OnHealed"; event.target = pending.target; other = pending.source; break;
+        case kb::scene::GameplayEventKind::Died: event.name = "OnDeath"; event.target = pending.target; other = pending.source; break;
+        case kb::scene::GameplayEventKind::Revived: event.name = "OnRevived"; event.target = pending.target; break;
+        case kb::scene::GameplayEventKind::AbilityUsed: event.name = "OnAbilityUsed"; event.target = pending.source; other = pending.target; break;
+        case kb::scene::GameplayEventKind::Spotted: event.name = "OnEnemySpotted"; event.target = pending.source; other = pending.target; break;
+        case kb::scene::GameplayEventKind::Lost: event.name = "OnEnemyLost"; event.target = pending.source; other = pending.target; break;
+        }
+        if (!event.target.IsValid() || !scene.Entities().IsAlive(event.target)) continue;
+        event.arguments.push_back(ScriptEventArgument{ .name = "other", .value = ScriptValue{ other.Id(), ScriptValueType::Entity } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "amount", .value = ScriptValue{ pending.amount } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "damageType",
+            .value = ScriptValue{ std::string{ kb::gameplay::DamageTypeName(pending.damageType) } } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "ability", .value = ScriptValue{ pending.ability, ScriptValueType::Hash } });
         MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
     }
 }
