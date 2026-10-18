@@ -96,6 +96,9 @@ enum class InspectorSectionId : std::uint8_t {
     UIWidgetSwitcher,
     Prefab,
     NavLink,
+    SocketAttachment,
+    Combatant,
+    AIBrain,
     // A post-process profile asset (.kbppfx): one section per effect, as Unity's Volume overrides.
     PostProcessTonemap,
     PostProcessExposure,
@@ -579,6 +582,16 @@ enum class InspectorPropertyId : std::uint16_t {
     NavLinkArea,
     NavLinkBidirectional,
     NavLinkEnabled,
+    SocketAttachmentSocket,
+    SocketAttachmentPositionX,
+    SocketAttachmentPositionY,
+    SocketAttachmentPositionZ,
+    SocketAttachmentRotationX,
+    SocketAttachmentRotationY,
+    SocketAttachmentRotationZ,
+    SocketAttachmentEnabled,
+    // A row of a section InspectorGenericComponentModel draws; the edit index names the field.
+    GenericComponentField,
     // A row of a post-process profile asset; the hit's index is the row (InspectorPostProcessProfileModel).
     PostProcessProfileField,
     ScenePostProcessProfile,

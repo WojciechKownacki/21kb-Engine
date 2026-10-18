@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/project/ProjectSettings.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -45,6 +46,9 @@ struct GameProjectRuntime {
     std::string inputMappingContext;
     bool inputEnabled = true;
     kb::project::ProjectSceneLightingPath lightingPath = kb::project::ProjectSceneLightingPath::Deferred;
+    // The shadow and global illumination quality the project pins for this device class (Auto keeps the engine's).
+    kb::project::ProjectQualityLevel shadowQuality = kb::project::ProjectQualityLevel::Auto;
+    kb::project::ProjectQualityLevel giQuality = kb::project::ProjectQualityLevel::Auto;
     std::vector<std::string> requiredModules;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> assetPack;
 
@@ -52,6 +56,13 @@ struct GameProjectRuntime {
         return assetPack != nullptr;
     }
 };
+
+// Phones and tablets read the "Mobile" quality settings of the project; every other device the plain ones.
+#if defined(__ANDROID__)
+inline constexpr bool kMobileDevice = true;
+#else
+inline constexpr bool kMobileDevice = false;
+#endif
 
 // A frame that took longer than this is stepped as if it had taken exactly this
 // long, so a stall cannot tunnel a moving body through the world.

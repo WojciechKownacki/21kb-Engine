@@ -80,6 +80,15 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.skeletonBinding.has_value()) {
         static_cast<void>(sceneComponents.SkeletonBindings().Set(entity, *components.skeletonBinding));
     }
+    if (components.socketAttachment.has_value()) {
+        static_cast<void>(sceneComponents.SocketAttachments().Set(entity, *components.socketAttachment));
+    }
+    if (components.combatant.has_value()) {
+        static_cast<void>(sceneComponents.Combatants().Set(entity, *components.combatant));
+    }
+    if (components.aiBrain.has_value()) {
+        static_cast<void>(sceneComponents.AIBrains().Set(entity, *components.aiBrain));
+    }
     if (components.motionSkeletonRule.has_value()) {
         static_cast<void>(sceneComponents.MotionSkeletonRules().Set(entity, *components.motionSkeletonRule));
     }

@@ -84,7 +84,12 @@ float KbPointShadowFactor(int lightSlot, vec3 worldPos, vec3 normal)
         vec2 ndc = vec2(dot(d, right), dot(d, up)) / (z * tanHalf);
         float tile = u_pointShadowAtlas.z;
         vec2 tilePx = vec2(0.5 + 0.5 * ndc.x, 0.5 + u_pointShadowInfo.y * ndc.y) * tile;
+#if BGFX_SHADER_LANGUAGE_GLSL
+        // The tiles are laid out from the top of the atlas, and OpenGL rows start at the bottom.
+        vec2 tileOrigin = vec2(face * tile, 1.0 / u_pointShadowAtlas.y - (float(s) + 1.0) * tile);
+#else
         vec2 tileOrigin = vec2(face * tile, float(s) * tile);
+#endif
         float bias = u_pointShadowDepth[s].z + z * 0.012;
         int entry = int(float(s) * 0.25);
         vec4 strengths = u_pointShadowStrength[entry];

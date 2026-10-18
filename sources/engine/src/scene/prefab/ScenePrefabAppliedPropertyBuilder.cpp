@@ -79,6 +79,15 @@ namespace {
     if (StartsWith(propertyPath, "skeletonBinding")) {
         return ScenePrefabOverrideFlag::SkeletonBinding;
     }
+    if (StartsWith(propertyPath, "socketAttachment")) {
+        return ScenePrefabOverrideFlag::SocketAttachment;
+    }
+    if (StartsWith(propertyPath, "combatant")) {
+        return ScenePrefabOverrideFlag::Combatant;
+    }
+    if (StartsWith(propertyPath, "aiBrain")) {
+        return ScenePrefabOverrideFlag::AIBrain;
+    }
     if (StartsWith(propertyPath, "motionSkeletonRule")) {
         return ScenePrefabOverrideFlag::MotionSkeletonRule;
     }

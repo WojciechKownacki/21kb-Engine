@@ -70,6 +70,7 @@ namespace bgfx
 	static const GUID IID_IDXGIAdapter2   = { 0x0aa1ae0a, 0xfa0e, 0x4b84, { 0x86, 0x44, 0xe0, 0x5f, 0xf8, 0xe5, 0xac, 0xb5 } };
 	static const GUID IID_IDXGIAdapter3   = { 0x645967a4, 0x1392, 0x4310, { 0xa7, 0x98, 0x80, 0x53, 0xce, 0x3e, 0x93, 0xfd } };
 	static const GUID IID_IDXGIAdapter4   = { 0x3c8d99d1, 0x4fbf, 0x4181, { 0xa8, 0x2c, 0xaf, 0x66, 0xbf, 0x7b, 0xd2, 0x4e } };
+	static const GUID IID_IDXGISwapChain2 = { 0xa8be2ac4, 0x199f, 0x4946, { 0xb3, 0x31, 0x79, 0x59, 0x9f, 0xb9, 0x8d, 0xe7 } };
 	static const GUID IID_IDXGISwapChain3 = { 0x94d99bdb, 0xf1f8, 0x4ab0, { 0xb2, 0x36, 0x7d, 0xa0, 0x17, 0x0e, 0xda, 0xb1 } };
 	static const GUID IID_IDXGISwapChain4 = { 0x3d585d5a, 0xbd4a, 0x489e, { 0xb1, 0xf4, 0x3d, 0xbc, 0xb6, 0x45, 0x2f, 0xfb } };
 	static const GUID IID_IDXGIOutput6    = { 0x068346e8, 0xaaec, 0x4b84, { 0xad, 0xd7, 0x13, 0x7f, 0x51, 0x3f, 0x77, 0xa1 } };
@@ -465,7 +466,7 @@ namespace bgfx
 		DX_RELEASE_I(dxgiDevice);
 	}
 
-	HRESULT Dxgi::createSwapChain(IUnknown* _device, const SwapChainDesc& _scd, SwapChainI** _swapChain)
+	HRESULT Dxgi::createSwapChain(IUnknown* _device, const DxgiSwapChainDesc& _scd, SwapChainI** _swapChain)
 	{
 		HRESULT hr = S_OK;
 
@@ -495,25 +496,35 @@ namespace bgfx
 			hr = factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing) );
 			BX_TRACE("Allow tearing is %ssupported.", allowTearing ? "" : "not ");
 
-			scd.Flags |= allowTearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
-			scd.Flags |= false
-				|| _scd.swapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
-				|| _scd.swapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD
-				? 0 // DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
+			// DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING and the waitable object are only
+			// valid on flip-model swap chains.
+			const bool flipModel = false
+				|| DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL == _scd.swapEffect
+				|| DXGI_SWAP_EFFECT_FLIP_DISCARD    == _scd.swapEffect
+				;
+
+			scd.Flags |= allowTearing && flipModel ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+			scd.Flags |= _scd.waitable && flipModel
+				? DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
 				: 0
 				;
 
-			m_tearingSupported = allowTearing;
+			m_tearingSupported = allowTearing && flipModel;
 
 			DX_RELEASE_I(factory5);
 		}
 
-		DXGI_SWAP_CHAIN_FULLSCREEN_DESC scfd;
-		scfd.RefreshRate.Numerator   = 1;
-		scfd.RefreshRate.Denominator = 60;
-		scfd.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
-		scfd.Scaling  = DXGI_MODE_SCALING_UNSPECIFIED;
-		scfd.Windowed = _scd.windowed;
+		const DXGI_SWAP_CHAIN_FULLSCREEN_DESC scfd =
+		{
+			.RefreshRate =
+			{
+				.Numerator   = 0,
+				.Denominator = 0,
+			},
+			.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
+			.Scaling          = DXGI_MODE_SCALING_UNSPECIFIED,
+			.Windowed         = _scd.windowed,
+		};
 
 		hr = m_factory->CreateSwapChainForHwnd(
 			  _device
@@ -578,9 +589,9 @@ namespace bgfx
 			}
 		}
 
-		if (FAILED(hr))
+		if (FAILED(hr) )
 		{
-			BX_TRACE("Failed to create swap chain.");
+			BX_TRACE("Failed to create swap chain, hr 0x%08x.", hr);
 			return hr;
 		}
 
@@ -619,12 +630,24 @@ namespace bgfx
 		}
 #endif // BX_PLATFORM_LINUX || BX_PLATFORM_WINDOWS
 
+		if (_scd.waitable)
+		{
+			IDXGISwapChain2* swapChain2;
+			hr = (*_swapChain)->QueryInterface(IID_IDXGISwapChain2, (void**)&swapChain2);
+
+			if (SUCCEEDED(hr) )
+			{
+				swapChain2->SetMaximumFrameLatency(bx::max<uint32_t>(1, _scd.maxFrameLatency) );
+				DX_RELEASE(swapChain2, 1);
+			}
+		}
+
 		updateHdr10(*_swapChain, _scd);
 
 		return S_OK;
 	}
 
-	HRESULT Dxgi::removeSwapChain(const SwapChainDesc& _scd)
+	HRESULT Dxgi::removeSwapChain(const DxgiSwapChainDesc& _scd)
 	{
 #if BX_PLATFORM_WINRT
 		IInspectable* nativeWindow = reinterpret_cast<IInspectable*>(_scd.nwh);
@@ -635,7 +658,7 @@ namespace bgfx
 #endif // BX_PLATFORM_WINRT
 	}
 
-	void Dxgi::updateHdr10(SwapChainI* _swapChain, const SwapChainDesc& _scd)
+	void Dxgi::updateHdr10(SwapChainI* _swapChain, const DxgiSwapChainDesc& _scd)
 	{
 #if BX_PLATFORM_WINDOWS
 		::IDXGISwapChain4* swapChain4;
@@ -643,18 +666,27 @@ namespace bgfx
 
 		if (SUCCEEDED(hr) )
 		{
+			const bool hdr10 = true
+				&& _scd.hdr10
+				&& 0 != (g_caps.supported & BGFX_CAPS_HDR10)
+				;
+
 			const DXGI_COLOR_SPACE_TYPE colorSpace =
-				  _scd.format == DXGI_FORMAT_R10G10B10A2_UNORM  ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
+				  !hdr10                                        ? DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709
+				: _scd.format == DXGI_FORMAT_R10G10B10A2_UNORM  ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
 				: _scd.format == DXGI_FORMAT_R16G16B16A16_FLOAT ? DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
 				:                                                 DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709
 				;
 
 			hr = swapChain4->SetColorSpace1(colorSpace);
 
-			if (SUCCEEDED(hr) )
+			if (SUCCEEDED(hr)
+			&&  DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 != colorSpace)
 			{
-				DXGI_OUTPUT_DESC1 desc;
-
+				swapChain4->SetHDRMetaData(DXGI_HDR_METADATA_TYPE_NONE, 0, NULL);
+			}
+			else if (SUCCEEDED(hr) )
+			{
 				IDXGIOutput* output;
 				hr = _swapChain->GetContainingOutput(&output);
 				if (SUCCEEDED(hr) )
@@ -663,6 +695,7 @@ namespace bgfx
 					hr = output->QueryInterface(IID_IDXGIOutput6, (void**)&output6);
 					if (SUCCEEDED(hr) )
 					{
+						DXGI_OUTPUT_DESC1 desc;
 						hr = output6->GetDesc1(&desc);
 						if (SUCCEEDED(hr) )
 						{
@@ -678,6 +711,21 @@ namespace bgfx
 							BX_TRACE("\t         MinLuminance: %f", desc.MinLuminance);
 							BX_TRACE("\t         MaxLuminance: %f", desc.MaxLuminance);
 							BX_TRACE("\tMaxFullFrameLuminance: %f", desc.MaxFullFrameLuminance);
+
+							DXGI_HDR_METADATA_HDR10 metaData;
+							metaData.RedPrimary[0]   = uint16_t(desc.RedPrimary[0]   * 50000.0f);
+							metaData.RedPrimary[1]   = uint16_t(desc.RedPrimary[1]   * 50000.0f);
+							metaData.GreenPrimary[0] = uint16_t(desc.GreenPrimary[0] * 50000.0f);
+							metaData.GreenPrimary[1] = uint16_t(desc.GreenPrimary[1] * 50000.0f);
+							metaData.BluePrimary[0]  = uint16_t(desc.BluePrimary[0]  * 50000.0f);
+							metaData.BluePrimary[1]  = uint16_t(desc.BluePrimary[1]  * 50000.0f);
+							metaData.WhitePoint[0]   = uint16_t(desc.WhitePoint[0]   * 50000.0f);
+							metaData.WhitePoint[1]   = uint16_t(desc.WhitePoint[1]   * 50000.0f);
+							metaData.MaxMasteringLuminance     = uint32_t(desc.MaxLuminance * 10000.0f);
+							metaData.MinMasteringLuminance     = uint32_t(desc.MinLuminance * 10000.0f);
+							metaData.MaxContentLightLevel      = uint16_t(desc.MaxFullFrameLuminance);
+							metaData.MaxFrameAverageLightLevel = uint16_t(desc.MaxFullFrameLuminance);
+							swapChain4->SetHDRMetaData(DXGI_HDR_METADATA_TYPE_HDR10, sizeof(DXGI_HDR_METADATA_HDR10), &metaData);
 						}
 
 						DX_RELEASE(output6, 1);
@@ -685,21 +733,6 @@ namespace bgfx
 
 					DX_RELEASE(output, 0);
 				}
-
-				DXGI_HDR_METADATA_HDR10 hdr10;
-				hdr10.RedPrimary[0]   = uint16_t(desc.RedPrimary[0]   * 50000.0f);
-				hdr10.RedPrimary[1]   = uint16_t(desc.RedPrimary[1]   * 50000.0f);
-				hdr10.GreenPrimary[0] = uint16_t(desc.GreenPrimary[0] * 50000.0f);
-				hdr10.GreenPrimary[1] = uint16_t(desc.GreenPrimary[1] * 50000.0f);
-				hdr10.BluePrimary[0]  = uint16_t(desc.BluePrimary[0]  * 50000.0f);
-				hdr10.BluePrimary[1]  = uint16_t(desc.BluePrimary[1]  * 50000.0f);
-				hdr10.WhitePoint[0]   = uint16_t(desc.WhitePoint[0]   * 50000.0f);
-				hdr10.WhitePoint[1]   = uint16_t(desc.WhitePoint[1]   * 50000.0f);
-				hdr10.MaxMasteringLuminance     = uint32_t(desc.MaxLuminance * 10000.0f);
-				hdr10.MinMasteringLuminance     = uint32_t(desc.MinLuminance * 10000.0f);
-				hdr10.MaxContentLightLevel      = uint16_t(desc.MaxFullFrameLuminance);
-				hdr10.MaxFrameAverageLightLevel = uint16_t(desc.MaxFullFrameLuminance);
-				hr = swapChain4->SetHDRMetaData(DXGI_HDR_METADATA_TYPE_HDR10, sizeof(DXGI_HDR_METADATA_HDR10), &hdr10);
 			}
 
 			DX_RELEASE(swapChain4, 1);
@@ -709,7 +742,7 @@ namespace bgfx
 #endif // BX_PLATFORM_WINDOWS
 	}
 
-	HRESULT Dxgi::resizeBuffers(SwapChainI* _swapChain, const SwapChainDesc& _scd, const uint32_t* _nodeMask, IUnknown* const* _presentQueue)
+	HRESULT Dxgi::resizeBuffers(SwapChainI* _swapChain, const DxgiSwapChainDesc& _scd, const uint32_t* _nodeMask, IUnknown* const* _presentQueue)
 	{
 		HRESULT hr;
 
@@ -727,11 +760,16 @@ namespace bgfx
 			hr = factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing));
 			BX_TRACE("Allow tearing is %ssupported.", allowTearing ? "" : "not ");
 
-			scdFlags |= allowTearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
-			scdFlags |= false
-				|| _scd.swapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
-				|| _scd.swapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD
-				? 0 // DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
+			// Must match the flags the swap chain was created with: tearing and the
+			// waitable object are only valid on flip-model swap chains.
+			const bool flipModel = false
+				|| DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL == _scd.swapEffect
+				|| DXGI_SWAP_EFFECT_FLIP_DISCARD    == _scd.swapEffect
+				;
+
+			scdFlags |= allowTearing && flipModel ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+			scdFlags |= _scd.waitable && flipModel
+				? DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
 				: 0
 				;
 

@@ -53,6 +53,7 @@ enum class ScenePrefabOverrideFlag : std::uint32_t {
     AudioSource = 1U << 14U,
     AudioListener = 1U << 15U,
     Animator = 1U << 16U,
+    AIBrain = 1U << 17U,
     AuxFrame = 1U << 18U,
     GeometrySwarm = 1U << 19U,
     SurfaceCast = 1U << 20U,
@@ -65,6 +66,8 @@ enum class ScenePrefabOverrideFlag : std::uint32_t {
     MotionSkeletonRule = 1U << 27U,
     ParticleEffect = 1U << 28U,
     UI = 1U << 29U,
+    SocketAttachment = 1U << 30U,
+    Combatant = 1U << 31U,
 };
 
 [[nodiscard]] constexpr ScenePrefabOverrideFlag operator|(ScenePrefabOverrideFlag lhs, ScenePrefabOverrideFlag rhs) noexcept {

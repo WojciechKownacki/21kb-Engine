@@ -351,11 +351,25 @@ void MotionVectorShaderUsesTopLeftUvToNdcMapping() {
         std::istreambuf_iterator<char>{},
     };
     Require(
-        source.find("1.0 - v_texcoord0.y * 2.0") != std::string::npos,
-        "Motion vector shader must map top-left UVs to positive NDC Y");
+        source.find("KbScreenUvToNdc(v_texcoord0)") != std::string::npos,
+        "Motion vector shader must map its UVs to NDC through screen_uv.sh");
     Require(
-        source.find("0.5 - previousNdc.y * 0.5") != std::string::npos,
-        "Motion vector shader must map previous NDC Y back to top-left UVs");
+        source.find("KbNdcToScreenUv(previousNdc)") != std::string::npos,
+        "Motion vector shader must map previous NDC back to UVs through screen_uv.sh");
+
+    // screen_uv.sh keeps the top-left mapping everywhere but OpenGL, whose rows start at the bottom.
+    std::ifstream helperFile{sourceIter->parent_path() / "screen_uv.sh"};
+    Require(helperFile.good(), "screen_uv.sh could not be opened");
+    const std::string helper{
+        std::istreambuf_iterator<char>{helperFile},
+        std::istreambuf_iterator<char>{},
+    };
+    Require(
+        helper.find("1.0 - uv.y * 2.0") != std::string::npos,
+        "screen_uv.sh must map top-left UVs to positive NDC Y");
+    Require(
+        helper.find("0.5 - ndc.y * 0.5") != std::string::npos,
+        "screen_uv.sh must map NDC Y back to top-left UVs");
 }
 
 } // namespace

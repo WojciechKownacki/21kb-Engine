@@ -197,6 +197,9 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneAudioSourceComponents.hpp
     include/engine/scene/SceneAnimatorComponents.hpp
     include/engine/scene/SceneSkeletonBindingComponents.hpp
+    include/engine/scene/SceneSocketAttachmentComponents.hpp
+    include/engine/scene/SceneCombatantComponents.hpp
+    include/engine/scene/SceneAIBrainComponents.hpp
     include/engine/scene/SceneMotionSkeletonRuleComponents.hpp
     include/engine/scene/SceneDeformedGeometryComponents.hpp
     include/engine/scene/SceneAssets.hpp
@@ -258,6 +261,13 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMaterialInstances.hpp
     include/engine/scene/AnimationAssets.hpp
     include/engine/scene/SkeletonBindingComponent.hpp
+    include/engine/scene/AnimationRetargeting.hpp
+    include/engine/scene/SceneGameplay.hpp
+    include/engine/gameplay/AbilityAsset.hpp
+    include/engine/scene/SkeletonNames.hpp
+    include/engine/scene/SocketAttachmentComponent.hpp
+    include/engine/scene/CombatantComponent.hpp
+    include/engine/scene/AIBrainComponent.hpp
     include/engine/scene/MotionSkeletonRuleComponent.hpp
     include/engine/scene/DrawD3DeformedGeometryComponent.hpp
     include/engine/scene/AnimationAssetIO.hpp
@@ -448,6 +458,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptMeshRendererApi.hpp
     include/engine/script/ScriptParticleSystemApi.hpp
     include/engine/script/ScriptAnimatorApi.hpp
+    include/engine/script/ScriptGameplayApi.hpp
     include/engine/script/ScriptTimelineApi.hpp
     include/engine/script/ScriptPostProcessApi.hpp
     include/engine/script/ScriptNavigationApi.hpp
@@ -697,6 +708,7 @@ add_library(kb_engine STATIC
     src/scene/Scene.cpp
     src/scene/SceneComponentAuthoring.cpp
     src/scene/SceneCreateMenu.cpp
+    src/scene/SceneSkeletalMeshSetup.cpp
     src/scene/SceneTemplates.cpp
     src/gameplay/GameInstance.cpp
     src/network/NetworkObject.cpp
@@ -752,6 +764,10 @@ add_library(kb_engine STATIC
     src/scene/TimelineAssetIO.cpp
     src/scene/TimelineAssetLoader.cpp
     src/scene/SceneTimelineService.cpp
+    src/scene/AnimationRetargeting.cpp
+    src/scene/SceneGameplayService.cpp
+    src/gameplay/AbilityAsset.cpp
+    src/scene/systems/GameplaySceneSystem.cpp
     src/scene/SceneAnimatorService.cpp
     src/scene/SceneLocalizationService.cpp
     src/scene/SceneCrashReportConsent.cpp
@@ -805,8 +821,14 @@ add_library(kb_engine STATIC
     src/scene/components/SceneAnimatorApi.cpp
     src/scene/components/SceneAnimatorStorage.cpp
     src/scene/components/SceneSkeletonBindingApi.cpp
+    src/scene/components/SceneSocketAttachmentApi.cpp
+    src/scene/components/SceneCombatantApi.cpp
+    src/scene/components/SceneAIBrainApi.cpp
     src/scene/components/SceneMotionSkeletonRuleApi.cpp
     src/scene/components/SceneSkeletonBindingStorage.cpp
+    src/scene/components/SceneSocketAttachmentStorage.cpp
+    src/scene/components/SceneCombatantStorage.cpp
+    src/scene/components/SceneAIBrainStorage.cpp
     src/scene/components/SceneMotionSkeletonRuleStorage.cpp
     src/scene/components/SceneDeformedGeometryApi.cpp
     src/scene/components/SceneDeformedGeometryStorage.cpp
@@ -947,6 +969,9 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneCameraModule.cpp
     src/scene/modules/components/SceneAnimatorModule.cpp
     src/scene/modules/components/SceneSkeletonBindingModule.cpp
+    src/scene/modules/components/SceneSocketAttachmentModule.cpp
+    src/scene/modules/components/SceneCombatantModule.cpp
+    src/scene/modules/components/SceneAIBrainModule.cpp
     src/scene/modules/components/SceneMotionSkeletonRuleModule.cpp
     src/scene/modules/components/SceneDeformedGeometryModule.cpp
     src/scene/modules/components/SceneBehaviourModule.cpp
@@ -1163,6 +1188,7 @@ add_library(kb_engine STATIC
     src/script/ScriptMeshRendererApi.cpp
     src/script/ScriptParticleSystemApi.cpp
     src/script/ScriptAnimatorApi.cpp
+    src/script/ScriptGameplayApi.cpp
     src/script/ScriptTimelineApi.cpp
     src/script/ScriptPostProcessApi.cpp
     src/script/ScriptNavigationApi.cpp
@@ -1240,6 +1266,9 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneCameraComponentStore.hpp
     src/private/scene/components/SceneAnimatorComponentStore.hpp
     src/private/scene/components/SceneSkeletonBindingComponentStore.hpp
+    src/private/scene/components/SceneSocketAttachmentComponentStore.hpp
+    src/private/scene/components/SceneCombatantComponentStore.hpp
+    src/private/scene/components/SceneAIBrainComponentStore.hpp
     src/private/scene/components/SceneMotionSkeletonRuleComponentStore.hpp
     src/private/scene/components/SceneDeformedGeometryComponentStore.hpp
     src/private/scene/components/SceneComponentIteration.hpp

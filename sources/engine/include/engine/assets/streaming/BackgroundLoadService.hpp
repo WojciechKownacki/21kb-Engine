@@ -309,7 +309,6 @@ private:
     BackgroundLaneId nextLane_ = 1U;
     std::uint32_t jobsRunning_ = 0U;
     std::uint32_t longJobsRunning_ = 0U;
-    std::uint32_t longWorkersIdle_ = 0U;
     std::uint64_t nextSequence_ = 0U;
     bool stopping_ = false;
     std::unordered_map<std::filesystem::path::string_type, std::shared_ptr<FileHandle>> files_;

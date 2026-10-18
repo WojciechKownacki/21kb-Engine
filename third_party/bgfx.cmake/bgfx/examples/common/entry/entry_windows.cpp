@@ -7,8 +7,10 @@
 
 #if ENTRY_CONFIG_USE_NATIVE && BX_PLATFORM_WINDOWS
 
-#include <bgfx/platform.h>
+#include <bgfx/bgfx.h>
 
+#include <bx/allocator.h>
+#include <bx/commandline.h>
 #include <bx/mutex.h>
 #include <bx/handlealloc.h>
 #include <bx/os.h>
@@ -380,7 +382,9 @@ namespace entry
 			s_translateKey[VK_NEXT]       = Key::PageDown;
 			s_translateKey[VK_SNAPSHOT]   = Key::Print;
 			s_translateKey[VK_OEM_PLUS]   = Key::Plus;
+			s_translateKey[VK_ADD]        = Key::Plus;
 			s_translateKey[VK_OEM_MINUS]  = Key::Minus;
+			s_translateKey[VK_SUBTRACT]   = Key::Minus;
 			s_translateKey[VK_OEM_4]      = Key::LeftBracket;
 			s_translateKey[VK_OEM_6]      = Key::RightBracket;
 			s_translateKey[VK_OEM_1]      = Key::Semicolon;
@@ -389,6 +393,7 @@ namespace entry
 			s_translateKey[VK_OEM_PERIOD] = Key::Period;
 			s_translateKey[VK_DECIMAL]    = Key::Period;
 			s_translateKey[VK_OEM_2]      = Key::Slash;
+			s_translateKey[VK_DIVIDE]     = Key::Slash;
 			s_translateKey[VK_OEM_5]      = Key::Backslash;
 			s_translateKey[VK_OEM_3]      = Key::Tilde;
 			s_translateKey[VK_F1]         = Key::F1;
@@ -734,6 +739,22 @@ namespace entry
 							m_height = height;
 							m_eventQueue.postSizeEvent(handle, m_width, m_height);
 						}
+					}
+					break;
+
+				case WM_SETFOCUS:
+					{
+						WindowHandle handle = findHandle(_hwnd);
+						m_eventQueue.postSuspendEvent(handle, Suspend::WillResume);
+						m_eventQueue.postSuspendEvent(handle, Suspend::DidResume);
+					}
+					break;
+
+				case WM_KILLFOCUS:
+					{
+						WindowHandle handle = findHandle(_hwnd);
+						m_eventQueue.postSuspendEvent(handle, Suspend::WillSuspend);
+						m_eventQueue.postSuspendEvent(handle, Suspend::DidSuspend);
 					}
 					break;
 
@@ -1190,7 +1211,11 @@ namespace entry
 int main(int _argc, const char* const* _argv)
 {
 	using namespace entry;
-	return s_ctx.run(_argc, _argv);
+
+	bx::DefaultAllocator allocator;
+	bx::CommandLineArgs args(&allocator, _argc, _argv);
+
+	return s_ctx.run(args.getArgc(), args.getArgv() );
 }
 
 #endif // BX_PLATFORM_WINDOWS

@@ -296,7 +296,8 @@ TextureBakeOutput BakeTextureBytes(
         output.status = TextureBakeStatus::SourceUndecodable;
         return output;
     }
-    if (source->m_cubeMap || source->m_depth != 1U || source->m_numLayers != 1U) {
+    // bimg reports a 2D image with depth 0 or 1.
+    if (source->m_cubeMap || source->m_depth > 1U || source->m_numLayers != 1U) {
         output.status = TextureBakeStatus::UnsupportedSourceShape;
         return output;
     }
@@ -379,7 +380,7 @@ TextureBakeOutput BakeTextureBytes(
         return output;
     }
     const std::uint32_t encodedSize =
-        bimg::imageGetSize(nullptr, width, height, 1U, false, true, 1U, bimgFormat);
+        TextureImageBytes32(bimg::imageGetSize(nullptr, width, height, 1U, false, true, 1U, bimgFormat));
     if (encodedSize == 0U) {
         output.status = TextureBakeStatus::EncodeFailed;
         return output;

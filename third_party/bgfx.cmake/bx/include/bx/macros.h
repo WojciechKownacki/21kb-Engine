@@ -178,6 +178,34 @@ extern "C" void* __cdecl _alloca(size_t _size);
 #	define BX_PRAGMA_DIAGNOSTIC_IGNORED_CLANG_GCC(_x)
 #endif // BX_COMPILER_
 
+///
+#if BX_COMPILER_MSVC
+#	define BX_FP_CONTRACT_OFF_BEGIN()
+#	define BX_FP_CONTRACT_OFF_END()
+#	define BX_FP_PRECISE_BEGIN()      __pragma(float_control(push) ) __pragma(float_control(precise, on) ) __pragma(fp_contract(off) )
+#	define BX_FP_PRECISE_END()        __pragma(float_control(pop) )
+#elif BX_COMPILER_CLANG && (BX_CPU_X86 || (BX_CPU_ARM && BX_ARCH_64BIT) )
+#	define BX_FP_CONTRACT_OFF_BEGIN() _Pragma("float_control(push)") _Pragma("clang fp contract(off)")
+#	define BX_FP_CONTRACT_OFF_END()   _Pragma("float_control(pop)")
+#	define BX_FP_PRECISE_BEGIN()      _Pragma("float_control(push)") _Pragma("float_control(precise, on)") _Pragma("clang fp contract(off)")
+#	define BX_FP_PRECISE_END()        _Pragma("float_control(pop)")
+#elif BX_COMPILER_CLANG
+#	define BX_FP_CONTRACT_OFF_BEGIN() _Pragma("clang fp contract(off)")
+#	define BX_FP_CONTRACT_OFF_END()
+#	define BX_FP_PRECISE_BEGIN()      _Pragma("clang fp contract(off)")
+#	define BX_FP_PRECISE_END()
+#elif BX_COMPILER_GCC
+#	define BX_FP_CONTRACT_OFF_BEGIN()
+#	define BX_FP_CONTRACT_OFF_END()
+#	define BX_FP_PRECISE_BEGIN()      _Pragma("GCC push_options") _Pragma("GCC optimize(\"no-fast-math\",\"fp-contract=off\")")
+#	define BX_FP_PRECISE_END()        _Pragma("GCC pop_options")
+#else
+#	define BX_FP_CONTRACT_OFF_BEGIN()
+#	define BX_FP_CONTRACT_OFF_END()
+#	define BX_FP_PRECISE_BEGIN()
+#	define BX_FP_PRECISE_END()
+#endif // BX_COMPILER_
+
 /// No default constructor.
 #define BX_CLASS_NO_DEFAULT_CTOR(_class) \
 	_class() = delete
@@ -299,6 +327,69 @@ extern "C" void* __cdecl _alloca(size_t _size);
 			_BX_TRACE_LOC(_location, "WARN " _format, ##__VA_ARGS__); \
 		}                                                             \
 	BX_MACRO_BLOCK_END
+
+#if BX_CLANG_HAS_FEATURE(thread_sanitizer) || defined(__SANITIZE_THREAD__)
+#	define BX_SANITIZER_THREAD 1
+#else
+#	define BX_SANITIZER_THREAD 0
+#endif // BX_CLANG_HAS_FEATURE(thread_sanitizer)
+
+#if BX_CLANG_HAS_FEATURE(address_sanitizer) || defined(__SANITIZE_ADDRESS__)
+#	define BX_SANITIZER_ADDRESS 1
+#else
+#	define BX_SANITIZER_ADDRESS 0
+#endif // BX_CLANG_HAS_FEATURE(address_sanitizer)
+
+#if BX_SANITIZER_THREAD
+extern "C"
+{
+	void __tsan_mutex_pre_lock(void* _addr, unsigned _flags);
+	void __tsan_mutex_post_lock(void* _addr, unsigned _flags, int _recursion);
+	int  __tsan_mutex_pre_unlock(void* _addr, unsigned _flags);
+	void __tsan_mutex_post_unlock(void* _addr, unsigned _flags);
+
+	void* __tsan_get_current_fiber();
+	void* __tsan_create_fiber(unsigned _flags);
+	void  __tsan_destroy_fiber(void* _fiber);
+	void  __tsan_switch_to_fiber(void* _fiber, unsigned _flags);
+}
+
+/// Annotations of custom mutex for ThreadSanitizer.
+#	define BX_TSAN_MUTEX_PRE_LOCK(_ptr)    __tsan_mutex_pre_lock( (void*)(_ptr), 0)
+#	define BX_TSAN_MUTEX_POST_LOCK(_ptr)   __tsan_mutex_post_lock( (void*)(_ptr), 0, 0)
+#	define BX_TSAN_MUTEX_PRE_UNLOCK(_ptr)  __tsan_mutex_pre_unlock( (void*)(_ptr), 0)
+#	define BX_TSAN_MUTEX_POST_UNLOCK(_ptr) __tsan_mutex_post_unlock( (void*)(_ptr), 0)
+
+/// Annotations of fiber switch for ThreadSanitizer.
+#	define BX_TSAN_FIBER_CURRENT()         __tsan_get_current_fiber()
+#	define BX_TSAN_FIBER_CREATE()          __tsan_create_fiber(0)
+#	define BX_TSAN_FIBER_DESTROY(_fiber)   __tsan_destroy_fiber(_fiber)
+#	define BX_TSAN_FIBER_SWITCH(_fiber)    __tsan_switch_to_fiber(_fiber, 0)
+#else
+#	define BX_TSAN_MUTEX_PRE_LOCK(_ptr)    BX_NOOP(_ptr)
+#	define BX_TSAN_MUTEX_POST_LOCK(_ptr)   BX_NOOP(_ptr)
+#	define BX_TSAN_MUTEX_PRE_UNLOCK(_ptr)  BX_NOOP(_ptr)
+#	define BX_TSAN_MUTEX_POST_UNLOCK(_ptr) BX_NOOP(_ptr)
+#	define BX_TSAN_FIBER_CURRENT()         NULL
+#	define BX_TSAN_FIBER_CREATE()          NULL
+#	define BX_TSAN_FIBER_DESTROY(_fiber)   BX_NOOP(_fiber)
+#	define BX_TSAN_FIBER_SWITCH(_fiber)    BX_NOOP(_fiber)
+#endif // BX_SANITIZER_THREAD
+
+#if BX_SANITIZER_ADDRESS
+extern "C"
+{
+	void __sanitizer_start_switch_fiber(void** _fakeStackSave, const void* _bottom, size_t _size);
+	void __sanitizer_finish_switch_fiber(void* _fakeStackSave, const void** _bottomOld, size_t* _sizeOld);
+}
+
+/// Annotations of fiber switch for AddressSanitizer.
+#	define BX_ASAN_FIBER_SWITCH_START(_fakeStackSave, _bottom, _size)    __sanitizer_start_switch_fiber(_fakeStackSave, _bottom, _size)
+#	define BX_ASAN_FIBER_SWITCH_FINISH(_fakeStack, _outBottom, _outSize) __sanitizer_finish_switch_fiber(_fakeStack, _outBottom, _outSize)
+#else
+#	define BX_ASAN_FIBER_SWITCH_START(_fakeStackSave, _bottom, _size)    BX_NOOP(_fakeStackSave, _bottom, _size)
+#	define BX_ASAN_FIBER_SWITCH_FINISH(_fakeStack, _outBottom, _outSize) BX_NOOP(_fakeStack, _outBottom, _outSize)
+#endif // BX_SANITIZER_ADDRESS
 
 // static_assert sometimes causes unused-local-typedef...
 BX_PRAGMA_DIAGNOSTIC_IGNORED_CLANG("-Wunused-local-typedef")

@@ -42,6 +42,8 @@ constexpr int kTooltipPaddingY = 10;
         return EditorText("projectSettings.category.graphics", "Graphics");
     case ProjectSettingsCategory::Physics:
         return EditorText("projectSettings.category.physics", "Physics");
+    case ProjectSettingsCategory::Lighting:
+        return EditorText("projectSettings.category.lighting", "Lighting");
     case ProjectSettingsCategory::Count:
     default:
         return {};
@@ -136,6 +138,47 @@ struct TooltipContent {
     std::string_view body;
 };
 
+// Rows of the Lighting page: shadows and global illumination, each for computers and for mobile devices.
+[[nodiscard]] std::string_view QualityLabel(int row) {
+    switch (row) {
+    case 0:
+        return EditorText("projectSettings.shadowQuality", "Shadows (Desktop)");
+    case 1:
+        return EditorText("projectSettings.shadowQualityMobile", "Shadows (Mobile)");
+    case 2:
+        return EditorText("projectSettings.giQuality", "Global Illumination (Desktop)");
+    case 3:
+        return EditorText("projectSettings.giQualityMobile", "Global Illumination (Mobile)");
+    default:
+        return {};
+    }
+}
+
+[[nodiscard]] std::string_view QualityLevelLabel(kb::project::ProjectQualityLevel level) {
+    switch (level) {
+    case kb::project::ProjectQualityLevel::Low:
+        return EditorText("projectSettings.quality.low", "Low");
+    case kb::project::ProjectQualityLevel::Medium:
+        return EditorText("projectSettings.quality.medium", "Medium");
+    case kb::project::ProjectQualityLevel::High:
+        return EditorText("projectSettings.quality.high", "High");
+    case kb::project::ProjectQualityLevel::Ultra:
+        return EditorText("projectSettings.quality.ultra", "Ultra");
+    case kb::project::ProjectQualityLevel::Auto:
+    default:
+        return EditorText("projectSettings.quality.auto", "Auto");
+    }
+}
+
+[[nodiscard]] kb::project::ProjectQualityLevel QualityOf(const kb::project::ProjectSettings& settings, int row) noexcept {
+    switch (row) {
+    case 0: return settings.shadowQuality;
+    case 1: return settings.shadowQualityMobile;
+    case 2: return settings.giQuality;
+    default: return settings.giQualityMobile;
+    }
+}
+
 [[nodiscard]] TooltipContent TooltipForKind(ProjectSettingsTooltipKind kind) {
     switch (kind) {
     case ProjectSettingsTooltipKind::MappingContext:
@@ -211,6 +254,30 @@ struct TooltipContent {
             EditorText("projectSettings.gpuDriven", "GPU Driven"),
             EditorText("projectSettings.gpuDrivenTooltip",
             "Enables runtime GPU-driven scene submission where supported. The renderer falls back when the selected backend lacks required features."),
+        };
+    case ProjectSettingsTooltipKind::ShadowQuality:
+        return TooltipContent{
+            QualityLabel(0),
+            EditorText("projectSettings.shadowQualityTooltip",
+            "Low uses fewer cascades and a shorter range; Ultra the sharpest maps and the most local shadows."),
+        };
+    case ProjectSettingsTooltipKind::ShadowQualityMobile:
+        return TooltipContent{
+            QualityLabel(1),
+            EditorText("projectSettings.shadowQualityMobileTooltip",
+            "Phones draw few local shadows; Medium is the usual choice, Ultra costs a lot of bandwidth."),
+        };
+    case ProjectSettingsTooltipKind::GiQuality:
+        return TooltipContent{
+            QualityLabel(2),
+            EditorText("projectSettings.giQualityTooltip",
+            "Low: a coarser voxel grid, cheaper. Ultra: the finest grid, the most detail."),
+        };
+    case ProjectSettingsTooltipKind::GiQualityMobile:
+        return TooltipContent{
+            QualityLabel(3),
+            EditorText("projectSettings.giQualityMobileTooltip",
+            "Phones and tablets use a coarser grid than computers; Medium is the usual choice."),
         };
     case ProjectSettingsTooltipKind::None:
     default:
@@ -323,6 +390,22 @@ void DrawGraphicsPage(
     DrawCheckbox(dc, rects.gpuDrivenCheckbox, theme, renderBackendSettings.GpuDrivenEnabled());
 }
 
+void DrawLightingPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+    const kb::project::ProjectSettings& settings = sceneContext.ProjectConfiguration();
+
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, EditorText("projectSettings.lightingSection", "LIGHTING QUALITY"), Color(theme.textSecondary), 11, FW_SEMIBOLD);
+    for (int row = 0; row < 4; ++row) {
+        const RECT label = rects.qualityLabel[row];
+        DrawText(dc, RECT{ label.left, label.top, label.right - 8, label.bottom }, QualityLabel(row), Color(theme.textSecondary), 12);
+        const kb::project::ProjectQualityLevel current = QualityOf(settings, row);
+        for (int level = 0; level < 5; ++level) {
+            const auto levelValue = static_cast<kb::project::ProjectQualityLevel>(level);
+            DrawOptionButton(dc, rects.qualityButton[row][level], theme, QualityLevelLabel(levelValue), current == levelValue);
+        }
+    }
+}
+
 void DrawPhysicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
     const kb::project::ProjectSettings& settings = sceneContext.ProjectConfiguration();
     const bool dropdownOpen = sceneContext.ProjectSettings().IsPhysicsLayersDropdownOpen();
@@ -367,6 +450,9 @@ void ProjectSettingsPanelRenderer::Paint(
         break;
     case ProjectSettingsCategory::Physics:
         DrawPhysicsPage(dc, rects, theme, sceneContext);
+        break;
+    case ProjectSettingsCategory::Lighting:
+        DrawLightingPage(dc, rects, theme, sceneContext);
         break;
     case ProjectSettingsCategory::Count:
     default:
@@ -418,6 +504,18 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
             const RECT button = ProjectSettingsPanelLayout::MsaaOptionButton(rects, index);
             if (PointInRect(button, x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::MsaaOption, .index = index, .rect = button };
+            }
+        }
+        return Hit{};
+    }
+
+    if (category == ProjectSettingsCategory::Lighting) {
+        for (int row = 0; row < 4; ++row) {
+            for (int level = 0; level < 5; ++level) {
+                const RECT button = ProjectSettingsPanelLayout::QualityOptionButton(rects, row, level);
+                if (PointInRect(button, x, y)) {
+                    return Hit{ .kind = ProjectSettingsHitKind::QualityOption, .index = row * 5 + level, .rect = button };
+                }
             }
         }
         return Hit{};
@@ -495,6 +593,14 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
         }
         if (PointInRect(rects.msaaLabel, x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::MsaaOption, .index = -1, .rect = rects.msaaLabel };
+        }
+    }
+
+    if (category == ProjectSettingsCategory::Lighting) {
+        for (int row = 0; row < 4; ++row) {
+            if (PointInRect(rects.qualityLabel[row], x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::QualityOption, .index = row * 5, .rect = rects.qualityLabel[row] };
+            }
         }
     }
 

@@ -2,6 +2,7 @@
 
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SocketAttachmentComponent.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -47,6 +48,16 @@ struct AnimatorAttachmentTransform {
     WorldTransform worldSpace;
 };
 
+// Where a SocketAttachment holds its object: the character it found above it and whether its
+// socket (or bone) exists there - `resolvedName` is that socket's or bone's own name. Before Play
+// it is judged against the character's authored skeleton. `error` says in plain words what to fix.
+struct SocketAttachmentStatus {
+    SceneEntity character{};
+    bool attached = false;
+    std::string resolvedName;
+    std::string error;
+};
+
 class SceneAnimatorQueries {
 public:
     explicit SceneAnimatorQueries(const Scene& scene) noexcept;
@@ -64,6 +75,10 @@ public:
         const LocalTransform& localOffset = {}) const noexcept;
     [[nodiscard]] std::optional<AnimatorAttachmentTransform> SocketTransform(
         SceneEntity entity, std::string_view socketName) const noexcept;
+    // Socket names of the skeleton the entity animates (or is authored with), then its bone names
+    // (both work as sockets).
+    [[nodiscard]] std::vector<std::string> SocketNames(SceneEntity entity) const;
+    [[nodiscard]] SocketAttachmentStatus SocketAttachment(SceneEntity attachedEntity) const;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
     [[nodiscard]] std::shared_ptr<const AnimatorDebugSnapshot> DebugSnapshot() const;
 
@@ -95,6 +110,18 @@ public:
         const LocalTransform& localOffset = {}) const noexcept;
     [[nodiscard]] std::optional<AnimatorAttachmentTransform> SocketTransform(
         SceneEntity entity, std::string_view socketName) const noexcept;
+    [[nodiscard]] std::vector<std::string> SocketNames(SceneEntity entity) const;
+    [[nodiscard]] SocketAttachmentStatus SocketAttachment(SceneEntity attachedEntity) const;
+    // Moves every SocketAttachment to its socket now; the animator system does this each frame
+    // after posing, so call it only after changing poses or attachments outside the frame.
+    void ApplySocketAttachments();
+    // Hangs `object` on `character`'s socket (or bone; "hand_r" also finds "hand.R"): parents it
+    // under the character unless it is below it already and places it at once. On failure nothing
+    // changes and `error` says why (an unknown socket, no skeleton above it, ...).
+    [[nodiscard]] bool AttachToSocket(SceneEntity object, SceneEntity character, std::string_view socket,
+        const SocketAttachmentOffset& offset = {}, std::string* error = nullptr);
+    // Stops following the socket; the object stays where it is, under the same parent.
+    void DetachFromSocket(SceneEntity object);
     [[nodiscard]] bool SetBool(SceneEntity entity, std::string_view name, bool value) noexcept;
     [[nodiscard]] bool SetInt(SceneEntity entity, std::string_view name, std::int32_t value) noexcept;
     [[nodiscard]] bool SetFloat(SceneEntity entity, std::string_view name, float value) noexcept;

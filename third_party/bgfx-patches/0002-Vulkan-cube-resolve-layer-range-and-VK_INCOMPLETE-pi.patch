@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wojciech Kownacki <verthsoft@gmail.com>
+Date: Sun, 18 Oct 2026 01:48:27 +0200
+Subject: [PATCH 2/3] Vulkan: cube resolve layer range and VK_INCOMPLETE
+ pipeline cache
+
+---
+ bgfx/src/renderer_vk.cpp | 42 ++++++++++++++++++++++++----------------
+ 1 file changed, 25 insertions(+), 17 deletions(-)
+
+diff --git a/bgfx/src/renderer_vk.cpp b/bgfx/src/renderer_vk.cpp
+index c1f425a..6e0313f 100644
+--- a/bgfx/src/renderer_vk.cpp
++++ b/bgfx/src/renderer_vk.cpp
+@@ -5087,8 +5087,13 @@ VK_IMPORT_DEVICE
+ 					cachedData = bx::realloc(g_allocator, cachedData, dataSize);
+ 				}
+ 
+-				VK_CHECK(vkGetPipelineCacheData(m_device, cache, &dataSize, cachedData) );
+-				g_callback->cacheWrite(hash, cachedData, (uint32_t)dataSize);
++				// VK_INCOMPLETE is a success code: the driver grew the cache since the size query
++				// and wrote a valid, shorter cache.
++				const VkResult result = vkGetPipelineCacheData(m_device, cache, &dataSize, cachedData);
++				if (VK_SUCCESS == result || VK_INCOMPLETE == result)
++				{
++					g_callback->cacheWrite(hash, cachedData, (uint32_t)dataSize);
++				}
+ 			}
+ 
+ 			VK_CHECK(vkMergePipelineCaches(m_device, m_pipelineCache, 1, &cache) );
+@@ -8316,24 +8321,27 @@ VK_DESTROY
+ 		const VkImageLayout oldLayout = m_currentImageLayout;
+ 		const VkImageLayout oldSingleMsaaLayout = m_currentSingleMsaaImageLayout;
+ 
+-		const uint32_t numLayers = false
++		const bool isCube = false
+ 			|| m_type == VK_IMAGE_VIEW_TYPE_CUBE
+ 			|| m_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY
+-			? m_numSides
+-			: _numLayers
+ 			;
+ 
++		// A cube covers all of its sides, so the range starts at layer 0 whichever face was rendered:
++		// starting at the face overruns the image, which loses the device on Mali.
++		const uint32_t numLayers = isCube ? m_numSides : _numLayers;
++		const uint32_t layer     = isCube ? 0         : _layer;
++
+ 		if (needResolve)
+ 		{
+ 			const VkFormat resolveFormat = getViewFormat(_resolve, BGFX_ATTACHMENT_SRGB);
+ 
+ 			if (0 != (m_aspectFlags & VK_IMAGE_ASPECT_DEPTH_BIT) )
+ 			{
+-				s_renderVK->resolveDepth(_commandBuffer, *this, _layer, numLayers, _mip);
++				s_renderVK->resolveDepth(_commandBuffer, *this, layer, numLayers, _mip);
+ 			}
+ 			else if (resolveFormat != m_format)
+ 			{
+-				resolveRenderPass(_commandBuffer, resolveFormat, _layer, numLayers, _mip);
++				resolveRenderPass(_commandBuffer, resolveFormat, layer, numLayers, _mip);
+ 				setState(_commandBuffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
+ 			}
+ 			else
+@@ -8347,7 +8355,7 @@ VK_DESTROY
+ 					{
+ 						.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+ 						.mipLevel       = _mip,
+-						.baseArrayLayer = _layer,
++						.baseArrayLayer = layer,
+ 						.layerCount     = numLayers,
+ 					},
+ 					.srcOffset = { .x = 0, .y = 0, .z = 0 },
+@@ -8355,7 +8363,7 @@ VK_DESTROY
+ 					{
+ 						.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+ 						.mipLevel       = _mip,
+-						.baseArrayLayer = _layer,
++						.baseArrayLayer = layer,
+ 						.layerCount     = numLayers,
+ 					},
+ 					.dstOffset = { .x = 0, .y = 0, .z = 0 },
+@@ -8394,11 +8402,11 @@ VK_DESTROY
+ 				VkImageBlit blit;
+ 				blit.srcOffsets[0] = { 0, 0, 0 };
+ 				blit.srcSubresource.aspectMask     = m_aspectFlags;
+-				blit.srcSubresource.baseArrayLayer = _layer;
++				blit.srcSubresource.baseArrayLayer = layer;
+ 				blit.srcSubresource.layerCount     = numLayers;
+ 				blit.dstOffsets[0] = { 0, 0, 0 };
+ 				blit.dstSubresource.aspectMask     = m_aspectFlags;
+-				blit.dstSubresource.baseArrayLayer = _layer;
++				blit.dstSubresource.baseArrayLayer = layer;
+ 				blit.dstSubresource.layerCount     = numLayers;
+ 
+ 				for (uint32_t i = _mip + 1; i < m_numMips; i++)
+@@ -8422,7 +8430,7 @@ VK_DESTROY
+ 						, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+ 						, blit.srcSubresource.mipLevel
+ 						, 1
+-						, _layer
++						, layer
+ 						, numLayers
+ 						);
+ 
+@@ -8446,7 +8454,7 @@ VK_DESTROY
+ 					, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+ 					, _mip
+ 					, m_numMips - _mip - 1
+-					, _layer
++					, layer
+ 					, numLayers
+ 					);
+ 			}
+@@ -8471,13 +8479,13 @@ VK_DESTROY
+ 			blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
+ 			blit.srcSubresource.aspectMask     = m_aspectFlags;
+ 			blit.srcSubresource.mipLevel       = 0;
+-			blit.srcSubresource.baseArrayLayer = _layer;
++			blit.srcSubresource.baseArrayLayer = layer;
+ 			blit.srcSubresource.layerCount     = numLayers;
+ 			blit.dstOffsets[0] = { 0, 0, 0 };
+ 			blit.dstOffsets[1] = { mipWidth, mipHeight, 1 };
+ 			blit.dstSubresource.aspectMask     = m_aspectFlags;
+ 			blit.dstSubresource.mipLevel       = 0;
+-			blit.dstSubresource.baseArrayLayer = _layer;
++			blit.dstSubresource.baseArrayLayer = layer;
+ 			blit.dstSubresource.layerCount     = numLayers;
+ 
+ 			for (uint32_t i = _mip + 1; i < m_numMips; i++)
+@@ -8501,7 +8509,7 @@ VK_DESTROY
+ 					, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+ 					, blit.srcSubresource.mipLevel
+ 					, 1
+-					, _layer
++					, layer
+ 					, numLayers
+ 					);
+ 
+@@ -8525,7 +8533,7 @@ VK_DESTROY
+ 				, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+ 				, _mip
+ 				, m_numMips - _mip - 1
+-				, _layer
++				, layer
+ 				, numLayers
+ 				);
+ 		}

@@ -42,12 +42,13 @@ bool NativeWindowFramebuffer::Ensure(
         bgfx::frame();
     }
 
-    frameBuffer_ = bgfx::createFrameBuffer(
-        nativeWindow,
-        static_cast<std::uint16_t>(width),
-        static_cast<std::uint16_t>(height),
-        colorFormat,
-        depthFormat);
+    bgfx::SwapChain swapChain{};
+    swapChain.nwh = nativeWindow;
+    swapChain.width = width;
+    swapChain.height = height;
+    swapChain.formatColor = colorFormat;
+    swapChain.formatDepthStencil = depthFormat;
+    frameBuffer_ = bgfx::createFrameBuffer(swapChain);
 
     if (!bgfx::isValid(frameBuffer_)) {
         return false;

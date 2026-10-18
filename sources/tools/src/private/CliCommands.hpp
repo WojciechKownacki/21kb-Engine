@@ -10,6 +10,12 @@
 namespace kb::cli {
 
 [[nodiscard]] int RunApiCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunAnimatorCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSkeletonCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunAbilityCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunAiCommand(const ArgumentList& arguments, CommandIo io);
+// Places a baked navigation mesh in the scene of --project/--scene (once), as the editor's Bake does.
+[[nodiscard]] bool PlaceSceneNavMesh(const ArgumentList& arguments, const std::filesystem::path& navMesh, CommandIo io);
 [[nodiscard]] int RunApiCheckCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunNewCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunEntityCommand(const ArgumentList& arguments, CommandIo io);
@@ -50,6 +56,7 @@ namespace kb::cli {
 [[nodiscard]] int RunWorldCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunNavMeshCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPhysicsLayersCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunLightingQualityCommand(const ArgumentList& arguments, CommandIo io);
 // The directory the cooker and the editor mount as /Game: the content root of the project in
 // `project`, else of the nearest folder above `path` that holds a project file.
 [[nodiscard]] std::optional<std::filesystem::path> FindProjectContentRoot(

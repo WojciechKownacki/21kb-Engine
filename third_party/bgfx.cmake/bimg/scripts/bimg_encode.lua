@@ -25,8 +25,8 @@ project "bimg_encode"
 		path.join(BIMG_DIR, "3rdparty/edtaa3/**.h"),
 		path.join(BIMG_DIR, "3rdparty/etc1/**.cpp"),
 		path.join(BIMG_DIR, "3rdparty/etc1/**.h"),
-		path.join(BIMG_DIR, "3rdparty/etc2/**.cpp"),
-		path.join(BIMG_DIR, "3rdparty/etc2/**.hpp"),
+		path.join(BIMG_DIR, "3rdparty/etcpak/**.cpp"),
+		path.join(BIMG_DIR, "3rdparty/etcpak/**.hpp"),
 		path.join(BIMG_DIR, "3rdparty/nvtt/**.cpp"),
 		path.join(BIMG_DIR, "3rdparty/nvtt/**.h"),
 		path.join(BIMG_DIR, "3rdparty/pvrtc/**.cpp"),
@@ -52,14 +52,21 @@ project "bimg_encode"
 	configuration { "mingw* or linux* or osx*" }
 		buildoptions {
 			"-Wno-implicit-fallthrough",
+			"-Wno-parentheses",
+			"-Wno-return-type",
 			"-Wno-shadow",
 			"-Wno-shift-negative-value",
+			"-Wno-sign-compare",
 			"-Wno-undef",
 		}
 
 		buildoptions_cpp {
-			"-Wno-class-memaccess",
 			"-Wno-deprecated-copy",
+		}
+
+	configuration { "mingw* or linux-gcc-*" }
+		buildoptions_cpp {
+			"-Wno-class-memaccess",
 		}
 
 	configuration {}

@@ -4,6 +4,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "scene/SkeletalImportSkeletonPlan.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -33,53 +34,21 @@ std::optional<SkeletalMeshFbxImportPlan> SkeletalMeshFbxImportPlanner::Plan(
     std::string importError;
     auto candidate = SkeletalMeshFbxImporter::Import(sourcePath, kPlanningSkeletonId, options, &importError);
     if (!candidate) return Fail<SkeletalMeshFbxImportPlan>(error, std::move(importError));
-    const std::uint64_t signature = SkeletonCompatibilitySignature(candidate->skeleton);
-    if (signature == 0U) return Fail<SkeletalMeshFbxImportPlan>(error,
-        "Skeletal FBX import produced a skeleton without a compatibility signature.");
-
-    std::vector<kb::assets::AssetMetadata> skeletons = manager.Registry().ByType(kSkeletonAssetType);
-    std::sort(skeletons.begin(), skeletons.end(), [](const auto& left, const auto& right) {
-        return left.id.value < right.id.value;
-    });
-    kb::assets::AssetId selected{};
-    std::filesystem::path selectedPath;
-    bool reuse = false;
-    bool update = false;
-    for (const kb::assets::AssetMetadata& metadata : skeletons) {
-        std::string loadError;
-        const auto existing = SkeletonAssetIO::Load(metadata.physicalPath, &loadError);
-        if (existing && SkeletonCompatibilitySignature(*existing) == signature) {
-            selected = metadata.id;
-            selectedPath = metadata.virtualPath;
-            reuse = true;
-            break;
-        }
+    const std::string stem = sourcePath.stem().string();
+    auto choice = skeletal_import::ChooseSkeleton(
+        manager, candidate->skeleton, candidate->mesh.lods.empty(), normalizedFolder, stem, error);
+    if (!choice) return std::nullopt;
+    candidate->mesh.skeletonAssetId = choice->id.value;
+    for (AnimationClip& clip : candidate->clips) clip.targetSkeletonAssetId = choice->id.value;
+    if (choice->sameRig) {
+        skeletal_import::MoveClipsToRig(candidate->clips, candidate->skeleton, *choice->sameRig, choice->id.value);
     }
-    if (!reuse) {
-        const std::filesystem::path candidatePath = std::filesystem::path{ normalizedFolder } /
-            (sourcePath.stem().string() + kSkeletonAssetExtension);
-        if (const kb::assets::AssetMetadata* occupied = manager.Registry().FindByPath(candidatePath);
-            occupied != nullptr) {
-            if (occupied->type != kSkeletonAssetType) return Fail<SkeletalMeshFbxImportPlan>(error,
-                "Skeletal FBX import destination path is occupied by a non-Skeleton asset.");
-            selectedPath = occupied->virtualPath;
-            selected = occupied->id;
-            update = true;
-        } else {
-            selectedPath = candidatePath;
-            selected = kb::assets::MakeAssetId(
-                kb::assets::NormalizeAssetPath(selectedPath) + ":" + kSkeletonAssetType);
-        }
-    }
-    candidate->mesh.skeletonAssetId = selected.value;
-    for (AnimationClip& clip : candidate->clips) clip.targetSkeletonAssetId = selected.value;
     return SkeletalMeshFbxImportPlan{
-        .imported = std::move(*candidate), .skeletonAssetId = selected,
-        .skeletonVirtualPath = std::move(selectedPath),
-        .meshVirtualPath = std::filesystem::path{ normalizedFolder } /
-            (sourcePath.stem().string() + kSkeletalMeshAssetExtension),
-        .reusesSkeleton = reuse,
-        .updatesSkeleton = update,
+        .imported = std::move(*candidate), .skeletonAssetId = choice->id,
+        .skeletonVirtualPath = std::move(choice->virtualPath),
+        .meshVirtualPath = std::filesystem::path{ normalizedFolder } / (stem + kSkeletalMeshAssetExtension),
+        .reusesSkeleton = choice->reuse,
+        .updatesSkeleton = choice->update,
     };
 }
 

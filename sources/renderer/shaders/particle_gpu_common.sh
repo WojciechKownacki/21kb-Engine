@@ -100,7 +100,7 @@ void WriteDeadInstance(uint base)
 void WriteMeshInstance(uint base, uint slot, vec3 position, vec3 velocity, float u, vec3 angles)
 {
     float size = SampleSize(u);
-    float random = frac(sin(float(slot) * 12.9898) * 43758.5453);
+    float random = fract(sin(float(slot) * 12.9898) * 43758.5453);
     // The frame the Euler turn is expressed in: the emitter's basis, or - when the mesh follows its velocity and
     // there is one - a frame whose Y axis is the velocity (X horizontal-ish, from the world up).
     vec3 frame0 = u_gpuParticleBasis[0].xyz;

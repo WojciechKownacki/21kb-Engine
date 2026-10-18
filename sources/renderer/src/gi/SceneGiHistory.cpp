@@ -86,7 +86,7 @@ void SceneGiHistory::Capture(bgfx::ViewId viewId, bgfx::TextureHandle sourceColo
     if (!bgfx::isValid(lit_) || !bgfx::isValid(sourceColor)) {
         return;
     }
-    bgfx::blit(viewId, lit_, 0U, 0U, sourceColor);
+    bgfx::blit(viewId, bgfx::TextureRegion{ .handle = lit_ }, bgfx::TextureRegion{ .handle = sourceColor });
     captured_ = true;
 }
 

@@ -21,12 +21,9 @@ Supported rendering backends
 -  Direct3D 12
 -  GNM (only for licensed PS4 developers, search DevNet forums for source)
 -  Metal
--  OpenGL 2.1
--  OpenGL 3.1+
--  OpenGL ES 2
--  OpenGL ES 3.1
+-  OpenGL 4.3+
+-  OpenGL ES 3.0+
 -  Vulkan
--  WebGL 1.0
 -  WebGL 2.0
 -  WebGPU (Dawn Native only)
 
@@ -62,6 +59,7 @@ Supported Languages
 -  `Go language API bindings <https://github.com/james4k/go-bgfx>`__
 -  `Haskell language API bindings <https://github.com/haskell-game/bgfx>`__
 -  `Lightweight Java Game Library 3 bindings <https://github.com/LWJGL/lwjgl3#lwjgl---lightweight-java-game-library-3>`__
+-  `Java language API bindings <https://github.com/bkaradzic/bgfx/tree/master/bindings/java>`__
 -  `Lua language API bindings <https://github.com/cloudwu/lua-bgfx>`__
 -  `Nim language API bindings <https://github.com/Halsys/nim-bgfx>`__
 -  `Pascal language API bindings <https://github.com/Akira13641/PasBGFX>`__

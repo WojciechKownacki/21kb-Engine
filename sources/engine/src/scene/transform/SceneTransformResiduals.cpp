@@ -11,7 +11,7 @@ const SceneTransformResidual* SceneTransformResiduals::Find(SceneEntity entity) 
     if (Empty() || !entity.IsValid()) return nullptr;
     const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
     if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex && denseIndex < slots_.size()) {
-        const std::uint64_t word = std::atomic_ref<const std::uint64_t>{ bits_[denseIndex / 64U] }.load(std::memory_order_acquire);
+        const std::uint64_t word = std::atomic_ref<std::uint64_t>{ const_cast<std::uint64_t&>(bits_[denseIndex / 64U]) }.load(std::memory_order_acquire);
         if ((word >> (denseIndex % 64U) & 1U) != 0U && slots_[denseIndex].entityId == entity.Id()) {
             return &slots_[denseIndex];
         }

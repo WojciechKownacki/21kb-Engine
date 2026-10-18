@@ -350,7 +350,7 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
             }
             bgfx::Attachment attachments[2]{};
             attachments[0].init(desc.colorTexture);
-            attachments[1].init(desc.depthTexture);
+            attachments[1].init(desc.depthTexture, bgfx::Access::Write, 0U, 1U, 0U, BGFX_ATTACHMENT_NONE);
             entry.frameBuffer = bgfx::createFrameBuffer(2U, attachments, false);
             entry.sourceFrameBuffer = desc.frameBuffer;
             entry.color = desc.colorTexture;

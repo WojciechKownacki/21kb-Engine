@@ -155,6 +155,31 @@ namespace {
     return lhs.skeletonAssetId == rhs.skeletonAssetId &&
         lhs.skeletonCompatibilitySignature == rhs.skeletonCompatibilitySignature && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equal(const SocketAttachmentOffset& lhs, const SocketAttachmentOffset& rhs) noexcept {
+    return lhs.position.x == rhs.position.x && lhs.position.y == rhs.position.y && lhs.position.z == rhs.position.z &&
+        lhs.rotation.x == rhs.rotation.x && lhs.rotation.y == rhs.rotation.y && lhs.rotation.z == rhs.rotation.z &&
+        lhs.rotation.w == rhs.rotation.w;
+}
+[[nodiscard]] bool Equal(const SocketAttachmentComponent& lhs, const SocketAttachmentComponent& rhs) noexcept {
+    return SocketAttachmentName(lhs) == SocketAttachmentName(rhs) && Equal(lhs.offset, rhs.offset) && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equal(const CombatantComponent& lhs, const CombatantComponent& rhs) noexcept {
+    return lhs.maximumHealth == rhs.maximumHealth && lhs.health == rhs.health && lhs.healthRegeneration == rhs.healthRegeneration &&
+        lhs.maximumMana == rhs.maximumMana && lhs.mana == rhs.mana && lhs.manaRegeneration == rhs.manaRegeneration &&
+        lhs.resistances == rhs.resistances && lhs.team == rhs.team && lhs.sightRange == rhs.sightRange &&
+        lhs.sightAngleDegrees == rhs.sightAngleDegrees && lhs.hearingRange == rhs.hearingRange &&
+        lhs.requireLineOfSight == rhs.requireLineOfSight && lhs.abilities == rhs.abilities &&
+        lhs.invulnerable == rhs.invulnerable && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equal(const AIBrainComponent& lhs, const AIBrainComponent& rhs) noexcept {
+    for (std::size_t index = 0U; index < kAIBrainRuleCount; ++index) {
+        const AIRule& a = lhs.rules[index];
+        const AIRule& b = rhs.rules[index];
+        if (a.when != b.when || a.whenValue != b.whenValue || a.action != b.action || a.actionValue != b.actionValue) return false;
+    }
+    return lhs.preset == rhs.preset && lhs.moveSpeed == rhs.moveSpeed && lhs.wanderRadius == rhs.wanderRadius &&
+        lhs.leashDistance == rhs.leashDistance && lhs.enabled == rhs.enabled;
+}
 [[nodiscard]] bool Equal(const MotionSkeletonRuleComponent& lhs, const MotionSkeletonRuleComponent& rhs) noexcept {
     return lhs.kind == rhs.kind && lhs.constrainedBoneId == rhs.constrainedBoneId &&
         lhs.midBoneId == rhs.midBoneId && lhs.tipBoneId == rhs.tipBoneId &&
@@ -224,6 +249,15 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
     }
     if (!EqualOptionalComponent(components.SkeletonBindings().TryGet(entity), expected.skeletonBinding)) {
         flags |= ScenePrefabOverrideFlag::SkeletonBinding;
+    }
+    if (!EqualOptionalComponent(components.SocketAttachments().TryGet(entity), expected.socketAttachment)) {
+        flags |= ScenePrefabOverrideFlag::SocketAttachment;
+    }
+    if (!EqualOptionalComponent(components.Combatants().TryGet(entity), expected.combatant)) {
+        flags |= ScenePrefabOverrideFlag::Combatant;
+    }
+    if (!EqualOptionalComponent(components.AIBrains().TryGet(entity), expected.aiBrain)) {
+        flags |= ScenePrefabOverrideFlag::AIBrain;
     }
     if (!EqualOptionalComponent(components.MotionSkeletonRules().TryGet(entity), expected.motionSkeletonRule)) {
         flags |= ScenePrefabOverrideFlag::MotionSkeletonRule;

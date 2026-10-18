@@ -1,6 +1,8 @@
 #include "scene/prefab/ScenePrefabPropertyOverrideApplier.hpp"
 #include "scene/prefab/ScenePrefabOverrideValueFormatter.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
+#include "scene/CombatantFields.hpp"
+#include "scene/AIBrainFields.hpp"
 
 #include <cmath>
 
@@ -477,6 +479,41 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     }
     if (property.propertyPath == "skeletonBinding.enabled") {
         return ParseBool(property.value, Ensure(node.components.skeletonBinding).enabled);
+    }
+    if (property.propertyPath == "aiBrain") {
+        return ApplyComponentPresence(property.value, node.components.aiBrain);
+    }
+    if (std::string_view{ property.propertyPath }.starts_with("aiBrain.")) {
+        const std::string_view name = std::string_view{ property.propertyPath }.substr(8U);
+        for (const AIBrainTextField& field : AIBrainTextFields()) {
+            if (field.name == name) return field.set(Ensure(node.components.aiBrain), field.rule, property.value);
+        }
+        return false;
+    }
+    if (property.propertyPath == "combatant") {
+        return ApplyComponentPresence(property.value, node.components.combatant);
+    }
+    if (std::string_view{ property.propertyPath }.starts_with("combatant.")) {
+        const std::string_view name = std::string_view{ property.propertyPath }.substr(10U);
+        for (const CombatantTextField& field : CombatantTextFields()) {
+            if (field.name == name) return field.set(Ensure(node.components.combatant), property.value);
+        }
+        return false;
+    }
+    if (property.propertyPath == "socketAttachment") {
+        return ApplyComponentPresence(property.value, node.components.socketAttachment);
+    }
+    if (property.propertyPath == "socketAttachment.socket") {
+        return SetSocketAttachmentName(Ensure(node.components.socketAttachment), property.value);
+    }
+    if (property.propertyPath == "socketAttachment.position") {
+        return ParseVec3(property.value, Ensure(node.components.socketAttachment).offset.position);
+    }
+    if (property.propertyPath == "socketAttachment.rotation") {
+        return ParseQuat(property.value, Ensure(node.components.socketAttachment).offset.rotation);
+    }
+    if (property.propertyPath == "socketAttachment.enabled") {
+        return ParseBool(property.value, Ensure(node.components.socketAttachment).enabled);
     }
     if (property.propertyPath == "deformedGeometry") {
         return ApplyComponentPresence(property.value, node.components.deformedGeometry);

@@ -1,3 +1,4 @@
+#include "kb/render/scene/SceneLightingQuality.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/ecs/World.hpp"
@@ -534,13 +535,55 @@ void RunRuntimeResources() {
     renderer.Shutdown();
 }
 
+// The quality a project pins turns into shadow and voxel settings that only get more detailed from one level
+// to the next, are never richer on a phone than on a computer, and are left alone by Auto.
+void RunLightingQuality() {
+    using Level = kb::project::ProjectQualityLevel;
+    const kb::render::SceneRenderLightingConfig engine{};
+    kb::render::SceneRenderLightingConfig automatic = engine;
+    kb::render::ApplyProjectLightingQuality(automatic, Level::Auto, Level::Auto, false);
+    kb::render::ApplyProjectLightingQuality(automatic, Level::Auto, Level::Auto, true);
+    Require(automatic.shadowMapSize == engine.shadowMapSize && automatic.shadowCascadeCount == engine.shadowCascadeCount &&
+            automatic.shadowAtlasSize == engine.shadowAtlasSize && automatic.shadowDistance == engine.shadowDistance &&
+            automatic.shadowFilter == engine.shadowFilter && automatic.giVoxelSize == engine.giVoxelSize &&
+            automatic.giHistoryWeight == engine.giHistoryWeight,
+        "Auto quality must leave the lighting config as the engine chose it");
+
+    const std::array levels{ Level::Low, Level::Medium, Level::High, Level::Ultra };
+    for (const bool mobile : { false, true }) {
+        kb::render::SceneRenderLightingConfig previous{};
+        for (std::size_t index = 0U; index < levels.size(); ++index) {
+            kb::render::SceneRenderLightingConfig current{};
+            kb::render::ApplyProjectLightingQuality(current, levels[index], levels[index], mobile);
+            if (index > 0U) {
+                Require(current.shadowMapSize >= previous.shadowMapSize && current.shadowCascadeCount >= previous.shadowCascadeCount &&
+                        current.shadowAtlasSize >= previous.shadowAtlasSize && current.shadowDistance >= previous.shadowDistance,
+                    "A higher shadow quality must not be coarser than the one below it");
+                Require(current.shadowMapSize > previous.shadowMapSize || current.shadowCascadeCount > previous.shadowCascadeCount ||
+                        current.shadowAtlasSize > previous.shadowAtlasSize || current.shadowDistance > previous.shadowDistance ||
+                        current.shadowFilter != previous.shadowFilter,
+                    "Every shadow quality level must differ from the one below it");
+                Require(current.giVoxelSize < previous.giVoxelSize, "A higher global illumination quality needs a finer voxel grid");
+            }
+            if (mobile) {
+                kb::render::SceneRenderLightingConfig desktop{};
+                kb::render::ApplyProjectLightingQuality(desktop, levels[index], levels[index], false);
+                Require(current.shadowMapSize <= desktop.shadowMapSize && current.shadowCascadeCount <= desktop.shadowCascadeCount &&
+                        current.shadowAtlasSize <= desktop.shadowAtlasSize && current.giVoxelSize >= desktop.giVoxelSize,
+                    "A phone must never get richer shadows or a finer voxel grid than a computer at the same level");
+            }
+            previous = current;
+        }
+    }
+}
+
 struct Test { const char* name; void (*run)(); };
 } // namespace
 
 int main(int argc, char** argv) {
     const std::array tests{
         Test{ "all-proxy", &RunAllProxyLifecycle }, Test{ "inherited", &RunInheritedAndNativeOnly },
-        Test{ "mesh-slices", &RunMeshPullSlices }, Test{ "resources", &RunRuntimeResources },
+        Test{ "mesh-slices", &RunMeshPullSlices }, Test{ "resources", &RunRuntimeResources }, Test{ "lighting-quality", &RunLightingQuality },
     };
     try {
         bool selected = false;

@@ -4,6 +4,9 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/SocketAttachmentComponent.hpp"
+#include "engine/scene/CombatantComponent.hpp"
+#include "engine/scene/AIBrainComponent.hpp"
 #include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
@@ -126,6 +129,12 @@ public:
     [[nodiscard]] static const Animator* TryGetAnimator(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasSkeletonBinding(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const SkeletonBindingComponent* TryGetSkeletonBinding(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasSocketAttachment(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const SocketAttachmentComponent* TryGetSocketAttachment(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasCombatant(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const CombatantComponent* TryGetCombatant(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasAIBrain(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const AIBrainComponent* TryGetAIBrain(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasMotionSkeletonRule(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const MotionSkeletonRuleComponent* TryGetMotionSkeletonRule(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasDeformedGeometry(const Scene& scene, SceneEntity entity) noexcept;

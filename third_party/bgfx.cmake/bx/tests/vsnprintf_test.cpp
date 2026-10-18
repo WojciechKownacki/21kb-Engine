@@ -145,11 +145,9 @@ TEST_CASE("Format %f", "[string][printf]")
 	REQUIRE(test("     nan", "%8f",   kDoubleNan) );
 	REQUIRE(test("-NAN    ", "%-8F", -kDoubleNan) );
 
-#if !defined(__FAST_MATH__) || !__FAST_MATH__
 	REQUIRE(test("     inf", "%8f",   bx::kDoubleInfinity) );
 	REQUIRE(test("inf     ", "%-8f",  bx::kDoubleInfinity) );
 	REQUIRE(test("    -INF", "%8F",  -bx::kDoubleInfinity) );
-#endif // !defined(__FAST_MATH__) || !__FAST_MATH__
 
 	REQUIRE(test(" 1.0",     "%4.1f",    1.0) );
 	REQUIRE(test(" 1.500",   "%6.3f",    1.5) );
@@ -226,7 +224,9 @@ TEST_CASE("Format %f", "[string][printf]")
 	REQUIRE(test("4.1",            "%.1f",    4.1) );
 	REQUIRE(test("0.00",           "%.2f",    1e-4) );
 	REQUIRE(test("-5.20",          "%+4.2f", -5.2) );
-	REQUIRE(test("0.0       ",     "%-10.1f", 0.) );
+
+	volatile double zero = 0.0; // /fp:fast allows the compiler to disregard the sign of zero.
+	REQUIRE(test("0.0       ",     "%-10.1f", zero) );
 	REQUIRE(test("-8.8888888800",  "%.10f",  -8.88888888) );
 	REQUIRE(test("880.0888888800", "%.10f",   880.08888888) );
 	REQUIRE(test("100056789.0",    "%.1f",    100056789.0) );
@@ -344,14 +344,11 @@ TEST_CASE("Format %td", "[string][printf]")
 
 	REQUIRE(test("-1", "%td", size) );
 
-	if constexpr (4 == sizeof(ptrdiff_t) )
-	{
-		REQUIRE(test("-1073741824", "%td", ptrdiff_t(3221225472) ) );
-	}
-	else
-	{
-		REQUIRE(test("3221225472", "%td", ptrdiff_t(3221225472) ) );
-	}
+#if BX_ARCH_32BIT
+	REQUIRE(test("-1073741824", "%td", ptrdiff_t(-1073741824) ) );
+#else
+	REQUIRE(test("3221225472", "%td", ptrdiff_t(3221225472) ) );
+#endif // BX_ARCH_32BIT
 }
 
 TEST_CASE("Format %n", "[string][printf]")

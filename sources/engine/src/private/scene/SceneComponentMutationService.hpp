@@ -4,6 +4,9 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/SocketAttachmentComponent.hpp"
+#include "engine/scene/CombatantComponent.hpp"
+#include "engine/scene/AIBrainComponent.hpp"
 #include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
@@ -190,6 +193,18 @@ public:
     [[nodiscard]] static bool SetSkeletonBinding(Scene& scene, SceneEntity entity, const SkeletonBindingComponent& binding);
     static void RemoveSkeletonBinding(Scene& scene, SceneEntity entity) noexcept;
     static void MarkSkeletonBindingModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SocketAttachmentComponent* TryGetSocketAttachment(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool SetSocketAttachment(Scene& scene, SceneEntity entity, const SocketAttachmentComponent& attachment);
+    static void RemoveSocketAttachment(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkSocketAttachmentModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static CombatantComponent* TryGetCombatant(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool SetCombatant(Scene& scene, SceneEntity entity, const CombatantComponent& combatant);
+    static void RemoveCombatant(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkCombatantModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static AIBrainComponent* TryGetAIBrain(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool SetAIBrain(Scene& scene, SceneEntity entity, const AIBrainComponent& aiBrain);
+    static void RemoveAIBrain(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkAIBrainModified(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static MotionSkeletonRuleComponent* TryGetMotionSkeletonRule(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool SetMotionSkeletonRule(Scene& scene, SceneEntity entity, const MotionSkeletonRuleComponent& rule);
     static void RemoveMotionSkeletonRule(Scene& scene, SceneEntity entity) noexcept;

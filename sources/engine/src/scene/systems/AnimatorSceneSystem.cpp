@@ -8,6 +8,7 @@ namespace kb::scene {
 void AnimatorSceneSystem::OnUpdate(SceneSystemContext& context) {
     SceneAnimatorService::SyncComponents(context.GetScene());
     SceneAnimatorService::Advance(context.GetScene(), context.DeltaSeconds());
+    SceneAnimatorService::ApplySocketAttachments(context.GetScene());
     SceneAnimatorService::SubmitDebugSnapshot(context.GetScene());
 }
 

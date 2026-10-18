@@ -279,8 +279,8 @@ def _validate_arguments(args: argparse.Namespace) -> None:
             raise PackagingError("Android application ID is invalid")
         if args.android_version_code <= 0 or args.android_version_code > 2_100_000_000:
             raise PackagingError("Android version code must be between 1 and 2100000000")
-        if not 28 <= args.android_min_sdk <= args.android_target_sdk <= 36:
-            raise PackagingError("Android SDK levels must satisfy 28 <= minimum <= target <= 36")
+        if not 23 <= args.android_min_sdk <= args.android_target_sdk <= 37:
+            raise PackagingError("Android SDK levels must satisfy 23 <= minimum <= target <= 37")
         if args.android_label is not None:
             args.android_label = _validate_text(args.android_label, "Android application label", 128)
         if args.configuration == "Release":
@@ -640,6 +640,7 @@ def _build_tool_path(build_root: Path, configuration: str, name: str) -> Path:
         build_root / "bin" / f"{name}{suffix}",
         build_root / configuration / f"{name}{suffix}",
         build_root / "renderer" / configuration / f"{name}{suffix}",
+        build_root / "renderer" / f"{name}{suffix}",
         build_root / "game" / configuration / f"{name}{suffix}",
     )
     for candidate in candidates:
@@ -1036,6 +1037,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
         "kb_physics_jolt_plugin",
         "kb_audio_miniaudio_plugin",
         "kb_basic_lighting_plugin",
+        "kb_ai_plugin",
         "kb_21kb_particle_plugin",
     )
     _build_targets(cmake, args.build_root, configuration, ("kb_game", *plugin_targets), args.engine_root)
@@ -1068,6 +1070,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
         expected = f"{target}.dll"
         candidates = [
             args.build_root / target.removeprefix("kb_").removesuffix("_plugin") / configuration / expected,
+            args.build_root / target.removeprefix("kb_").removesuffix("_plugin") / expected,
             args.build_root / "21kb_particle" / configuration / expected,
             game.parent / expected,
         ]
@@ -1169,6 +1172,7 @@ def _verify_android_apk(
     expects_custom_icon: bool,
     build_tools: Path,
     expected_debuggable: bool,
+    legal_assets: Path,
 ) -> None:
     if not apk.is_file() or apk.read_bytes()[:4] != b"PK\x03\x04":
         raise PackagingError("Android package is not a readable APK")
@@ -1178,19 +1182,12 @@ def _verify_android_apk(
             if len(names) != len(set(names)) or len({name.casefold() for name in names}) != len(names):
                 raise PackagingError("Android APK contains duplicate or case-colliding entries")
             required = {"assets/game.kbpack", "lib/arm64-v8a/libkb_game_android.so"}
-            required.update({
-                "assets/THIRD_PARTY_NOTICES.txt",
-                "assets/Licenses/bgfx.rst",
-                "assets/Licenses/bimg.txt",
-                "assets/Licenses/bx.txt",
-                "assets/Licenses/flecs.txt",
-                "assets/Licenses/jolt.txt",
-                "assets/Licenses/lua.txt",
-                "assets/Licenses/miniaudio.txt",
-                "assets/Licenses/ufbx.txt",
-                "assets/Licenses/androidx-apache-2.0.txt",
-                "assets/kb_trust_anchor.bin",
-            })
+            required.add("assets/kb_trust_anchor.bin")
+            # Exactly the notices staged for this target, so the check never lags the component catalog.
+            required.update(
+                f"assets/{path.relative_to(legal_assets).as_posix()}"
+                for path in legal_assets.rglob("*") if path.is_file()
+            )
             if not required.issubset(names):
                 raise PackagingError(f"Android APK is missing runtime entries: {sorted(required - set(names))}")
             abis = {PurePosixPath(name).parts[1] for name in names if name.startswith("lib/") and len(PurePosixPath(name).parts) >= 3}
@@ -1202,8 +1199,11 @@ def _verify_android_apk(
     except zipfile.BadZipFile as error:
         raise PackagingError("Android APK central directory is invalid") from error
     zipalign = _android_tool(build_tools, "zipalign")
+    # Below API 24 the APK carries a v1 (JAR) signature, which always warns about the
+    # unsigned META-INF/*.version files of the AndroidX libraries.
+    strict = ["-Werr"] if min_sdk >= 24 else []
     run_checked(
-        _apksigner_command(build_tools, ["verify", "--verbose", "--print-certs", "-Werr", apk]),
+        _apksigner_command(build_tools, ["verify", "--verbose", "--print-certs", *strict, apk]),
         cwd=apk.parent,
         timeout_seconds=120,
     )
@@ -1399,6 +1399,7 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
             target_sdk=args.android_target_sdk,
             expects_custom_icon=args.application_icon is not None,
             build_tools=build_tools,
+            legal_assets=legal_assets,
             expected_debuggable=False,
         )
         shutil.copy2(signed, destination)
@@ -1415,6 +1416,7 @@ def _stage_android(args: argparse.Namespace, pack: Path, stage: Path, job: Path)
         target_sdk=args.android_target_sdk,
         expects_custom_icon=args.application_icon is not None,
         build_tools=build_tools,
+        legal_assets=legal_assets,
         expected_debuggable=args.configuration == "Development",
     )
     tools = (
@@ -2308,8 +2310,8 @@ def _parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--android-application-id", default="com.kbengine.game")
     parser.add_argument("--android-label")
     parser.add_argument("--android-version-code", type=int, default=1)
-    parser.add_argument("--android-min-sdk", type=int, default=28)
-    parser.add_argument("--android-target-sdk", type=int, default=35)
+    parser.add_argument("--android-min-sdk", type=int, default=23)
+    parser.add_argument("--android-target-sdk", type=int, default=36)
     parser.add_argument("--android-keystore", type=Path)
     parser.add_argument("--android-key-alias", default="")
     parser.add_argument("--android-signing-broker", type=Path)

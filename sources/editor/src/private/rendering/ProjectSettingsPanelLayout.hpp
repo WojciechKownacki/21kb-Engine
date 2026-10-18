@@ -53,6 +53,10 @@ struct ProjectSettingsPanelLayoutRects {
     RECT msaa4xButton{};
     RECT msaa8xButton{};
     RECT msaa16xButton{};
+    // Lighting page: one row per quality setting (shadows and global illumination, desktop and mobile)
+    // with one button per level (Auto, Low, Medium, High, Ultra).
+    RECT qualityLabel[4]{};
+    RECT qualityButton[4][5]{};
 };
 
 class ProjectSettingsPanelLayout {
@@ -79,6 +83,7 @@ public:
     [[nodiscard]] static RECT GraphicsToggleLabel(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
     [[nodiscard]] static RECT AntiAliasingModeButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
     [[nodiscard]] static RECT MsaaOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
+    [[nodiscard]] static RECT QualityOptionButton(const ProjectSettingsPanelLayoutRects& rects, int row, int level) noexcept;
 };
 
 #endif

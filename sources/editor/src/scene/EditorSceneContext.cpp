@@ -2966,6 +2966,22 @@ bool EditorSceneContext::SetProjectSceneLightingPath(kb::project::ProjectSceneLi
     return saved;
 }
 
+bool EditorSceneContext::SetProjectQualityLevel(int row, kb::project::ProjectQualityLevel level) {
+    kb::project::ProjectQualityLevel* target = nullptr;
+    switch (row) {
+    case 0: target = &projectConfig_.shadowQuality; break;
+    case 1: target = &projectConfig_.shadowQualityMobile; break;
+    case 2: target = &projectConfig_.giQuality; break;
+    case 3: target = &projectConfig_.giQualityMobile; break;
+    default: return false;
+    }
+    if (static_cast<std::uint8_t>(level) >= kb::project::kProjectQualityLevelCount || *target == level) {
+        return false;
+    }
+    *target = level;
+    return SaveProjectConfiguration();
+}
+
 bool EditorSceneContext::CycleEntityVisibilityMode(kb::scene::SceneEntity entity) {
     return ExecuteSceneCommand("Edit Visibility Mode", [this, entity]() {
         kb::scene::VisibilityComponent* visibility = scene_->Components().Visibility().TryGet(entity);
@@ -4152,6 +4168,28 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
     if (kb::scene::SceneComponentAuthoring::Has(*scene_, entity, componentId)) {
         console_.Warning("Inspector", "Entity already has a " + displayName + " component.");
         return false;
+    }
+    // Plugins on by default are switched on by asking for what they provide (an AI Brain turns
+    // Gameplay.AI on in a project made before it existed); the others are the project's choice.
+    if (!kb::scene::SceneComponentAuthoring::PluginEnabled(project_, *kind) && kind->requiredPlugin == "Gameplay.AI") {
+        auto plugin = std::ranges::find_if(project_.plugins, [kind](const kb::project::ProjectPluginReference& reference) {
+            return reference.name == kind->requiredPlugin;
+        });
+        if (plugin == project_.plugins.end()) {
+            project_.plugins.push_back(kb::project::ProjectPluginReference{
+                .name = std::string{ kind->requiredPlugin },
+                .binaryPath = EditorPluginCatalog::PersistentBinaryPath(kind->requiredPlugin),
+                .enabled = true,
+            });
+        } else {
+            plugin->enabled = true;
+        }
+        if (!SaveProjectDescriptor()) {
+            console_.Error("Plugins", "The AI plugin could not be added to the project.");
+            return false;
+        }
+        plugins_.MarkPendingReload();
+        console_.Info("Plugins", "The AI plugin was switched on for this project; brains think once the scene is reloaded or played.");
     }
     if (!kb::scene::SceneComponentAuthoring::PluginEnabled(project_, *kind)) {
         console_.Warning("Plugins", "Enable the " + std::string{ kind->requiredPlugin } +

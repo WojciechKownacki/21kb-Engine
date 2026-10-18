@@ -4,14 +4,18 @@
 #include "engine/ecs/Query.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/AnimationRetargeting.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/SkeletonNames.hpp"
+#include "engine/scene/SocketAttachmentComponent.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
@@ -224,7 +228,8 @@ AnimatorDebugSnapshotCapture CaptureAnimatorDebugSnapshot(Scene& scene, SceneSta
                 const auto transition = std::find_if(
                     definition.transitions.begin(), definition.transitions.end(),
                     [&previous, &active](const AnimatorControllerTransition& candidate) {
-                        return candidate.fromState == previous.name && candidate.toState == active.name;
+                        return (candidate.fromState == previous.name || candidate.fromState == kAnimatorAnyState) &&
+                            candidate.toState == active.name;
                     });
                 if (transition != definition.transitions.end()) transitionId = transition->id;
             }
@@ -536,6 +541,55 @@ void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
     }
     InitializePoseBuffers(derived);
     return derived;
+}
+
+// A clip made for another skeleton plays on this character's own: it is retargeted once by bone
+// names (AnimationRetargeting) and the result is shared by every character with that skeleton.
+[[nodiscard]] bool RetargetToCharacter(
+    Scene& scene, const AnimatorRuntimeRecord& instance,
+    AnimatorRuntimeState::Motion& motion) {
+    const SkeletonBindingComponent* binding =
+        scene.Components().SkeletonBindings().TryGet(instance.entity);
+    const AnimationClip& clip = *motion.clip;
+    if (binding == nullptr || !binding->enabled || !IsSkeletonBindingComponentValid(*binding) ||
+        clip.targetSkeletonAssetId == binding->skeletonAssetId) {
+        return true;
+    }
+    SceneState& state = SceneAccess::State(scene);
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const kb::assets::AssetId sourceId{ clip.targetSkeletonAssetId };
+    const kb::assets::AssetId targetId{ binding->skeletonAssetId };
+    const std::array<std::uint64_t, 6> key{
+        motion.clip.Id().value, manager.LoadGeneration(motion.clip.Id()),
+        sourceId.value, manager.LoadGeneration(sourceId),
+        targetId.value, manager.LoadGeneration(targetId),
+    };
+    if (const auto cached = state.retargetedClips.find(key); cached != state.retargetedClips.end()) {
+        motion.clip = kb::assets::AssetHandle<AnimationClip>{ motion.clip.Id(), cached->second };
+        return true;
+    }
+    const auto source = manager.Load<SkeletonAsset>(sourceId);
+    const auto target = manager.Load<SkeletonAsset>(targetId);
+    if (!source.IsLoaded() || !target.IsLoaded() ||
+        SkeletonCompatibilitySignature(*source) != clip.targetSkeletonCompatibilitySignature ||
+        SkeletonCompatibilitySignature(*target) != binding->skeletonCompatibilitySignature) {
+        state.animatorBindError = "a clip's skeleton or the character's skeleton could not be loaded";
+        return false;
+    }
+    std::string error;
+    std::optional<AnimationClip> retargeted = RetargetAnimationClip(
+        clip, *source, *target, binding->skeletonAssetId, binding->skeletonCompatibilitySignature, nullptr, &error);
+    if (!retargeted.has_value()) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(motion.clip.Id());
+        state.animatorBindError = "clip " + (metadata == nullptr ? std::string{ "?" } : metadata->virtualPath.generic_string()) +
+            " cannot play on this character: " + error;
+        return false;
+    }
+    if (state.retargetedClips.size() >= 4096U) state.retargetedClips.clear();
+    auto shared = std::make_shared<const AnimationClip>(std::move(*retargeted));
+    state.retargetedClips.emplace(key, shared);
+    motion.clip = kb::assets::AssetHandle<AnimationClip>{ motion.clip.Id(), std::move(shared) };
+    return true;
 }
 
 [[nodiscard]] bool BindSkeletalMotion(
@@ -985,6 +1039,29 @@ struct BlendSelection {
     };
 }
 
+// A blend state's clips may differ in length (a walk of 1 s, a run of 0.6 s). They play at one
+// phase: the state's playhead runs on its first clip's seconds, each clip is sampled at the same
+// fraction of its own length, and the playhead advances at the blend-weighted length of the
+// two clips in play - the normalized-time sync of Unity's and Unreal's blend spaces.
+[[nodiscard]] double MotionPhaseScale(
+    const AnimatorRuntimeState& state,
+    const AnimatorRuntimeState::Motion& motion) {
+    const double reference = static_cast<double>(ReferenceClip(state).durationSeconds);
+    return reference > 0.0 ? static_cast<double>(motion.clip->durationSeconds) / reference : 1.0;
+}
+
+[[nodiscard]] double StateRate(
+    const AnimatorRuntimeRecord& record,
+    const AnimatorRuntimeState& state,
+    const AnimatorControllerState& definition) {
+    if (state.motions.size() < 2U) return 1.0;
+    const BlendSelection selection = SelectBlend(record, state, definition);
+    const double lower = static_cast<double>(state.motions[selection.lower].clip->durationSeconds);
+    const double upper = static_cast<double>(state.motions[selection.upper].clip->durationSeconds);
+    const double length = lower + (upper - lower) * static_cast<double>(selection.alpha);
+    return length > 0.0 ? static_cast<double>(ReferenceClip(state).durationSeconds) / length : 1.0;
+}
+
 [[nodiscard]] const AnimationTransformTrack* RootTrack(
     const AnimatorRuntimeState::Motion& motion,
     const AnimatorControllerLayer& layer) {
@@ -1064,11 +1141,15 @@ struct BlendSelection {
     double startSeconds,
     double deltaSeconds) {
     const BlendSelection selection = SelectBlend(record, state, stateDefinition);
-    RootMotionDelta lower = MotionRootMotion(
-        state.motions[selection.lower], layer, startSeconds, deltaSeconds);
+    const double rate = StateRate(record, state, stateDefinition);
+    const auto motionRootMotion = [&](std::size_t motionIndex) {
+        const AnimatorRuntimeState::Motion& motion = state.motions[motionIndex];
+        const double scale = MotionPhaseScale(state, motion);
+        return MotionRootMotion(motion, layer, startSeconds * scale, deltaSeconds * rate * scale);
+    };
+    RootMotionDelta lower = motionRootMotion(selection.lower);
     if (selection.lower == selection.upper) return lower;
-    const RootMotionDelta upper = MotionRootMotion(
-        state.motions[selection.upper], layer, startSeconds, deltaSeconds);
+    const RootMotionDelta upper = motionRootMotion(selection.upper);
     lower.translation = lower.translation +
         (upper.translation - lower.translation) * selection.alpha;
     lower.rotation = kb::math::Slerp(lower.rotation, upper.rotation, selection.alpha);
@@ -1160,6 +1241,9 @@ std::size_t EventCrossingCount(
     const AnimatorRuntimeState::Motion& motion =
         EventMotion(record, state, definition);
     if (delta <= 0.0 || motion.clip->events.empty()) return 0U;
+    const double scale = MotionPhaseScale(state, motion);
+    start *= scale;
+    delta *= StateRate(record, state, definition) * scale;
     const double duration = static_cast<double>(motion.clip->durationSeconds);
     std::size_t total = 0U;
     for (const AnimationEventKeyframe& event : motion.clip->events) {
@@ -1195,6 +1279,9 @@ void QueueStateEvents(
     const AnimatorRuntimeState::Motion& motion =
         EventMotion(record, state, definition);
     if (delta <= 0.0 || motion.clip->events.empty()) return;
+    const double scale = MotionPhaseScale(state, motion);
+    start *= scale;
+    delta *= StateRate(record, state, definition) * scale;
     const double duration = static_cast<double>(motion.clip->durationSeconds);
     const auto append = [&](const AnimationEventKeyframe& event) {
         pending.push_back(AnimationEventRecord{
@@ -1247,13 +1334,13 @@ void EvaluateState(
     std::uint64_t mask,
     bool from) {
     const BlendSelection selection = SelectBlend(record, state, definition);
-    const float sampleTime = static_cast<float>(time);
     for (std::size_t bindingIndex = 0U;
          bindingIndex < record.bindings.size(); ++bindingIndex) {
         const auto sampleMotion = [&](std::size_t motionIndex)
             -> std::optional<LocalTransform> {
             const AnimatorRuntimeState::Motion& motion = state.motions[motionIndex];
             const AnimationClip& clip = *motion.clip;
+            const float sampleTime = static_cast<float>(time * MotionPhaseScale(state, motion));
             for (std::size_t trackIndex = 0U;
                  trackIndex < clip.tracks.size(); ++trackIndex) {
                 if (motion.targetIndices[trackIndex] != bindingIndex ||
@@ -1328,12 +1415,12 @@ void EvaluateIndexedSkeletalState(
     std::fill(outputMorphTouched.begin(), outputMorphTouched.end(), std::uint8_t{ 0U });
 
     const BlendSelection selection = SelectBlend(instance, state, definition);
-    const float sampleTime = static_cast<float>(time);
     const auto sampleMotion = [&](std::size_t motionIndex,
                                   std::vector<std::uint8_t>& touched,
                                   bool blendUpper) {
         const AnimatorRuntimeState::Motion& motion =
             state.motions[motionIndex];
+        const float sampleTime = static_cast<float>(time * MotionPhaseScale(state, motion));
         if (motion.boneIndices.size() !=
             motion.clip->skeletalTracks.size()) {
             throw std::runtime_error(
@@ -2355,18 +2442,27 @@ void EvaluateControllerTransitions(AnimatorRuntimeRecord& record) {
         const float normalizedTime = duration > 0.0F
             ? static_cast<float>(layer.currentTimeSeconds / static_cast<double>(duration))
             : 0.0F;
-        for (const AnimatorControllerTransition& transition : definition.transitions) {
-            if (transition.fromState != currentState ||
-                (transition.exitNormalizedTime >= 0.0F && normalizedTime < transition.exitNormalizedTime) ||
-                !std::all_of(transition.conditions.begin(), transition.conditions.end(),
-                    [&](const AnimatorTransitionCondition& condition) { return ConditionMatches(record, condition); })) {
-                continue;
+        // Any-state transitions first, then the active state's own, each in authored order.
+        const AnimatorControllerTransition* fired = nullptr;
+        for (const bool anyState : { true, false }) {
+            for (const AnimatorControllerTransition& transition : definition.transitions) {
+                const bool fromAny = transition.fromState == kAnimatorAnyState;
+                if (fromAny != anyState || (fromAny ? transition.toState == currentState : transition.fromState != currentState) ||
+                    (transition.exitNormalizedTime >= 0.0F && normalizedTime < transition.exitNormalizedTime) ||
+                    !std::all_of(transition.conditions.begin(), transition.conditions.end(),
+                        [&](const AnimatorTransitionCondition& condition) { return ConditionMatches(record, condition); })) {
+                    continue;
+                }
+                fired = &transition;
+                break;
             }
-            const std::size_t target = StateIndex(definition, transition.toState);
-            if (StartTransition(record, layerIndex, target, transition.durationSeconds, 0.0F)) {
-                ConsumeTransitionTriggers(record, transition);
+            if (fired != nullptr) break;
+        }
+        if (fired != nullptr) {
+            const std::size_t target = StateIndex(definition, fired->toState);
+            if (StartTransition(record, layerIndex, target, fired->durationSeconds, 0.0F)) {
+                ConsumeTransitionTriggers(record, *fired);
             }
-            break;
         }
     }
 }
@@ -2425,9 +2521,10 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
                 auto clip =
                     manager.Load<AnimationClip>(ResolveClip(manager, reference));
                 if (!clip.IsLoaded()) return false;
+                // Lengths may differ (they play at one phase); a blend of a loop and a
+                // one-shot has no single end, so looping has to agree.
                 if (!state.motions.empty() &&
-                    (clip->durationSeconds !=
-                         state.motions.front().clip->durationSeconds ||
+                    (clip->durationSeconds <= 0.0F ||
                      clip->looping != state.motions.front().clip->looping)) {
                     return false;
                 }
@@ -2436,7 +2533,8 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
                 motion.clipLoadGeneration =
                     manager.LoadGeneration(motion.clip.Id());
                 if (motion.clip->targetSkeletonAssetId != 0U) {
-                    if (!BindSkeletalMotion(scene, candidate, motion)) {
+                    if (!RetargetToCharacter(scene, candidate, motion) ||
+                        !BindSkeletalMotion(scene, candidate, motion)) {
                         return false;
                     }
                 } else {
@@ -2661,20 +2759,287 @@ SceneAnimatorService::AttachmentTransform(
     };
 }
 
+namespace {
+
+// A socket - or a bone - by its name or another spelling of it (FindSkeletonSocket).
+struct ResolvedSocket {
+    SkeletonBoneId boneId = 0U;
+    LocalTransform localTransform{};
+};
+
+[[nodiscard]] std::optional<ResolvedSocket> ResolveSocket(const SkeletonAsset& skeleton, std::string_view name) {
+    const std::optional<SkeletonSocketMatch> match = FindSkeletonSocket(skeleton, name);
+    if (!match.has_value()) return std::nullopt;
+    return ResolvedSocket{ .boneId = match->boneId, .localTransform = match->localTransform };
+}
+
+// The nearest ancestor that has a posed skeleton (an Animator's or a SkeletonBinding's).
+[[nodiscard]] SceneEntity FindSocketCharacter(const Scene& scene, SceneEntity attached) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    SceneEntity current = scene.Hierarchy().Parent(attached);
+    for (std::size_t depth = 0U; current.IsValid() && depth < 4096U; ++depth) {
+        if (FindSkeletonPose(state, current) != nullptr) return current;
+        current = scene.Hierarchy().Parent(current);
+    }
+    return SceneEntity{};
+}
+
+// `target` expressed in the space of `parent` (both relative to the same frame).
+[[nodiscard]] std::optional<LocalTransform> RelativeTo(const LocalTransform& parent, const LocalTransform& target) noexcept {
+    if (parent.scale.x == 0.0F || parent.scale.y == 0.0F || parent.scale.z == 0.0F) return std::nullopt;
+    const Quat inverseRotation = kb::math::Conjugate(kb::math::Normalize(parent.rotation));
+    const Vec3 rotated = kb::math::Rotate(inverseRotation, target.position - parent.position);
+    return LocalTransform{
+        .position = { rotated.x / parent.scale.x, rotated.y / parent.scale.y, rotated.z / parent.scale.z },
+        .rotation = kb::math::Normalize(inverseRotation * target.rotation),
+        .scale = { target.scale.x / parent.scale.x, target.scale.y / parent.scale.y, target.scale.z / parent.scale.z },
+    };
+}
+
+struct SocketPlacement {
+    SocketAttachmentStatus status;
+    LocalTransform local{};
+};
+
+[[nodiscard]] SocketPlacement PlaceSocketAttachment(const Scene& scene, SceneEntity attached, const SocketAttachmentComponent& attachment) {
+    SocketPlacement placement;
+    SocketAttachmentStatus& status = placement.status;
+    const std::string_view socketName = SocketAttachmentName(attachment);
+    if (socketName.empty()) {
+        status.error = "no socket name; set one, e.g. hand_r";
+        return placement;
+    }
+    status.character = FindSocketCharacter(scene, attached);
+    if (!status.character.IsValid()) {
+        status.error = "no animated character above this object; parent it under the character";
+        return placement;
+    }
+    const AnimatorInstanceSkeleton* pose = FindSkeletonPose(SceneAccess::State(scene), status.character);
+    const std::optional<ResolvedSocket> socket = ResolveSocket(*pose->asset, socketName);
+    if (!socket.has_value()) {
+        status.error = "the character's skeleton has no socket or bone named '" + std::string{ socketName } + "'";
+        return placement;
+    }
+    const std::optional<AnimatorAttachmentTransform> transform = SceneAnimatorService::AttachmentTransform(
+        scene, status.character, socket->boneId,
+        ComposeTransform(socket->localTransform, LocalTransform{ .position = attachment.offset.position, .rotation = attachment.offset.rotation }));
+    if (!transform.has_value()) {
+        status.error = "the character has no pose yet";
+        return placement;
+    }
+    // The socket in character space, then in the space of the object's own parent, which may sit
+    // anywhere between the object and the character.
+    LocalTransform parentInCharacter{};
+    std::vector<SceneEntity> chain;
+    for (SceneEntity current = scene.Hierarchy().Parent(attached); current.IsValid() && current.Id() != status.character.Id();
+         current = scene.Hierarchy().Parent(current)) {
+        chain.push_back(current);
+    }
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        const TransformComponent* link = scene.Transforms().TryGet(*it);
+        if (link == nullptr) {
+            status.error = "an object between this one and the character has no Transform";
+            return placement;
+        }
+        parentInCharacter = ComposeTransform(parentInCharacter, link->LocalPayload());
+    }
+    const std::optional<LocalTransform> local = RelativeTo(parentInCharacter, transform->componentSpace);
+    if (!local.has_value() || !IsFiniteTransform(*local)) {
+        status.error = "an object between this one and the character has zero scale";
+        return placement;
+    }
+    placement.local = *local;
+    // The object keeps its own size; only where it is and how it is turned follow the socket.
+    if (const TransformComponent* own = scene.Transforms().TryGet(attached)) placement.local.scale = own->localScale;
+    status.attached = true;
+    return placement;
+}
+
+} // namespace
+
 std::optional<AnimatorAttachmentTransform>
 SceneAnimatorService::SocketTransform(
     const Scene& scene, SceneEntity entity, std::string_view socketName) noexcept {
-    if (socketName.empty()) return std::nullopt;
     const AnimatorInstanceSkeleton* pose =
         FindSkeletonPose(SceneAccess::State(scene), entity);
     if (pose == nullptr) return std::nullopt;
-    const SkeletonAsset& skeleton = *pose->asset;
-    const auto socket = std::find_if(
-        skeleton.sockets.begin(), skeleton.sockets.end(),
-        [socketName](const SkeletonSocket& value) { return value.name == socketName; });
-    return socket == skeleton.sockets.end()
-        ? std::nullopt
-        : AttachmentTransform(scene, entity, socket->boneId, socket->localTransform);
+    const std::optional<ResolvedSocket> socket = ResolveSocket(*pose->asset, socketName);
+    return socket.has_value()
+        ? AttachmentTransform(scene, entity, socket->boneId, socket->localTransform)
+        : std::nullopt;
+}
+
+namespace {
+
+// The skeleton a character is authored with, posed or not (the editor, before Play).
+[[nodiscard]] SceneEntity FindAuthoredCharacter(const Scene& scene, SceneEntity attached) noexcept {
+    SceneEntity current = scene.Hierarchy().Parent(attached);
+    for (std::size_t depth = 0U; current.IsValid() && depth < 4096U; ++depth) {
+        const SkeletonBindingComponent* binding = scene.Components().SkeletonBindings().TryGet(current);
+        if (binding != nullptr && binding->enabled && IsSkeletonBindingComponentValid(*binding)) return current;
+        current = scene.Hierarchy().Parent(current);
+    }
+    return SceneEntity{};
+}
+
+[[nodiscard]] kb::assets::AssetHandle<SkeletonAsset> AuthoredSkeleton(const Scene& scene, SceneEntity character) {
+    const SkeletonBindingComponent* binding = scene.Components().SkeletonBindings().TryGet(character);
+    if (binding == nullptr) return {};
+    return const_cast<Scene&>(scene).Assets().Manager().Load<SkeletonAsset>(kb::assets::AssetId{ binding->skeletonAssetId });
+}
+
+} // namespace
+
+SocketAttachmentStatus SceneAnimatorService::SocketAttachment(const Scene& scene, SceneEntity attachedEntity) {
+    const SocketAttachmentComponent* attachment = SceneAccess::State(scene).componentStorage.SocketAttachments().TryGet(attachedEntity);
+    if (attachment == nullptr) return SocketAttachmentStatus{ .error = "the object has no SocketAttachment" };
+    SocketAttachmentStatus status = PlaceSocketAttachment(scene, attachedEntity, *attachment).status;
+    const std::string_view socketName = SocketAttachmentName(*attachment);
+    if (status.attached) {
+        const AnimatorInstanceSkeleton* pose = FindSkeletonPose(SceneAccess::State(scene), status.character);
+        if (const std::optional<SkeletonSocketMatch> match = FindSkeletonSocket(*pose->asset, socketName)) status.resolvedName = match->name;
+        return status;
+    }
+    if (socketName.empty() || (status.character.IsValid() && FindSkeletonPose(SceneAccess::State(scene), status.character) != nullptr &&
+                               status.error.find("no pose") == std::string::npos)) {
+        return status;
+    }
+    // Not posed yet (the editor before Play): judge the name against the authored skeleton.
+    const SceneEntity character = FindAuthoredCharacter(scene, attachedEntity);
+    if (!character.IsValid()) return status;
+    const kb::assets::AssetHandle<SkeletonAsset> skeleton = AuthoredSkeleton(scene, character);
+    if (!skeleton.IsLoaded()) {
+        return SocketAttachmentStatus{ .character = character, .error = "the character's skeleton could not be loaded" };
+    }
+    const std::optional<SkeletonSocketMatch> match = FindSkeletonSocket(*skeleton, socketName);
+    if (!match.has_value()) {
+        return SocketAttachmentStatus{ .character = character,
+            .error = "the character's skeleton has no socket or bone named '" + std::string{ socketName } + "'" };
+    }
+    return SocketAttachmentStatus{ .character = character, .attached = true, .resolvedName = match->name };
+}
+
+std::vector<std::string> SceneAnimatorService::SocketNames(const Scene& scene, SceneEntity entity) {
+    std::vector<std::string> names;
+    kb::assets::AssetHandle<SkeletonAsset> authored;
+    const SkeletonAsset* skeleton = nullptr;
+    if (const AnimatorInstanceSkeleton* pose = FindSkeletonPose(SceneAccess::State(scene), entity)) {
+        skeleton = &*pose->asset;
+    } else if (const SkeletonBindingComponent* binding = scene.Components().SkeletonBindings().TryGet(entity);
+               binding != nullptr && IsSkeletonBindingComponentValid(*binding)) {
+        authored = AuthoredSkeleton(scene, entity);
+        if (authored.IsLoaded()) skeleton = &*authored;
+    }
+    if (skeleton == nullptr) return names;
+    names.reserve(skeleton->sockets.size() + skeleton->bones.size());
+    for (const SkeletonSocket& socket : skeleton->sockets) names.push_back(socket.name);
+    for (const SkeletonBone& bone : skeleton->bones) {
+        if (std::find(names.begin(), names.end(), bone.name) == names.end()) names.push_back(bone.name);
+    }
+    return names;
+}
+
+
+
+bool SceneAnimatorService::AttachToSocket(
+    Scene& scene, SceneEntity object, SceneEntity character, std::string_view socketName,
+    const SocketAttachmentOffset& offset, std::string* error) {
+    const auto fail = [error](std::string message) {
+        if (error != nullptr) *error = std::move(message);
+        return false;
+    };
+    if (!scene.Entities().IsAlive(object) || !scene.Entities().IsAlive(character)) return fail("the object or the character does not exist");
+    for (SceneEntity current = character; current.IsValid(); current = scene.Hierarchy().Parent(current)) {
+        if (current.Id() == object.Id()) return fail("an object cannot hang on itself or on an object below it");
+    }
+    SocketAttachmentComponent attachment{};
+    if (!SetSocketAttachmentName(attachment, socketName)) return fail("the socket name is empty or longer than 128 bytes");
+    // Keep the socket's own spelling ("hand.R" for "hand_r"), so frames find it without folding names.
+    if (const AnimatorInstanceSkeleton* pose = FindSkeletonPose(SceneAccess::State(scene), character)) {
+        if (const std::optional<SkeletonSocketMatch> match = FindSkeletonSocket(*pose->asset, socketName)) {
+            static_cast<void>(SetSocketAttachmentName(attachment, match->name));
+        }
+    }
+    attachment.offset = offset;
+    if (!IsSocketAttachmentComponentValid(attachment)) return fail("the offset must be finite with a non-zero rotation");
+
+    const SceneEntity previousParent = scene.Hierarchy().Parent(object);
+    const std::optional<SocketAttachmentComponent> previous = [&]() -> std::optional<SocketAttachmentComponent> {
+        const SocketAttachmentComponent* existing = scene.Components().SocketAttachments().TryGet(object);
+        return existing == nullptr ? std::nullopt : std::optional<SocketAttachmentComponent>{ *existing };
+    }();
+    bool below = false;
+    for (SceneEntity current = previousParent; current.IsValid(); current = scene.Hierarchy().Parent(current)) {
+        if (current.Id() == character.Id()) below = true;
+    }
+    if (!below && !scene.Hierarchy().SetParent(object, character)) return fail("the object could not be parented under the character");
+    if (!scene.Components().SocketAttachments().Set(object, attachment)) return fail("the attachment could not be stored");
+    const SocketPlacement placement = PlaceSocketAttachment(scene, object, attachment);
+    if (!placement.status.attached) {
+        // Leave the scene as it was: a wrong socket name must not move or reparent anything.
+        if (previous.has_value()) static_cast<void>(scene.Components().SocketAttachments().Set(object, *previous));
+        else scene.Components().SocketAttachments().Remove(object);
+        if (!below) static_cast<void>(scene.Hierarchy().SetParent(object, previousParent));
+        return fail(placement.status.error);
+    }
+    if (TransformComponent* transform = scene.Transforms().TryGet(object)) {
+        TransformComponent updated = *transform;
+        updated.localPosition = placement.local.position;
+        updated.localRotation = placement.local.rotation;
+        scene.Transforms().Set(object, updated);
+    }
+    return true;
+}
+
+void SceneAnimatorService::DetachFromSocket(Scene& scene, SceneEntity object) {
+    if (scene.Components().SocketAttachments().Has(object)) scene.Components().SocketAttachments().Remove(object);
+}
+
+void SceneAnimatorService::ApplySocketAttachments(Scene& scene) {
+    SceneState& state = SceneAccess::State(scene);
+    if (SceneEntityCounter::CountWithComponent(state.world, state.components.SocketAttachmentComponentId()) == 0U) return;
+    struct Authored {
+        SceneEntity entity{};
+        SocketAttachmentComponent attachment{};
+    };
+    std::vector<Authored> authored;
+    state.world.CreateQuery<SocketAttachmentComponent>().ForEach(
+        [](SceneEntity entity, const SocketAttachmentComponent& attachment, void* context) {
+            static_cast<std::vector<Authored>*>(context)->push_back({ .entity = entity, .attachment = attachment });
+        }, &authored);
+    // Outer attachments first, so an object hanging on an attached object sees its parent moved.
+    const auto depth = [&scene](SceneEntity entity) {
+        std::size_t value = 0U;
+        for (SceneEntity current = scene.Hierarchy().Parent(entity); current.IsValid() && value < 4096U;
+             current = scene.Hierarchy().Parent(current)) {
+            ++value;
+        }
+        return value;
+    };
+    std::vector<std::pair<std::size_t, Authored>> ordered;
+    ordered.reserve(authored.size());
+    for (const Authored& value : authored) ordered.emplace_back(depth(value.entity), value);
+    std::stable_sort(ordered.begin(), ordered.end(), [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+    for (const auto& [unused, value] : ordered) {
+        static_cast<void>(unused);
+        const SocketAttachmentComponent& attachment = value.attachment;
+        if (!attachment.enabled || !scene.Entities().IsActive(value.entity)) continue;
+        const SocketPlacement placement = PlaceSocketAttachment(scene, value.entity, attachment);
+        const TransformComponent* current = scene.Transforms().TryGet(value.entity);
+        if (!placement.status.attached || current == nullptr) continue;
+        const LocalTransform before = current->LocalPayload();
+        const LocalTransform& after = placement.local;
+        const auto same = [](Vec3 lhs, Vec3 rhs) { return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z; };
+        if (same(before.position, after.position) && before.rotation.x == after.rotation.x && before.rotation.y == after.rotation.y &&
+            before.rotation.z == after.rotation.z && before.rotation.w == after.rotation.w && same(before.scale, after.scale)) {
+            continue;
+        }
+        TransformComponent updated = *current;
+        updated.localPosition = after.position;
+        updated.localRotation = after.rotation;
+        updated.localScale = after.scale;
+        scene.Transforms().Set(value.entity, updated);
+    }
 }
 
 bool SceneAnimatorService::Play(Scene& scene, SceneEntity entity, std::string_view layerName, std::string_view stateName, float normalizedTime) noexcept {
@@ -2970,8 +3335,11 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
                 previous.emplace(std::move(*record));
             }
             state.animators.erase(value.entity.Id());
+            SceneAccess::State(scene).animatorBindError.clear();
             if (!Attach(scene, value.entity, value.animator.controllerAssetId)) {
-                throw std::runtime_error("Animator component could not load its controller or bind the authored hierarchy");
+                const std::string& reason = SceneAccess::State(scene).animatorBindError;
+                throw std::runtime_error("Animator component could not load its controller or bind the authored hierarchy" +
+                    (reason.empty() ? std::string{} : ": " + reason));
             }
             record = Find(SceneAccess::State(scene), value.entity);
             if (previous.has_value() &&
@@ -3213,11 +3581,13 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
                 layer.currentTimeSeconds, scaledDelta, record.entity,
                 definition.name, definition.states[layer.currentState].name, state.pendingAnimationEvents);
             AdvanceTime(
-                layer.currentTimeSeconds, scaledDelta,
+                layer.currentTimeSeconds,
+                scaledDelta * StateRate(record, layer.states[layer.currentState], definition.states[layer.currentState]),
                 ReferenceClip(layer.states[layer.currentState]));
             if (layer.transitioning) {
                 AdvanceTime(
-                    layer.previousTimeSeconds, scaledDelta,
+                    layer.previousTimeSeconds,
+                    scaledDelta * StateRate(record, layer.states[layer.previousState], definition.states[layer.previousState]),
                     ReferenceClip(layer.states[layer.previousState]));
                 layer.transitionElapsedSeconds = std::min(layer.transitionElapsedSeconds + static_cast<double>(deltaSeconds), layer.transitionDurationSeconds);
                 for (AnimatorRuntimeBinding& binding : record.bindings) {

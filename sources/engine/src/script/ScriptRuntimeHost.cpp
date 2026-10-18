@@ -150,8 +150,8 @@ void ScriptRuntimeHostSceneSystem::OnDestroy(kb::scene::SceneSystemContext& cont
 }
 
 [[nodiscard]] std::string EntityName(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
-    const std::string_view name = scene.Entities().Name(entity);
-    return name.empty() ? "entity #" + std::to_string(entity.Id()) : "'" + std::string{ name } + "'";
+    const std::string name = scene.Entities().Name(entity);
+    return name.empty() ? "entity #" + std::to_string(entity.Id()) : "'" + name + "'";
 }
 
 void ScriptRuntimeHostSceneSystem::CollectDiagnostics() {

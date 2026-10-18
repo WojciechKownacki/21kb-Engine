@@ -38,6 +38,8 @@
 #include "scene/assets/ScenePrefabAssetLoader.hpp"
 
 #include "scene/systems/AnimatorSceneSystem.hpp"
+#include "scene/systems/GameplaySceneSystem.hpp"
+#include "engine/gameplay/AbilityAsset.hpp"
 #include "scene/systems/TimelineSceneSystem.hpp"
 #include "scene/systems/NavigationSceneSystem.hpp"
 #include "scene/systems/ContentInstanceSceneSystem.hpp"
@@ -112,6 +114,8 @@ Scene::Scene(
     const bool registeredCollisionMeshLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::CollisionMeshAssetLoader>());
     const bool registeredAnimationClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimationClipAssetLoader>());
     const bool registeredAnimatorControllerLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimatorControllerAssetLoader>());
+    const bool registeredAbilityLoader = state_->assets.RegisterLoader(std::make_unique<kb::gameplay::AbilityAssetLoader>());
+    static_cast<void>(registeredAbilityLoader);
     const bool registeredTimelineLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::TimelineAssetLoader>());
     const bool registeredLocalizationLoader = state_->assets.RegisterLoader(std::make_unique<kb::localization::LocalizationCatalogAssetLoader>());
     const bool registeredWorldLoader = state_->assets.RegisterLoader(std::make_unique<kb::world::WorldDescriptorAssetLoader>());
@@ -173,6 +177,7 @@ Scene::Scene(
     moduleHost_->AttachScene(*this);
     state_->sceneSystemScheduler.Add(std::make_unique<SceneUISystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<AnimatorSceneSystem>(), *this);
+    state_->sceneSystemScheduler.Add(std::make_unique<GameplaySceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<TimelineSceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<ContentInstanceSceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<NavigationSceneSystem>(), *this);

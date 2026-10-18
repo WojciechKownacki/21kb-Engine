@@ -41,6 +41,31 @@ constexpr std::string_view kCrashReports = "Project.CrashReports";
 
 } // namespace
 
+std::string_view ProjectQualityLevelName(ProjectQualityLevel level) noexcept {
+    switch (level) {
+    case ProjectQualityLevel::Low: return "Low";
+    case ProjectQualityLevel::Medium: return "Medium";
+    case ProjectQualityLevel::High: return "High";
+    case ProjectQualityLevel::Ultra: return "Ultra";
+    case ProjectQualityLevel::Auto:
+    default: return "Auto";
+    }
+}
+
+std::optional<ProjectQualityLevel> ParseProjectQualityLevel(std::string_view name) noexcept {
+    const auto same = [name](std::string_view expected) noexcept {
+        return std::ranges::equal(name, expected, [](char lhs, char rhs) noexcept {
+            return (lhs >= 'A' && lhs <= 'Z' ? static_cast<char>(lhs + ('a' - 'A')) : lhs) == rhs;
+        });
+    };
+    if (same("auto")) return ProjectQualityLevel::Auto;
+    if (same("low")) return ProjectQualityLevel::Low;
+    if (same("medium")) return ProjectQualityLevel::Medium;
+    if (same("high")) return ProjectQualityLevel::High;
+    if (same("ultra")) return ProjectQualityLevel::Ultra;
+    return std::nullopt;
+}
+
 std::filesystem::path ProjectSettingsStore::FilePath(const std::filesystem::path& projectRoot) {
     return projectRoot / "Config" / "ProjectSettings.ini";
 }
@@ -105,6 +130,14 @@ ProjectSettingsLoadResult ProjectSettingsStore::Load(const std::filesystem::path
     result.settings.lightingPath = ParseLightingPath(
         ReadString(document, kRendering, "LightingPath", std::string{LightingPathName(defaults.lightingPath)}),
         defaults.lightingPath);
+    const auto readQuality = [&](std::string_view key, ProjectQualityLevel fallback) {
+        return ParseProjectQualityLevel(ReadString(document, kRendering, key, std::string{ProjectQualityLevelName(fallback)}))
+            .value_or(fallback);
+    };
+    result.settings.shadowQuality = readQuality("ShadowQuality", defaults.shadowQuality);
+    result.settings.shadowQualityMobile = readQuality("ShadowQualityMobile", defaults.shadowQualityMobile);
+    result.settings.giQuality = readQuality("GiQuality", defaults.giQuality);
+    result.settings.giQualityMobile = readQuality("GiQualityMobile", defaults.giQualityMobile);
     result.settings.inputEnabled = document.GetBool(kInput, "Enabled").value_or(defaults.inputEnabled);
     result.settings.inputMappingContext = ReadString(document, kInput, "MappingContext", defaults.inputMappingContext);
     result.settings.physicsLayersAsset = ReadString(document, kPhysics, "LayersAsset", defaults.physicsLayersAsset);
@@ -144,6 +177,10 @@ bool ProjectSettingsStore::Save(
     document.SetString(kMaps, "DefaultMap", settings.defaultMap);
     document.SetString(kMaps, "LastOpenMap", settings.lastOpenMap);
     document.SetString(kRendering, "LightingPath", std::string{LightingPathName(settings.lightingPath)});
+    document.SetString(kRendering, "ShadowQuality", std::string{ProjectQualityLevelName(settings.shadowQuality)});
+    document.SetString(kRendering, "ShadowQualityMobile", std::string{ProjectQualityLevelName(settings.shadowQualityMobile)});
+    document.SetString(kRendering, "GiQuality", std::string{ProjectQualityLevelName(settings.giQuality)});
+    document.SetString(kRendering, "GiQualityMobile", std::string{ProjectQualityLevelName(settings.giQualityMobile)});
     document.SetBool(kInput, "Enabled", settings.inputEnabled);
     document.SetString(kInput, "MappingContext", settings.inputMappingContext);
     document.SetString(kPhysics, "LayersAsset", settings.physicsLayersAsset);

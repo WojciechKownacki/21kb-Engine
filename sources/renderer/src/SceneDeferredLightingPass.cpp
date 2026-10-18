@@ -134,6 +134,7 @@ bool SceneDeferredLightingPass::Initialize() {
     fogParamsUniform_ = bgfx::createUniform("u_fogParams", bgfx::UniformType::Vec4);
     fogColorUniform_ = bgfx::createUniform("u_fogColor", bgfx::UniformType::Vec4);
     fogVolumetricUniform_ = bgfx::createUniform("u_fogVolumetric", bgfx::UniformType::Vec4);
+    fogSkyUniform_ = bgfx::createUniform("u_fogSky", bgfx::UniformType::Vec4);
     backdropHorizonUniform_ = bgfx::createUniform("u_deferredBackdropHorizon", bgfx::UniformType::Vec4);
     backdropZenithUniform_ = bgfx::createUniform("u_deferredBackdropZenith", bgfx::UniformType::Vec4);
     backdropParamsUniform_ = bgfx::createUniform("u_deferredBackdropParams", bgfx::UniformType::Vec4);
@@ -224,7 +225,7 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
     shadowCascades_.Destroy();
     pointShadows_.Destroy();
     giUniforms_.Destroy();
-    for (bgfx::UniformHandle* handle : { &fogParamsUniform_, &fogColorUniform_, &fogVolumetricUniform_ }) {
+    for (bgfx::UniformHandle* handle : { &fogParamsUniform_, &fogColorUniform_, &fogVolumetricUniform_, &fogSkyUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
@@ -517,6 +518,11 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
         bgfx::setUniform(fogParamsUniform_, fogParams.data());
         bgfx::setUniform(fogColorUniform_, fogColor.data());
         bgfx::setUniform(fogVolumetricUniform_, fogVolumetric.data());
+        // The sky the scene clears to is part of what the fog covers: the pass rewrites those pixels with
+        // the fog in front of them instead of leaving the clear colour.
+        const std::array<float, 4> fogSky{ desc.clearColor[0], desc.clearColor[1], desc.clearColor[2],
+            config.fogEnabled ? 1.0F : 0.0F };
+        bgfx::setUniform(fogSkyUniform_, fogSky.data());
     }
     lightGrid_.Bind(lighting.lightGrid, 7U);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);

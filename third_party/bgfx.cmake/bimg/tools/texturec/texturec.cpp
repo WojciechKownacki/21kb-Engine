@@ -170,13 +170,13 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 			{
 				outputWidth  = bx::max(blockWidth  * minBlockX, ( ( (outputWidth>>1)  + blockWidth  - 1) / blockWidth )*blockWidth);
 				outputHeight = bx::max(blockHeight * minBlockY, ( ( (outputHeight>>1) + blockHeight - 1) / blockHeight)*blockHeight);
-				outputDepth  = bx::max(outputDepth>>1, 1u);
+				outputDepth  = 0 != outputDepth ? bx::max(outputDepth>>1, 1u) : 0;
 			}
 		}
 
 		if (_options.equirect)
 		{
-			if (outputDepth   == 1
+			if (outputDepth   == 0
 			&&  outputWidth/2 == outputHeight)
 			{
 				if (outputWidth/2 > _options.maxSize)
@@ -195,7 +195,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 		}
 		else if (_options.strip)
 		{
-			if (outputDepth == 1
+			if (outputDepth == 0
 			&& ( (outputWidth == outputHeight*6) || (outputWidth*6 == outputHeight) ) )
 			{
 				const bool horizontal = outputWidth == outputHeight*6;
@@ -234,6 +234,9 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 				outputWidth  = outputWidth * _options.maxSize / outputHeight;
 				outputHeight = _options.maxSize;
 			}
+
+			outputWidth  = bx::max(blockWidth  * minBlockX, ( (outputWidth  + blockWidth  - 1) / blockWidth )*blockWidth);
+			outputHeight = bx::max(blockHeight * minBlockY, ( (outputHeight + blockHeight - 1) / blockHeight)*blockHeight);
 		}
 
 		const bool needResize = false
@@ -305,7 +308,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 			if (inputFormat != outputFormat
 			&&  bimg::isCompressed(outputFormat) )
 			{
-				output = bimg::imageEncode(_allocator, outputFormat, _options.quality, *input);
+				output = bimg::imageEncode(_allocator, outputFormat, _options.quality, *input, _err);
 			}
 			else
 			{
@@ -355,7 +358,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 
 			if (bimg::TextureFormat::RGBA32F != outputFormat)
 			{
-				bimg::ImageContainer* temp = bimg::imageEncode(_allocator, outputFormat, _options.quality, *output);
+				bimg::ImageContainer* temp = bimg::imageEncode(_allocator, outputFormat, _options.quality, *output, _err);
 				bimg::imageFree(output);
 
 				output = temp;
@@ -393,7 +396,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 				// Normal map.
 				if (_options.normalMap)
 				{
-					uint32_t size = bimg::imageGetSize(
+					uint32_t size = (uint32_t)bimg::imageGetSize(
 						  NULL
 						, uint16_t(dstMip.m_width)
 						, uint16_t(dstMip.m_height)
@@ -507,7 +510,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 					 || outputFormat == bimg::TextureFormat::BC7
 						)
 				{
-					uint32_t size = bimg::imageGetSize(
+					uint32_t size = (uint32_t)bimg::imageGetSize(
 						  NULL
 						, uint16_t(dstMip.m_width)
 						, uint16_t(dstMip.m_height)
@@ -619,7 +622,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 				// SDF
 				else if (_options.sdf)
 				{
-					uint32_t size = bimg::imageGetSize(
+					uint32_t size = (uint32_t)bimg::imageGetSize(
 						  NULL
 						, uint16_t(dstMip.m_width)
 						, uint16_t(dstMip.m_height)
@@ -665,7 +668,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 							, alphaRef
 							);
 
-						size = bimg::imageGetSize(
+						size = (uint32_t)bimg::imageGetSize(
 							NULL
 							, uint16_t(dstMip.m_width)
 							, uint16_t(dstMip.m_height)
@@ -737,7 +740,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 				// RGBA8
 				else
 				{
-					uint32_t size = bimg::imageGetSize(
+					uint32_t size = (uint32_t)bimg::imageGetSize(
 						  NULL
 						, uint16_t(dstMip.m_width)
 						, uint16_t(dstMip.m_height)
@@ -897,6 +900,162 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 	return output;
 }
 
+static const char* const s_outputExt[] =
+{
+	"dds",
+	"exr",
+	"hdr",
+	"ktx",
+	"ktx2",
+	"png",
+	NULL,
+};
+
+struct FileFormatDesc
+{
+	const char* ext;
+	const char* description;
+};
+
+static const FileFormatDesc s_fileFormatDesc[] =
+{
+	{ "avif", "AV1 Image File Format."       },
+	{ "bmp",  "Windows Bitmap."              },
+	{ "dds",  "Direct Draw Surface."         },
+	{ "exr",  "OpenEXR."                     },
+	{ "gif",  "Graphics Interchange Format." },
+	{ "hdr",  "Radiance RGBE."               },
+	{ "heic", "High Efficiency Image Coding." },
+	{ "jpeg", "JPEG Interchange Format."     },
+	{ "jpg",  "JPEG Interchange Format."     },
+	{ "ktx",  "Khronos Texture."             },
+	{ "ktx2", "Khronos Texture 2."           },
+	{ "pgm",  "Portable Gray Map."           },
+	{ "png",  "Portable Network Graphics."   },
+	{ "ppm",  "Portable Pixel Map."          },
+	{ "psd",  "Photoshop Document."          },
+	{ "pvr",  "PowerVR."                     },
+	{ "tga",  "Truevision TGA."              },
+	{ "webp", "WebP."                        },
+};
+
+static bool isInList(const char* const* _list, const bx::StringView& _ext)
+{
+	for (const char* const* ext = _list; NULL != *ext; ++ext)
+	{
+		if (bx::isEqual(_ext, *ext, false) )
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static const char* getFileFormatDesc(const bx::StringView& _ext)
+{
+	for (uint32_t ii = 0; ii < BX_COUNTOF(s_fileFormatDesc); ++ii)
+	{
+		if (bx::isEqual(_ext, s_fileFormatDesc[ii].ext, false) )
+		{
+			return s_fileFormatDesc[ii].description;
+		}
+	}
+	return "";
+}
+
+static int32_t writeExt(char* _out, int32_t _max, const char* _ext, bool _input, bool _output)
+{
+	return bx::snprintf(_out, _max, "*.%s (%s%s%s)"
+		, _ext
+		, _input             ? "input"  : ""
+		, _input && _output  ? ", "     : ""
+		, _output            ? "output" : ""
+		);
+}
+
+static int32_t writeFileFormats(bx::WriterI* _writer, bx::Error* _err)
+{
+	struct FileFormat
+	{
+		const char* ext;
+		bool        input;
+		bool        output;
+	};
+
+	FileFormat formats[64];
+	int32_t    num = 0;
+
+	const char* const* inputExt = bimg::getSupportedExt();
+
+	for (const char* const* ext = inputExt; NULL != *ext && num < int32_t(BX_COUNTOF(formats) ); ++ext)
+	{
+		formats[num++] = { *ext, true, isInList(s_outputExt, *ext) };
+	}
+
+	for (const char* const* ext = s_outputExt; NULL != *ext && num < int32_t(BX_COUNTOF(formats) ); ++ext)
+	{
+		if (!isInList(inputExt, *ext) )
+		{
+			formats[num++] = { *ext, false, true };
+		}
+	}
+
+	char    column[64];
+	int32_t width = 0;
+
+	for (int32_t ii = 0; ii < num; ++ii)
+	{
+		width = bx::max(width, writeExt(column, sizeof(column), formats[ii].ext, formats[ii].input, formats[ii].output) );
+	}
+
+	int32_t total = 0;
+
+	for (int32_t ii = 0; ii < num; ++ii)
+	{
+		const FileFormat& format = formats[ii];
+
+		const int32_t len = writeExt(column, sizeof(column), format.ext, format.input, format.output);
+
+		total += bx::write(_writer, _err, "    %s", column);
+		total += bx::writeRep(_writer, ' ', width - len + 2, _err);
+		total += bx::write(_writer, _err, "%s\n", getFileFormatDesc(format.ext) );
+	}
+
+	return total;
+}
+
+static const bx::CommandLineOption s_options[] =
+{
+	{ 'h',  "help",      0, NULL,          "Help."                                                         },
+	{ 'v',  "version",   0, NULL,          "Version information only."                                     },
+	{ 'f',  NULL,        1, "<file path>", "Input file path.\n"
+	                                       "Input and output may also be passed positionally, without\n"
+	                                       "-f/-o."                                                        },
+	{ 'o',  NULL,        1, "<file path>", "Output file path."                                             },
+	{ 't',  NULL,        1, "<format>",    "Output format type (BC1/2/3/4/5, ETC1, PVR14, etc.)."          },
+	{ 'q',  NULL,        1, "<quality>",   "Encoding quality (default, fastest, highest)."                 },
+	{ 'm',  "mips",      0, NULL,          "Generate mip-maps."                                            },
+	{ '\0', "mipskip",   1, "<N>",         "Skip <N> number of mips."                                      },
+	{ 'n',  "normalmap", 0, NULL,          "Input texture is normal map. (Implies --linear)"               },
+	{ '\0', "equirect",  0, NULL,          "Input texture is equirectangular projection of cubemap."       },
+	{ '\0', "strip",     0, NULL,          "Input texture is horizontal or vertical strip of cubemap."     },
+	{ '\0', "sdf",       0, NULL,          "Compute SDF texture."                                          },
+	{ '\0', "ref",       1, "<alpha>",     "Alpha reference value."                                        },
+	{ '\0', "iqa",       0, NULL,          "Image Quality Assessment"                                      },
+	{ '\0', "pma",       0, NULL,          "Premultiply alpha into RGB channel."                           },
+	{ '\0', "linear",    0, NULL,          "Input and output texture is linear color space (gamma\n"
+	                                       "correction won't be applied)."                                 },
+	{ '\0', "max",       1, "<max size>",  "Maximum width/height (image will be scaled down and\n"
+	                                       "aspect ratio will be preserved)"                               },
+	{ '\0', "radiance",  1, "<model>",     "Radiance cubemap filter. (Lighting model: Phong, PhongBrdf,\n"
+	                                       "Blinn, BlinnBrdf, GGX)"                                        },
+	{ '\0', "as",        1, "<extension>", "Save as."                                                      },
+	{ '\0', "formats",   0, NULL,          "List all supported formats."                                   },
+	{ '\0', "validate",  0, NULL,          "*DEBUG* Validate that output image produced matches after\n"
+	                                       "loading."                                                      },
+};
+
 void help(const char* _error = NULL, bool _showHelp = true)
 {
 	if (NULL != _error)
@@ -918,48 +1077,25 @@ void help(const char* _error = NULL, bool _showHelp = true)
 		, BIMG_API_VERSION
 		);
 
+	bx::Error err;
+
 	bx::printf(
 		  "Usage: texturec -f <in> -o <out> [-t <texture format>]\n"
-
+		  "       texturec <in> <out> [-t <texture format>]\n"
 		  "\n"
 		  "Supported file formats:\n"
-		  "    *.bmp (input)          Windows Bitmap.\n"
-		  "    *.dds (input, output)  Direct Draw Surface.\n"
-		  "    *.exr (input, output)  OpenEXR.\n"
-		  "    *.gif (input)          Graphics Interchange Format.\n"
-		  "    *.jpg (input)          JPEG Interchange Format.\n"
-		  "    *.hdr (input, output)  Radiance RGBE.\n"
-		  "    *.ktx (input, output)  Khronos Texture.\n"
-		  "    *.png (input, output)  Portable Network Graphics.\n"
-		  "    *.psd (input)          Photoshop Document.\n"
-		  "    *.pvr (input)          PowerVR.\n"
-		  "    *.tga (input)          Truevision TGA.\n"
+		);
 
+	writeFileFormats(bx::getStdOut(), &err);
+
+	bx::printf(
 		  "\n"
 		  "Options:\n"
-		  "  -h, --help               Help.\n"
-		  "  -v, --version            Version information only.\n"
-		  "  -f <file path>           Input file path.\n"
-		  "  -o <file path>           Output file path.\n"
-		  "  -t <format>              Output format type (BC1/2/3/4/5, ETC1, PVR14, etc.).\n"
-		  "  -q <quality>             Encoding quality (default, fastest, highest).\n"
-		  "  -m, --mips               Generate mip-maps.\n"
-		  "      --mipskip <N>        Skip <N> number of mips.\n"
-		  "  -n, --normalmap          Input texture is normal map. (Implies --linear)\n"
-		  "      --equirect           Input texture is equirectangular projection of cubemap.\n"
-		  "      --strip              Input texture is horizontal or vertical strip of cubemap.\n"
-		  "      --sdf                Compute SDF texture.\n"
-		  "      --ref <alpha>        Alpha reference value.\n"
-		  "      --iqa                Image Quality Assessment\n"
-		  "      --pma                Premultiply alpha into RGB channel.\n"
-		  "      --linear             Input and output texture is linear color space (gamma correction won't be applied).\n"
-		  "      --max <max size>     Maximum width/height (image will be scaled down and\n"
-		  "                           aspect ratio will be preserved)\n"
-		  "      --radiance <model>   Radiance cubemap filter. (Lighting model: Phong, PhongBrdf, Blinn, BlinnBrdf, GGX)\n"
-		  "      --as <extension>     Save as.\n"
-		  "      --formats            List all supported formats.\n"
-		  "      --validate           *DEBUG* Validate that output image produced matches after loading.\n"
+		);
 
+	bx::write(bx::getStdOut(), s_options, BX_COUNTOF(s_options), &err);
+
+	bx::printf(
 		  "\n"
 		  "For additional information, see https://github.com/bkaradzic/bimg\n"
 		);
@@ -1008,7 +1144,10 @@ public:
 
 int main(int _argc, const char* _argv[])
 {
-	bx::CommandLine cmdLine(_argc, _argv);
+	bx::DefaultAllocator defaultAllocator;
+	bx::CommandLineArgs args(&defaultAllocator, _argc, _argv);
+
+	bx::CommandLine cmdLine(args.getArgc(), args.getArgv(), s_options, BX_COUNTOF(s_options) );
 
 	if (cmdLine.hasArg('v', "version") )
 	{
@@ -1051,7 +1190,22 @@ int main(int _argc, const char* _argv[])
 		return bx::kExitSuccess;
     }
 
+	const char* unknown = cmdLine.findUnknownOption();
+	if (NULL != unknown)
+	{
+		char error[256];
+		bx::snprintf(error, BX_COUNTOF(error), "Unknown option '%s'.", unknown);
+		help(error);
+		return bx::kExitFailure;
+	}
+
+	int32_t positional = 1;
+
 	const char* inputFileName = cmdLine.findOption('f');
+	inputFileName = NULL != inputFileName
+		? inputFileName
+		: cmdLine.getPositional(positional++)
+		;
 	if (NULL == inputFileName)
 	{
 		help("Input file must be specified.");
@@ -1059,6 +1213,10 @@ int main(int _argc, const char* _argv[])
 	}
 
 	const char* outputFileName = cmdLine.findOption('o');
+	outputFileName = NULL != outputFileName
+		? outputFileName
+		: cmdLine.getPositional(positional++)
+		;
 	if (NULL == outputFileName)
 	{
 		help("Output file must be specified.");
@@ -1066,6 +1224,7 @@ int main(int _argc, const char* _argv[])
 	}
 
 	bx::StringView saveAs = cmdLine.findOption("as");
+	saveAs = saveAs.isEmpty() ? bx::strFindI(outputFileName, ".ktx2") : saveAs;
 	saveAs = saveAs.isEmpty() ? bx::strFindI(outputFileName, ".ktx") : saveAs;
 	saveAs = saveAs.isEmpty() ? bx::strFindI(outputFileName, ".dds") : saveAs;
 	saveAs = saveAs.isEmpty() ? bx::strFindI(outputFileName, ".png") : saveAs;
@@ -1215,7 +1374,6 @@ int main(int _argc, const char* _argv[])
 		return bx::kExitFailure;
 	}
 
-	bx::DefaultAllocator defaultAllocator;
 	AlignedAllocator allocator(&defaultAllocator, 16);
 
 	uint8_t* inputData = (uint8_t*)bx::alloc(&allocator, inputSize);
@@ -1240,7 +1398,11 @@ int main(int _argc, const char* _argv[])
 		bx::FileWriter writer;
 		if (bx::open(&writer, outputFileName, false, &err) )
 		{
-			if (!bx::strFindI(saveAs, "ktx").isEmpty() )
+			if (!bx::strFindI(saveAs, "ktx2").isEmpty() )
+			{
+				bimg::imageWriteKtx2(&writer, *output, output->m_data, output->m_size, &err);
+			}
+			else if (!bx::strFindI(saveAs, "ktx").isEmpty() )
 			{
 				bimg::imageWriteKtx(&writer, *output, output->m_data, output->m_size, &err);
 			}

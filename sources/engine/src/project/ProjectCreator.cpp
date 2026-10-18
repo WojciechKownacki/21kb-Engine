@@ -46,7 +46,8 @@ ProjectDescriptor ProjectCreator::DefaultDescriptor() {
     for (const auto& [name, stem] : { std::pair{ "Physics.Jolt", "kb_physics_jolt_plugin" },
              std::pair{ "Audio.Miniaudio", "kb_audio_miniaudio_plugin" },
              std::pair{ "Rendering.BasicLighting", "kb_basic_lighting_plugin" },
-             std::pair{ "Rendering.21kbParticle", "kb_21kb_particle_plugin" } }) {
+             std::pair{ "Rendering.21kbParticle", "kb_21kb_particle_plugin" },
+             std::pair{ "Gameplay.AI", "kb_ai_plugin" } }) {
         descriptor.plugins.push_back(ProjectPluginReference{ .name = name, .binaryPath = PluginFileName(stem), .enabled = true });
     }
     return descriptor;

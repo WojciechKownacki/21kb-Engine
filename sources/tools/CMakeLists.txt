@@ -1,4 +1,7 @@
 add_library(kb_cli_core STATIC
+    src/CliAnimatorCommands.cpp
+    src/CliSkeletonCommands.cpp
+    src/CliAbilityCommands.cpp
     src/CliApiCommands.cpp
     src/CliCommon.cpp
     src/CliEntityCommands.cpp
@@ -7,6 +10,7 @@ add_library(kb_cli_core STATIC
     src/CliNavMeshCommands.cpp
     src/CliPackSetCommands.cpp
     src/CliPhysicsCommands.cpp
+    src/CliQualityCommands.cpp
     src/CliRunCommand.cpp
     src/CliSceneCommands.cpp
     src/CliScriptCommands.cpp

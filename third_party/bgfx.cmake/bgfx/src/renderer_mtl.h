@@ -13,9 +13,11 @@
 #include <metal-cpp/metal.hpp>
 #include <CoreFoundation/CoreFoundation.h>
 
-#define BGFX_MTL_PROFILER_BEGIN(_view, _abgr)         \
-	BX_MACRO_BLOCK_BEGIN                              \
-		BGFX_PROFILER_BEGIN(s_viewName[view], _abgr); \
+#include "renderer.h"
+
+#define BGFX_MTL_PROFILER_BEGIN(_view, _abgr) \
+	BX_MACRO_BLOCK_BEGIN                      \
+		BGFX_PROFILER_BEGIN(viewName, _abgr); \
 	BX_MACRO_BLOCK_END
 
 #define BGFX_MTL_PROFILER_BEGIN_LITERAL(_name, _abgr) \
@@ -70,6 +72,15 @@
 #define MTL_RELEASE_W(_obj, _expected) _MTL_RELEASE(_obj, _expected, BX_WARN)
 #define MTL_RELEASE_I(_obj)            _MTL_RELEASE(_obj, 0, BX_NOOP)
 
+#define MTL_RELEASE_DEFERRED(_obj)                                \
+	BX_MACRO_BLOCK_BEGIN                                          \
+		if (NULL != _obj)                                         \
+		{                                                         \
+			bgfx::mtl::deferredRelease( (NS::Object*)(void*)_obj); \
+			_obj = NULL;                                          \
+		}                                                         \
+	BX_MACRO_BLOCK_END
+
 namespace bgfx { namespace mtl
 {
 	// Helper to access NS::Object's protected sendMessage for label retrieval
@@ -98,7 +109,6 @@ namespace bgfx { namespace mtl
 		return MtlObjAccess::hasLabel(_obj) ? MtlObjAccess::label(_obj) : "?!";
 	}
 
-	// String conversion helper for metal-cpp API calls that take NS::String*
 	inline NS::String* nsstr(const char* _str)
 	{
 		return NS::String::string(_str, NS::UTF8StringEncoding);
@@ -106,13 +116,30 @@ namespace bgfx { namespace mtl
 
 	inline MTL::Library* newLibraryWithSource(MTL::Device* _device, const char* _source)
 	{
-		NS::Error* error = NULL;
+		NS::Error*  error  = NULL;
 		NS::String* source = NS::String::string(_source, NS::ASCIIStringEncoding);
-		MTL::Library* lib = _device->newLibrary(source, (MTL::CompileOptions*)NULL, &error);
+		MTL::Library*  lib = _device->newLibrary(source, (MTL::CompileOptions*)NULL, &error);
+
 		BX_WARN(NULL == error
 			, "Shader compilation failed: %s"
 			, error->localizedDescription()->utf8String()
 			);
+
+		return lib;
+	}
+
+	inline MTL::Library* newLibraryWithData(MTL::Device* _device, const void* _data, uint32_t _size)
+	{
+		dispatch_data_t data = dispatch_data_create(_data, _size, NULL, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+		NS::Error*  error = NULL;
+		MTL::Library* lib = _device->newLibrary(data, &error);
+		dispatch_release(data);
+
+		BX_WARN(NULL == error
+			, "Shader library load failed: %s"
+			, error->localizedDescription()->utf8String()
+			);
+
 		return lib;
 	}
 
@@ -225,6 +252,8 @@ namespace bgfx { namespace mtl
 		return MTL::RasterizationRateMapDescriptor::alloc()->init();
 	}
 
+	void deferredRelease(NS::Object* _obj);
+
 	//helper functions
 	template<typename T>
 	inline void release(T* _obj)
@@ -245,57 +274,6 @@ namespace bgfx { namespace mtl
 
 	// end of c++ wrapper
 
-	template <typename Ty>
-	class StateCacheT
-	{
-	public:
-		void add(uint64_t _id, Ty _item)
-		{
-			invalidate(_id);
-			m_hashMap.insert(stl::make_pair(_id, _item) );
-		}
-
-		Ty find(uint64_t _id)
-		{
-			typename HashMap::iterator it = m_hashMap.find(_id);
-			if (it != m_hashMap.end() )
-			{
-				return it->second;
-			}
-
-			return NULL;
-		}
-
-		void invalidate(uint64_t _id)
-		{
-			typename HashMap::iterator it = m_hashMap.find(_id);
-			if (it != m_hashMap.end() )
-			{
-				release(it->second);
-				m_hashMap.erase(it);
-			}
-		}
-
-		void invalidate()
-		{
-			for (typename HashMap::iterator it = m_hashMap.begin(), itEnd = m_hashMap.end(); it != itEnd; ++it)
-			{
-				release(it->second);
-			}
-
-			m_hashMap.clear();
-		}
-
-		uint32_t getCount() const
-		{
-			return uint32_t(m_hashMap.size() );
-		}
-
-	private:
-		typedef stl::unordered_map<uint64_t, Ty> HashMap;
-		HashMap m_hashMap;
-	};
-
 	struct BufferMtl
 	{
 		BufferMtl()
@@ -310,7 +288,7 @@ namespace bgfx { namespace mtl
 
 		void destroy()
 		{
-			MTL_RELEASE_W(m_ptr, 0);
+			MTL_RELEASE_DEFERRED(m_ptr);
 
 			if (NULL != m_dynamic)
 			{
@@ -344,18 +322,33 @@ namespace bgfx { namespace mtl
 	struct ShaderMtl
 	{
 		ShaderMtl()
-			: m_function(NULL)
+			: m_lib(NULL)
+			, m_function(NULL)
 		{
 		}
 
 		void create(const Memory* _mem);
 
+		MTL::Function* getFunction(uint32_t _sampleMask) const;
+
 		void destroy()
 		{
-			MTL_RELEASE_W(m_function, 0);
+			for (FunctionMap::iterator it = m_functions.begin(), itEnd = m_functions.end(); it != itEnd; ++it)
+			{
+				MTL_RELEASE_DEFERRED(it->second);
+			}
+
+			m_functions.clear();
+			m_function = NULL;
+
+			MTL_RELEASE_DEFERRED(m_lib);
 		}
 
+		typedef stl::unordered_map<uint32_t, MTL::Function*> FunctionMap;
+
+		MTL::Library*  m_lib;
 		MTL::Function* m_function;
+		mutable FunctionMap m_functions;
 		uint32_t m_hash;
 		uint16_t m_numThreads[3];
 	};
@@ -421,8 +414,8 @@ namespace bgfx { namespace mtl
 				m_fshConstantBuffer = NULL;
 			}
 
-			MTL_RELEASE_W(m_rps, 0);
-			MTL_RELEASE_W(m_cps, 0);
+			MTL_RELEASE_DEFERRED(m_rps);
+			MTL_RELEASE_DEFERRED(m_cps);
 		}
 
 		UniformBuffer* m_vshConstantBuffer;
@@ -437,6 +430,7 @@ namespace bgfx { namespace mtl
 		{
 			BindToVertexShader   = 1 << 0,
 			BindToFragmentShader = 1 << 1,
+			BindMultisample      = 1 << 2,
 		};
 		uint8_t m_bindingTypes[BGFX_CONFIG_MAX_TEXTURE_SAMPLERS];
 
@@ -449,10 +443,23 @@ namespace bgfx { namespace mtl
 		MTL::ComputePipelineState* m_cps;
 	};
 
-	void release(PipelineStateMtl* _ptr)
+	inline void release(PipelineStateMtl* _ptr)
 	{
 		bx::deleteObject(g_allocator, _ptr);
 	}
+
+	template<typename T>
+	inline void evict(T* _ptr)
+	{
+		deferredRelease( (NS::Object*)(void*)_ptr);
+	}
+
+	inline void evict(PipelineStateMtl* _ptr)
+	{
+		release(_ptr);
+	}
+
+	struct VideoDecoderMtl;
 
 	struct TextureMtl
 	{
@@ -467,23 +474,20 @@ namespace bgfx { namespace mtl
 			: m_ptr(NULL)
 			, m_ptrMsaa(NULL)
 			, m_ptrStencil(NULL)
+			, m_ptrAlt(NULL)
+			, m_ptrMsaaAlt(NULL)
 			, m_sampler(NULL)
+			, m_videoDecoder(NULL)
 			, m_flags(0)
 			, m_width(0)
 			, m_height(0)
 			, m_depth(0)
 			, m_numMips(0)
 		{
-			for (uint32_t ii = 0; ii < BX_COUNTOF(m_ptrMips); ++ii)
-			{
-				m_ptrMips[ii] = NULL;
-			}
 		}
 
 		void create(const Memory* _mem, uint64_t _flags, uint8_t _skip, uint64_t _external);
 		void destroy();
-		void overrideInternal(uintptr_t _ptr);
-
 		void update(
 			  uint8_t _side
 			, uint8_t _mip
@@ -494,21 +498,39 @@ namespace bgfx { namespace mtl
 			, const Memory* _mem
 			);
 
+		void clear(uint8_t _mip, uint8_t _numMips, uint16_t _layer, uint16_t _numLayers);
+
 		void commit(
 			  uint8_t _stage
 			, bool _vertex
 			, bool _fragment
 			, uint32_t _flags = BGFX_SAMPLER_INTERNAL_DEFAULT
 			, uint8_t _mip = UINT8_MAX
+			, uint16_t _firstLayer = 0
+			, uint16_t _numLayers = UINT16_MAX
+			, uint8_t _firstMip = 0
+			, uint8_t _numMips = UINT8_MAX
+			, uint8_t _lodMin = 0
+			, uint8_t _lodMax = UINT8_MAX
+			, bool _multisample = false
 			);
 
-		MTL::Texture* getTextureMipLevel(uint8_t _mip);
+		MTL::Texture* getMultisampleView(uint32_t _flags) const;
+
+		MTL::Texture* getTextureImage(uint8_t _mip, uint16_t _firstLayer = 0, uint16_t _numLayers = UINT16_MAX);
+		MTL::Texture* getTextureView(uint16_t _firstLayer, uint16_t _numLayers, uint8_t _firstMip, uint8_t _numMips, bool _stencil = false, bool _alt = false);
+
+		bool useAltFormat(uint32_t _flags, uint32_t _bit) const;
+		MTL::PixelFormat getAttachmentPixelFormat(uint8_t _flags) const;
 
 		MTL::Texture* m_ptr;
 		MTL::Texture* m_ptrMsaa;
 		MTL::Texture* m_ptrStencil; // for emulating packed depth/stencil formats - only for iOS8...
-		MTL::Texture* m_ptrMips[14];
+		MTL::Texture* m_ptrAlt;
+		MTL::Texture* m_ptrMsaaAlt;
+		stl::unordered_map<uint64_t, MTL::Texture*> m_ptrViews;
 		MTL::SamplerState* m_sampler;
+		VideoDecoderMtl*   m_videoDecoder;
 		uint64_t m_flags;
 		uint32_t m_width;
 		uint32_t m_height;
@@ -527,10 +549,14 @@ namespace bgfx { namespace mtl
 			: m_metalLayer(NULL)
 			, m_drawable(NULL)
 			, m_drawableTexture(NULL)
+			, m_screenshotTarget(NULL)
 			, m_backBufferColorMsaa()
 			, m_backBufferDepth()
 			, m_backBufferStencil()
 			, m_maxAnisotropy(0)
+			, m_colorFormat(TextureFormat::Count)
+			, m_borrowedDepth(false)
+			, m_hdr10(false)
 		{
 		}
 
@@ -540,7 +566,7 @@ namespace bgfx { namespace mtl
 
 		void releaseBackBuffer();
 
-		uint32_t resize(uint32_t _width, uint32_t _height, TextureFormat::Enum _format, TextureFormat::Enum _depthFormat);
+		uint32_t resize(const SwapChain& _desc);
 
 		MTL::Texture* currentDrawableTexture();
 
@@ -548,6 +574,7 @@ namespace bgfx { namespace mtl
 		CA::MetalDrawable* m_drawable;
 
 		MTL::Texture* m_drawableTexture;
+		MTL::Texture* m_screenshotTarget;
 
 		MTL::Texture* m_backBufferColorMsaa;
 		MTL::Texture* m_backBufferDepth;
@@ -555,6 +582,9 @@ namespace bgfx { namespace mtl
 
 		uint32_t m_maxAnisotropy;
 		void* m_nwh;
+		TextureFormat::Enum m_colorFormat;
+		bool m_borrowedDepth;
+		bool m_hdr10;
 	};
 
 	struct FrameBufferMtl
@@ -570,24 +600,12 @@ namespace bgfx { namespace mtl
 		}
 
 		void create(uint8_t _num, const Attachment* _attachment);
-		void create(
-			  uint16_t _denseIdx
-			, void* _nwh
-			, uint32_t _width
-			, uint32_t _height
-			, TextureFormat::Enum _format
-			, TextureFormat::Enum _depthFormat
-			);
+		void create(uint16_t _denseIdx, const SwapChain& _desc);
 		void postReset();
 		uint16_t destroy();
 
 		void resolve();
-		void resizeSwapChain(
-			  uint32_t _width
-			, uint32_t _height
-			, TextureFormat::Enum _format = TextureFormat::Count
-			, TextureFormat::Enum _depthFormat = TextureFormat::Count
-			);
+		void resizeSwapChain(const SwapChain& _desc);
 
 		SwapChainMtl* m_swapChain;
 		void* m_nwh;
@@ -596,9 +614,9 @@ namespace bgfx { namespace mtl
 		uint32_t m_height;
 		uint16_t m_denseIdx;
 
-		TextureHandle m_colorHandle[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS-1];
+		TextureHandle m_colorHandle[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS];
 		TextureHandle m_depthHandle;
-		Attachment m_colorAttachment[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS-1];
+		Attachment m_colorAttachment[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS];
 		Attachment m_depthAttachment;
 		uint8_t m_num; // number of color handles
 	};
@@ -608,12 +626,13 @@ namespace bgfx { namespace mtl
 		CommandQueueMtl()
 			: m_commandQueue(NULL)
 			, m_activeCommandBuffer(NULL)
-			, m_releaseWriteIndex(0)
-			, m_releaseReadIndex(0)
+			, m_maxFrameLatency(BGFX_CONFIG_MAX_FRAME_LATENCY)
+			, m_submittedFrames(0)
+			, m_completedFrames(0)
 		{
 		}
 
-		void init(MTL::Device* _device);
+		void init(MTL::Device* _device, uint32_t _maxFrameLatency);
 		void shutdown();
 		MTL::CommandBuffer* alloc();
 		void kick(bool _endFrame, bool _waitForFinish);
@@ -630,16 +649,25 @@ namespace bgfx { namespace mtl
 		MTL::CommandQueue*  m_commandQueue;
 		MTL::CommandBuffer* m_activeCommandBuffer;
 
-		int m_releaseWriteIndex;
-		int m_releaseReadIndex;
-		typedef stl::vector<NS::Object*> ResourceArray;
-		ResourceArray m_release[BGFX_CONFIG_MAX_FRAME_LATENCY];
+		uint32_t m_maxFrameLatency;
+		uint32_t m_submittedFrames;
+		volatile uint32_t m_completedFrames;
+		struct Release
+		{
+			NS::Object* ptr;
+			uint32_t    frame;
+		};
+
+		typedef stl::vector<Release> ReleaseArray;
+		ReleaseArray m_release;
 	};
 
 	struct TimerQueryMtl
 	{
 		TimerQueryMtl()
-			: m_control(4)
+			: m_frameNum(0)
+			, m_control(4)
+			, m_samplingIdx(0)
 		{
 		}
 
@@ -647,8 +675,17 @@ namespace bgfx { namespace mtl
 		void shutdown();
 		uint32_t begin(uint32_t _resultIdx, uint32_t _frameNum);
 		void end(uint32_t _idx);
-		void addHandlers(MTL::CommandBuffer*& _commandBuffer);
+		void addHandlers(MTL::CommandBuffer*& _commandBuffer, uint32_t _frameNum);
 		bool get();
+
+		bool isViewTimingSupported() const
+		{
+			return NULL != m_sampling[0].m_sampleBuffer;
+		}
+
+		void beginFrame(uint32_t _frameNum);
+		void attach(MTL::RenderPassDescriptor* _renderPassDescriptor);
+		void resolve(uint32_t _samplingIdx);
 
 		struct Result
 		{
@@ -663,16 +700,40 @@ namespace bgfx { namespace mtl
 			uint64_t m_begin;
 			uint64_t m_end;
 			uint32_t m_pending;
-			uint32_t m_frameNum; // TODO: implement (currently stays 0)
+			uint32_t m_frameNum;
+		};
+
+		struct Query
+		{
+			uint32_t m_resultIdx;
+			uint32_t m_frameNum;
+			uint32_t m_first;
+			uint32_t m_num;
+		};
+
+		struct Sampling
+		{
+			MTL::CounterSampleBuffer* m_sampleBuffer;
+			Query    m_query[BGFX_CONFIG_MAX_VIEWS];
+			uint32_t m_numQueries;
+			uint32_t m_numSamples;
+			uint32_t m_activeQuery;
+			uint64_t m_cpuTimestamp;
+			uint64_t m_gpuTimestamp;
 		};
 
 		uint64_t m_begin;
 		uint64_t m_end;
 		uint64_t m_elapsed;
 		uint64_t m_frequency;
+		uint32_t m_frameNum;
 
-		Result m_result[BGFX_CONFIG_MAX_VIEWS+1];
+		TimerResultT<Result> m_result;
+		Result m_frameResult[4];
 		bx::RingBufferControl m_control;
+
+		Sampling m_sampling[BGFX_CONFIG_MAX_FRAME_LATENCY];
+		uint32_t m_samplingIdx;
 	};
 
 	struct OcclusionQueryMTL
@@ -693,6 +754,7 @@ namespace bgfx { namespace mtl
 		struct Query
 		{
 			OcclusionQueryHandle m_handle;
+			uint32_t m_frame;
 		};
 
 		MTL::Buffer* m_buffer;
@@ -701,6 +763,23 @@ namespace bgfx { namespace mtl
 	};
 
 } /* namespace metal */ } // namespace bgfx
+
+namespace bgfx
+{
+	template<typename Ty>
+	struct StateCacheFuncT<Ty*>
+	{
+		static void evict(Ty* _ptr)
+		{
+			mtl::evict(_ptr);
+		}
+
+		static void validate(Ty* /*_ptr*/, uint64_t /*_key*/)
+		{
+		}
+	};
+
+} // namespace bgfx
 
 #endif // BGFX_CONFIG_RENDERER_METAL
 

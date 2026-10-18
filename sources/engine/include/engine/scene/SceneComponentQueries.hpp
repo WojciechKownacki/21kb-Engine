@@ -4,6 +4,9 @@
 #include "engine/scene/SceneAudioSourceComponents.hpp"
 #include "engine/scene/SceneAnimatorComponents.hpp"
 #include "engine/scene/SceneSkeletonBindingComponents.hpp"
+#include "engine/scene/SceneSocketAttachmentComponents.hpp"
+#include "engine/scene/SceneCombatantComponents.hpp"
+#include "engine/scene/SceneAIBrainComponents.hpp"
 #include "engine/scene/SceneMotionSkeletonRuleComponents.hpp"
 #include "engine/scene/SceneDeformedGeometryComponents.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
@@ -80,6 +83,9 @@ public:
     [[nodiscard]] SceneAudioListenerComponentQueries AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponentQueries Animators() const noexcept;
     [[nodiscard]] SceneSkeletonBindingComponentQueries SkeletonBindings() const noexcept;
+    [[nodiscard]] SceneSocketAttachmentComponentQueries SocketAttachments() const noexcept;
+    [[nodiscard]] SceneCombatantComponentQueries Combatants() const noexcept;
+    [[nodiscard]] SceneAIBrainComponentQueries AIBrains() const noexcept;
     [[nodiscard]] SceneMotionSkeletonRuleComponentQueries MotionSkeletonRules() const noexcept;
     [[nodiscard]] SceneDeformedGeometryComponentQueries DeformedGeometries() const noexcept;
     [[nodiscard]] SceneNavAgentComponentQueries NavAgents() const noexcept;

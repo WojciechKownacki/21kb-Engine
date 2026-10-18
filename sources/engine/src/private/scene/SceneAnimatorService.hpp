@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/SceneAnimators.hpp"
+#include "engine/scene/SocketAttachmentComponent.hpp"
 
 namespace kb::scene {
 
@@ -56,6 +57,13 @@ public:
     // none is running) and rethrows any failure the worker recorded.
     static void WaitForDebugSnapshot(Scene& scene);
     static void SyncComponents(Scene& scene);
+    [[nodiscard]] static std::vector<std::string> SocketNames(const Scene& scene, SceneEntity entity);
+    [[nodiscard]] static SocketAttachmentStatus SocketAttachment(const Scene& scene, SceneEntity attachedEntity);
+    static void ApplySocketAttachments(Scene& scene);
+    [[nodiscard]] static bool AttachToSocket(
+        Scene& scene, SceneEntity object, SceneEntity character, std::string_view socketName,
+        const SocketAttachmentOffset& offset, std::string* error);
+    static void DetachFromSocket(Scene& scene, SceneEntity object);
 };
 
 } // namespace kb::scene

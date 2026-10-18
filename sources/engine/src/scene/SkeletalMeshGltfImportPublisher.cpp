@@ -53,6 +53,20 @@ void Rollback(std::vector<StagedAsset>& staged) noexcept {
     }
 }
 
+// A clip name as part of a file name: letters, digits, '-' and '_'; anything else becomes '_'.
+[[nodiscard]] std::string ClipFileName(const std::string& sourceName, std::size_t index) {
+    std::string name;
+    for (const char character : sourceName) {
+        const unsigned char value = static_cast<unsigned char>(character);
+        const bool keep = (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+            (value >= '0' && value <= '9') || value == '-' || value == '_';
+        name.push_back(keep ? character : '_');
+    }
+    while (!name.empty() && name.back() == '_') name.pop_back();
+    while (!name.empty() && name.front() == '_') name.erase(name.begin());
+    return name.empty() ? "Animation_" + std::to_string(index) : name;
+}
+
 [[nodiscard]] std::optional<std::filesystem::path> PhysicalPath(
     const kb::assets::AssetManager& manager,
     const std::filesystem::path& virtualPath) {
@@ -120,7 +134,9 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
         Rollback(staged);
         return Fail<SkeletalMeshGltfPublishResult>(error, "Skeletal glTF Skeleton staging write failed.");
     }
-    if (!add(meshVirtualPath, [&](const auto& path) {
+    // A source of animations only has no mesh to publish.
+    const bool hasMesh = !plan.imported.mesh.lods.empty();
+    if (hasMesh && !add(meshVirtualPath, [&](const auto& path) {
             return SkeletalMeshAssetIO::Save(path, plan.imported.mesh);
         })) {
         Rollback(staged);
@@ -128,9 +144,14 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
     }
     std::vector<std::filesystem::path> clipVirtualPaths;
     clipVirtualPaths.reserve(plan.imported.clips.size());
+    std::set<std::string> clipNames;
     for (std::size_t index = 0U; index < plan.imported.clips.size(); ++index) {
-        const std::filesystem::path clipPath = folder /
-            (stem + "_Animation_" + std::to_string(index) + kAnimationClipAssetExtension);
+        // Named after the source's animation - Hero_Walk for Blender's Walk action of Hero.blend.
+        const std::string base = stem + "_" + ClipFileName(
+            index < plan.imported.clipNames.size() ? plan.imported.clipNames[index] : std::string{}, index);
+        std::string name = base;
+        for (std::size_t suffix = 2U; !clipNames.insert(name).second; ++suffix) name = base + "_" + std::to_string(suffix);
+        const std::filesystem::path clipPath = folder / (name + kAnimationClipAssetExtension);
         if (!add(clipPath, [&](const auto& path) {
                 return AnimationAssetIO::SaveClip(path, plan.imported.clips[index]);
             })) {
@@ -153,8 +174,8 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
         asset.installed = true;
     }
     static_cast<void>(manager.DiscoverMountedAssets());
-    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath(meshVirtualPath);
-    if (meshMetadata == nullptr || meshMetadata->type != kSkeletalMeshAssetType) {
+    const kb::assets::AssetMetadata* meshMetadata = hasMesh ? manager.Registry().FindByPath(meshVirtualPath) : nullptr;
+    if (hasMesh && (meshMetadata == nullptr || meshMetadata->type != kSkeletalMeshAssetType)) {
         Rollback(staged);
         static_cast<void>(manager.DiscoverMountedAssets());
         return Fail<SkeletalMeshGltfPublishResult>(error,
@@ -171,7 +192,7 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
     }
     SkeletalMeshGltfPublishResult result{};
     result.skeletonAssetId = plan.skeletonAssetId;
-    result.meshAssetId = meshMetadata->id;
+    if (meshMetadata != nullptr) result.meshAssetId = meshMetadata->id;
     result.createdSkeleton = !plan.reusesSkeleton && !plan.updatesSkeleton;
     for (const SkeletalMeshImportArtifact& artifact : artifacts) {
         const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(artifact.virtualPath);

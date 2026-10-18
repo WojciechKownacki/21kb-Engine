@@ -87,8 +87,8 @@ def requestedVersionName = propertyOrEnvironment(
     "kbVersionName", "KB_ANDROID_VERSION_NAME").orElse("1.0")
 def requestedApplicationLabel = propertyOrEnvironment(
     "kbApplicationLabel", "KB_ANDROID_APPLICATION_LABEL").orElse("21kb Game")
-def requestedMinSdk = providers.gradleProperty("kbMinSdk").orElse("28")
-def requestedTargetSdk = providers.gradleProperty("kbTargetSdk").orElse("35")
+def requestedMinSdk = providers.gradleProperty("kbMinSdk").orElse("23")
+def requestedTargetSdk = providers.gradleProperty("kbTargetSdk").orElse("36")
 def requestedApplicationIcon = providers.gradleProperty("kbApplicationIcon")
 def requestedLegalAssets = providers.gradleProperty("kbLegalAssets")
 // Release public key and product id the player checks its pack against; written by packaging.
@@ -119,8 +119,8 @@ if (versionNameValue.isEmpty()) {
 if (applicationLabelValue.isEmpty()) {
     throw new GradleException("kbApplicationLabel / KB_ANDROID_APPLICATION_LABEL must not be empty")
 }
-if (minSdkValue < 28 || targetSdkValue < minSdkValue || targetSdkValue > 36) {
-    throw new GradleException("Android SDK levels must satisfy 28 <= minimum <= target <= 36")
+if (minSdkValue < 23 || targetSdkValue < minSdkValue || targetSdkValue > 37) {
+    throw new GradleException("Android SDK levels must satisfy 23 <= minimum <= target <= 37")
 }
 def requestedTaskNames = gradle.startParameter.taskNames.collect { it.toLowerCase(Locale.ROOT) }
 if (requestedTargetProfile.isPresent()) {
@@ -144,7 +144,7 @@ if (requestedApplicationIcon.isPresent()) {
 
 android {
     namespace = "com.kbengine.runtime"
-    compileSdk = 36
+    compileSdk = Math.max(36, targetSdkValue)
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
@@ -206,7 +206,7 @@ android {
     externalNativeBuild {
         cmake {
             path = repositoryRoot.file("CMakeLists.txt")
-            version = "4.3.1"
+            version = "4.1.2"
         }
     }
 

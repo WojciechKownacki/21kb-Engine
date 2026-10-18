@@ -76,7 +76,7 @@ struct PosTexVertex {
 [[nodiscard]] bgfx::TextureHandle CreateNeutralColorGradeLut() {
     constexpr std::uint16_t kLutSize = 16U;
     const bgfx::Caps* caps = bgfx::getCaps();
-    if (caps == nullptr || (caps->supported & BGFX_CAPS_TEXTURE_3D) == 0U) {
+    if (caps == nullptr) {
         return BGFX_INVALID_HANDLE;
     }
 

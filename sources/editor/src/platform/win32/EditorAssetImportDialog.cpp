@@ -4,6 +4,8 @@
 #if defined(_WIN32)
 #include "engine/assets/AssetImportCatalog.hpp"
 #include "engine/assets/AssetImportPreset.hpp"
+#include "engine/scene/SkeletalMeshFbxImporter.hpp"
+#include "engine/scene/SkeletalMeshGltfImporter.hpp"
 #include "platform/win32/EditorFileDialogFilter.hpp"
 #include "platform/win32/EditorModalMessageLoop.hpp"
 #include "rendering/GdiDrawing.hpp"
@@ -68,11 +70,12 @@ public:
         std::size_t fileCount,
         bool materialSlotsAvailable,
         bool skeletalImportAvailable,
+        bool skeletalByDefault,
         std::span<const EditorAssetImportPreset> presets)
         : fileCount_(fileCount)
         , materialSlotsAvailable_(materialSlotsAvailable)
         , skeletalImportAvailable_(skeletalImportAvailable)
-        , importSkeletalMesh_(skeletalImportAvailable)
+        , importSkeletalMesh_(skeletalImportAvailable && skeletalByDefault)
         , presets_(presets.begin(), presets.end()) {
         ShowTransform(kb::assets::AssetMeshImportTransform{});
     }
@@ -446,9 +449,17 @@ std::optional<EditorAssetImportSelection> EditorAssetImportDialog::Open(HWND own
         std::ranges::transform(extension, extension.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
         return extension == ".fbx" || extension == ".gltf" || extension == ".glb";
     });
+    // Import skeleton starts ticked when every file is a character - a skinned mesh, or an
+    // armature with animations - and unticked for props, as kb_cli import --skeletal auto decides.
+    const bool skeletalByDefault = skeletalImportAvailable && std::ranges::all_of(files, [](const std::filesystem::path& path) {
+        std::string extension = path.extension().string();
+        std::ranges::transform(extension, extension.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+        return (extension == ".fbx" ? kb::scene::SkeletalMeshFbxImporter::Probe(path)
+                                    : kb::scene::SkeletalMeshGltfImporter::Probe(path)).Skeletal();
+    });
     if (containsMesh) {
         const std::optional<kb::assets::AssetImportOptions> meshOptions =
-            MeshImportOptionsWindow{ files.size(), materialSlotsAvailable, skeletalImportAvailable, presets }.Show(owner);
+            MeshImportOptionsWindow{ files.size(), materialSlotsAvailable, skeletalImportAvailable, skeletalByDefault, presets }.Show(owner);
         if (!meshOptions.has_value()) return std::nullopt;
         options = *meshOptions;
     }

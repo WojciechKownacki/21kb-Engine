@@ -49,6 +49,17 @@ public:
         std::span<const std::filesystem::path> sourceFiles,
         const std::filesystem::path& destinationVirtualFolder,
         const kb::assets::AssetImportOptions& options);
+
+    // Skeletal import of FBX, glTF and GLB sources: a Skeleton (reused when the project already has
+    // the same one), the Skeletal Mesh and one Animation Clip per source animation, with the
+    // source's textures and materials when the options ask for them. Each item's id is the
+    // Skeletal Mesh; producedAssets lists the skeleton, the clips and the textures and materials.
+    // The editor's Import and kb_cli import both come here.
+    [[nodiscard]] static kb::assets::AssetImportResult ImportSkeletalFiles(
+        kb::assets::AssetManager& manager,
+        std::span<const std::filesystem::path> sourceFiles,
+        const std::filesystem::path& destinationVirtualFolder,
+        const kb::assets::AssetImportOptions& options);
 };
 
 } // namespace kb::render

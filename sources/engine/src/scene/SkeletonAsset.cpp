@@ -1,4 +1,5 @@
 #include "engine/scene/SkeletonAsset.hpp"
+#include "engine/scene/SkeletonNames.hpp"
 
 #include <cmath>
 #include <type_traits>
@@ -92,6 +93,38 @@ SkeletonAssetValidationResult ValidateSkeletonAsset(const SkeletonAsset& asset) 
         }
     }
     return { true, {} };
+}
+
+std::optional<SkeletonSocketMatch> FindSkeletonSocket(const SkeletonAsset& asset, std::string_view name) {
+    if (name.empty()) return std::nullopt;
+    for (const SkeletonSocket& socket : asset.sockets) {
+        if (socket.name == name) return SkeletonSocketMatch{ socket.boneId, socket.localTransform, socket.name, false };
+    }
+    for (const SkeletonBone& bone : asset.bones) {
+        if (bone.name == name) return SkeletonSocketMatch{ bone.id, {}, bone.name, true };
+    }
+    const std::string wanted = NormalizeSkeletonName(name);
+    if (wanted.empty()) return std::nullopt;
+    const SkeletonSocket* socketMatch = nullptr;
+    std::size_t socketMatches = 0U;
+    for (const SkeletonSocket& socket : asset.sockets) {
+        if (NormalizeSkeletonName(socket.name) == wanted) {
+            socketMatch = &socket;
+            ++socketMatches;
+        }
+    }
+    if (socketMatches == 1U) return SkeletonSocketMatch{ socketMatch->boneId, socketMatch->localTransform, socketMatch->name, false };
+    if (socketMatches > 1U) return std::nullopt;
+    const SkeletonBone* boneMatch = nullptr;
+    std::size_t boneMatches = 0U;
+    for (const SkeletonBone& bone : asset.bones) {
+        if (NormalizeSkeletonName(bone.name) == wanted) {
+            boneMatch = &bone;
+            ++boneMatches;
+        }
+    }
+    if (boneMatches != 1U) return std::nullopt;
+    return SkeletonSocketMatch{ boneMatch->id, {}, boneMatch->name, true };
 }
 
 std::uint64_t SkeletonCompatibilitySignature(const SkeletonAsset& asset) {

@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wojciech Kownacki <verthsoft@gmail.com>
+Date: Sun, 18 Oct 2026 11:27:04 +0200
+Subject: [PATCH] shaderc: define BGFX_SHADER_LANGUAGE_WGSL for WGSL on asm.js
+
+---
+ bgfx/tools/shaderc/shaderc.cpp | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/bgfx/tools/shaderc/shaderc.cpp b/bgfx/tools/shaderc/shaderc.cpp
+index d6d623e..1056e2c 100644
+--- a/bgfx/tools/shaderc/shaderc.cpp
++++ b/bgfx/tools/shaderc/shaderc.cpp
+@@ -1298,8 +1298,15 @@ namespace bgfx
+ 		else if (0 == bx::strCmpI(platform, "asm.js") )
+ 		{
+ 			preprocessor.setDefine("BX_PLATFORM_EMSCRIPTEN=1");
+-			preprocessor.setDefine(glslDefine);
+-			preprocessor.setDefine(esslDefine);
++			if (profile->lang == ShadingLang::WGSL)
++			{
++				preprocessor.setDefine("BGFX_SHADER_LANGUAGE_WGSL=1");
++			}
++			else
++			{
++				preprocessor.setDefine(glslDefine);
++				preprocessor.setDefine(esslDefine);
++			}
+ 		}
+ 		else if (0 == bx::strCmpI(platform, "linux") )
+ 		{

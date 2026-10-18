@@ -57,7 +57,13 @@ struct SceneDocument {
     // v44: the scene's post-process profile (tonemapping, exposure, bloom, anti-aliasing) persists
     //      with the scene, as a Unity global Volume or a Godot WorldEnvironment does; older files
     //      load with no profile (renderer defaults).
-    static constexpr std::uint32_t CurrentFileVersion = 48U;
+    // v49: SocketAttachment holds an object at a socket or bone of the character above it.
+    //      Combatant persists health, mana, resistances, team, senses and ability slots.
+    //      AIBrain persists the AI preset and its rules.
+    static constexpr std::uint32_t CurrentFileVersion = 49U;
+    static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
+    static constexpr std::uint32_t CombatantFileVersion = 49U;
+    static constexpr std::uint32_t AIBrainFileVersion = 49U;
     static constexpr std::uint32_t LightShadowSettingsFileVersion = 48U;
     static constexpr std::uint32_t JointMotorSpringBreakFileVersion = 47U;
     static constexpr std::uint32_t RigidbodyDampingFileVersion = 46U;

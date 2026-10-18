@@ -7,12 +7,17 @@
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SkeletalMeshFbxImporter.hpp"
+#include "engine/scene/SkeletalMeshGltfImporter.hpp"
 
 #if KB_CLI_RENDERER
 #include "kb/render/resources/RenderMeshImportArtifacts.hpp"
 #endif
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <utility>
@@ -78,6 +83,15 @@ namespace {
     return true;
 }
 
+// What a model source holds, for --skeletal auto: FBX through ufbx, glTF and GLB through cgltf.
+[[nodiscard]] kb::scene::SkeletalSourceSummary ProbeModel(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    if (extension == ".fbx") return kb::scene::SkeletalMeshFbxImporter::Probe(path);
+    if (extension == ".gltf" || extension == ".glb") return kb::scene::SkeletalMeshGltfImporter::Probe(path);
+    return {};
+}
+
 } // namespace
 
 int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
@@ -107,9 +121,12 @@ int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
         !ApplyFlag(options, arguments, "--import-textures", "importTextures", "yes or no", io)) {
         return 1;
     }
-    if (options.mesh.importSkeletalMesh) {
-        io.err << "error: skeletal import (importSkeletalMesh) is done by the editor's Import with Import skeleton; "
-                  "kb_cli imports static models\n";
+    // --skeletal: auto (default) imports a model with a skinned mesh, or an armature with
+    // animations, as a character - Skeleton, Skeletal Mesh, Animation Clips - and anything else
+    // as a static mesh, as an artist's file is meant; yes and no force one or the other.
+    const std::string skeletalMode = arguments.Option("--skeletal").value_or(options.mesh.importSkeletalMesh ? "yes" : "auto");
+    if (skeletalMode != "auto" && skeletalMode != "yes" && skeletalMode != "no") {
+        io.err << "error: --skeletal takes auto, yes or no, got '" << skeletalMode << "'\n";
         return 1;
     }
     if (options.mesh.importMaterials) {
@@ -117,34 +134,55 @@ int RunImportCommand(const ArgumentList& arguments, CommandIo io) {
         options.mesh.importTextures = true;
     }
 
-    std::vector<std::filesystem::path> sources;
-    sources.reserve(arguments.Positionals().size());
+    std::vector<std::filesystem::path> staticSources;
+    std::vector<std::filesystem::path> skeletalSources;
     for (const std::string& source : arguments.Positionals()) {
-        sources.push_back(ResolveInputPath(kb::assets::Utf8Path(source), kb::assets::Utf8Path(*project)));
+        const std::filesystem::path path = ResolveInputPath(kb::assets::Utf8Path(source), kb::assets::Utf8Path(*project));
+        const bool skeletal = skeletalMode == "yes" ||
+            (skeletalMode == "auto" && ProbeModel(path).Skeletal());
+        (skeletal ? skeletalSources : staticSources).push_back(path);
     }
-
-#if KB_CLI_RENDERER
-    const kb::assets::AssetImportResult result = kb::render::RenderMeshImportArtifacts::ImportStaticFiles(
-        scene.Assets().Manager(), sources, std::filesystem::path{ *destination }, options);
-#else
-    if (options.mesh.importTextures || options.mesh.importMaterials) {
-        io.err << "error: importing a model's textures and materials needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
+    if (!skeletalSources.empty() && !options.mesh.transform.IsIdentity()) {
+        io.err << "error: --scale and --rotation apply to static models; a character keeps the source's scale "
+                  "and orientation (export it in metres; the source's up axis is converted)\n";
         return 1;
     }
-    const kb::assets::AssetImportResult result = kb::assets::AssetImportService::ImportFiles(
-        scene.Assets().Manager(), sources, std::filesystem::path{ *destination }, options);
+
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const std::filesystem::path folder{ *destination };
+    kb::assets::AssetImportResult result{};
+#if KB_CLI_RENDERER
+    result = kb::render::RenderMeshImportArtifacts::ImportStaticFiles(manager, staticSources, folder, options);
+    kb::assets::AssetImportResult skeletal =
+        kb::render::RenderMeshImportArtifacts::ImportSkeletalFiles(manager, skeletalSources, folder, options);
+    result.items.insert(result.items.end(),
+        std::make_move_iterator(skeletal.items.begin()), std::make_move_iterator(skeletal.items.end()));
+#else
+    if (options.mesh.importTextures || options.mesh.importMaterials || !skeletalSources.empty()) {
+        io.err << "error: importing characters, textures and materials needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
+        return 1;
+    }
+    result = kb::assets::AssetImportService::ImportFiles(manager, staticSources, folder, options);
 #endif
+    static_cast<void>(manager.DiscoverMountedAssets());
     for (const kb::assets::AssetImportItemResult& item : result.items) {
         if (item.Succeeded()) {
+            const kb::assets::AssetMetadata* metadata = manager.Registry().Find(item.id);
             io.out << kb::assets::ToString(item.status) << " " << item.virtualPath.generic_string();
+            if (metadata != nullptr) io.out << " (" << metadata->type << ')';
             if (item.category == kb::assets::AssetImportCategory::Model && !options.mesh.transform.IsIdentity()) {
                 const kb::assets::AssetMeshImportTransform& transform = options.mesh.transform;
                 io.out << " (scale " << transform.scale << ", rotation " << transform.rotationDegrees[0] << ','
                        << transform.rotationDegrees[1] << ',' << transform.rotationDegrees[2] << ')';
             }
             io.out << '\n';
+            for (const kb::assets::AssetId produced : item.producedAssets) {
+                if (const kb::assets::AssetMetadata* other = manager.Registry().Find(produced)) {
+                    io.out << "  + " << other->virtualPath.generic_string() << " (" << other->type << ")\n";
+                }
+            }
         } else {
-            io.err << "error: " << item.sourcePath.string() << ": " << item.error << '\n';
+            io.err << "error: " << Utf8Text(item.sourcePath) << ": " << item.error << '\n';
         }
     }
     return result.Succeeded() ? 0 : 1;

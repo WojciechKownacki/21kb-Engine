@@ -3377,6 +3377,38 @@ void RunNavMeshCommandTests() {
     Require(chunks.exitCode == 0 && Contains(chunks.output, "/Game/Level.cells/nav/r_0_0/"), chunks.output.c_str());
 }
 
+// lighting-quality reports the project's shadow and global illumination quality, stores the levels it is
+// given in the settings file and refuses one it does not know.
+void RunLightingQualityCommandTests() {
+    const std::filesystem::path root = TestRoot() / "lighting_quality";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "kb_cli lighting-quality test root could not be prepared");
+    WriteProjectDescriptor(root, false);
+    const std::string project = root.string();
+    const std::filesystem::path settingsFile = kb::project::ProjectSettingsStore::FilePath(root);
+    const CommandRun initial = Run(&kb::cli::RunLightingQualityCommand, { "--project", project });
+    Require(initial.exitCode == 0 && Contains(initial.output, "Shadows (desktop): Auto") &&
+            Contains(initial.output, "Global illumination (mobile): Auto"),
+        "a project that never chose a quality must report Auto for all four: " + initial.output);
+    const CommandRun set = Run(&kb::cli::RunLightingQualityCommand, { "--project", project, "--shadows", "High",
+        "--shadows-mobile", "low", "--gi", "ultra", "--gi-mobile", "medium" });
+    Require(set.exitCode == 0 && Contains(set.output, "Shadows (desktop): High") && Contains(set.output, "Shadows (mobile): Low") &&
+            Contains(set.output, "Global illumination (desktop): Ultra") && Contains(set.output, "Global illumination (mobile): Medium"),
+        "lighting-quality must report the levels it set: " + set.output);
+    const kb::project::ProjectSettings stored = kb::project::ProjectSettingsStore::Load(settingsFile).settings;
+    Require(stored.shadowQuality == kb::project::ProjectQualityLevel::High &&
+            stored.shadowQualityMobile == kb::project::ProjectQualityLevel::Low &&
+            stored.giQuality == kb::project::ProjectQualityLevel::Ultra &&
+            stored.giQualityMobile == kb::project::ProjectQualityLevel::Medium,
+        "the settings file did not keep the quality levels");
+    const CommandRun refused = Run(&kb::cli::RunLightingQualityCommand, { "--project", project, "--gi", "extreme" });
+    Require(refused.exitCode != 0 && Contains(refused.output, "extreme") &&
+            kb::project::ProjectSettingsStore::Load(settingsFile).settings.giQuality == kb::project::ProjectQualityLevel::Ultra,
+        "an unknown level must be refused and leave the setting alone: " + refused.output);
+}
+
 #if KB_CLI_RENDERER
 [[nodiscard]] std::string NewAuthoringProject(std::string_view folder) {
     const std::filesystem::path parent = TestRoot() / std::string{ folder };
@@ -3675,6 +3707,7 @@ int main() {
     RunKeyAndPackCommandTests();
     RunWorldCommandTests();
     RunNavMeshCommandTests();
+    RunLightingQualityCommandTests();
     RunPackSetCommandTests();
     RunEncryptedPatchCommandTests();
     // Keep the production physics fixture on disk after the test process so

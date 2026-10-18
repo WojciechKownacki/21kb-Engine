@@ -5,6 +5,8 @@
 
 #include "common.h"
 
+#include "video_player.h"
+
 #include <bgfx/bgfx.h>
 
 #include <bx/commandline.h>
@@ -15,6 +17,7 @@
 #include <bx/os.h>
 #include <bx/process.h>
 #include <bx/settings.h>
+#include <bx/sort.h>
 
 #include <entry/entry.h>
 #include <entry/input.h>
@@ -68,25 +71,37 @@ static const bgfx::EmbeddedShader s_embeddedShaders[] =
 	BGFX_EMBEDDED_SHADER_END()
 };
 
-static const char* s_supportedExt[] =
+static bx::StringView s_supportedExt[64];
+static uint32_t       s_numSupportedExt = 0;
+
+static int32_t compareExt(const void* _lhs, const void* _rhs)
 {
-	"bmp",
-	"dds",
-	"exr",
-	"gif",
-	"gnf",
-	"hdr",
-	"heic",
-	"jpeg",
-	"jpg",
-	"ktx",
-	"pgm",
-	"png",
-	"ppm",
-	"psd",
-	"pvr",
-	"tga",
-};
+	const bx::StringView& lhs = *(const bx::StringView*)_lhs;
+	const bx::StringView& rhs = *(const bx::StringView*)_rhs;
+	return bx::strCmpI(lhs, rhs);
+}
+
+static void initSupportedExt()
+{
+	const char* const* supportedExt = bimg::getSupportedExt();
+
+	for (s_numSupportedExt = 0
+		; s_numSupportedExt < BX_COUNTOF(s_supportedExt) && NULL != supportedExt[s_numSupportedExt]
+		; ++s_numSupportedExt)
+	{
+		s_supportedExt[s_numSupportedExt] = supportedExt[s_numSupportedExt];
+	}
+
+	BX_ASSERT(NULL == supportedExt[s_numSupportedExt], "s_supportedExt array is too small.");
+	BX_ASSERT(bx::isSorted(s_supportedExt, s_numSupportedExt, sizeof(s_supportedExt[0]), compareExt)
+		, "s_supportedExt must be sorted!"
+		);
+}
+
+static bool isExtSupported(const bx::StringView& _ext)
+{
+	return 0 <= bx::binarySearch(_ext, s_supportedExt, s_numSupportedExt, sizeof(s_supportedExt[0]), compareExt);
+}
 
 struct Binding
 {
@@ -96,6 +111,8 @@ struct Binding
 		View,
 		Help,
 		About,
+		Delete,
+		Video,
 
 		Count
 	};
@@ -125,15 +142,7 @@ struct Output
 	};
 };
 
-static const InputBinding s_bindingApp[] =
-{
-	{ entry::Key::KeyQ, entry::Modifier::None,  1, NULL, "exit"                },
-	{ entry::Key::KeyF, entry::Modifier::None,  1, NULL, "graphics fullscreen" },
-
-	INPUT_BINDING_END
-};
-
-const char* s_resetCmd =
+static const char* s_resetCmd =
 	"view zoom 1.0\n"
 	"view rotate x 0\n"
 	"view rotate y 0\n"
@@ -143,71 +152,104 @@ const char* s_resetCmd =
 	"view ev\n"
 	;
 
-static const InputBinding s_bindingView[] =
+static const InputBinding s_bindingApp[] =
 {
-	{ entry::Key::Esc,       entry::Modifier::None,       1, NULL, "exit"                    },
-
-	{ entry::Key::Comma,     entry::Modifier::None,       1, NULL, "view mip prev"           },
-	{ entry::Key::Period,    entry::Modifier::None,       1, NULL, "view mip next"           },
-	{ entry::Key::Comma,     entry::Modifier::LeftShift,  1, NULL, "view mip"                },
-	{ entry::Key::Comma,     entry::Modifier::RightShift, 1, NULL, "view mip"                },
-
-	{ entry::Key::Slash,     entry::Modifier::None,       1, NULL, "view filter"             },
-
-	{ entry::Key::Key1,      entry::Modifier::None,       1, NULL, "view zoom 1.0\n"
-	                                                               "view fit\n"              },
-
-	{ entry::Key::Key0,      entry::Modifier::None,       1, NULL, s_resetCmd                },
-	{ entry::Key::Plus,      entry::Modifier::None,       1, NULL, "view zoom +0.1"          },
-	{ entry::Key::Minus,     entry::Modifier::None,       1, NULL, "view zoom -0.1"          },
-
-	{ entry::Key::KeyZ,      entry::Modifier::None,       1, NULL, "view rotate z -90"       },
-	{ entry::Key::KeyZ,      entry::Modifier::LeftShift,  1, NULL, "view rotate z +90"       },
-
-	{ entry::Key::KeyX,      entry::Modifier::None,       1, NULL, "view rotate x +180"      },
-	{ entry::Key::KeyY,      entry::Modifier::None,       1, NULL, "view rotate y +180"      },
+	{ entry::Key::KeyQ,      entry::Modifier::None,       1, NULL, "exit"                },
+	{ entry::Key::KeyF,      entry::Modifier::None,       1, NULL, "graphics fullscreen" },
 
 	{ entry::Key::Up,        entry::Modifier::None,       1, NULL, "view pan\n"
-	                                                               "view file-up"            },
+	                                                               "view file-up"        },
 	{ entry::Key::Down,      entry::Modifier::None,       1, NULL, "view pan\n"
-	                                                               "view file-down"          },
+	                                                               "view file-down"      },
 	{ entry::Key::PageUp,    entry::Modifier::None,       1, NULL, "view pan\n"
-	                                                               "view file-pgup"          },
+	                                                               "view file-pgup"      },
 	{ entry::Key::PageDown,  entry::Modifier::None,       1, NULL, "view pan\n"
-	                                                               "view file-pgdown"        },
+	                                                               "view file-pgdown"    },
 
-	{ entry::Key::Left,      entry::Modifier::None,       1, NULL, "view layer prev"         },
-	{ entry::Key::Right,     entry::Modifier::None,       1, NULL, "view layer next"         },
+	{ entry::Key::Return,    entry::Modifier::None,       1, NULL, "view files"          },
+	{ entry::Key::KeyH,      entry::Modifier::None,       1, NULL, "view help"           },
+	{ entry::Key::KeyI,      entry::Modifier::None,       1, NULL, "view info"           },
+	{ entry::Key::Delete,    entry::Modifier::None,       1, NULL, "view delete"         },
 
-	{ entry::Key::KeyR,      entry::Modifier::None,       1, NULL, "view rgb r"              },
-	{ entry::Key::KeyG,      entry::Modifier::None,       1, NULL, "view rgb g"              },
-	{ entry::Key::KeyB,      entry::Modifier::None,       1, NULL, "view rgb b"              },
-	{ entry::Key::KeyA,      entry::Modifier::None,       1, NULL, "view rgb a"              },
+	{ entry::Key::Key1,      entry::Modifier::None,       1, NULL, "view zoom 1.0\n"
+	                                                               "view fit\n"          },
+	{ entry::Key::Key0,      entry::Modifier::None,       1, NULL, s_resetCmd            },
+	{ entry::Key::Plus,      entry::Modifier::None,       1, NULL, "view zoom +0.1"      },
+	{ entry::Key::Minus,     entry::Modifier::None,       1, NULL, "view zoom -0.1"      },
 
-	{ entry::Key::KeyI,      entry::Modifier::None,       1, NULL, "view info"               },
+	{ entry::Key::KeyZ,      entry::Modifier::None,       1, NULL, "view rotate z -90"   },
+	{ entry::Key::KeyZ,      entry::Modifier::LeftShift,  1, NULL, "view rotate z +90"   },
 
-	{ entry::Key::KeyH,      entry::Modifier::None,       1, NULL, "view help"               },
+	{ entry::Key::KeyX,      entry::Modifier::None,       1, NULL, "view rotate x +180"  },
+	{ entry::Key::KeyY,      entry::Modifier::None,       1, NULL, "view rotate y +180"  },
 
-	{ entry::Key::Return,    entry::Modifier::None,       1, NULL, "view files"              },
+	{ entry::Key::KeyR,      entry::Modifier::None,       1, NULL, "view rgb r"          },
+	{ entry::Key::KeyG,      entry::Modifier::None,       1, NULL, "view rgb g"          },
+	{ entry::Key::KeyB,      entry::Modifier::None,       1, NULL, "view rgb b"          },
+	{ entry::Key::KeyA,      entry::Modifier::None,       1, NULL, "view rgb a"          },
 
-	{ entry::Key::KeyS,      entry::Modifier::None,       1, NULL, "view sdf"                },
+	{ entry::Key::KeyI,      entry::Modifier::None,       1, NULL, "view info"           },
+
+	{ entry::Key::KeyH,      entry::Modifier::None,       1, NULL, "view help"           },
+
+	{ entry::Key::Return,    entry::Modifier::None,       1, NULL, "view files"          },
+
+	INPUT_BINDING_END
+};
+
+static const InputBinding s_bindingView[] =
+{
+	{ entry::Key::Esc,       entry::Modifier::None,       1, NULL, "exit"                },
+
+	{ entry::Key::Comma,     entry::Modifier::None,       1, NULL, "view mip prev"       },
+	{ entry::Key::Period,    entry::Modifier::None,       1, NULL, "view mip next"       },
+	{ entry::Key::Comma,     entry::Modifier::LeftShift,  1, NULL, "view mip"            },
+	{ entry::Key::Comma,     entry::Modifier::RightShift, 1, NULL, "view mip"            },
+
+	{ entry::Key::Slash,     entry::Modifier::None,       1, NULL, "view filter"         },
+
+	{ entry::Key::Left,      entry::Modifier::None,       1, NULL, "view layer prev"     },
+	{ entry::Key::Right,     entry::Modifier::None,       1, NULL, "view layer next"     },
+
+	{ entry::Key::KeyS,      entry::Modifier::None,       1, NULL, "view sdf"            },
 
 	{ entry::Key::Space,     entry::Modifier::None,       1, NULL, "view geo\n"
-	                                                               "view pan\n"              },
+	                                                               "view pan\n"          },
 
 	INPUT_BINDING_END
 };
 
 static const InputBinding s_bindingHelp[] =
 {
-	{ entry::Key::Esc,  entry::Modifier::None,  1, NULL, "view help" },
-	{ entry::Key::KeyH, entry::Modifier::None,  1, NULL, "view help" },
+	{ entry::Key::Esc,  entry::Modifier::None, 1, NULL, "view help" },
+	{ entry::Key::KeyH, entry::Modifier::None, 1, NULL, "view help" },
 	INPUT_BINDING_END
 };
 
 static const InputBinding s_bindingAbout[] =
 {
-	{ entry::Key::Esc,  entry::Modifier::None,  1, NULL, "view about" },
+	{ entry::Key::Esc,  entry::Modifier::None, 1, NULL, "view about" },
+	INPUT_BINDING_END
+};
+
+static const InputBinding s_bindingDelete[] =
+{
+	{ entry::Key::KeyD, entry::Modifier::None, 1, NULL, "view delete file"   },
+	{ entry::Key::KeyT, entry::Modifier::None, 1, NULL, "view delete trash"  },
+	{ entry::Key::Esc,  entry::Modifier::None, 1, NULL, "view delete cancel" },
+	INPUT_BINDING_END
+};
+
+static const InputBinding s_bindingVideo[] =
+{
+	{ entry::Key::Esc,          entry::Modifier::None, 1, NULL, "exit"            },
+	{ entry::Key::Left,         entry::Modifier::None, 1, NULL, "video skip -8"   },
+	{ entry::Key::Right,        entry::Modifier::None, 1, NULL, "video skip +8"   },
+	{ entry::Key::Space,        entry::Modifier::None, 1, NULL, "video pause"     },
+	{ entry::Key::LeftBracket,  entry::Modifier::None, 1, NULL, "video rate down" },
+	{ entry::Key::RightBracket, entry::Modifier::None, 1, NULL, "video rate up"   },
+	{ entry::Key::KeyL,         entry::Modifier::None, 1, NULL, "video marker"    },
+
 	INPUT_BINDING_END
 };
 
@@ -217,6 +259,8 @@ static const char* s_bindingName[] =
 	"View",
 	"Help",
 	"About",
+	"Delete",
+	"Video",
 };
 static_assert(Binding::Count == BX_COUNTOF(s_bindingName) );
 
@@ -226,24 +270,94 @@ static const InputBinding* s_binding[] =
 	s_bindingView,
 	s_bindingHelp,
 	s_bindingAbout,
+	s_bindingDelete,
+	s_bindingVideo,
 };
 static_assert(Binding::Count == BX_COUNTOF(s_binding) );
 
-static const char* s_filter = ""
-	"All Image Formats (bmp, dds, exr, gif, gnf, jpg, jpeg, hdr, ktx, pgm, png, ppm, psd, pvr, tga) | *.bmp *.dds *.exr *.gif *.gnf *.jpg *.jpeg *.hdr *.ktx *.pgm *.png *.ppm *.psd *.pvr *.tga\n"
-	"Windows Bitmap (bmp) | *.bmp\n"
-	"Direct Draw Surface (dds) | *.dds\n"
-	"OpenEXR (exr) | *.exr\n"
-	"Graphics Interchange Format (gif) | *.gif\n"
-	"JPEG Interchange Format (jpg, jpeg) | *.jpg *.jpeg\n"
-	"Radiance RGBE (hdr) | *.hdr\n"
-	"Khronos Texture (ktx) | *.ktx\n"
-	"Portable Graymap/Pixmap Format (pgm, ppm) | *.pgm *.ppm\n"
-	"Portable Network Graphics (png) | *.png\n"
-	"Photoshop Document (psd) | *.psd\n"
-	"PowerVR (pvr) | *.pvr\n"
-	"Truevision TGA (tga) | *.tga\n"
-	;
+struct FileFormat
+{
+	const char* name;
+	const char* ext[4];
+};
+
+static const FileFormat s_fileFormat[] =
+{
+	{ "AV1 Image File Format",             { "avif"                } },
+	{ "Windows Bitmap",                    { "bmp"                 } },
+	{ "Direct Draw Surface",               { "dds"                 } },
+	{ "OpenEXR",                           { "exr"                 } },
+	{ "Graphics Interchange Format",       { "gif"                 } },
+	{ "High Efficiency Image File Format", { "heic"                } },
+	{ "JPEG Interchange Format",           { "jpg", "jpeg"         } },
+	{ "Radiance RGBE",                     { "hdr"                 } },
+	{ "Khronos Texture",                   { "ktx"                 } },
+	{ "Khronos Texture 2",                 { "ktx2"                } },
+	{ "Portable Graymap/Pixmap Format",    { "pgm", "ppm"          } },
+	{ "Portable Network Graphics",         { "png"                 } },
+	{ "Photoshop Document",                { "psd"                 } },
+	{ "PowerVR",                           { "pvr"                 } },
+	{ "Scalable Vector Graphics",          { "svg"                 } },
+	{ "Truevision TGA",                    { "tga"                 } },
+	{ "WebP",                              { "webp"                } },
+	{ "MPEG-4/QuickTime Video",            { "mp4", "m4v", "mov"   } },
+	{ "H.264 Video",                       { "264", "h264"         } },
+	{ "H.265 Video",                       { "265", "h265", "hevc" } },
+	{ "AV1 Video",                         { "av1", "obu", "ivf"   } },
+};
+
+static char s_filter[4096];
+
+static void writeFilterLine(bx::WriterI* _writer, const char* _name, const bx::StringView* _ext, uint32_t _num, bx::Error* _err)
+{
+	bx::write(_writer, _err, "%s (", _name);
+
+	for (uint32_t ii = 0; ii < _num; ++ii)
+	{
+		bx::write(_writer, _err, "%s%S", 0 == ii ? "" : ", ", &_ext[ii]);
+	}
+
+	bx::write(_writer, _err, ") |");
+
+	for (uint32_t ii = 0; ii < _num; ++ii)
+	{
+		bx::write(_writer, _err, " *.%S", &_ext[ii]);
+	}
+
+	bx::write(_writer, '\n', _err);
+}
+
+static void initFilter()
+{
+	bx::StaticMemoryBlockWriter writer(s_filter, sizeof(s_filter)-1);
+	bx::Error err;
+
+	writeFilterLine(&writer, "All Supported Formats", s_supportedExt, s_numSupportedExt, &err);
+
+	for (uint32_t ii = 0; ii < BX_COUNTOF(s_fileFormat); ++ii)
+	{
+		const FileFormat& format = s_fileFormat[ii];
+
+		bx::StringView ext[BX_COUNTOF(format.ext)];
+		uint32_t num = 0;
+
+		for (uint32_t jj = 0; jj < BX_COUNTOF(format.ext) && NULL != format.ext[jj]; ++jj)
+		{
+			if (isExtSupported(format.ext[jj]) )
+			{
+				ext[num++] = format.ext[jj];
+			}
+		}
+
+		if (0 < num)
+		{
+			writeFilterLine(&writer, format.name, ext, num, &err);
+		}
+	}
+
+	BX_ASSERT(err.isOk(), "s_filter array is too small.");
+	s_filter[bx::seek(&writer)] = '\0';
+}
 
 #if BX_PLATFORM_WINDOWS
 
@@ -260,11 +374,24 @@ struct RendererTypeRemap
 
 struct View
 {
+	struct Action
+	{
+		enum Enum
+		{
+			None,
+			Delete,
+			Trash,
+		};
+	};
+
 	View()
 		: m_rendererType(bgfx::RendererType::Count)
 		, m_cubeMapGeo(Geometry::Quad)
 		, m_outputFormat(Output::sRGB)
+		, m_action(Action::None)
 		, m_fileIndex(0)
+		, m_fileRows(1)
+		, m_fileScroll(0)
 		, m_scaleFn(0)
 		, m_mip(0)
 		, m_layer(0)
@@ -288,6 +415,7 @@ struct View
 		, m_alpha(false)
 		, m_help(false)
 		, m_about(false)
+		, m_delete(false)
 		, m_info(false)
 		, m_files(false)
 		, m_sdf(false)
@@ -305,6 +433,7 @@ struct View
 	~View()
 	{
 	}
+
 	int32_t cmd(int32_t _argc, char const* const* _argv)
 	{
 		if (_argc >= 2)
@@ -580,13 +709,27 @@ struct View
 			}
 			else if (0 == bx::strCmp(_argv[1], "file-up") )
 			{
-				m_fileIndex = bx::satSub<uint32_t>(m_fileIndex, 1u);
+				m_fileIndex  = bx::satSub<uint32_t>(m_fileIndex, 1u);
+				m_fileScroll = -1;
 			}
 			else if (0 == bx::strCmp(_argv[1], "file-down") )
 			{
 				uint32_t numFiles = bx::satSub<uint32_t>(uint32_t(m_fileList.size()), 1u);
 				++m_fileIndex;
-				m_fileIndex = bx::min(m_fileIndex, numFiles);
+				m_fileIndex  = bx::min(m_fileIndex, numFiles);
+				m_fileScroll = 1;
+			}
+			else if (0 == bx::strCmp(_argv[1], "file-pgup") )
+			{
+				m_fileIndex  = bx::satSub<uint32_t>(m_fileIndex, m_fileRows);
+				m_fileScroll = -1;
+			}
+			else if (0 == bx::strCmp(_argv[1], "file-pgdown") )
+			{
+				uint32_t numFiles = bx::satSub<uint32_t>(uint32_t(m_fileList.size()), 1u);
+				m_fileIndex += m_fileRows;
+				m_fileIndex  = bx::min(m_fileIndex, numFiles);
+				m_fileScroll = 1;
 			}
 			else if (0 == bx::strCmp(_argv[1], "rgb") )
 			{
@@ -675,10 +818,16 @@ struct View
 					else if (Output::HDR10 == m_outputFormat)
 					{
 						format = bgfx::TextureFormat::RGB10A2;
-						formatFlag = BGFX_RESET_HDR10;
+						formatFlag = BGFX_SWAP_CHAIN_HDR10;
 					}
 
-					bgfx::reset(m_width, m_height, BGFX_RESET_VSYNC | formatFlag, format);
+					bgfx::SwapChain swapChain;
+					swapChain.width       = m_width;
+					swapChain.height      = m_height;
+					swapChain.flags       = formatFlag;
+					swapChain.formatColor = format;
+
+					bgfx::reset(BGFX_RESET_VSYNC, &swapChain);
 				}
 			}
 			else if (0 == bx::strCmp(_argv[1], "help") )
@@ -688,6 +837,30 @@ struct View
 			else if (0 == bx::strCmp(_argv[1], "about") )
 			{
 				m_about ^= true;
+			}
+			else if (0 == bx::strCmp(_argv[1], "delete") )
+			{
+				if (_argc >= 3)
+				{
+					if (0 == bx::strCmp(_argv[2], "file") )
+					{
+						m_action = Action::Delete;
+					}
+					else if (0 == bx::strCmp(_argv[2], "trash") )
+					{
+						m_action = Action::Trash;
+					}
+
+					m_delete = false;
+				}
+				else if (!m_delete)
+				{
+					m_delete = !m_fileList.empty();
+				}
+				else
+				{
+					m_delete = false;
+				}
 			}
 			else if (0 == bx::strCmp(_argv[1], "save") )
 			{
@@ -700,6 +873,7 @@ struct View
 			else if (0 == bx::strCmp(_argv[1], "files") )
 			{
 				m_files ^= true;
+				m_fileScroll = -1;
 			}
 		}
 
@@ -742,40 +916,54 @@ struct View
 			&&  bx::FileType::File == fi.type)
 			{
 				bx::StringView ext = fi.filePath.getExt();
+				bool supported = false;
 
 				if (!ext.isEmpty() )
 				{
 					ext.set(ext.getPtr()+1, ext.getTerm() );
+					supported = isExtSupported(ext);
+				}
+				else
+				{
+					bx::FilePath fullPath = m_path;
+					fullPath.join(fi.filePath.getFileName() );
+					supported = VideoPlayer::isVideoFile(fullPath);
+				}
 
-					bool supported = false;
-					for (uint32_t ii = 0; ii < BX_COUNTOF(s_supportedExt); ++ii)
-					{
-						const bx::StringView supportedExt(s_supportedExt[ii]);
-
-						if (0 == bx::strCmpI(bx::max(ext.getPtr(), ext.getTerm() - supportedExt.getLength() ), supportedExt) )
-						{
-							supported = true;
-							break;
-						}
-					}
-
-					if (supported)
-					{
-						const bx::StringView fileName = fi.filePath.getFileName();
-						m_fileList.push_back(std::string(fileName.getPtr(), fileName.getTerm() ) );
-					}
+				if (supported)
+				{
+					const bx::StringView fileName = fi.filePath.getFileName();
+					m_fileList.push_back(std::string(fileName.getPtr(), fileName.getTerm() ) );
 				}
 			}
 		}
 
 		bx::close(&dr);
 
+		const bx::StringView fileName = _filePath.getFileName();
+
+		{
+			bx::FileInfo fi;
+			bool listed = false;
+
+			for (FileList::const_iterator it = m_fileList.begin(); it != m_fileList.end(); ++it)
+			{
+				listed |= 0 == bx::strCmp(it->c_str(), fileName);
+			}
+
+			if (!listed
+			&&  !fileName.isEmpty()
+			&&  bx::stat(fi, _filePath)
+			&&  bx::FileType::File == fi.type)
+			{
+				m_fileList.push_back(std::string(fileName.getPtr(), fileName.getTerm() ) );
+			}
+		}
+
 		std::sort(m_fileList.begin(), m_fileList.end(), sortNameAscending);
 
 		m_fileIndex = 0;
 		uint32_t idx = 0;
-
-		const bx::StringView fileName = _filePath.getFileName();
 
 		for (FileList::const_iterator it = m_fileList.begin(); it != m_fileList.end(); ++it, ++idx)
 		{
@@ -868,7 +1056,10 @@ struct View
 	bgfx::TextureInfo m_textureInfo;
 	Geometry::Enum m_cubeMapGeo;
 	Output::Enum m_outputFormat;
+	Action::Enum m_action;
 	uint32_t m_fileIndex;
+	uint32_t m_fileRows;
+	int32_t  m_fileScroll;
 	uint32_t m_scaleFn;
 	uint32_t m_mip;
 	uint32_t m_layer;
@@ -893,6 +1084,7 @@ struct View
 	bool     m_alpha;
 	bool     m_help;
 	bool     m_about;
+	bool     m_delete;
 	bool     m_info;
 	bool     m_files;
 	bool     m_sdf;
@@ -903,6 +1095,52 @@ int cmdView(CmdContext* /*_context*/, void* _userData, int _argc, char const* co
 {
 	View* view = static_cast<View*>(_userData);
 	return view->cmd(_argc, _argv);
+}
+
+int cmdVideo(CmdContext* /*_context*/, void* _userData, int _argc, char const* const* _argv)
+{
+	VideoPlayer* player = static_cast<VideoPlayer*>(_userData);
+	if (NULL == player || !player->isOpen() || _argc < 2)
+	{
+		return 0;
+	}
+
+	const bx::StringView verb(_argv[1]);
+
+	if (0 == bx::strCmp(verb, "skip", 4) )
+	{
+		float seconds = 0.0f;
+		if (_argc >= 3)
+		{
+			bx::fromString(&seconds, _argv[2]);
+		}
+		player->seekRelative(int64_t(seconds * 1.0e6f) );
+	}
+	else if (0 == bx::strCmp(verb, "pause", 5) )
+	{
+		player->togglePause();
+	}
+	else if (0 == bx::strCmp(verb, "rate", 4) )
+	{
+		if (_argc >= 3 && 0 == bx::strCmp(_argv[2], "up", 2) )
+		{
+			player->rateUp();
+		}
+		else if (_argc >= 3 && 0 == bx::strCmp(_argv[2], "down", 4) )
+		{
+			player->rateDown();
+		}
+	}
+	else if (0 == bx::strCmp(verb, "marker", 6) )
+	{
+		player->cycleAbMarker();
+	}
+	else if (0 == bx::strCmp(verb, "restart", 7) )
+	{
+		player->restart();
+	}
+
+	return 0;
 }
 
 struct PosUvwColorVertex
@@ -1192,15 +1430,15 @@ void associate()
 	str += "[HKEY_CLASSES_ROOT\\Applications\\texturev.exe\\shell\\open\\command]\r\n";
 	str += value;
 
-	for (uint32_t ii = 0; ii < BX_COUNTOF(s_supportedExt); ++ii)
+	for (uint32_t ii = 0; ii < s_numSupportedExt; ++ii)
 	{
-		const char* ext = s_supportedExt[ii];
+		const bx::StringView& ext = s_supportedExt[ii];
 
-		bx::stringPrintf(str, "[-HKEY_CLASSES_ROOT\\.%s]\r\n\r\n", ext);
-		bx::stringPrintf(str, "[-HKEY_CURRENT_USER\\Software\\Classes\\.%s]\r\n\r\n", ext);
+		bx::stringPrintf(str, "[-HKEY_CLASSES_ROOT\\.%S]\r\n\r\n", &ext);
+		bx::stringPrintf(str, "[-HKEY_CURRENT_USER\\Software\\Classes\\.%S]\r\n\r\n", &ext);
 
-		bx::stringPrintf(str, "[HKEY_CLASSES_ROOT\\.%s]\r\n@=\"texturev\"\r\n\r\n", ext);
-		bx::stringPrintf(str, "[HKEY_CURRENT_USER\\Software\\Classes\\.%s]\r\n@=\"texturev\"\r\n\r\n", ext);
+		bx::stringPrintf(str, "[HKEY_CLASSES_ROOT\\.%S]\r\n@=\"texturev\"\r\n\r\n", &ext);
+		bx::stringPrintf(str, "[HKEY_CURRENT_USER\\Software\\Classes\\.%S]\r\n@=\"texturev\"\r\n\r\n", &ext);
 	}
 
 	bx::FilePath filePath(bx::Dir::Temp);
@@ -1229,10 +1467,10 @@ void associate()
 
 	std::string mimeType;
 
-	auto associate = [&mimeType](const char* _ext)
+	auto associate = [&mimeType](const bx::StringView _ext)
 	{
 		std::string tmp;
-		bx::stringPrintf(tmp, "default texturev.desktop image/%s", _ext);
+		bx::stringPrintf(tmp, "default texturev.desktop image/%S", &_ext);
 
 		bx::ProcessReader reader;
 		bx::Error err;
@@ -1242,13 +1480,13 @@ void associate()
 		}
 		else
 		{
-			bx::printf("Failed to associate MIME type image/%s (error: \"%S\")!\n", _ext, &err.getMessage() );
+			bx::printf("Failed to associate MIME type image/%S (error: \"%S\")!\n", &_ext, &err.getMessage() );
 		}
 
-		bx::stringPrintf(mimeType, "image/%s;", _ext);
+		bx::stringPrintf(mimeType, "image/%S;", &_ext);
 	};
 
-	for (uint32_t ii = 0; ii < BX_COUNTOF(s_supportedExt); ++ii)
+	for (uint32_t ii = 0; ii < s_numSupportedExt; ++ii)
 	{
 		associate(s_supportedExt[ii]);
 	}
@@ -1284,6 +1522,13 @@ void associate()
 #endif // BX_PLATFORM_WINDOWS
 }
 
+static const bx::CommandLineOption s_options[] =
+{
+	{ 'h',  "help",      0, NULL, "Help."                                     },
+	{ 'v',  "version",   0, NULL, "Version information only."                 },
+	{ '\0', "associate", 0, NULL, "Associate file extensions with texturev."  },
+};
+
 void help(const char* _error = NULL)
 {
 	if (NULL != _error)
@@ -1306,17 +1551,28 @@ void help(const char* _error = NULL)
 		  "Supported input file types:\n"
 		  );
 
-	for (uint32_t ii = 0; ii < BX_COUNTOF(s_supportedExt); ++ii)
+	for (uint32_t ii = 0; ii < s_numSupportedExt; ++ii)
 	{
-		bx::printf("    *.%s\n", s_supportedExt[ii]);
+		bx::printf("    *.%S\n", &s_supportedExt[ii]);
 	}
 
 	bx::printf(
 		  "\n"
 		  "Options:\n"
-		  "  -h, --help               Help.\n"
-		  "  -v, --version            Version information only.\n"
-		  "      --associate          Associate file extensions with texturev.\n"
+		);
+
+	bx::Error err;
+	bx::write(bx::getStdOut(), s_options, BX_COUNTOF(s_options), &err);
+
+	bx::printf("\n");
+
+	bx::write(bx::getStdOut(), Args::s_rendererOptions, BX_COUNTOF(Args::s_rendererOptions), &err);
+
+	bx::printf("\n");
+
+	bx::write(bx::getStdOut(), Args::s_vendorOptions, BX_COUNTOF(Args::s_vendorOptions), &err);
+
+	bx::printf(
 		  "\n"
 		  "For additional information, see https://github.com/bkaradzic/bgfx\n"
 		);
@@ -1324,7 +1580,9 @@ void help(const char* _error = NULL)
 
 int _main_(int _argc, char** _argv)
 {
-	bx::CommandLine cmdLine(_argc, _argv);
+	initSupportedExt();
+
+	bx::CommandLine cmdLine(_argc, _argv, s_options, BX_COUNTOF(s_options) );
 
 	if (cmdLine.hasArg('v', "version") )
 	{
@@ -1350,22 +1608,32 @@ int _main_(int _argc, char** _argv)
 
 	uint32_t debug = BGFX_DEBUG_TEXT;
 
+	Args args(_argc, _argv);
+
 	inputAddBindings(s_bindingName[Binding::App],  s_binding[Binding::App]);
 	inputAddBindings(s_bindingName[Binding::View], s_binding[Binding::View]);
 
 	View view;
 	cmdAdd("view", cmdView, &view);
 
+	VideoPlayer videoPlayer;
+	cmdAdd("video", cmdVideo, &videoPlayer);
+
 	entry::setWindowFlags(entry::kDefaultWindowHandle, ENTRY_WINDOW_FLAG_ASPECT_RATIO, false);
 	entry::setWindowSize(entry::kDefaultWindowHandle, view.m_width, view.m_height);
 
 	bgfx::Init init;
-	init.type = view.m_rendererType;
-	init.platformData.nwh  = entry::getNativeWindowHandle(entry::kDefaultWindowHandle);
-	init.platformData.ndt  = entry::getNativeDisplayHandle();
-	init.resolution.width  = view.m_width;
-	init.resolution.height = view.m_height;
-	init.resolution.reset  = BGFX_RESET_VSYNC;
+	init.type = bgfx::RendererType::Count != args.m_type
+		? args.m_type
+		: view.m_rendererType
+		;
+	init.vendorId          = args.m_pciId;
+	init.swapChain.nwh     = entry::getNativeWindowHandle(entry::kDefaultWindowHandle);
+	init.swapChain.ndt     = entry::getNativeDisplayHandle();
+	init.swapChain.width  = view.m_width;
+	init.swapChain.height = view.m_height;
+	init.reset  = BGFX_RESET_VSYNC;
+	init.videoDecode       = true;
 
 	bgfx::init(init);
 
@@ -1379,10 +1647,54 @@ int _main_(int _argc, char** _argv)
 
 	imguiCreate();
 
+	ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+
 	PosUvwColorVertex::init();
 
 	const bgfx::Caps* caps = bgfx::getCaps();
 	bgfx::RendererType::Enum type = caps->rendererType;
+
+	if (0 != (caps->supported & BGFX_CAPS_VIDEO_DECODE) )
+	{
+		struct CodecExt
+		{
+			bgfx::VideoCodec::Enum codec;
+			const char* const* ext;
+		};
+
+		static const char* const s_containerExt[] = { "mp4", "m4v",  "mov",  NULL };
+		static const char* const s_h264Ext[]      = { "264", "h264",         NULL };
+		static const char* const s_h265Ext[]      = { "265", "h265", "hevc", NULL };
+		static const char* const s_av1Ext[]       = { "av1", "obu",  "ivf",  NULL };
+
+		static const CodecExt s_codecExt[] =
+		{
+			{ bgfx::VideoCodec::Count, s_containerExt },
+			{ bgfx::VideoCodec::H264,  s_h264Ext      },
+			{ bgfx::VideoCodec::H265,  s_h265Ext      },
+			{ bgfx::VideoCodec::AV1,   s_av1Ext       },
+		};
+
+		for (uint32_t ii = 0; ii < BX_COUNTOF(s_codecExt); ++ii)
+		{
+			const CodecExt& codecExt = s_codecExt[ii];
+
+			if (bgfx::VideoCodec::Count != codecExt.codec
+			&&  0 == caps->codecs[codecExt.codec])
+			{
+				continue;
+			}
+
+			for (const char* const* ext = codecExt.ext; NULL != *ext && s_numSupportedExt < BX_COUNTOF(s_supportedExt); ++ext)
+			{
+				s_supportedExt[s_numSupportedExt++] = *ext;
+			}
+		}
+
+		bx::quickSort(s_supportedExt, s_numSupportedExt, sizeof(s_supportedExt[0]), compareExt);
+	}
+
+	initFilter();
 
 	bgfx::UniformHandle s_texColor = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
 	bgfx::UniformHandle u_mtx      = bgfx::createUniform("u_mtx",      bgfx::UniformType::Mat4);
@@ -1489,20 +1801,23 @@ int _main_(int _argc, char** _argv)
 			;
 	};
 
-	const char* filePath = _argc < 2 ? "" : _argv[1];
+	const char* filePath = cmdLine.getPositional(1);
+	filePath = NULL == filePath ? "" : filePath;
 
 	view.updateFileList(filePath);
 
 	int exitcode = bx::kExitSuccess;
 	bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+	bool videoOwnsTexture = false;
+	int playbackBinding = Binding::View;
 
 	{
-		uint32_t fileIndex = 0;
+		uint32_t fileIndex = UINT32_MAX;
 		bool dragging = false;
 
 		entry::WindowState windowState;
 		entry::MouseState mouseStatePrev;
-		while (!entry::processWindowEvents(windowState, debug, init.resolution.reset) )
+		while (!entry::processWindowEvents(windowState, debug, init.reset) )
 		{
 			const entry::MouseState& mouseState = windowState.m_mouse;
 			view.m_width  = windowState.m_width;
@@ -1524,7 +1839,7 @@ int _main_(int _argc, char** _argv)
 				,  uint16_t(view.m_height)
 				);
 
-			bool modalWindow = view.m_help || view.m_about;
+			bool modalWindow = view.m_help || view.m_about || view.m_delete;
 			bool overArea = false
 				|| ImGui::GetMousePos().y <= ImGui::GetTextLineHeightWithSpacing()
 				|| ImGui::MouseOverArea()
@@ -1730,14 +2045,82 @@ int _main_(int _argc, char** _argv)
 						name = " 2D Array";
 					}
 
-					ImGui::Text("%d x %d%s, mips: %d, layers %d, %s"
+					const char* codecName = "";
+
+					if (videoPlayer.isOpen() )
+					{
+						static const char* s_videoCodecName[] =
+						{
+							", H.264", // VideoCodec::H264
+							", H.265", // VideoCodec::H265
+							", AV1",   // VideoCodec::AV1
+						};
+						static_assert(BX_COUNTOF(s_videoCodecName) == bgfx::VideoCodec::Count);
+						const bgfx::VideoCodec::Enum codec = videoPlayer.codec();
+						codecName = s_videoCodecName[codec];
+					}
+
+					ImGui::Text("%d x %d%s, mips: %d, layers %d, %s%s"
 						, view.m_textureInfo.width
 						, view.m_textureInfo.height
 						, name
 						, view.m_textureInfo.numMips
 						, view.m_textureInfo.numLayers
 						, bimg::getName(bimg::TextureFormat::Enum(view.m_textureInfo.format) )
+						, codecName
 						);
+				}
+
+				if (videoPlayer.isOpen() )
+				{
+					ImGui::Separator();
+
+					const bool paused = videoPlayer.isPaused();
+					if (ImGui::Button(paused ? ICON_FA_PLAY : ICON_FA_PAUSE) )
+					{
+						videoPlayer.togglePause();
+					}
+
+					const int64_t curUs = videoPlayer.playbackTimeUs();
+					const int64_t durUs = int64_t(videoPlayer.durationUs() );
+					const float   curS  = float(double(curUs) * 1e-6);
+					const float   durS  = bx::max(0.001f, float(double(durUs) * 1e-6) );
+
+					float sliderS = bx::clamp(curS, 0.0f, durS);
+					ImGui::PushItemWidth(240.0f);
+
+					ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+					if (ImGui::SliderFloat("##videoProgress", &sliderS, 0.0f, durS, "%.2fs", ImGuiSliderFlags_AlwaysClamp) )
+					{
+						videoPlayer.seekTo(uint64_t(double(sliderS) * 1e6) );
+					}
+
+					ImGui::PopItemFlag();
+					ImGui::PopItemWidth();
+
+					ImGui::Text("/ %5.2fs  " ICON_FA_FORWARD " %.2fx", durS, videoPlayer.playbackRate() );
+
+					const int64_t aUs = videoPlayer.aMarkerUs();
+					const int64_t bUs = videoPlayer.bMarkerUs();
+					if (aUs >= 0 && bUs >= 0)
+					{
+						ImGui::Separator();
+						ImGui::TextColored(
+							  ImVec4(1.0f, 1.0f, 0.0f, 1.0f)
+							, ICON_FA_REPEAT " A=%.2fs  B=%.2fs"
+							, double(aUs)*1e-6
+							, double(bUs)*1e-6
+							);
+					}
+					else if (aUs >= 0)
+					{
+						ImGui::Separator();
+						ImGui::TextColored(
+							  ImVec4(1.0f, 1.0f, 0.0f, 1.0f)
+							, "A=%.2fs"
+							, double(aUs)*1e-6
+							);
+					}
 				}
 
 				ImGui::EndMainMenuBar();
@@ -1747,7 +2130,10 @@ int _main_(int _argc, char** _argv)
 
 			static bool help = false;
 			static bool about = false;
+			static bool deleteFile = false;
+			static bool deleteOpened = false;
 			static bool mouseDelta = false;
+
 			if (!mouseDelta)
 			{
 				mouseStatePrev = mouseState;
@@ -1796,13 +2182,13 @@ int _main_(int _argc, char** _argv)
 				if (!help)
 				{
 					ImGui::OpenPopup("Help");
-					inputRemoveBindings(s_bindingName[Binding::View]);
+					inputRemoveBindings(s_bindingName[playbackBinding]);
 					inputAddBindings(s_bindingName[Binding::Help], s_binding[Binding::Help]);
 				}
 				else
 				{
 					inputRemoveBindings(s_bindingName[Binding::Help]);
-					inputAddBindings(s_bindingName[Binding::View], s_binding[Binding::View]);
+					inputAddBindings(s_bindingName[playbackBinding], s_binding[playbackBinding]);
 				}
 
 				help = view.m_help;
@@ -1813,16 +2199,36 @@ int _main_(int _argc, char** _argv)
 				if (!about)
 				{
 					ImGui::OpenPopup("About");
-					inputRemoveBindings(s_bindingName[Binding::View]);
+					inputRemoveBindings(s_bindingName[playbackBinding]);
 					inputAddBindings(s_bindingName[Binding::About], s_binding[Binding::About]);
 				}
 				else
 				{
 					inputRemoveBindings(s_bindingName[Binding::About]);
-					inputAddBindings(s_bindingName[Binding::View], s_binding[Binding::View]);
+					inputAddBindings(s_bindingName[playbackBinding], s_binding[playbackBinding]);
 				}
 
 				about = view.m_about;
+			}
+
+			if (deleteFile != view.m_delete)
+			{
+				if (!deleteFile)
+				{
+					ImGui::OpenPopup("Delete");
+					deleteOpened = true;
+					inputRemoveBindings(s_bindingName[Binding::App]);
+					inputRemoveBindings(s_bindingName[playbackBinding]);
+					inputAddBindings(s_bindingName[Binding::Delete], s_binding[Binding::Delete]);
+				}
+				else
+				{
+					inputRemoveBindings(s_bindingName[Binding::Delete]);
+					inputAddBindings(s_bindingName[Binding::App], s_binding[Binding::App]);
+					inputAddBindings(s_bindingName[playbackBinding], s_binding[playbackBinding]);
+				}
+
+				deleteFile = view.m_delete;
 			}
 
 			if (view.m_info)
@@ -1910,41 +2316,53 @@ int _main_(int _argc, char** _argv)
 						if (ImGui::BeginListBox("##empty", ImVec2(0.0f, listHeight) ) )
 						{
 							const int32_t itemCount = int32_t(view.m_fileList.size() );
+							const int32_t index     = int32_t(view.m_fileIndex);
+							const int32_t scroll    = view.m_fileScroll;
+
+							view.m_fileRows = bx::max<uint32_t>(1
+								, uint32_t(ImGui::GetWindowHeight()/itemHeight)
+								);
+							view.m_fileScroll = 0;
 
 							ImGuiListClipper clipper;
 							clipper.Begin(itemCount, itemHeight);
 
-							const  int32_t index = int32_t(view.m_fileIndex);
-							static int32_t oldIndex  = index;
-							const  int32_t direction = bx::clamp(index - oldIndex, -1, 1);
-							oldIndex = index;
-
-							bool currentVisible = false;
+							if (0 != scroll
+							&&  index < itemCount)
+							{
+								clipper.IncludeItemByIndex(index);
+							}
 
 							while (clipper.Step() )
 							{
-								currentVisible |= index > clipper.DisplayStart && index < clipper.DisplayEnd;
-
 								for (int32_t pos = clipper.DisplayStart; pos < clipper.DisplayEnd; ++pos)
 								{
 									ImGui::PushID(pos);
 
-									bool isSelected = pos == index;
+									const bool isSelected = pos == index;
 
-									if (ImGui::Selectable(view.m_fileList[pos].c_str(), &isSelected) )
+									if (ImGui::Selectable(view.m_fileList[pos].c_str(), isSelected) )
 									{
 										view.m_fileIndex = pos;
 									}
 
+									if (isSelected
+									&&  0 != scroll)
+									{
+										const float itemTop = ImGui::GetItemRectMin().y;
+										const float itemBot = ImGui::GetItemRectMax().y;
+										const float viewTop = ImGui::GetWindowPos().y;
+										const float viewBot = viewTop + ImGui::GetWindowHeight();
+
+										if (itemTop < viewTop
+										||  itemBot > viewBot)
+										{
+											ImGui::SetScrollHereY(0 < scroll ? 1.0f : 0.0f);
+										}
+									}
+
 									ImGui::PopID();
 								}
-							}
-
-							if (0 != direction && !currentVisible)
-							{
-								const int32_t num  = int32_t(listHeight / itemHeight);
-								const int32_t posY = index + (1 == direction ? 1-num : 0);
-								ImGui::SetScrollY(posY*itemHeight);
 							}
 
 							clipper.End();
@@ -2016,6 +2434,9 @@ int _main_(int _argc, char** _argv)
 				keyBindingHelp("down", "Next texture.");
 				ImGui::NextLine();
 
+				keyBindingHelp("delete", "Delete current file (or move it to trash).");
+				ImGui::NextLine();
+
 				keyBindingHelp("r/g/b", "Toggle R, G, or B color channel.");
 				keyBindingHelp("a",     "Toggle alpha blending.");
 				ImGui::NextLine();
@@ -2037,83 +2458,257 @@ int _main_(int _argc, char** _argv)
 				ImGui::EndPopup();
 			}
 
-			imguiEndFrame();
-
-			if ( (!bgfx::isValid(texture) || view.m_fileIndex != fileIndex)
-			&&  0 != view.m_fileList.size() )
+			if (ImGui::BeginPopupModal("Delete", &view.m_delete, ImGuiWindowFlags_AlwaysAutoResize) )
 			{
-				if (bgfx::isValid(texture) )
+				ImGui::Text("Delete file:\n\n");
+
+				ImGui::PushFont(ImGui::Font::Mono);
+				ImGui::Text("%s", view.m_fileList.empty() ? "" : view.m_fileList[view.m_fileIndex].c_str() );
+				ImGui::NextLine();
+
+				keyBindingHelp("d",     "Delete file.");
+				keyBindingHelp("t",     "Move file to trash.");
+				keyBindingHelp("[any]", "Cancel.");
+				ImGui::PopFont();
+
+				ImGui::Dummy(ImVec2(0.0f, 0.0f) );
+
+				bool cancel = false;
+
+				if (ImGui::Button("Delete", ImVec2(96.0f, 0.0f) ) )
 				{
-					bgfx::destroy(texture);
+					view.m_action = View::Action::Delete;
 				}
 
+				ImGui::SameLine();
+				if (ImGui::Button("Trash", ImVec2(96.0f, 0.0f) ) )
+				{
+					view.m_action = View::Action::Trash;
+				}
+
+				ImGui::SameLine();
+				cancel |= ImGui::Button("Cancel", ImVec2(96.0f, 0.0f) );
+
+				// Any key other than the ones bound above cancels. Skip the frame
+				// popup is opened, otherwise key that opened it would cancel it.
+				if (!deleteOpened)
+				{
+					for (int32_t key = ImGuiKey_Tab; key <= ImGuiKey_Oem102 && !cancel; ++key)
+					{
+						if (key >= ImGuiKey_LeftCtrl
+						&&  key <= ImGuiKey_RightSuper)
+						{
+							continue;
+						}
+
+						cancel = ImGui::IsKeyPressed(ImGuiKey(key), false);
+					}
+				}
+
+				deleteOpened = false;
+
+				if (cancel
+				||  View::Action::None != view.m_action
+				||  view.m_fileList.empty()
+				||  !view.m_delete)
+				{
+					view.m_delete = false;
+					ImGui::CloseCurrentPopup();
+				}
+
+				ImGui::EndPopup();
+			}
+
+			imguiEndFrame();
+
+			if (View::Action::None != view.m_action)
+			{
+				const View::Action::Enum action = view.m_action;
+				view.m_action = View::Action::None;
+
+				if (!view.m_fileList.empty() )
+				{
+					bx::FilePath fp = view.m_path;
+					fp.join(view.m_fileList[view.m_fileIndex].c_str() );
+
+					if (videoOwnsTexture)
+					{
+						videoPlayer.close();
+						videoOwnsTexture = false;
+						texture = BGFX_INVALID_HANDLE;
+					}
+					else if (bgfx::isValid(texture) )
+					{
+						bgfx::destroy(texture);
+						texture = BGFX_INVALID_HANDLE;
+					}
+
+					bx::Error err;
+					const bool result = View::Action::Trash == action
+						? bx::moveToTrash(fp, &err)
+						: bx::remove(fp, &err)
+						;
+
+					if (result)
+					{
+						view.m_fileList.erase(view.m_fileList.begin() + view.m_fileIndex);
+
+						if (view.m_fileIndex >= view.m_fileList.size() )
+						{
+							view.m_fileIndex = bx::satSub<uint32_t>(uint32_t(view.m_fileList.size() ), 1u);
+						}
+					}
+					else
+					{
+						const bx::StringView& msg = err.getMessage();
+						bx::printf("Failed to delete %s: %S\n", fp.getCPtr(), &msg);
+					}
+
+					fileIndex = UINT32_MAX;
+
+					if (view.m_fileList.empty() )
+					{
+						entry::setWindowTitle(entry::kDefaultWindowHandle, "texturev");
+					}
+				}
+			}
+
+			if (view.m_fileIndex != fileIndex
+			&&  0 != view.m_fileList.size() )
+			{
 				fileIndex = view.m_fileIndex;
 
 				bx::FilePath fp = view.m_path;
 				fp.join(view.m_fileList[view.m_fileIndex].c_str() );
 
-				bimg::Orientation::Enum orientation;
-				texture = loadTexture(fp.getCPtr()
-					, 0
-					| BGFX_SAMPLER_U_CLAMP
-					| BGFX_SAMPLER_V_CLAMP
-					| BGFX_SAMPLER_W_CLAMP
-					, 0
-					, &view.m_textureInfo
-					, &orientation
-					);
+				const bool nextIsVideo = VideoPlayer::isVideoFile(fp);
 
-				bimg::TextureFormat::Enum format = bimg::TextureFormat::Enum(view.m_textureInfo.format);
-
-				if (format < bimg::TextureFormat::Count)
+				if (videoOwnsTexture)
 				{
-					view.m_inLinear = bimg::isFloat(format);
-
-					switch (orientation)
-					{
-					default:
-					case bimg::Orientation::R0:        cmdExec("view orientation\nview orientation z    0"); break;
-					case bimg::Orientation::R90:       cmdExec("view orientation\nview orientation z  -90"); break;
-					case bimg::Orientation::R180:      cmdExec("view orientation\nview orientation z -180"); break;
-					case bimg::Orientation::R270:      cmdExec("view orientation\nview orientation z -270"); break;
-					case bimg::Orientation::HFlip:     cmdExec("view orientation\nview orientation x -180"); break;
-					case bimg::Orientation::HFlipR90:  cmdExec("view orientation\nview orientation z  -90\nview orientation x -180");  break;
-					case bimg::Orientation::HFlipR270: cmdExec("view orientation\nview orientation z -270\nview orientation x -180"); break;
-					case bimg::Orientation::VFlip:     cmdExec("view orientation\nview orientation y -180"); break;
-					}
+					videoPlayer.close();
+					videoOwnsTexture = false;
+					texture = BGFX_INVALID_HANDLE;
+				}
+				else if (bgfx::isValid(texture) )
+				{
+					bgfx::destroy(texture);
+					texture = BGFX_INVALID_HANDLE;
 				}
 
-				std::string title;
-				if (isValid(texture) )
+				const int desiredBinding = nextIsVideo ? Binding::Video : Binding::View;
+				const bool modalOpen = view.m_help || view.m_about || view.m_delete;
+				if (desiredBinding != playbackBinding && !modalOpen)
 				{
-					const char* name = "";
-					if (view.m_textureInfo.cubeMap)
-					{
-						name = " CubeMap";
-					}
-					else if (1 < view.m_textureInfo.depth)
-					{
-						name = " 3D";
-						view.m_textureInfo.numLayers = view.m_textureInfo.depth;
-					}
-					else if (1 < view.m_textureInfo.numLayers)
-					{
-						name = " 2D Array";
-					}
+					inputRemoveBindings(s_bindingName[playbackBinding]);
+					inputAddBindings(s_bindingName[desiredBinding], s_binding[desiredBinding]);
+				}
+				playbackBinding = desiredBinding;
 
-					bx::stringPrintf(title, "%s (%d x %d%s, mips: %d, layers %d, %s)"
-						, fp.getCPtr()
-						, view.m_textureInfo.width
-						, view.m_textureInfo.height
-						, name
-						, view.m_textureInfo.numMips
-						, view.m_textureInfo.numLayers
-						, bimg::getName(bimg::TextureFormat::Enum(view.m_textureInfo.format) )
-						);
+				std::string title;
+
+				if (nextIsVideo)
+				{
+					if (videoPlayer.open(fp.getCPtr() ) )
+					{
+						texture = videoPlayer.texture();
+						videoOwnsTexture = true;
+
+						view.m_textureInfo =
+						{
+							.format       = videoPlayer.format(),
+							.storageSize  = 0,
+							.width        = uint16_t(videoPlayer.width() ),
+							.height       = uint16_t(videoPlayer.height() ),
+							.depth        = 1,
+							.numLayers    = 1,
+							.numMips      = 1,
+							.bitsPerPixel = 32,
+							.cubeMap      = false,
+						};
+						view.m_inLinear = false;
+
+						cmdExec("view orientation\nview orientation z 0");
+
+						bx::stringPrintf(title, "%s (%d x %d, video, %5.2fs)"
+							, fp.getCPtr()
+							, view.m_textureInfo.width
+							, view.m_textureInfo.height
+							, double(videoPlayer.durationUs() ) * 1e-6
+							);
+					}
+					else
+					{
+						bx::stringPrintf(title, "Failed to load %s!", filePath);
+					}
 				}
 				else
 				{
-					bx::stringPrintf(title, "Failed to load %s!", filePath);
+					bimg::Orientation::Enum orientation;
+					bx::Error loadErr;
+					texture = loadTexture(fp.getCPtr()
+						, 0
+						| BGFX_SAMPLER_U_CLAMP
+						| BGFX_SAMPLER_V_CLAMP
+						| BGFX_SAMPLER_W_CLAMP
+						, 0
+						, &view.m_textureInfo
+						, &orientation
+						, &loadErr
+						);
+
+					bimg::TextureFormat::Enum format = bimg::TextureFormat::Enum(view.m_textureInfo.format);
+
+					if (format < bimg::TextureFormat::Count)
+					{
+						view.m_inLinear = bimg::isFloat(format);
+
+						switch (orientation)
+						{
+						default:
+						case bimg::Orientation::R0:        cmdExec("view orientation\nview orientation z    0"); break;
+						case bimg::Orientation::R90:       cmdExec("view orientation\nview orientation z  -90"); break;
+						case bimg::Orientation::R180:      cmdExec("view orientation\nview orientation z -180"); break;
+						case bimg::Orientation::R270:      cmdExec("view orientation\nview orientation z -270"); break;
+						case bimg::Orientation::HFlip:     cmdExec("view orientation\nview orientation x -180"); break;
+						case bimg::Orientation::HFlipR90:  cmdExec("view orientation\nview orientation z  -90\nview orientation x -180");  break;
+						case bimg::Orientation::HFlipR270: cmdExec("view orientation\nview orientation z -270\nview orientation x -180"); break;
+						case bimg::Orientation::VFlip:     cmdExec("view orientation\nview orientation y -180"); break;
+						}
+					}
+
+					if (!loadErr.isOk() )
+					{
+						const bx::StringView& msg = loadErr.getMessage();
+						bx::stringPrintf(title, "Failed to load %s: %S", filePath, &msg);
+						bx::printf("Failed to load %s: %S\n", filePath, &msg);
+					}
+					else
+					{
+						const char* name = "";
+						if (view.m_textureInfo.cubeMap)
+						{
+							name = " CubeMap";
+						}
+						else if (1 < view.m_textureInfo.depth)
+						{
+							name = " 3D";
+							view.m_textureInfo.numLayers = view.m_textureInfo.depth;
+						}
+						else if (1 < view.m_textureInfo.numLayers)
+						{
+							name = " 2D Array";
+						}
+
+						bx::stringPrintf(title, "%s (%d x %d%s, mips: %d, layers %d, %s)"
+							, fp.getCPtr()
+							, view.m_textureInfo.width
+							, view.m_textureInfo.height
+							, name
+							, view.m_textureInfo.numMips
+							, view.m_textureInfo.numLayers
+							, bimg::getName(bimg::TextureFormat::Enum(view.m_textureInfo.format) )
+							);
+					}
 				}
 
 				entry::setWindowTitle(entry::kDefaultWindowHandle, title.c_str() );
@@ -2304,18 +2899,29 @@ int _main_(int _argc, char** _argv)
 				bgfx::discard();
 			}
 
+			if (videoPlayer.isOpen() )
+			{
+				videoPlayer.tick();
+			}
+
 			bgfx::frame();
 
 			// Slow down when nothing is animating...
 			if (!dragging
-			&&  !anyActive() )
+			&&  !anyActive()
+			&&  !videoPlayer.isOpen() )
 			{
 				bx::sleep(100);
 			}
 		}
 	}
 
-	if (bgfx::isValid(texture) )
+	if (videoOwnsTexture)
+	{
+		videoPlayer.close();
+		texture = BGFX_INVALID_HANDLE;
+	}
+	else if (bgfx::isValid(texture) )
 	{
 		bgfx::destroy(texture);
 	}

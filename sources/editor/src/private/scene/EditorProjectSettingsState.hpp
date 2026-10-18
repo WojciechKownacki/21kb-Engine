@@ -18,6 +18,10 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     Shadows,
     SelectionOutline,
     GpuDriven,
+    ShadowQuality,
+    ShadowQualityMobile,
+    GiQuality,
+    GiQualityMobile,
 };
 
 // Transient UI state for the Project Settings panel: which category is selected

@@ -87,6 +87,24 @@ void RevertComponentProperty(Scene& scene, SceneObject object, const ScenePrefab
         } else {
             components.SkeletonBindings().Remove(entity);
         }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "socketAttachment")) {
+        if (node.components.socketAttachment.has_value()) {
+            static_cast<void>(components.SocketAttachments().Set(entity, *node.components.socketAttachment));
+        } else {
+            components.SocketAttachments().Remove(entity);
+        }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "combatant")) {
+        if (node.components.combatant.has_value()) {
+            static_cast<void>(components.Combatants().Set(entity, *node.components.combatant));
+        } else {
+            components.Combatants().Remove(entity);
+        }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "aiBrain")) {
+        if (node.components.aiBrain.has_value()) {
+            static_cast<void>(components.AIBrains().Set(entity, *node.components.aiBrain));
+        } else {
+            components.AIBrains().Remove(entity);
+        }
     } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "motionSkeletonRule")) {
         if (node.components.motionSkeletonRule.has_value()) {
             static_cast<void>(components.MotionSkeletonRules().Set(entity, *node.components.motionSkeletonRule));

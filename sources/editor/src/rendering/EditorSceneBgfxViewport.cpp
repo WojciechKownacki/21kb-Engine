@@ -11,7 +11,6 @@
 #include "platform/win32/Utf8Gdi.hpp"
 
 #include <bgfx/bgfx.h>
-#include <bgfx/platform.h>
 
 #include <algorithm>
 #include <cstdint>

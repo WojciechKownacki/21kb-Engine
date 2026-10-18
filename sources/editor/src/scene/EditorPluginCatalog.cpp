@@ -30,6 +30,14 @@ namespace {
 #endif
 #endif
 
+#if !defined(KB_AI_PLUGIN_PATH)
+#if defined(_WIN32)
+#define KB_AI_PLUGIN_PATH "kb_ai_plugin.dll"
+#else
+#define KB_AI_PLUGIN_PATH "libkb_ai_plugin.so"
+#endif
+#endif
+
 #if !defined(KB_21KB_PARTICLE_PLUGIN_PATH)
 #if defined(_WIN32)
 #define KB_21KB_PARTICLE_PLUGIN_PATH "kb_21kb_particle_plugin.dll"
@@ -46,7 +54,7 @@ namespace {
 #endif
 #endif
 
-constexpr std::array<EditorPluginDescriptor, 5> kPlugins{{
+constexpr std::array<EditorPluginDescriptor, 6> kPlugins{{
     EditorPluginDescriptor{
         .id = "Physics.Jolt",
         .displayName = "Jolt Physics",
@@ -78,6 +86,14 @@ constexpr std::array<EditorPluginDescriptor, 5> kPlugins{{
         .provider = "21kb",
         .description = "Directional, point and spot lighting provider for scene rendering.",
         .binaryPath = KB_BASIC_LIGHTING_PLUGIN_PATH,
+    },
+    EditorPluginDescriptor{
+        .id = "Gameplay.AI",
+        .displayName = "AI",
+        .category = "Gameplay",
+        .provider = "21kb",
+        .description = "Runs AI Brains: creatures that see, chase, fight, flee and wander by simple rules.",
+        .binaryPath = KB_AI_PLUGIN_PATH,
     },
     EditorPluginDescriptor{
         .id = "Editor.Terrain",

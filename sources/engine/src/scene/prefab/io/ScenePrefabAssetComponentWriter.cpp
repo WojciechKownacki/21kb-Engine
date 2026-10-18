@@ -2,6 +2,9 @@
 
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/ui/SceneUIComponentTextCodec.hpp"
+#include "scene/prefab/io/ScenePrefabAssetEscaper.hpp"
+#include "scene/CombatantFields.hpp"
+#include "scene/AIBrainFields.hpp"
 
 #include <cstdint>
 #include <ostream>
@@ -395,6 +398,27 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "skeletonBinding.skeletonAssetId=" << components.skeletonBinding->skeletonAssetId << '\n';
         output << "skeletonBinding.compatibilitySignature=" << components.skeletonBinding->skeletonCompatibilitySignature << '\n';
         output << "skeletonBinding.enabled=" << (components.skeletonBinding->enabled ? 1 : 0) << '\n';
+    }
+    output << "socketAttachment=" << (components.socketAttachment.has_value() ? 1 : 0) << '\n';
+    if (components.socketAttachment.has_value()) {
+        const SocketAttachmentComponent& attachment = *components.socketAttachment;
+        output << "socketAttachment.socket=" << ScenePrefabAssetEscaper::Escape(SocketAttachmentName(attachment)) << '\n';
+        WriteVec3(output, "socketAttachment.position", attachment.offset.position);
+        output << "socketAttachment.rotation=" << attachment.offset.rotation.x << ' ' << attachment.offset.rotation.y << ' '
+               << attachment.offset.rotation.z << ' ' << attachment.offset.rotation.w << '\n';
+        output << "socketAttachment.enabled=" << (attachment.enabled ? 1 : 0) << '\n';
+    }
+    output << "combatant=" << (components.combatant.has_value() ? 1 : 0) << '\n';
+    if (components.combatant.has_value()) {
+        for (const CombatantTextField& field : CombatantTextFields()) {
+            output << "combatant." << field.name << '=' << field.get(*components.combatant) << '\n';
+        }
+    }
+    output << "aiBrain=" << (components.aiBrain.has_value() ? 1 : 0) << '\n';
+    if (components.aiBrain.has_value()) {
+        for (const AIBrainTextField& field : AIBrainTextFields()) {
+            output << "aiBrain." << field.name << '=' << field.get(*components.aiBrain, field.rule) << '\n';
+        }
     }
     output << "deformedGeometry=" << (components.deformedGeometry.has_value() ? 1 : 0) << '\n';
     if (components.deformedGeometry.has_value()) {

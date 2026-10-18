@@ -23,6 +23,7 @@
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/script/ScriptProjectFiles.hpp"
+#include "engine/security/Crypto.hpp"
 #include "engine/world/WorldCellBuilder.hpp"
 #include "kb/render/ShaderManifest.hpp"
 #include "kb/render/bake/MeshBaker.hpp"
@@ -64,6 +65,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <unordered_map>
 #include <unordered_set>
@@ -1872,16 +1874,33 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
     }
     const HANDLE nullInput = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
         &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-    startup.wShowWindow = SW_HIDE;
-    startup.hStdInput = nullInput == INVALID_HANDLE_VALUE ? nullptr : nullInput;
-    startup.hStdOutput = diagnostic;
-    startup.hStdError = diagnostic;
+    // Tools run side by side: each child inherits only its own two handles, never the
+    // inheritable handles another thread has just opened for its own child.
+    std::array<HANDLE, 2U> inherited{ diagnostic, nullInput };
+    const DWORD inheritedCount = nullInput == INVALID_HANDLE_VALUE ? 1U : 2U;
+    SIZE_T attributeBytes = 0U;
+    static_cast<void>(InitializeProcThreadAttributeList(nullptr, 1U, 0U, &attributeBytes));
+    std::vector<std::uint8_t> attributeStorage(attributeBytes);
+    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeStorage.data());
+    const bool attributesReady =
+        InitializeProcThreadAttributeList(attributes, 1U, 0U, &attributeBytes) != FALSE;
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startup.StartupInfo.wShowWindow = SW_HIDE;
+    startup.StartupInfo.hStdInput = nullInput == INVALID_HANDLE_VALUE ? nullptr : nullInput;
+    startup.StartupInfo.hStdOutput = diagnostic;
+    startup.StartupInfo.hStdError = diagnostic;
+    startup.lpAttributeList = attributes;
     PROCESS_INFORMATION process{};
-    const BOOL created = CreateProcessW(executableWide.c_str(), command.data(), nullptr, nullptr, TRUE,
-        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
+    const BOOL created = attributesReady &&
+        UpdateProcThreadAttribute(attributes, 0U, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.data(),
+            inheritedCount * sizeof(HANDLE), nullptr, nullptr) != FALSE &&
+        CreateProcessW(executableWide.c_str(), command.data(), nullptr, nullptr, TRUE,
+            CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &startup.StartupInfo, &process) != FALSE;
+    if (attributesReady) {
+        DeleteProcThreadAttributeList(attributes);
+    }
     CloseHandle(diagnostic);
     if (nullInput != INVALID_HANDLE_VALUE) {
         CloseHandle(nullInput);
@@ -1964,6 +1983,174 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
     return directory;
 }
 
+// Compiled fixed shaders are kept in the cook cache, so a cook recompiles only what its inputs
+// changed. The key is SHA-512 over every byte the compiler can read (shaderc, its DXC library, the
+// captured renderer shaders and bgfx includes), so any change to any of them moves every entry to
+// a new key; nothing is matched by name or time stamp. An entry carries SHA-512 over its identity
+// and payload and is published by rename, so a torn, corrupted or swapped file is only ever a miss.
+// The checksum detects damage, it does not authenticate: like the material graph shader cache, the
+// cache is trusted exactly as far as the output directory it sits in.
+constexpr std::string_view kFixedShaderCacheMagic = "KBFSC001";
+constexpr std::size_t kFixedShaderCacheKeyBytes = 32U;
+constexpr std::size_t kFixedShaderCacheHeaderBytes = 8U + 8U + kb::security::kSha512Bytes;
+
+[[nodiscard]] bool FixedShaderToolchainKey(
+    const CookerToolInputSnapshot& toolInputs,
+    std::string_view shadercPlatform,
+    std::string& key,
+    std::string& error) {
+    kb::security::Sha512Hasher hasher;
+    const auto updateText = [&hasher](std::string_view text) {
+        hasher.Update(std::span{ reinterpret_cast<const std::uint8_t*>(text.data()), text.size() });
+        const std::uint8_t terminator = 0U;
+        hasher.Update(std::span{ &terminator, 1U });
+    };
+    updateText(kFixedShaderCacheMagic);
+    updateText(shadercPlatform);
+    const std::filesystem::path capturedRoot = toolInputs.shaderSourceRoot.parent_path();
+    std::array<std::uint8_t, 64U * 1024U> buffer{};
+    for (const CookerToolInputFingerprint& input : toolInputs.inputs) {
+        // The bytes the compiler reads: the immutable capture of a source, the executable itself.
+        const bool captured = !input.snapshotPath.empty();
+        const std::filesystem::path& file = captured ? input.snapshotPath : input.path;
+        updateText(captured ? input.snapshotPath.lexically_relative(capturedRoot).generic_string()
+                            : input.path.filename().generic_string());
+        std::ifstream stream{ file, std::ios::binary };
+        if (!stream.is_open()) {
+            error = "renderer shader compiler input could not be read: " + file.generic_string();
+            return false;
+        }
+        std::uint64_t size = 0U;
+        std::uint64_t hash = 14695981039346656037ULL;
+        while (stream) {
+            stream.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+            const std::streamsize read = stream.gcount();
+            if (read <= 0) break;
+            hasher.Update(std::span{ buffer.data(), static_cast<std::size_t>(read) });
+            size += static_cast<std::uint64_t>(read);
+            for (std::streamsize index = 0; index < read; ++index) {
+                hash ^= buffer[static_cast<std::size_t>(index)];
+                hash *= 1099511628211ULL;
+            }
+        }
+        // The key has to name the bytes that were fingerprinted when the cook captured its inputs.
+        if (stream.bad() || !stream.eof() || (hash == 0U ? 1099511628211ULL : hash) != input.contentHash) {
+            error = "renderer shader compiler input changed while cooking: " + file.generic_string();
+            return false;
+        }
+        std::array<std::uint8_t, 8U> sizeBytes{};
+        for (std::size_t index = 0U; index < sizeBytes.size(); ++index) {
+            sizeBytes[index] = static_cast<std::uint8_t>(size >> (index * 8U));
+        }
+        hasher.Update(sizeBytes);
+    }
+    const kb::security::Sha512Digest digest = hasher.Finish();
+    key = kb::security::ToHex(std::span{ digest.data(), kFixedShaderCacheKeyBytes });
+    return true;
+}
+
+[[nodiscard]] kb::security::Sha512Digest FixedShaderCacheChecksum(
+    std::string_view identity,
+    std::span<const std::uint8_t> payload) {
+    kb::security::Sha512Hasher hasher;
+    hasher.Update(std::span{ reinterpret_cast<const std::uint8_t*>(identity.data()), identity.size() });
+    const std::uint8_t terminator = 0U;
+    hasher.Update(std::span{ &terminator, 1U });
+    hasher.Update(payload);
+    return hasher.Finish();
+}
+
+[[nodiscard]] bool ReadFixedShaderCacheEntry(
+    const std::filesystem::path& path,
+    std::string_view identity,
+    std::vector<std::uint8_t>& payload) {
+    std::vector<std::uint8_t> file;
+    std::string ignored;
+    std::error_code statusError;
+    if (!std::filesystem::is_regular_file(path, statusError) || !ReadFileBytes(path, file, ignored) ||
+        file.size() <= kFixedShaderCacheHeaderBytes ||
+        !std::equal(kFixedShaderCacheMagic.begin(), kFixedShaderCacheMagic.end(), file.begin())) {
+        return false;
+    }
+    std::uint64_t size = 0U;
+    for (std::size_t index = 0U; index < 8U; ++index) {
+        size |= static_cast<std::uint64_t>(file[8U + index]) << (index * 8U);
+    }
+    if (size != file.size() - kFixedShaderCacheHeaderBytes) {
+        return false;
+    }
+    const std::span<const std::uint8_t> stored{ file.data() + 16U, kb::security::kSha512Bytes };
+    const std::span<const std::uint8_t> body{ file.data() + kFixedShaderCacheHeaderBytes, static_cast<std::size_t>(size) };
+    const kb::security::Sha512Digest checksum = FixedShaderCacheChecksum(identity, body);
+    if (!kb::security::ConstantTimeEqual(stored, checksum)) {
+        return false;
+    }
+    payload.assign(body.begin(), body.end());
+    return true;
+}
+
+// Best effort: a cache that cannot be written only means the next cook compiles again.
+void WriteFixedShaderCacheEntry(
+    const std::filesystem::path& path,
+    std::string_view identity,
+    std::span<const std::uint8_t> payload) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) {
+        return;
+    }
+#if defined(_WIN32)
+    const std::uint64_t processId = static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+    const std::uint64_t processId = static_cast<std::uint64_t>(getpid());
+#endif
+    static std::atomic<std::uint64_t> nextEntry{ 0U };
+    const std::filesystem::path staging = WithCookFileSuffix(path,
+        "." + std::to_string(processId) + "-" +
+        std::to_string(nextEntry.fetch_add(1U, std::memory_order_relaxed)) + ".tmp");
+    const kb::security::Sha512Digest checksum = FixedShaderCacheChecksum(identity, payload);
+    {
+        std::ofstream output{ staging, std::ios::binary | std::ios::trunc };
+        std::array<std::uint8_t, 8U> sizeBytes{};
+        for (std::size_t index = 0U; index < sizeBytes.size(); ++index) {
+            sizeBytes[index] = static_cast<std::uint8_t>(static_cast<std::uint64_t>(payload.size()) >> (index * 8U));
+        }
+        output.write(kFixedShaderCacheMagic.data(), static_cast<std::streamsize>(kFixedShaderCacheMagic.size()));
+        output.write(reinterpret_cast<const char*>(sizeBytes.data()), static_cast<std::streamsize>(sizeBytes.size()));
+        output.write(reinterpret_cast<const char*>(checksum.data()), static_cast<std::streamsize>(checksum.size()));
+        output.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+        output.flush();
+        if (!output) {
+            output.close();
+            std::filesystem::remove(staging, error);
+            return;
+        }
+    }
+    if (!PublishValidatedCookPack(staging, path)) {
+        std::filesystem::remove(staging, error);
+    }
+}
+
+// Entries of other toolchains can never be hit again by this engine: only the current key stays.
+void PruneFixedShaderCache(const std::filesystem::path& cacheParent, std::string_view currentKey) {
+    std::error_code error;
+    std::filesystem::directory_iterator iterator{ cacheParent, error };
+    if (error) {
+        return;
+    }
+    std::vector<std::filesystem::path> stale;
+    for (const std::filesystem::directory_entry& entry : iterator) {
+        const std::string name = entry.path().filename().generic_string();
+        if (name != currentKey && name.size() == kFixedShaderCacheKeyBytes * 2U &&
+            std::ranges::all_of(name, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })) {
+            stale.push_back(entry.path());
+        }
+    }
+    for (const std::filesystem::path& path : stale) {
+        std::filesystem::remove_all(path, error);
+    }
+}
+
 [[nodiscard]] bool AddFixedShaders(
     const ProjectCookRequest& request,
     const CookerToolInputSnapshot& toolInputs,
@@ -1971,6 +2158,7 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
     asset_bake::AssetPackWriter& writer,
     asset_bake::RuntimeAssetManifest& manifest,
     std::set<std::string>& packagedPaths,
+    std::ostream& diagnostics,
     std::string& error) {
     if (request.shadercPath.empty() || !std::filesystem::is_regular_file(request.shadercPath)) {
         error = "the pinned renderer shader compiler was not found";
@@ -1991,6 +2179,31 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
         return false;
     }
     const ScopedCookDirectory workDirectoryCleanup{ targetRoot };
+    std::string toolchainKey;
+    if (!FixedShaderToolchainKey(toolInputs, shadercPlatform, toolchainKey, error)) {
+        return false;
+    }
+    const std::filesystem::path cacheParent =
+        kb::platform::ExtendedLengthPath(request.cacheRoot) / "fixed-shaders";
+    const std::filesystem::path cacheRoot = cacheParent / toolchainKey;
+
+    struct FixedShaderJob {
+        const kb::render::ShaderManifestEntry* shader = nullptr;
+        std::filesystem::path binaryPath;
+        std::filesystem::path diagnosticPath;
+        std::filesystem::path cachePath;
+        std::string identity;
+        std::vector<std::string> arguments;
+        int exitCode = -1;
+    };
+    struct FixedShaderBackend {
+        std::string name;
+        std::filesystem::path profileRoot;
+        kb::render::ShaderRuntimeFeatureMask features = 0U;
+        std::vector<std::size_t> jobs;
+    };
+    std::vector<FixedShaderJob> jobs;
+    std::vector<FixedShaderBackend> backends;
     for (std::uint32_t index = 0U; index < asset_bake::kShaderBakeBackendCount; ++index) {
         const auto backend = static_cast<asset_bake::ShaderBakeBackend>(index);
         if (!asset_bake::HasShaderBakeBackend(profile.shaderBackends, backend)) {
@@ -2013,7 +2226,8 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
             error = "fixed shader cache directory could not be created: " + profileRoot.generic_string();
             return false;
         }
-        std::vector<const kb::render::ShaderManifestEntry*> compiledShaders;
+        FixedShaderBackend& planned = backends.emplace_back(FixedShaderBackend{
+            .name = backendName, .profileRoot = profileRoot, .features = requiredShaderFeatures });
         for (const kb::render::ShaderManifestEntry& shader : kb::render::RequiredShaderManifest()) {
             const bool requiredForPackage =
                 std::ranges::find(requiredPackagedShaders, std::string_view{ shader.name }) !=
@@ -2034,56 +2248,129 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
                 error = "fixed renderer shader source is missing: " + sourcePath.generic_string();
                 return false;
             }
+            const std::string stageName{ FixedShaderStageName(shader.stage) };
             const std::filesystem::path binaryPath = profileRoot / (std::string{ shader.name } + ".bin");
-            const std::filesystem::path diagnosticPath = profileRoot / (std::string{ shader.name } + ".log");
-            const std::vector<std::string> arguments{
-                "--type", std::string{ FixedShaderStageName(shader.stage) },
-                "--platform", shadercPlatform,
-                "--profile", profileName,
-                "-f", sourcePath.generic_string(),
-                "-o", binaryPath.generic_string(),
-                "--varyingdef", varyingDef.generic_string(),
-                "-i", sourceRoot.generic_string(),
-                "-i", bgfxInclude.generic_string(),
-                "-O", "3",
-            };
-            std::filesystem::remove(binaryPath, directoryError);
-            directoryError.clear();
-            if (!VerifyCookerExecutablesUnchanged(toolInputs, error)) {
-                return false;
+            planned.jobs.push_back(jobs.size());
+            jobs.push_back(FixedShaderJob{
+                .shader = &shader,
+                .binaryPath = binaryPath,
+                .diagnosticPath = profileRoot / (std::string{ shader.name } + ".log"),
+                .cachePath = cacheRoot / backendName / (std::string{ shader.name } + ".bin"),
+                .identity = toolchainKey + "/" + backendName + "/" + profileName + "/" + stageName + "/" +
+                    shader.name,
+                .arguments = {
+                    "--type", stageName,
+                    "--platform", shadercPlatform,
+                    "--profile", profileName,
+                    "-f", sourcePath.generic_string(),
+                    "-o", binaryPath.generic_string(),
+                    "--varyingdef", varyingDef.generic_string(),
+                    "-i", sourceRoot.generic_string(),
+                    "-i", bgfxInclude.generic_string(),
+                    "-O", "3",
+                },
+            });
+        }
+    }
+
+    std::vector<std::size_t> misses;
+    for (std::size_t index = 0U; index < jobs.size(); ++index) {
+        const FixedShaderJob& job = jobs[index];
+        std::vector<std::uint8_t> bytes;
+        bool restored = ReadFixedShaderCacheEntry(job.cachePath, job.identity, bytes);
+        if (restored) {
+            std::ofstream output{ job.binaryPath, std::ios::binary | std::ios::trunc };
+            output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            output.flush();
+            restored = static_cast<bool>(output);
+        }
+        if (!restored) {
+            misses.push_back(index);
+        }
+    }
+
+    if (!misses.empty()) {
+        // shaderc is single-threaded: the missing shaders compile side by side, one process each.
+        if (!VerifyCookerExecutablesUnchanged(toolInputs, error)) {
+            return false;
+        }
+        std::atomic<std::size_t> next{ 0U };
+        const auto compile = [&]() {
+            for (;;) {
+                const std::size_t slot = next.fetch_add(1U, std::memory_order_relaxed);
+                if (slot >= misses.size()) {
+                    return;
+                }
+                FixedShaderJob& job = jobs[misses[slot]];
+                std::error_code removeError;
+                std::filesystem::remove(job.binaryPath, removeError);
+                // An exception must not leave a worker thread: it would terminate the cook unreported.
+                try {
+                    job.exitCode = RunCookerTool(request.shadercPath, job.arguments, job.diagnosticPath);
+                } catch (...) {
+                    job.exitCode = -1;
+                }
             }
-            const int exitCode = RunCookerTool(request.shadercPath, arguments, diagnosticPath);
-            if (!VerifyCookerExecutablesUnchanged(toolInputs, error)) {
-                std::filesystem::remove(binaryPath, directoryError);
-                return false;
+        };
+        const std::size_t workerCount =
+            std::min<std::size_t>(misses.size(), std::max(1U, std::thread::hardware_concurrency()));
+        std::vector<std::thread> workers;
+        workers.reserve(workerCount - 1U);
+        for (std::size_t worker = 1U; worker < workerCount; ++worker) {
+            try {
+                workers.emplace_back(compile);
+            } catch (const std::system_error&) {
+                break;
             }
-            const bool produced = exitCode == 0 && std::filesystem::is_regular_file(binaryPath) &&
-                std::filesystem::file_size(binaryPath, directoryError) > 0U && !directoryError;
+        }
+        compile();
+        for (std::thread& worker : workers) {
+            worker.join();
+        }
+        // The compiler and every source it read must still be the ones the key was taken from
+        // before anything it wrote reaches the package or the cache.
+        if (!VerifyCookerToolInputsUnchanged(request, toolInputs, error)) {
+            return false;
+        }
+        for (const std::size_t index : misses) {
+            const FixedShaderJob& job = jobs[index];
+            std::error_code sizeError;
+            const bool produced = job.exitCode == 0 && std::filesystem::is_regular_file(job.binaryPath) &&
+                std::filesystem::file_size(job.binaryPath, sizeError) > 0U && !sizeError;
             if (!produced) {
-                error = "fixed shader compilation failed for " + backendName + "/" + shader.name +
-                    " (exit " + std::to_string(exitCode) + ")";
-                const std::string diagnostic = ReadCookerDiagnostic(diagnosticPath);
+                error = "fixed shader compilation failed for " + job.identity.substr(toolchainKey.size() + 1U) +
+                    " (exit " + std::to_string(job.exitCode) + ")";
+                const std::string diagnostic = ReadCookerDiagnostic(job.diagnosticPath);
                 if (!diagnostic.empty()) {
                     error += "\n" + diagnostic;
                 }
                 return false;
             }
-            std::filesystem::remove(diagnosticPath, directoryError);
-            directoryError.clear();
-            compiledShaders.push_back(&shader);
+            std::filesystem::remove(job.diagnosticPath, sizeError);
         }
+        for (const std::size_t index : misses) {
+            std::vector<std::uint8_t> bytes;
+            std::string ignored;
+            if (ReadFileBytes(jobs[index].binaryPath, bytes, ignored) && !bytes.empty()) {
+                WriteFixedShaderCacheEntry(jobs[index].cachePath, jobs[index].identity, bytes);
+            }
+        }
+    }
+    diagnostics << "fixed shaders: " << jobs.size() - misses.size() << " from the cook cache, "
+                << misses.size() << " compiled\n";
+
+    for (const FixedShaderBackend& backend : backends) {
         const kb::render::ShaderManifestValidationResult validation =
-            kb::render::ValidatePackagedShaderManifestProfile(
-                profileRoot, requiredShaderFeatures);
+            kb::render::ValidatePackagedShaderManifestProfile(backend.profileRoot, backend.features);
         if (!validation.Succeeded()) {
-            error = "required renderer shaders are missing for backend " + backendName;
+            error = "required renderer shaders are missing for backend " + backend.name;
             for (const std::string& missing : validation.missingRequiredShaders) {
                 error += "\n  " + missing;
             }
             return false;
         }
-        for (const kb::render::ShaderManifestEntry* shader : compiledShaders) {
-            const std::filesystem::path binaryPath = profileRoot / (std::string{ shader->name } + ".bin");
+        for (const std::size_t index : backend.jobs) {
+            const std::filesystem::path& binaryPath = jobs[index].binaryPath;
             std::vector<std::uint8_t> bytes;
             if (!ReadFileBytes(binaryPath, bytes, error) || bytes.empty()) {
                 if (error.empty()) {
@@ -2092,7 +2379,7 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
                 return false;
             }
             const std::string virtualPath =
-                "/Engine/Shaders/" + shaderPlatform + "/" + backendName + "/" +
+                "/Engine/Shaders/" + shaderPlatform + "/" + backend.name + "/" +
                 binaryPath.filename().generic_string();
             asset_bake::AssetBakeDigest digest{};
             if (!StoreSourceFile(writer, profile, bytes, virtualPath, digest, error)) {
@@ -2109,6 +2396,7 @@ using NativeRuntimeSources = std::unordered_map<std::uint64_t, std::vector<std::
             });
         }
     }
+    PruneFixedShaderCache(cacheParent, toolchainKey);
     return true;
 }
 
@@ -2352,7 +2640,7 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
     std::set<asset_bake::AssetBakeDigest> bakedTextures;
     ProjectCookResult result{};
 
-    if (!AddFixedShaders(request, cookerToolInputs, profile, writer, manifest, packagedPaths, error)) {
+    if (!AddFixedShaders(request, cookerToolInputs, profile, writer, manifest, packagedPaths, diagnostics, error)) {
         return Failure(std::move(error));
     }
 

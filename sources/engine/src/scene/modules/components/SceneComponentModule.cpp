@@ -90,6 +90,15 @@ SceneAnimatorComponentQueries SceneComponentQueries::Animators() const noexcept 
 SceneSkeletonBindingComponentQueries SceneComponentQueries::SkeletonBindings() const noexcept {
     return SceneSkeletonBindingComponentQueries{ scene_ };
 }
+SceneSocketAttachmentComponentQueries SceneComponentQueries::SocketAttachments() const noexcept {
+    return SceneSocketAttachmentComponentQueries{ scene_ };
+}
+SceneCombatantComponentQueries SceneComponentQueries::Combatants() const noexcept {
+    return SceneCombatantComponentQueries{ scene_ };
+}
+SceneAIBrainComponentQueries SceneComponentQueries::AIBrains() const noexcept {
+    return SceneAIBrainComponentQueries{ scene_ };
+}
 SceneMotionSkeletonRuleComponentQueries SceneComponentQueries::MotionSkeletonRules() const noexcept {
     return SceneMotionSkeletonRuleComponentQueries{ scene_ };
 }
@@ -188,6 +197,15 @@ SceneAnimatorComponents SceneComponents::Animators() const noexcept {
 }
 SceneSkeletonBindingComponents SceneComponents::SkeletonBindings() const noexcept {
     return SceneSkeletonBindingComponents{ scene_ };
+}
+SceneSocketAttachmentComponents SceneComponents::SocketAttachments() const noexcept {
+    return SceneSocketAttachmentComponents{ scene_ };
+}
+SceneCombatantComponents SceneComponents::Combatants() const noexcept {
+    return SceneCombatantComponents{ scene_ };
+}
+SceneAIBrainComponents SceneComponents::AIBrains() const noexcept {
+    return SceneAIBrainComponents{ scene_ };
 }
 SceneMotionSkeletonRuleComponents SceneComponents::MotionSkeletonRules() const noexcept {
     return SceneMotionSkeletonRuleComponents{ scene_ };

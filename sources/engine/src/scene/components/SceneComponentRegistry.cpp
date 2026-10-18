@@ -8,6 +8,9 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/SocketAttachmentComponent.hpp"
+#include "engine/scene/CombatantComponent.hpp"
+#include "engine/scene/AIBrainComponent.hpp"
 #include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -579,6 +582,9 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, AudioListenerComponent::StableId))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
     , skeletonBindingComponentId_(RegisterSceneComponent<SkeletonBindingComponent>(world, SkeletonBindingComponent::StableId))
+    , socketAttachmentComponentId_(RegisterSceneComponent<SocketAttachmentComponent>(world, SocketAttachmentComponent::StableId))
+    , combatantComponentId_(RegisterSceneComponent<CombatantComponent>(world, CombatantComponent::StableId))
+    , aiBrainComponentId_(RegisterSceneComponent<AIBrainComponent>(world, AIBrainComponent::StableId))
     , motionSkeletonRuleComponentId_(RegisterSceneComponent<MotionSkeletonRuleComponent>(world, MotionSkeletonRuleComponent::StableId))
     , deformedGeometryComponentId_(RegisterSceneComponent<DrawD3DeformedGeometryComponent>(world, DrawD3DeformedGeometryComponent::StableId))
     , navAgentComponentId_(RegisterSceneComponent<NavAgent>(world, "kb.scene.NavAgent"))
@@ -687,6 +693,9 @@ std::uint64_t SceneComponentRegistry::AudioListenerComponentId() const noexcept 
 
 std::uint64_t SceneComponentRegistry::AnimatorComponentId() const noexcept { return animatorComponentId_; }
 std::uint64_t SceneComponentRegistry::SkeletonBindingComponentId() const noexcept { return skeletonBindingComponentId_; }
+std::uint64_t SceneComponentRegistry::SocketAttachmentComponentId() const noexcept { return socketAttachmentComponentId_; }
+std::uint64_t SceneComponentRegistry::CombatantComponentId() const noexcept { return combatantComponentId_; }
+std::uint64_t SceneComponentRegistry::AIBrainComponentId() const noexcept { return aiBrainComponentId_; }
 std::uint64_t SceneComponentRegistry::MotionSkeletonRuleComponentId() const noexcept { return motionSkeletonRuleComponentId_; }
 std::uint64_t SceneComponentRegistry::DeformedGeometryComponentId() const noexcept { return deformedGeometryComponentId_; }
 std::uint64_t SceneComponentRegistry::NavAgentComponentId() const noexcept { return navAgentComponentId_; }

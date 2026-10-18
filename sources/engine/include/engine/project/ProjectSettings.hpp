@@ -4,9 +4,29 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace kb::project {
+
+// How much a project spends on shadows or global illumination. Auto leaves the choice to the engine;
+// the other levels pin one, from the cheapest (Low) to the most detailed (Ultra). A project sets a
+// level for computers and another for phones and tablets.
+enum class ProjectQualityLevel : std::uint8_t {
+    Auto = 0,
+    Low,
+    Medium,
+    High,
+    Ultra,
+};
+
+inline constexpr std::uint8_t kProjectQualityLevelCount = 5U;
+
+// The level's name as the settings file and the command line spell it ("Auto", "Low", ...).
+[[nodiscard]] std::string_view ProjectQualityLevelName(ProjectQualityLevel level) noexcept;
+// The level a name stands for, whatever its letter case; nullopt for anything else.
+[[nodiscard]] std::optional<ProjectQualityLevel> ParseProjectQualityLevel(std::string_view name) noexcept;
 
 // The project's settings, as opposed to its structure. The descriptor answers
 // what a project is made of - engine association, content root, modules, plugins,
@@ -48,6 +68,11 @@ struct ProjectSettings {
     // Rendering
     // Deferred by default: any number of lights, GI, fog and contact shadows.
     ProjectSceneLightingPath lightingPath = ProjectSceneLightingPath::Deferred;
+    // Shadow and global illumination quality, for computers and for phones and tablets.
+    ProjectQualityLevel shadowQuality = ProjectQualityLevel::Auto;
+    ProjectQualityLevel shadowQualityMobile = ProjectQualityLevel::Auto;
+    ProjectQualityLevel giQuality = ProjectQualityLevel::Auto;
+    ProjectQualityLevel giQualityMobile = ProjectQualityLevel::Auto;
 
     // Input
     bool inputEnabled = true;

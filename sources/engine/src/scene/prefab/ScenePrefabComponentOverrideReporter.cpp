@@ -7,6 +7,8 @@
 #include "scene/prefab/ScenePrefabMeshRendererOverrideReporter.hpp"
 #include "scene/prefab/ScenePrefabOverridePropertyReporter.hpp"
 #include "scene/prefab/ScenePrefabOverrideValueFormatter.hpp"
+#include "scene/CombatantFields.hpp"
+#include "scene/AIBrainFields.hpp"
 
 #include <string>
 
@@ -409,6 +411,58 @@ void AppendSkeletonBinding(SceneComponents components, SceneEntity entity, const
     }
 }
 
+void AppendAIBrain(SceneComponents components, SceneEntity entity, const std::optional<AIBrainComponent>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
+    const AIBrainComponent* actual = components.AIBrains().TryGet(entity);
+    if (actual == nullptr && !expected.has_value()) return;
+    if (HasPresenceOverride(actual, expected, report, nodeIndex, object, "aiBrain", ScenePrefabOverrideFlag::AIBrain)) return;
+    for (const AIBrainTextField& field : AIBrainTextFields()) {
+        const std::string value = field.get(*actual, field.rule);
+        if (!expected.has_value() || value != field.get(*expected, field.rule)) {
+            ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "aiBrain." + field.name, value, ScenePrefabOverrideFlag::AIBrain);
+        }
+    }
+}
+
+void AppendCombatant(SceneComponents components, SceneEntity entity, const std::optional<CombatantComponent>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
+    const CombatantComponent* actual = components.Combatants().TryGet(entity);
+    if (actual == nullptr && !expected.has_value()) return;
+    if (HasPresenceOverride(actual, expected, report, nodeIndex, object, "combatant", ScenePrefabOverrideFlag::Combatant)) return;
+    for (const CombatantTextField& field : CombatantTextFields()) {
+        const std::string value = field.get(*actual);
+        if (!expected.has_value() || value != field.get(*expected)) {
+            ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "combatant." + std::string{ field.name }, value, ScenePrefabOverrideFlag::Combatant);
+        }
+    }
+}
+
+void AppendSocketAttachment(SceneComponents components, SceneEntity entity, const std::optional<SocketAttachmentComponent>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
+    const SocketAttachmentComponent* actual = components.SocketAttachments().TryGet(entity);
+    const auto sameVec = [](Vec3 lhs, Vec3 rhs) { return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z; };
+    const auto sameQuat = [](Quat lhs, Quat rhs) { return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.w == rhs.w; };
+    const auto vecText = [](Vec3 value) { return ScenePrefabOverrideValueFormatter::ToString(value.x) + " " + ScenePrefabOverrideValueFormatter::ToString(value.y) + " " + ScenePrefabOverrideValueFormatter::ToString(value.z); };
+    const bool equal = actual == nullptr ? !expected.has_value() : expected.has_value() &&
+        SocketAttachmentName(*actual) == SocketAttachmentName(*expected) && sameVec(actual->offset.position, expected->offset.position) &&
+        sameQuat(actual->offset.rotation, expected->offset.rotation) &&
+        actual->enabled == expected->enabled;
+    if (equal) return;
+    if (HasPresenceOverride(actual, expected, report, nodeIndex, object, "socketAttachment", ScenePrefabOverrideFlag::SocketAttachment)) return;
+    if (!expected.has_value() || SocketAttachmentName(*actual) != SocketAttachmentName(*expected)) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "socketAttachment.socket", std::string{ SocketAttachmentName(*actual) }, ScenePrefabOverrideFlag::SocketAttachment);
+    }
+    if (!expected.has_value() || !sameVec(actual->offset.position, expected->offset.position)) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "socketAttachment.position", vecText(actual->offset.position), ScenePrefabOverrideFlag::SocketAttachment);
+    }
+    if (!expected.has_value() || !sameQuat(actual->offset.rotation, expected->offset.rotation)) {
+        const Quat rotation = actual->offset.rotation;
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "socketAttachment.rotation",
+            ScenePrefabOverrideValueFormatter::ToString(rotation.x) + " " + ScenePrefabOverrideValueFormatter::ToString(rotation.y) + " " +
+            ScenePrefabOverrideValueFormatter::ToString(rotation.z) + " " + ScenePrefabOverrideValueFormatter::ToString(rotation.w), ScenePrefabOverrideFlag::SocketAttachment);
+    }
+    if (!expected.has_value() || actual->enabled != expected->enabled) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "socketAttachment.enabled", ScenePrefabOverrideValueFormatter::ToString(actual->enabled), ScenePrefabOverrideFlag::SocketAttachment);
+    }
+}
+
 void AppendDeformedGeometry(SceneComponents components, SceneEntity entity, const std::optional<DrawD3DeformedGeometryComponent>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
     const DrawD3DeformedGeometryComponent* actual = components.DeformedGeometries().TryGet(entity);
     const bool equal = actual == nullptr ? !expected.has_value() : expected.has_value() &&
@@ -486,6 +540,9 @@ void ScenePrefabComponentOverrideReporter::Append(SceneComponents components, Sc
     AppendAudioListener(components, entity, expected.audioListener, report, nodeIndex, object);
     AppendAnimator(components, entity, expected.animator, report, nodeIndex, object);
     AppendSkeletonBinding(components, entity, expected.skeletonBinding, report, nodeIndex, object);
+    AppendSocketAttachment(components, entity, expected.socketAttachment, report, nodeIndex, object);
+    AppendCombatant(components, entity, expected.combatant, report, nodeIndex, object);
+    AppendAIBrain(components, entity, expected.aiBrain, report, nodeIndex, object);
     AppendDeformedGeometry(components, entity, expected.deformedGeometry, report, nodeIndex, object);
     AppendParticleEffect(components, entity, expected.particleEffect, report, nodeIndex, object);
 }

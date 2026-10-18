@@ -217,6 +217,12 @@ namespace bx
 	}
 
 	template<typename Ty>
+	inline constexpr bool isInRange(const Ty& _a, const TypeIdentityType<Ty>& _min, const TypeIdentityType<Ty>& _max)
+	{
+		return _min <= _a && _a <= _max;
+	}
+
+	template<typename Ty>
 	inline constexpr bool isPowerOf2(Ty _a)
 	{
 		return _a && !(_a & (_a - 1) );
@@ -271,7 +277,7 @@ namespace bx
 
 				if (_from < mn)
 				{
-					return mn;
+					return Ty(mn);
 				}
 				else if (_from > mx)
 				{
@@ -298,6 +304,8 @@ namespace bx
 		return static_cast<Ty>(_from);
 	}
 
+BX_PRAGMA_DIAGNOSTIC_PUSH()
+BX_PRAGMA_DIAGNOSTIC_IGNORED_MSVC(4702) // warning C4702: unreachable code
 	template<typename Ty, typename FromT>
 	inline constexpr bool narrowCastTest(Ty* _out, const FromT& _from)
 	{
@@ -310,6 +318,7 @@ namespace bx
 		*_out = static_cast<Ty>(_from);
 		return static_cast<FromT>(*_out) == _from;
 	}
+BX_PRAGMA_DIAGNOSTIC_POP()
 
 	template<typename Ty, typename FromT>
 	inline Ty narrowCast(const FromT& _from, Location _location)

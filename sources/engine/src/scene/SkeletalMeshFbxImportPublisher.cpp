@@ -19,6 +19,7 @@ std::optional<SkeletalMeshFbxPublishResult> SkeletalMeshFbxImportPublisher::Publ
             .skeleton = plan.imported.skeleton,
             .mesh = plan.imported.mesh,
             .clips = plan.imported.clips,
+            .clipNames = plan.imported.clipNames,
         },
         .skeletonAssetId = plan.skeletonAssetId,
         .skeletonVirtualPath = plan.skeletonVirtualPath,

@@ -159,7 +159,7 @@ PointShadowSetup PointShadowPassPlanner::Build(
         setup.staticLight[slot] = light.staticMobility;
         const bx::Vec3 eye{ light.position[0], light.position[1], light.position[2] };
         if (light.kind == RenderLightKind::Spot) {
-            const auto& axis = SceneLightShaderData::Pack(light).texels[0];
+            const auto axis = SceneLightShaderData::Pack(light).texels[0];
             // The up vector must match the spot branch of KbPointShadowFactor in point_shadow.sh.
             const bx::Vec3 up = std::abs(axis[1]) < 0.99F ? bx::Vec3{ 0.0F, 1.0F, 0.0F } : bx::Vec3{ 0.0F, 0.0F, 1.0F };
             const float fov = std::clamp(light.outerConeDegrees * 2.0F + PointShadowPassPlanner::kSpotMarginDegrees, 20.0F, 150.0F);

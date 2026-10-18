@@ -3,7 +3,9 @@
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kb::scene {
@@ -41,6 +43,17 @@ struct SkeletonAssetValidationResult {
 // an independently editable value. Zero means that the source asset is not a
 // valid skeleton and therefore has no compatibility identity.
 [[nodiscard]] std::uint64_t SkeletonCompatibilitySignature(const SkeletonAsset& asset);
+
+// What a socket name holds on: a socket of that name, else a bone of that name, else - written
+// another way ("hand_r" for "hand.R", NormalizeSkeletonName) - the one socket, else the one bone,
+// it stands for. `name` is the matched socket's or bone's own name.
+struct SkeletonSocketMatch {
+    SkeletonBoneId boneId = 0U;
+    LocalTransform localTransform{};
+    std::string name;
+    bool bone = false;
+};
+[[nodiscard]] std::optional<SkeletonSocketMatch> FindSkeletonSocket(const SkeletonAsset& asset, std::string_view name);
 [[nodiscard]] SkeletonAssetValidationResult ValidateSkeletonAsset(const SkeletonAsset& asset);
 
 } // namespace kb::scene

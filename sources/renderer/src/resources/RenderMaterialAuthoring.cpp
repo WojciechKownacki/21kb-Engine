@@ -473,6 +473,7 @@ RenderMaterialGraphParameterMetadata DefaultRenderMaterialGraphParameterMetadata
     case kb::render::RenderMaterialGraphNodeKind::HueShift:
     case kb::render::RenderMaterialGraphNodeKind::ChannelMixer:
     case kb::render::RenderMaterialGraphNodeKind::RemapValueRange:
+    default:
         break;
     }
     return {};

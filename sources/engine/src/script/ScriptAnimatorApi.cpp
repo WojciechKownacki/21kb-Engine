@@ -173,6 +173,44 @@ ScriptFunctionCallResult Speed(const ScriptFunctionCallContext& context, std::sp
     return ScriptFunctionCallResult{ .executed = true, .outputs = { { "speed", ScriptValue{ context.scene->Animators().Speed(entity) } } }, .errors = {} };
 }
 
+ScriptFunctionCallResult Socket(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("Animator.Socket requires an active scene");
+    const auto socket = context.scene->Animators().SocketTransform(Target(context, arguments), Arg(arguments, "socket")->AsString());
+    if (!socket) return Error("Animator.Socket: the entity has no posed skeleton with a socket or bone of that name");
+    const kb::scene::WorldTransform& world = socket->worldSpace;
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            { "x", ScriptValue{ world.position.x } }, { "y", ScriptValue{ world.position.y } }, { "z", ScriptValue{ world.position.z } },
+            { "rotationX", ScriptValue{ world.rotation.x } }, { "rotationY", ScriptValue{ world.rotation.y } },
+            { "rotationZ", ScriptValue{ world.rotation.z } }, { "rotationW", ScriptValue{ world.rotation.w } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult AttachToSocket(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("Animator.AttachToSocket requires an active scene");
+    const auto number = [&arguments](std::string_view name, float fallback) {
+        const ScriptValue* value = Arg(arguments, name);
+        return value == nullptr ? fallback : value->AsFloat();
+    };
+    const kb::scene::SocketAttachmentOffset offset{
+        .position = { number("x", 0.0F), number("y", 0.0F), number("z", 0.0F) },
+        .rotation = { number("rotationX", 0.0F), number("rotationY", 0.0F), number("rotationZ", 0.0F), number("rotationW", 1.0F) },
+    };
+    std::string error;
+    return Applied(context.scene->Animators().AttachToSocket(kb::scene::SceneEntity{ Arg(arguments, "object")->AsUInt64() },
+                       Target(context, arguments), Arg(arguments, "socket")->AsString(), offset, &error),
+        "Animator.AttachToSocket: " + error);
+}
+
+ScriptFunctionCallResult DetachFromSocket(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("Animator.DetachFromSocket requires an active scene");
+    context.scene->Animators().DetachFromSocket(kb::scene::SceneEntity{ Arg(arguments, "object")->AsUInt64() });
+    return Applied(true, {});
+}
+
 bool RegisterFunction(
     ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> inputs,
     std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
@@ -193,7 +231,20 @@ std::vector<ScriptFunctionPin> Targeted(std::vector<ScriptFunctionPin> inputs) {
 
 bool ScriptAnimatorApi::Register(ScriptRuntimeHost& host) {
     const auto applied = std::vector<ScriptFunctionPin>{ { "applied", ScriptValueType::Bool, true } };
-    return RegisterFunction(host, "Animator.Play", Targeted({ { "layer", ScriptValueType::String, true }, { "state", ScriptValueType::String, true }, { "normalizedTime", ScriptValueType::Float, false } }), applied, &Play) &&
+    const auto transform = std::vector<ScriptFunctionPin>{
+        { "x", ScriptValueType::Float, true }, { "y", ScriptValueType::Float, true }, { "z", ScriptValueType::Float, true },
+        { "rotationX", ScriptValueType::Float, true }, { "rotationY", ScriptValueType::Float, true },
+        { "rotationZ", ScriptValueType::Float, true }, { "rotationW", ScriptValueType::Float, true } };
+    return RegisterFunction(host, "Animator.Socket", Targeted({ { "socket", ScriptValueType::String, true } }), transform, &Socket) &&
+        RegisterFunction(host, "Animator.AttachToSocket", Targeted({
+            { "object", ScriptValueType::Entity, true },
+            { "socket", ScriptValueType::String, true },
+            { "x", ScriptValueType::Float, false }, { "y", ScriptValueType::Float, false }, { "z", ScriptValueType::Float, false },
+            { "rotationX", ScriptValueType::Float, false }, { "rotationY", ScriptValueType::Float, false },
+            { "rotationZ", ScriptValueType::Float, false }, { "rotationW", ScriptValueType::Float, false },
+        }), applied, &AttachToSocket) &&
+        RegisterFunction(host, "Animator.DetachFromSocket", { { "object", ScriptValueType::Entity, true } }, applied, &DetachFromSocket) &&
+        RegisterFunction(host, "Animator.Play", Targeted({ { "layer", ScriptValueType::String, true }, { "state", ScriptValueType::String, true }, { "normalizedTime", ScriptValueType::Float, false } }), applied, &Play) &&
         RegisterFunction(host, "Animator.CrossFade", Targeted({ { "layer", ScriptValueType::String, true }, { "state", ScriptValueType::String, true }, { "duration", ScriptValueType::Float, true }, { "normalizedTime", ScriptValueType::Float, false } }), applied, &CrossFade) &&
         RegisterFunction(host, "Animator.SetSpeed", Targeted({ { "speed", ScriptValueType::Float, true } }), applied, &SetSpeed) &&
         RegisterFunction(host, "Animator.Speed", Targeted({}), { { "speed", ScriptValueType::Float, true } }, &Speed) &&

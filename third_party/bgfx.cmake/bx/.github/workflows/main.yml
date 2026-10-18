@@ -14,18 +14,22 @@ jobs:
       fail-fast: true
       matrix:
         include: [
-          { config: Debug,   platform: x64, bindir: 'win64_vs2022', genie-action: 'vs2022', solution-ext: 'sln' },
-          { config: Release, platform: x64, bindir: 'win64_vs2022', genie-action: 'vs2022', solution-ext: 'sln' },
+          { config: Debug,   platform: x64,   runs-on: windows-latest, bindir: 'win64_vs2022', genie-action: 'vs2022', solution-ext: 'sln' },
+          { config: Release, platform: x64,   runs-on: windows-latest, bindir: 'win64_vs2022', genie-action: 'vs2022', solution-ext: 'sln' },
+          { config: Debug,   platform: Win32, runs-on: windows-latest, bindir: 'win32_vs2022', genie-action: 'vs2022', solution-ext: 'sln' },
+          { config: Release, platform: Win32, runs-on: windows-latest, bindir: 'win32_vs2022', genie-action: 'vs2022', solution-ext: 'sln' },
+          { config: Debug,   platform: ARM64, runs-on: windows-11-arm, bindir: 'arm64_vs2022', genie-action: 'vs2022', solution-ext: 'sln' },
+          { config: Release, platform: ARM64, runs-on: windows-11-arm, bindir: 'arm64_vs2022', genie-action: 'vs2022', solution-ext: 'sln' },
 #          { config: Debug,   platform: x64, bindir: 'win64_vs2026', genie-action: 'vs2026', solution-ext: 'slnx' },
 #          { config: Release, platform: x64, bindir: 'win64_vs2026', genie-action: 'vs2026', solution-ext: 'slnx' },
         ]
     name: msvc-${{ matrix.config }}-${{ matrix.platform }}
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runs-on }}
     steps:
       - name: Checkout bx
         uses: actions/checkout@v6
         with:
-          repository: bkaradzic/bx
+          repository: ${{ github.repository }}
           path: bx
       - name: Prepare
         uses: microsoft/setup-msbuild@v2
@@ -54,7 +58,7 @@ jobs:
       - name: Checkout bx
         uses: actions/checkout@v6
         with:
-          repository: bkaradzic/bx
+          repository: ${{ github.repository }}
           path: bx
       - name: Prepare
         uses: msys2/setup-msys2@v2
@@ -83,21 +87,25 @@ jobs:
           { compiler: gcc,   genie: linux-gcc,   bindir: linux64_gcc,   config: release, binsuffix: Release },
           { compiler: clang, genie: linux-clang, bindir: linux64_clang, config: debug,   binsuffix: Debug   },
           { compiler: clang, genie: linux-clang, bindir: linux64_clang, config: release, binsuffix: Release },
+          { compiler: clang, genie: linux-clang, bindir: linux64_clang, config: debug,   binsuffix: Debug,   genie-options: --with-sanitizers, suffix: -sanitizers },
         ]
-    name: linux-${{ matrix.compiler }}-${{ matrix.config }}64
+    name: linux-${{ matrix.compiler }}-${{ matrix.config }}64${{ matrix.suffix }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout bx
         uses: actions/checkout@v6
         with:
-          repository: bkaradzic/bx
+          repository: ${{ github.repository }}
           path: bx
       - name: Build
         run: |
           cd bx
-          tools/bin/linux/genie --gcc=${{ matrix.genie }} gmake
+          tools/bin/linux/genie ${{ matrix.genie-options }} --gcc=${{ matrix.genie }} gmake
           make -R -C .build/projects/gmake-${{ matrix.genie }} config=${{ matrix.config }}64 -j$(nproc)
       - name: Check
+        env:
+          ASAN_OPTIONS: halt_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: |
           cd bx
           ".build/${{ matrix.bindir }}/bin/bx.test${{ matrix.binsuffix }}" -d yes
@@ -106,25 +114,27 @@ jobs:
       fail-fast: true
       matrix:
         include: [
-          { runs-on: macos-13, arch: osx-x64,   bindir: osx-x64,   config: debug,   binsuffix: Debug   },
-          { runs-on: macos-13, arch: osx-x64,   bindir: osx-x64,   config: release, binsuffix: Release },
-          { runs-on: macos-14, arch: osx-arm64, bindir: osx-arm64, config: debug,   binsuffix: Debug   },
-          { runs-on: macos-14, arch: osx-arm64, bindir: osx-arm64, config: release, binsuffix: Release },
+          { runs-on: macos-15, arch: osx-arm64, bindir: osx-arm64, config: debug,   binsuffix: Debug   },
+          { runs-on: macos-15, arch: osx-arm64, bindir: osx-arm64, config: release, binsuffix: Release },
+          { runs-on: macos-15, arch: osx-arm64, bindir: osx-arm64, config: debug,   binsuffix: Debug,   genie-options: --with-sanitizers, suffix: -sanitizers },
         ]
-    name: osx-${{ matrix.arch }}-${{ matrix.config }}
+    name: osx-${{ matrix.arch }}-${{ matrix.config }}${{ matrix.suffix }}
     runs-on: ${{ matrix.runs-on }}
     steps:
       - name: Checkout bx
         uses: actions/checkout@v6
         with:
-          repository: bkaradzic/bx
+          repository: ${{ github.repository }}
           path: bx
       - name: Build
         run: |
           cd bx
-          tools/bin/darwin/genie --gcc=${{ matrix.arch }} gmake
+          tools/bin/darwin/genie ${{ matrix.genie-options }} --gcc=${{ matrix.arch }} gmake
           make -C .build/projects/gmake-${{ matrix.arch }} config=${{ matrix.config }} -j$(sysctl -n hw.physicalcpu)
       - name: Check
+        env:
+          ASAN_OPTIONS: halt_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: |
           cd bx
           ".build/${{ matrix.bindir }}/bin/bx.test${{ matrix.binsuffix }}" -d yes
@@ -142,7 +152,7 @@ jobs:
       - name: Checkout bx
         uses: actions/checkout@v6
         with:
-          repository: bkaradzic/bx
+          repository: ${{ github.repository }}
           path: bx
       - uses: nttld/setup-ndk@v1
         id: setup-ndk
@@ -171,11 +181,12 @@ jobs:
       - name: Checkout bx
         uses: actions/checkout@v6
         with:
-          repository: bkaradzic/bx
+          repository: ${{ github.repository }}
           path: bx
       - uses: mymindstorm/setup-emsdk@v14
         with:
           version: 5.0.2
+          actions-cache-folder: emsdk-cache
       - uses: browser-actions/setup-chrome@v1
       - name: Build
         run: |
@@ -186,3 +197,64 @@ jobs:
         run: |
           cd bx
 #          npx http-server -o .build/wasm/bin/ & chromium http://127.0.0.1:8080/.build/wasm/bin/bx.testRelease.html
+  amalgamated:
+    strategy:
+      fail-fast: true
+      matrix:
+        include: [
+          { name: msvc,          runs-on: windows-latest },
+          { name: linux-gcc,     runs-on: ubuntu-24.04, os: linux,  config: release64, bindir: linux64_gcc   },
+          { name: linux-clang,   runs-on: ubuntu-24.04, os: linux,  config: release64, bindir: linux64_clang },
+          { name: osx-arm64,     runs-on: macos-15,     os: darwin, config: release,   bindir: osx-arm64     },
+          { name: android-arm64, runs-on: ubuntu-24.04, os: linux,  config: release },
+          { name: wasm,          runs-on: ubuntu-24.04, os: linux,  config: release, make-args: 'EMSCRIPTEN=$EMSDK/upstream/emscripten' },
+        ]
+    name: amalgamated-${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - name: Checkout bx
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository }}
+          path: bx
+      - name: Prepare
+        if: matrix.name == 'msvc'
+        uses: microsoft/setup-msbuild@v2
+      - uses: nttld/setup-ndk@v1
+        if: startsWith(matrix.name, 'android')
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+      - uses: mymindstorm/setup-emsdk@v14
+        if: matrix.name == 'wasm'
+        with:
+          version: 5.0.2
+          actions-cache-folder: emsdk-cache
+      - name: Build
+        if: matrix.name == 'msvc'
+        shell: cmd
+        run: |
+          cd bx
+          tools\bin\windows\genie.exe --with-amalgamated vs2022
+          msbuild ".build/projects/vs2022/bx.sln" /m /v:minimal /p:Configuration=Release /p:Platform=x64
+      - name: Build
+        if: matrix.name != 'msvc'
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ARM: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ARM64: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cd bx
+          tools/bin/${{ matrix.os }}/genie --with-amalgamated --gcc=${{ matrix.name }} gmake
+          make -C .build/projects/gmake-${{ matrix.name }} config=${{ matrix.config }} -j$(getconf _NPROCESSORS_ONLN) ${{ matrix.make-args }}
+      - name: Check
+        if: matrix.name == 'msvc'
+        shell: cmd
+        run: |
+          cd bx
+          ".build\win64_vs2022\bin\bx.testRelease.exe" -d yes
+      - name: Check
+        if: matrix.bindir
+        run: |
+          cd bx
+          ".build/${{ matrix.bindir }}/bin/bx.testRelease" -d yes

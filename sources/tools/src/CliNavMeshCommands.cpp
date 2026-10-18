@@ -151,6 +151,8 @@ namespace {
            << " agent profile(s) from " << baked.geometry.meshes << " meshes and " << baked.geometry.colliders << " colliders ("
            << baked.stats.sourceTriangles << " triangles) in " << static_cast<long long>(baked.stats.milliseconds) << " ms into "
            << out.generic_string() << '\n';
+    // As the editor's Bake: the scene places its mesh, so agents walk on it when the scene plays.
+    if (project.has_value() && out == kb::navigation::SceneNavMeshPath(scene) && !PlaceSceneNavMesh(arguments, out, io)) return 1;
     return 0;
 }
 

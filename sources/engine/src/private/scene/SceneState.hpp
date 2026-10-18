@@ -3,6 +3,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/scene/AnimationAssets.hpp"
+#include "scene/SceneGameplayService.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/WorkerPool.hpp"
@@ -299,6 +300,12 @@ public:
     std::map<std::uint64_t, AnimatorInstance> animators;
     SceneNavigationState navigation;
     std::map<std::uint64_t, SkeletonBindingRuntimePose> skeletonBindingPoses;
+    // Clips made for another skeleton, played on a character's own (AnimationRetargeting), keyed by
+    // clip, source skeleton and character skeleton with their load generations.
+    std::map<std::array<std::uint64_t, 6>, std::shared_ptr<const AnimationClip>> retargetedClips;
+    // Why the last Animator could not bind, in plain words (empty when it did or nobody said).
+    std::string animatorBindError;
+    GameplayRuntimeState gameplay;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::unique_ptr<kb::ecs::WorkerPool> animatorWorkerPool;
     std::vector<AnimatorRuntimeRecord*> animatorParallelPoseScratch;

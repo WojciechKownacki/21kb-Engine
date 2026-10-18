@@ -187,10 +187,10 @@ void SceneSkyReflection::Update(const SceneBackdropUniformValues& backdrop, bgfx
         bgfx::Attachment attachment;
         if (step_ == 0U) {
             // The capture's mips feed the filtered importance sampling of the prefilter.
-            attachment.init(capture_, bgfx::Access::Write, face, 1, 0, BGFX_RESOLVE_AUTO_GEN_MIPS);
+            attachment.init(capture_, bgfx::Access::Write, face, 1, 0, BGFX_ATTACHMENT_AUTO_GEN_MIPS);
         } else {
             attachment.init(prefiltered_[back], bgfx::Access::Write, face, 1, static_cast<std::uint16_t>(step_ - 1U),
-                BGFX_RESOLVE_NONE);
+                BGFX_ATTACHMENT_NONE);
         }
         stepTargets_[face] = bgfx::createFrameBuffer(1, &attachment, false);
         if (!bgfx::isValid(stepTargets_[face])) {

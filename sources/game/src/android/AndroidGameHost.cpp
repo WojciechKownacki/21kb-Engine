@@ -715,7 +715,9 @@ private:
         }
         if (!firstFrameReported_) {
             std::ostringstream message;
-            message << "profile=" << targetProfileId_ << " first-frame=rendered";
+            message << "profile=" << targetProfileId_
+                    << " backend=" << renderer_.CapabilityReport().selectedBackendName
+                    << " first-frame=rendered";
             LogInfo(message.str());
             firstFrameReported_ = true;
         }

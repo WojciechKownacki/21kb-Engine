@@ -6,8 +6,19 @@
 #ifndef BX_DEBUG_H_HEADER_GUARD
 #define BX_DEBUG_H_HEADER_GUARD
 
+#include "platform.h"
+
 #include <stdint.h> // uint32_t
 #include <stdarg.h> // va_list
+
+/// Address of current stack frame.
+#if BX_COMPILER_MSVC
+extern "C" void* _AddressOfReturnAddress();
+#	pragma intrinsic(_AddressOfReturnAddress)
+#	define BX_STACK_FRAME_ADDRESS() uintptr_t(_AddressOfReturnAddress() )
+#else
+#	define BX_STACK_FRAME_ADDRESS() uintptr_t(__builtin_frame_address(0) )
+#endif // BX_COMPILER_MSVC
 
 namespace bx
 {
@@ -18,6 +29,12 @@ namespace bx
 	/// Break in debugger.
 	///
 	void debugBreak();
+
+	/// Check whether a debugger is present or not.
+	///
+	/// @returns True when debugger is present. Otherwise returns false.
+	///
+	bool isDebuggerPresent();
 
 	/// Write string to debug output.
 	///

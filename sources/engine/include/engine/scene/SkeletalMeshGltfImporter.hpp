@@ -2,6 +2,7 @@
 
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SkeletalMeshAsset.hpp"
+#include "engine/scene/SkeletalSourceSummary.hpp"
 
 #include <array>
 #include <cstdint>
@@ -15,8 +16,11 @@ namespace kb::scene {
 
 struct SkeletalMeshGltfImportResult {
     SkeletonAsset skeleton;
+    // No LODs when the source is an armature with animations and no mesh.
     SkeletalMeshAsset mesh;
     std::vector<AnimationClip> clips;
+    // The source's name of each clip (a Blender action, an FBX take), in clip order.
+    std::vector<std::string> clipNames;
 };
 
 enum class SkeletalMeshGltfImportDiagnosticSeverity : std::uint8_t {
@@ -96,6 +100,9 @@ public:
         SkeletalMeshGltfImportReport* report = nullptr) {
         return Import(path, skeletonAssetId, {}, error, report);
     }
+
+    // Reads the document only (no buffers): skin, joints and animations.
+    [[nodiscard]] static SkeletalSourceSummary Probe(const std::filesystem::path& path);
 };
 
 } // namespace kb::scene

@@ -20,7 +20,10 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
+#include "kb/render/scene/SceneLightingQuality.hpp"
 #include "kb/render/RuntimeAssetShaderProvider.hpp"
+
+#include <bgfx/bgfx.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -66,6 +69,8 @@ struct GameOptions {
     bool profileFixedStep = false;
     std::filesystem::path profilePath;
     std::optional<kb::render::SceneRenderLightingPath> profileLighting;
+    // -1 lets the renderer choose; otherwise a bgfx::RendererType.
+    std::int32_t rendererType = -1;
     std::filesystem::path screenshotPath;
     std::uint32_t screenshotFrame = 0U;
     // 0 runs until the player closes the window; a positive value bounds the
@@ -90,6 +95,7 @@ Usage: kb_game [options]
   --profile-file=<file>             per-frame timings (needs --frames=1..120000)
   --profile-fixed-step              fixed time step while profiling (needs --headless)
   --profile-lighting=Forward|ForwardPlus|Deferred
+  --renderer=d3d11|d3d12|vulkan|opengl  graphics backend (default: the platform's)
   --help                            this text
 )";
 
@@ -143,7 +149,7 @@ struct GameFrameProfile {
 // Switches that load content other than the game's own package, pick a scene
 // the game did not start in, or write files where the command line says. Only
 // a development player accepts them; a shipped game refuses them.
-constexpr std::array<std::wstring_view, 7U> kDevelopmentSwitches{
+constexpr std::array<std::wstring_view, 8U> kDevelopmentSwitches{
     L"--project=",
     L"--scene=",
     L"--profile-fixed-step",
@@ -151,6 +157,7 @@ constexpr std::array<std::wstring_view, 7U> kDevelopmentSwitches{
     L"--profile-file=",
     L"--screenshot-file=",
     L"--screenshot-frame=",
+    L"--renderer=",
 };
 
 // Names the first development switch on the command line, or returns nothing.
@@ -250,6 +257,16 @@ constexpr std::array<std::wstring_view, 7U> kDevelopmentSwitches{
         } else if (HasPrefix(argument, L"--screenshot-frame=")) {
             if (!ParseFrameLimit(argument.substr(19U), options.screenshotFrame)) {
                 std::cerr << "kb_game: --screenshot-frame expects a positive frame count\n";
+                return false;
+            }
+        } else if (HasPrefix(argument, L"--renderer=")) {
+            const auto value = argument.substr(11U);
+            if (value == L"d3d11") options.rendererType = bgfx::RendererType::Direct3D11;
+            else if (value == L"d3d12") options.rendererType = bgfx::RendererType::Direct3D12;
+            else if (value == L"vulkan") options.rendererType = bgfx::RendererType::Vulkan;
+            else if (value == L"opengl") options.rendererType = bgfx::RendererType::OpenGL;
+            else {
+                std::cerr << "kb_game: --renderer expects d3d11, d3d12, vulkan or opengl\n";
                 return false;
             }
         } else if (HasPrefix(argument, L"--profile-lighting=")) {
@@ -368,6 +385,7 @@ int RunGame(const GameOptions& options) {
 
     kb::render::DisplayConfig displayConfig{};
     displayConfig.enableEditorRendering = false;
+    displayConfig.preferredBgfxRendererType = options.rendererType;
     if (options.uncapped) {
         displayConfig.syncMode = kb::render::DisplaySyncMode::Uncapped;
     }
@@ -421,6 +439,7 @@ int RunGame(const GameOptions& options) {
         case kb::project::ProjectSceneLightingPath::Deferred: lighting.lightingPath = kb::render::SceneRenderLightingPath::Deferred; break;
         }
         if (options.profileLighting) lighting.lightingPath = *options.profileLighting;
+        kb::render::ApplyProjectLightingQuality(lighting, projectRuntime.shadowQuality, projectRuntime.giQuality, kb::game::kMobileDevice);
         lighting.maxForwardLights = lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus
             ? kb::render::kMaxSceneForwardPlusLights : kb::render::kMaxSceneForwardLights;
         renderer.SetDefaultSceneLightingConfig(lighting);

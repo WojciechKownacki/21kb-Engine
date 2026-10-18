@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wojciech Kownacki <verthsoft@gmail.com>
+Date: Sun, 18 Oct 2026 01:49:00 +0200
+Subject: [PATCH 3/3] CMake: let the engine choose the dxcompiler runtime next
+ to shaderc
+
+---
+ cmake/bgfx/shaderc.cmake | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/cmake/bgfx/shaderc.cmake b/cmake/bgfx/shaderc.cmake
+index 49be0f3..a9804bc 100644
+--- a/cmake/bgfx/shaderc.cmake
++++ b/cmake/bgfx/shaderc.cmake
+@@ -51,7 +51,11 @@ if(UNIX
+ 	)
+ 	set(DXCOMPILER_RUNTIME ${BGFX_DIR}/tools/bin/linux/libdxcompiler.so)
+ elseif(WIN32)
+-	set(DXCOMPILER_RUNTIME ${BGFX_DIR}/tools/bin/windows/dxcompiler.dll)
++	if(KB_DXCOMPILER_RUNTIME)
++		set(DXCOMPILER_RUNTIME ${KB_DXCOMPILER_RUNTIME})
++	else()
++		set(DXCOMPILER_RUNTIME ${BGFX_DIR}/tools/bin/windows/dxcompiler.dll)
++	endif()
+ endif()
+ 
+ if(BGFX_AMALGAMATED)
+@@ -82,7 +86,7 @@ endif()
+ 
+ # DXIL compiler will be dynamically loaded at runtime - no need
+ # to link, just install the needed binaries alongside shaderc.exe
+-if(DXCOMPILER_RUNTIME)
++if(DXCOMPILER_RUNTIME AND EXISTS "${DXCOMPILER_RUNTIME}")
+ 	add_custom_command(
+ 		TARGET shaderc POST_BUILD
+ 		COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DXCOMPILER_RUNTIME} $<TARGET_FILE_DIR:shaderc>
+@@ -90,4 +94,6 @@ if(DXCOMPILER_RUNTIME)
+ 	if(BGFX_INSTALL)
+ 		install(FILES ${DXCOMPILER_RUNTIME} DESTINATION "${CMAKE_INSTALL_BINDIR}")
+ 	endif()
++elseif(DXCOMPILER_RUNTIME)
++	message(WARNING "bgfx shaderc DXIL runtime is unavailable at '${DXCOMPILER_RUNTIME}'; shaderc will remain available for non-DXIL profiles.")
+ endif()

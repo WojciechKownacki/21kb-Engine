@@ -169,6 +169,9 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<AudioListenerComponent> audioListeners;
     std::vector<Animator> animators;
     std::vector<SkeletonBindingComponent> skeletonBindings;
+    std::vector<SocketAttachmentComponent> socketAttachments;
+    std::vector<CombatantComponent> combatants;
+    std::vector<AIBrainComponent> aiBrains;
     std::vector<MotionSkeletonRuleComponent> motionSkeletonRules;
     std::vector<DrawD3DeformedGeometryComponent> deformedGeometries;
     std::vector<NavAgent> navAgents;
@@ -313,6 +316,18 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SkeletonBinding)) {
             RepeatComponents(skeletonBindings, std::span<const SkeletonBindingComponent>{ archetype.skeletonBindings }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const SkeletonBindingComponent>{ skeletonBindings });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SocketAttachment)) {
+            RepeatComponents(socketAttachments, std::span<const SocketAttachmentComponent>{ archetype.socketAttachments }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const SocketAttachmentComponent>{ socketAttachments });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Combatant)) {
+            RepeatComponents(combatants, std::span<const CombatantComponent>{ archetype.combatants }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const CombatantComponent>{ combatants });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::AIBrain)) {
+            RepeatComponents(aiBrains, std::span<const AIBrainComponent>{ archetype.aiBrains }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const AIBrainComponent>{ aiBrains });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::MotionSkeletonRule)) {
             RepeatComponents(motionSkeletonRules, std::span<const MotionSkeletonRuleComponent>{ archetype.motionSkeletonRules }, instanceCount);
@@ -470,6 +485,18 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SkeletonBinding)) {
             AddCommandComponentPatternView(views, std::span<const SkeletonBindingComponent>{ archetype.skeletonBindings }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const SkeletonBindingComponent>{ archetype.skeletonBindings }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SocketAttachment)) {
+            AddCommandComponentPatternView(views, std::span<const SocketAttachmentComponent>{ archetype.socketAttachments }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const SocketAttachmentComponent>{ archetype.socketAttachments }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Combatant)) {
+            AddCommandComponentPatternView(views, std::span<const CombatantComponent>{ archetype.combatants }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const CombatantComponent>{ archetype.combatants }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::AIBrain)) {
+            AddCommandComponentPatternView(views, std::span<const AIBrainComponent>{ archetype.aiBrains }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const AIBrainComponent>{ archetype.aiBrains }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::MotionSkeletonRule)) {
             AddCommandComponentPatternView(views, std::span<const MotionSkeletonRuleComponent>{ archetype.motionSkeletonRules }, instanceCount);

@@ -65,6 +65,10 @@ std::optional<MeshPassType> MeshPassForRenderPassKind(RenderPassKind kind) noexc
     case RenderPassKind::ScreenUIComposite:
     case RenderPassKind::EditorUiComposite:
     case RenderPassKind::EditorGizmoOverlay:
+    case RenderPassKind::PostProcessMaterial0:
+    case RenderPassKind::PostProcessMaterial1:
+    case RenderPassKind::PostProcessMaterial2:
+    case RenderPassKind::PostProcessMaterial3:
         return std::nullopt;
     }
 

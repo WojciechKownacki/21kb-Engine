@@ -37,9 +37,9 @@ struct Target {
         bgfx::destroy(color);
     }
     std::array<int, 3> Read(bgfx::ViewId view = 240U) const {
-        bgfx::blit(view, readback, 0U, 0U, color, 0U, 0U, 64U, 64U);
+        bgfx::blit(view, bgfx::TextureRegion{ .handle = readback }, bgfx::TextureRegion{ .handle = color, .width = 64U, .height = 64U });
         std::vector<std::uint8_t> pixels(64U * 64U * 4U);
-        const auto ready = bgfx::readTexture(readback, pixels.data());
+        const auto ready = bgfx::read(bgfx::TextureRegion{ .handle = readback }, pixels.data());
         auto frame = bgfx::frame();
         for (auto guard = 0U; frame < ready && guard < 8U; ++guard) frame = bgfx::frame();
         Require(frame >= ready, "Light grid readback did not complete");
@@ -77,8 +77,8 @@ void RunSceneLightGridGpuTests() {
     Require(window != nullptr, "Light grid hidden surface failed");
     bgfx::Init init{};
     init.type = bgfx::RendererType::Direct3D11;
-    init.platformData.nwh = window;
-    init.resolution.width = init.resolution.height = 64U;
+    init.swapChain.nwh = window;
+    init.swapChain.width = init.swapChain.height = 64U;
     Require(bgfx::init(init), "Light grid test requires real D3D11");
     {
         SceneRenderer renderer;

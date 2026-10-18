@@ -152,6 +152,13 @@ std::optional<PrewarmShaderBytecode> ExtractBgfxShaderBytecode(std::span<const s
             return std::nullopt;
         }
     }
+    if (version >= 12U) {
+        // The raw SRV and UAV binding masks.
+        std::uint32_t rawBindings[2]{};
+        if (!cursor.ReadU32(rawBindings[0]) || !cursor.ReadU32(rawBindings[1])) {
+            return std::nullopt;
+        }
+    }
 
     std::uint16_t uniformCount = 0U;
     if (!cursor.ReadU16(uniformCount)) {

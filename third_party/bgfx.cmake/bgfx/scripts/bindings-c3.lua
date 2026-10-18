@@ -26,23 +26,29 @@ local function hasSuffix(str, suffix)
     return suffix == "" or str:sub(-#suffix) == suffix
 end
 
+local function hasTypePrefix(ctype, prefix)
+    return hasPrefix( (ctype:gsub("^const%s+", "") ), prefix)
+end
+
 local function convert_type_0(arg)
 
-    if hasPrefix(arg.ctype, "uint64_t") then
+    if hasTypePrefix(arg.ctype, "uint64_t") then
         return arg.ctype:gsub("uint64_t", "ulong")
-    elseif hasPrefix(arg.ctype, "int64_t") then
+    elseif hasTypePrefix(arg.ctype, "int64_t") then
         return arg.ctype:gsub("int64_t", "long")
-    elseif hasPrefix(arg.ctype, "uint32_t") then
+    elseif hasTypePrefix(arg.ctype, "uint32_t") then
         return arg.ctype:gsub("uint32_t", "uint")
-    elseif hasPrefix(arg.ctype, "int32_t") then
+    elseif hasTypePrefix(arg.ctype, "int32_t") then
         return arg.ctype:gsub("int32_t", "int")
-    elseif hasPrefix(arg.ctype, "uint16_t") then
+    elseif hasTypePrefix(arg.ctype, "uint16_t") then
         return arg.ctype:gsub("uint16_t", "ushort")
-    elseif hasPrefix(arg.ctype, "bgfx_view_id_t") then
+    elseif hasTypePrefix(arg.ctype, "int16_t") then
+        return arg.ctype:gsub("int16_t", "short")
+    elseif hasTypePrefix(arg.ctype, "bgfx_view_id_t") then
         return arg.ctype:gsub("bgfx_view_id_t", "ushort")
-    elseif hasPrefix(arg.ctype, "uint8_t") then
+    elseif hasTypePrefix(arg.ctype, "uint8_t") then
         return arg.ctype:gsub("uint8_t", "char")
-    elseif hasPrefix(arg.ctype, "uintptr_t") then
+    elseif hasTypePrefix(arg.ctype, "uintptr_t") then
         return arg.ctype:gsub("uintptr_t", "uptr")
     elseif arg.ctype == "bgfx_caps_gpu_t" then
         return arg.ctype:gsub("bgfx_caps_gpu_t", "uint")
@@ -103,7 +109,7 @@ function gen.gen()
     return r
 end
 
-local combined = { "State", "Stencil", "Buffer", "Texture", "Sampler", "Reset" }
+local combined = { "State", "Stencil", "Buffer", "Texture", "Sampler", "Reset", "SwapChain" }
 
 for _, v in ipairs(combined) do
     combined[v] = {}
@@ -113,16 +119,16 @@ local lastCombinedFlag
 
 local function FlagBlock(typ)
     local format = "0x%08x"
-    local enumType = " : const uint"
+    local enumType = " : inline uint"
     if typ.bits == 64 then
         format = "0x%016x"
-        enumType = " : const ulong"
+        enumType = " : inline ulong"
     elseif typ.bits == 16 then
         format = "0x%04x"
-        enumType = " : const ushort"
+        enumType = " : inline ushort"
     end
 
-    yield("enum " .. typ.name .. "Flags" .. enumType)
+    yield("constdef " .. typ.name .. "Flags" .. enumType)
     yield("{")
 
     for idx, flag in ipairs(typ.flag) do
@@ -211,6 +217,9 @@ function converter.types(typ)
 
         yield("struct " .. typ.name .. " {")
         yield("    ushort idx;")
+        if typ.tagged then
+        yield("    ushort type;")
+        end
         yield("}")
     elseif hasSuffix(typ.name, "::Enum") then
         lastCombinedFlagBlock()
@@ -245,7 +254,10 @@ function converter.types(typ)
         enum["[" .. typ.typename .. "::Count]"] = #typ.enum
 
     elseif typ.bits ~= nil then
-        local prefix, name = typ.name:match "(%u%l+)(.*)"
+        local prefix, name = typ.name:match "(%u%l+%u%l+)(.*)"
+        if not combined[prefix] then
+            prefix, name = typ.name:match "(%u%l+)(.*)"
+        end
         if prefix ~= lastCombinedFlag then
             lastCombinedFlagBlock()
             lastCombinedFlag = prefix
@@ -377,7 +389,7 @@ function converter.funcs(func)
         table.insert(args, convert_type(arg) .. " " .. arg.name)
     end
     yield("extern fn " .. convert_type(func.ret) .. " " .. func.cname
-            .. "(" .. table.concat(args, ", ") .. ") @extern(\"bgfx_" .. func.cname .. "\");"   )
+            .. "(" .. table.concat(args, ", ") .. ") @cname(\"bgfx_" .. func.cname .. "\");"   )
 end
 
 function gen.write(codes, outputfile)

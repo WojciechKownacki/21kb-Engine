@@ -128,6 +128,21 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     }
 }
 
+[[nodiscard]] ProjectSettingsTooltipKind QualityTooltipKind(int row) noexcept {
+    switch (row) {
+    case 0:
+        return ProjectSettingsTooltipKind::ShadowQuality;
+    case 1:
+        return ProjectSettingsTooltipKind::ShadowQualityMobile;
+    case 2:
+        return ProjectSettingsTooltipKind::GiQuality;
+    case 3:
+        return ProjectSettingsTooltipKind::GiQualityMobile;
+    default:
+        return ProjectSettingsTooltipKind::None;
+    }
+}
+
 [[nodiscard]] ProjectSettingsTooltipKind TooltipKindForHit(ProjectSettingsPanelRenderer::Hit hit) noexcept {
     switch (hit.kind) {
     case ProjectSettingsHitKind::MappingContextField:
@@ -146,6 +161,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         return ProjectSettingsTooltipKind::MsaaSamples;
     case ProjectSettingsHitKind::GraphicsToggle:
         return GraphicsToggleTooltipKind(hit.index);
+    case ProjectSettingsHitKind::QualityOption:
+        return QualityTooltipKind(hit.index / 5);
     case ProjectSettingsHitKind::None:
     case ProjectSettingsHitKind::CategoryItem:
     case ProjectSettingsHitKind::MappingContextOption:
@@ -212,6 +229,12 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         if (changed) {
             sceneContext.MarkSceneRenderDirty();
         }
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
+    }
+    case ProjectSettingsHitKind::QualityOption: {
+        // A click always lands on a level button here; the label cells only answer hover tooltips.
+        static_cast<void>(sceneContext.SetProjectQualityLevel(hit.index / 5, static_cast<kb::project::ProjectQualityLevel>(hit.index % 5)));
         static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         return true;
     }

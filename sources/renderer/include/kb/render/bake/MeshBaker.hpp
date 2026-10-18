@@ -28,7 +28,8 @@ namespace kb::render::bake {
 // Identity of this baker inside a bake key. `bakerId` scopes `bakerVersion`, so bumping the
 // version below re-bakes every mesh and leaves every other baker's cache untouched.
 inline constexpr std::string_view kMeshBakerId = "Mesh";
-inline constexpr std::string_view kMeshBakerVersion = "4";
+// 5: meshoptimizer 1.2 clusters and bounds, which a cache baked by 0.25 does not match.
+inline constexpr std::string_view kMeshBakerVersion = "5";
 
 // Runtime type of the artifact this baker publishes; a path component of the bake store, and
 // what a package announces about itself so discovery can ask instead of guessing from .kbpack.

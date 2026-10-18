@@ -90,7 +90,7 @@ Any API call starting with ``bgfx::setView*`` is considered part of the View API
 
 One important constraint: ``bgfx::setViewMode`` must be set **before** any draw calls are submitted to that view within a frame. The internal encoder reads the view mode at submit time to select the sort key encoding. Changing the view mode after draw calls have already been submitted to that view will cause incorrect sort behaviour.
 
-The maximum number of views is configured by ``BGFX_CONFIG_MAX_VIEWS`` (default: 256, must be a power of 2). Views are referenced by ``ViewId`` (a 16-bit integer).
+Views are referenced by ``ViewId`` (a 16-bit integer) in the range ``0`` to ``BGFX_CONFIG_MAX_VIEWS-1`` (4096 ids, fixed). View state is kept for ``Init::Limits::minViews`` views (``BGFX_CONFIG_MIN_VIEWS``, default 256) and allocated in blocks of 64 as views past that are set; a block whose views are all reset is released again once ``Init::Limits::numDrawCallPeakFrames`` frames have gone by. The per-frame copies hold only the views used in that frame and grow and shrink with that count.
 
 Encoder API
 -----------
@@ -115,13 +115,13 @@ The maximum size of transient buffers can be configured via ``Limits.maxTransien
 Customization
 -------------
 
-By default each platform has sane default values. For example on Windows the default renderer is Direct3D 12, on Linux it is Vulkan, and on macOS it's Metal. On Windows, almost all rendering backends are available. For OpenGL ES on desktop you can find more information at: `OpenGL ES 2.0 and EGL on desktop <http://www.g-truc.net/post-0457.html>`__
+By default each platform has sane default values. For example on Windows the default renderer is Direct3D 12, on Linux it is Vulkan, and on macOS it's Metal. On Windows, almost all rendering backends are available. For OpenGL ES on desktop you can find more information at: `OpenGL ES and EGL on desktop <http://www.g-truc.net/post-0457.html>`__
 
 If you're targeting specific mobile hardware, you can find GLES support in their official SDKs: `Adreno SDK <http://developer.qualcomm.com/mobile-development/mobile-technologies/gaming-graphics-optimization-adreno/tools-and-resources>`__, `Mali SDK <http://www.malideveloper.com/>`__, `PowerVR SDK <http://www.imgtec.com/powervr/insider/sdkdownloads/>`__.
 
 All configuration settings are located inside `src/config.h <https://github.com/bkaradzic/bgfx/blob/master/src/config.h>`__.
 
-Every ``BGFX_CONFIG_*`` setting can be changed by passing defines through compiler switches. For example setting preprocessor define ``BGFX_CONFIG_RENDERER_OPENGL=1`` will change the backend renderer to OpenGL 2.1 on Windows. Since rendering APIs are platform specific, this obviously won't work nor make sense in all cases.
+Every ``BGFX_CONFIG_*`` setting can be changed by passing defines through compiler switches. For example setting preprocessor define ``BGFX_CONFIG_RENDERER_OPENGL=1`` will change the backend renderer to OpenGL 4.3 on Windows. Since rendering APIs are platform specific, this obviously won't work nor make sense in all cases.
 
 Options
 ~~~~~~~
@@ -152,9 +152,9 @@ Renderer backends
 
 ``BGFX_CONFIG_RENDERER_NVN`` - Enable NVN renderer backend (Nintendo Switch). Default is auto-detected per platform.
 
-``BGFX_CONFIG_RENDERER_OPENGL`` - Enable OpenGL renderer backend. Set to the minimum GL version (e.g. 21 for OpenGL 2.1, 33 for 3.3, 44 for 4.4). Default is auto-detected per platform; minimum is 21 if enabled.
+``BGFX_CONFIG_RENDERER_OPENGL`` - Enable OpenGL renderer backend. Set to the minimum GL version (e.g. 43 for OpenGL 4.3, 45 for 4.5, 46 for 4.6). Default is auto-detected per platform; minimum is 43 if enabled.
 
-``BGFX_CONFIG_RENDERER_OPENGLES`` - Enable OpenGL ES renderer backend. Set to the minimum GLES version (e.g. 20 for ES 2.0, 30 for ES 3.0). Default is auto-detected per platform; minimum is 20 if enabled. Cannot be combined with ``BGFX_CONFIG_RENDERER_OPENGL``.
+``BGFX_CONFIG_RENDERER_OPENGLES`` - Enable OpenGL ES renderer backend. Set to the minimum GLES version (e.g. 30 for ES 3.0, 31 for ES 3.1). Default is auto-detected per platform; minimum is 30 if enabled. Cannot be combined with ``BGFX_CONFIG_RENDERER_OPENGL``.
 
 ``BGFX_CONFIG_RENDERER_VULKAN`` - Enable Vulkan renderer backend. Default is 1 on Android/Linux/Windows/macOS/NX.
 
@@ -164,16 +164,24 @@ Renderer backends
 
 ``BGFX_CONFIG_RENDERER_DIRECT3D11_USE_STAGING_BUFFER`` - Enable use of staging buffers in the Direct3D 11 renderer for texture and buffer updates. Default is 0.
 
-``BGFX_CONFIG_RENDERER_VULKAN_MAX_DESCRIPTOR_SETS_PER_FRAME`` - Maximum number of Vulkan descriptor sets allocated per frame. Default is 1024. Each draw/compute call may consume one descriptor set.
+``BGFX_CONFIG_RENDERER_VULKAN_DESCRIPTOR_SETS_PER_POOL`` - Number of Vulkan descriptor sets per descriptor-pool chunk. The per-frame descriptor pool is a chain of chunks of this size, grown on demand and reset/reused each frame; this is the allocation granularity and initial per-frame footprint, not a hard cap. Each unique draw/compute bind consumes one descriptor set. Default is 1024.
 
 Resource limits
 ^^^^^^^^^^^^^^^
 
 ``BGFX_CONFIG_MAX_DRAW_CALLS`` - Maximum number of draw/compute calls per frame. Default is 65535 (64K - 1).
 
+``BGFX_CONFIG_DYNAMIC_FRAME_STORAGE`` - Enable dynamic per frame storage. When enabled, storage for render items, binds, blit items and scissor rectangles is allocated in blocks, on first touch, and grows during the frame instead of dropping submissions; ``Init::Limits::numDrawCalls`` is then what is reserved up front rather than a hard limit, and ``Caps::Limits::maxDrawCalls`` always reports ``BGFX_CONFIG_MAX_DRAW_CALLS``. When disabled, all of it is allocated once, up front, at exactly the requested size, indexing has no indirection, and ``Init::Limits::numDrawCalls`` is a hard limit that submissions are dropped past. Default is 1. Disabling trades memory for a small amount of submission throughput; see ``Stats::numDrawCallsPeak`` to size ``numDrawCalls``.
+
+``BGFX_CONFIG_DRAW_CALL_BLOCK`` - Granularity dynamic per frame storage grows by, in items, and the multiple ``Init::Limits::numDrawCalls`` is rounded up to. Must be a power of two, at least 64. Default is 1024.
+
+``BGFX_CONFIG_BLIT_BLOCK``, ``BGFX_CONFIG_DEPTH_CONTROL_BLOCK``, ``BGFX_CONFIG_MATRIX_BLOCK``, ``BGFX_CONFIG_RECT_BLOCK``, ``BGFX_CONFIG_VIEW_BLOCK`` - Granularity the per frame blit item, depth control, matrix and scissor rect caches and the view storage grow by. Must be a power of two, at least 64. Default is 64.
+
 ``BGFX_CONFIG_MAX_BLIT_ITEMS`` - Maximum number of blit items per frame. Default is 1024.
 
-``BGFX_CONFIG_MAX_VIEWS`` - Maximum number of views. Default is 256. Must be a power of 2.
+``BGFX_CONFIG_MAX_VIEWS`` - Number of view ids. Fixed at 4096; view storage is allocated as views are used, so this is only the id range.
+
+``BGFX_CONFIG_MIN_VIEWS`` - Minimum number of views storage is kept for. Default is 256. Must be at least ``BGFX_CONFIG_VIEW_BLOCK``.
 
 ``BGFX_CONFIG_MAX_VIEW_NAME`` - Maximum length of a view name string. Default is 256.
 
@@ -222,13 +230,13 @@ Buffer sizes
 
 ``BGFX_CONFIG_MAX_TRANSIENT_INDEX_BUFFER_SIZE`` - Maximum transient index buffer size. There is no growth; all transient indices must fit into this buffer. Default is 2 MB.
 
-``BGFX_CONFIG_MIN_RESOURCE_COMMAND_BUFFER_SIZE`` - Minimum initial size of the resource command buffer (pre/post render commands for resource creation and updates). Default is 64 KB. The buffer grows as needed.
+``BGFX_CONFIG_MIN_RESOURCE_COMMAND_BUFFER_SIZE`` - Minimum initial size of the resource command buffer (pre/post render commands for resource creation and updates). Default is 64 KB. The buffer grows as needed. After ``Init::Limits::numDrawCallPeakFrames`` (default 60) of observing the high-water mark it shrinks toward that peak, but not below this minimum. Set ``numDrawCallPeakFrames`` to 0 to keep the largest size for the lifetime of the context.
 
-``BGFX_CONFIG_MIN_UNIFORM_BUFFER_SIZE`` - Minimum initial size in bytes of the per-encoder uniform buffer. Default is 1 MB. This buffer will resize on demand.
+``BGFX_CONFIG_MIN_UNIFORM_BUFFER_SIZE`` - Minimum initial size in bytes of the per-encoder uniform buffer. Default is 128 KB. This buffer will resize on demand. Must be larger than ``BGFX_CONFIG_UNIFORM_BUFFER_RESIZE_THRESHOLD_SIZE``, otherwise the buffer resizes on first use.
 
-``BGFX_CONFIG_UNIFORM_BUFFER_RESIZE_THRESHOLD_SIZE`` - Maximum amount of unused uniform buffer space (in bytes) before the buffer is shrunk. Default is 64 KB.
+``BGFX_CONFIG_UNIFORM_BUFFER_RESIZE_THRESHOLD_SIZE`` - Head room in bytes kept in the uniform buffer; it grows once less than this is left, and shrinking keeps this much above the peak. Must be at least as large as the largest single uniform record (4 + 1023*sizeof(Mat4) = 65476 bytes). Default is 64 KB.
 
-``BGFX_CONFIG_UNIFORM_BUFFER_RESIZE_INCREMENT_SIZE`` - Increment size for uniform buffer resize. Default is 1 MB.
+``BGFX_CONFIG_UNIFORM_BUFFER_RESIZE_INCREMENT_SIZE`` - Increment size for uniform buffer resize. Default is 64 KB.
 
 ``BGFX_CONFIG_CACHED_DEVICE_MEMORY_ALLOCATIONS_SIZE`` - Amount of allowed memory allocations left on device to use for recycling during later allocations. This can be beneficial in case the driver is slow allocating memory on the device. Default is 128 MB. Currently only used by the Vulkan backend.
 
@@ -252,16 +260,16 @@ Sort key
 Swap chain
 ^^^^^^^^^^
 
-``BGFX_CONFIG_MAX_BACK_BUFFERS`` - Maximum number of back buffers for the swap chain. Default is 4. The actual number used is specified via ``bgfx::Resolution::numBackBuffers``.
+``BGFX_CONFIG_MAX_BACK_BUFFERS`` - Maximum number of back buffers for the swap chain. Default is 4. The actual number used is specified via ``bgfx::SwapChain::numBackBuffers``.
 
-``BGFX_CONFIG_MAX_FRAME_LATENCY`` - Maximum frame latency (number of frames that can be queued ahead). Default is 3. The actual value is specified via ``bgfx::Resolution::maxFrameLatency``.
+``BGFX_CONFIG_MAX_FRAME_LATENCY`` - Maximum frame latency (number of frames that can be queued ahead). Default is 3. The actual value is specified via ``bgfx::SwapChain::maxFrameLatency``.
 
 Debugging and profiling
 ^^^^^^^^^^^^^^^^^^^^^^^
 
 ``BGFX_CONFIG_DEBUG_TEXT_MAX_SCALE`` - Debug text maximum scale factor for ``bgfx::dbgTextPrintf``. Default is 4.
 
-``BGFX_CONFIG_DEBUG_PERFHUD`` - Enable nVidia PerfHUD integration. Default is 0.
+``BGFX_CONFIG_DEBUG_PERFHUD`` - Enable NVIDIA PerfHUD integration. Default is 0.
 
 ``BGFX_CONFIG_DEBUG_ANNOTATION`` - Enable annotation for graphics debuggers (e.g. RenderDoc, PIX). Default matches ``BGFX_CONFIG_DEBUG``.
 
@@ -280,10 +288,8 @@ Debugging and profiling
 Miscellaneous
 ^^^^^^^^^^^^^
 
-``BGFX_CONFIG_USE_TINYSTL`` - Enable use of tinystl instead of std containers for internal data structures. Default is 1. Reduces binary size and avoids std library dependency.
-
 ``BGFX_CONFIG_MIP_LOD_BIAS`` - Global MIP level-of-detail bias applied to all texture sampling. Default is 0. Positive values select coarser MIP levels, negative values select finer MIP levels.
 
 ``BGFX_CONFIG_DRAW_INDIRECT_STRIDE`` - Stride in bytes of each draw indirect command. Fixed at 32 bytes. Not configurable.
 
-``BGFX_CONFIG_PREFER_DISCRETE_GPU`` - On laptops with integrated and discrete GPU, prefer selection of the discrete GPU (nVidia and AMD). Default is 1 on Windows, 0 elsewhere.
+``BGFX_CONFIG_PREFER_DISCRETE_GPU`` - On laptops with integrated and discrete GPU, prefer selection of the discrete GPU (NVIDIA and AMD). Default is 1 on Windows, 0 elsewhere.

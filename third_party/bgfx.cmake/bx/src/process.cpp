@@ -12,6 +12,7 @@
 			|| BX_CRT_NONE            \
 			|| BX_PLATFORM_EMSCRIPTEN \
 			|| BX_PLATFORM_PS4        \
+			|| BX_PLATFORM_PS5        \
 			|| BX_PLATFORM_WINRT      \
 			|| BX_PLATFORM_XBOXONE    \
 			)
@@ -22,9 +23,59 @@ namespace bx
 #if BX_CONFIG_CRT_PROCESS
 
 #if BX_CRT_MSVC
-#	define popen  _popen
 #	define pclose _pclose
 #endif // BX_CRT_MSVC
+
+	static FILE* openProcess(const char* _cmd, const char* _mode)
+	{
+#if BX_PLATFORM_WINDOWS
+		wchar_t cmd[kMaxFilePath*2];
+		wchar_t mode[4];
+
+		if (0 == toUtf16( (uint16_t*)cmd,  BX_COUNTOF(cmd),  _cmd)
+		||  0 == toUtf16( (uint16_t*)mode, BX_COUNTOF(mode), _mode) )
+		{
+			return NULL;
+		}
+
+		return _wpopen(cmd, mode);
+#else
+		return popen(_cmd, _mode);
+#endif // BX_PLATFORM_WINDOWS
+	}
+
+	static bool makeCommandLine(char* _out, int32_t _outSize, const StringView& _filePath, const StringView& _args)
+	{
+#if BX_PLATFORM_WINDOWS
+		// cmd.exe /c strips the first and the last quote of the command line.
+		const StringView prefix = "\"\"";
+		const StringView suffix = "\"";
+#else
+		const StringView prefix = "\"";
+		const StringView suffix = "";
+#endif // BX_PLATFORM_WINDOWS
+
+		const int32_t len = 0
+			+ prefix.getLength()
+			+ _filePath.getLength()
+			+ 2
+			+ _args.getLength()
+			+ suffix.getLength()
+			;
+
+		if (len >= _outSize)
+		{
+			return false;
+		}
+
+		strCopy(_out, _outSize, prefix);
+		strCat(_out, _outSize, _filePath);
+		strCat(_out, _outSize, "\" ");
+		strCat(_out, _outSize, _args);
+		strCat(_out, _outSize, suffix);
+
+		return true;
+	}
 
 	ProcessReader::ProcessReader()
 		: m_file(NULL)
@@ -46,12 +97,14 @@ namespace bx
 			return false;
 		}
 
-		char tmp[kMaxFilePath*2] = "\"";
-		strCat(tmp, BX_COUNTOF(tmp), _filePath);
-		strCat(tmp, BX_COUNTOF(tmp), "\" ");
-		strCat(tmp, BX_COUNTOF(tmp), _args);
+		char tmp[kMaxFilePath*2];
+		if (!makeCommandLine(tmp, BX_COUNTOF(tmp), _filePath, _args) )
+		{
+			BX_ERROR_SET(_err, kErrorReaderWriterOpen, "ProcessReader: Command line is too long.");
+			return false;
+		}
 
-		m_file = popen(tmp, "r");
+		m_file = openProcess(tmp, "r");
 		if (NULL == m_file)
 		{
 			BX_ERROR_SET(_err, kErrorReaderWriterOpen, "ProcessReader: Failed to open process.");
@@ -117,12 +170,14 @@ namespace bx
 			return false;
 		}
 
-		char tmp[kMaxFilePath*2] = "\"";
-		strCat(tmp, BX_COUNTOF(tmp), _filePath);
-		strCat(tmp, BX_COUNTOF(tmp), "\" ");
-		strCat(tmp, BX_COUNTOF(tmp), _args);
+		char tmp[kMaxFilePath*2];
+		if (!makeCommandLine(tmp, BX_COUNTOF(tmp), _filePath, _args) )
+		{
+			BX_ERROR_SET(_err, kErrorReaderWriterOpen, "ProcessWriter: Command line is too long.");
+			return false;
+		}
 
-		m_file = popen(tmp, "w");
+		m_file = openProcess(tmp, "w");
 		if (NULL == m_file)
 		{
 			BX_ERROR_SET(_err, kErrorReaderWriterOpen, "ProcessWriter: Failed to open process.");

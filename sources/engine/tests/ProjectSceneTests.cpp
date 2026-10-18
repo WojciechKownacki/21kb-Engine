@@ -411,6 +411,48 @@ void RunLegacyProjectDescriptorCarriesItsSettingsTest() {
     Require(carried.physicsLayersAsset == "/Game/Physics/Legacy.21kbphysicslayers", "the physics layers asset was lost");
 }
 
+// The shadow and global illumination quality a project pins is kept by the settings file, a project
+// that never chose one reads Auto, and a level the file spells wrongly falls back to Auto.
+void RunProjectQualitySettingsTest() {
+    CleanTempRoot();
+    const std::filesystem::path file = kb::project::ProjectSettingsStore::FilePath(TempRoot());
+    const kb::project::ProjectSettings defaults;
+    Require(defaults.shadowQuality == kb::project::ProjectQualityLevel::Auto &&
+            defaults.shadowQualityMobile == kb::project::ProjectQualityLevel::Auto &&
+            defaults.giQuality == kb::project::ProjectQualityLevel::Auto &&
+            defaults.giQualityMobile == kb::project::ProjectQualityLevel::Auto,
+        "a project that never chose a quality must leave the choice to the engine");
+
+    kb::project::ProjectSettings chosen;
+    chosen.shadowQuality = kb::project::ProjectQualityLevel::Ultra;
+    chosen.shadowQualityMobile = kb::project::ProjectQualityLevel::Low;
+    chosen.giQuality = kb::project::ProjectQualityLevel::High;
+    chosen.giQualityMobile = kb::project::ProjectQualityLevel::Medium;
+    std::string error;
+    Require(kb::project::ProjectSettingsStore::Save(file, chosen, error), "the quality levels could not be saved");
+    const kb::project::ProjectSettingsLoadResult loaded = kb::project::ProjectSettingsStore::Load(file);
+    Require(loaded.Succeeded() && loaded.settings == chosen, "the settings file did not keep the quality levels");
+
+    for (const kb::project::ProjectQualityLevel level : { kb::project::ProjectQualityLevel::Auto, kb::project::ProjectQualityLevel::Low,
+             kb::project::ProjectQualityLevel::Medium, kb::project::ProjectQualityLevel::High, kb::project::ProjectQualityLevel::Ultra }) {
+        const std::optional<kb::project::ProjectQualityLevel> parsed =
+            kb::project::ParseProjectQualityLevel(kb::project::ProjectQualityLevelName(level));
+        Require(parsed.has_value() && *parsed == level, "a level's name must parse back to the level");
+    }
+    Require(kb::project::ParseProjectQualityLevel("ULTRA") == kb::project::ProjectQualityLevel::Ultra,
+        "a level name must parse whatever its letter case");
+    Require(!kb::project::ParseProjectQualityLevel("extreme").has_value(), "an unknown level must not parse");
+
+    {
+        std::ofstream output{ file, std::ios::binary | std::ios::trunc };
+        output << "[Project.Rendering]\nShadowQuality=extreme\nGiQuality=low\n";
+    }
+    const kb::project::ProjectSettings fallback = kb::project::ProjectSettingsStore::Load(file).settings;
+    Require(fallback.shadowQuality == kb::project::ProjectQualityLevel::Auto && fallback.giQuality == kb::project::ProjectQualityLevel::Low,
+        "a misspelled level must fall back to Auto and leave the others alone");
+    CleanTempRoot();
+}
+
 // A project directory deep enough to leave no room for the files that go inside it is refused at
 // the door, with the three numbers the reader needs, instead of failing later inside whichever
 // asset write crosses MAX_PATH first with the operating system's own message.
@@ -1653,6 +1695,7 @@ void RunProjectSceneTests() {
     RunIniDocumentToleratesAuthoredTextTest();
     RunProjectDescriptorRoundTripTest();
     RunLegacyProjectDescriptorCarriesItsSettingsTest();
+    RunProjectQualitySettingsTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
     RunProjectPathBudgetTest();
     RunSceneDocumentRoundTripTest();
