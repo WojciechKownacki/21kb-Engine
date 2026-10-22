@@ -1037,7 +1037,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule1Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[0].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[0].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[0].action == kb::scene::AIAction::UseAbility && b.rules[0].actionValue < 1.0F) b.rules[0].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[0].action == kb::scene::AIAction::UseAbility && b.rules[0].actionValue < 1.0F) {
+                b.rules[0].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule1DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[0].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[0].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[0].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1050,7 +1053,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule2Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[1].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[1].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[1].action == kb::scene::AIAction::UseAbility && b.rules[1].actionValue < 1.0F) b.rules[1].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[1].action == kb::scene::AIAction::UseAbility && b.rules[1].actionValue < 1.0F) {
+                b.rules[1].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule2DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[1].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[1].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[1].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1063,7 +1069,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule3Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[2].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[2].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[2].action == kb::scene::AIAction::UseAbility && b.rules[2].actionValue < 1.0F) b.rules[2].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[2].action == kb::scene::AIAction::UseAbility && b.rules[2].actionValue < 1.0F) {
+                b.rules[2].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule3DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[2].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[2].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[2].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1076,7 +1085,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule4Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[3].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[3].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[3].action == kb::scene::AIAction::UseAbility && b.rules[3].actionValue < 1.0F) b.rules[3].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[3].action == kb::scene::AIAction::UseAbility && b.rules[3].actionValue < 1.0F) {
+                b.rules[3].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule4DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[3].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[3].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[3].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1089,7 +1101,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule5Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[4].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[4].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[4].action == kb::scene::AIAction::UseAbility && b.rules[4].actionValue < 1.0F) b.rules[4].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[4].action == kb::scene::AIAction::UseAbility && b.rules[4].actionValue < 1.0F) {
+                b.rules[4].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule5DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[4].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[4].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[4].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1102,7 +1117,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule6Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[5].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[5].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[5].action == kb::scene::AIAction::UseAbility && b.rules[5].actionValue < 1.0F) b.rules[5].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[5].action == kb::scene::AIAction::UseAbility && b.rules[5].actionValue < 1.0F) {
+                b.rules[5].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule6DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[5].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[5].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[5].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1115,7 +1133,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule7Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[6].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[6].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[6].action == kb::scene::AIAction::UseAbility && b.rules[6].actionValue < 1.0F) b.rules[6].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[6].action == kb::scene::AIAction::UseAbility && b.rules[6].actionValue < 1.0F) {
+                b.rules[6].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule7DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[6].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[6].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[6].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
@@ -1128,7 +1149,10 @@ constexpr std::array<FieldBinding, 37> kAIBrainFields{
     FieldBinding{ "rule8Do", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AIBrainComponent*>(c)->rules[7].action) }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() >= static_cast<int>(kb::scene::kAIActionCount)) return false;
             auto& b = *static_cast<kb::scene::AIBrainComponent*>(c); b.rules[7].action = static_cast<kb::scene::AIAction>(v.AsInt());
-            if (b.rules[7].action == kb::scene::AIAction::UseAbility && b.rules[7].actionValue < 1.0F) b.rules[7].actionValue = 1.0F; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
+            if (b.rules[7].action == kb::scene::AIAction::UseAbility && b.rules[7].actionValue < 1.0F) {
+                b.rules[7].actionValue = 1.0F;
+            }
+            b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
     FieldBinding{ "rule8DoValue", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AIBrainComponent*>(c)->rules[7].actionValue }; },
         [](void* c, const ScriptValue& v) noexcept -> bool { auto& b = *static_cast<kb::scene::AIBrainComponent*>(c);
             if (v.Type() == ScriptValueType::Float) b.rules[7].actionValue = v.AsFloat(); else if (v.Type() == ScriptValueType::Int) b.rules[7].actionValue = static_cast<float>(v.AsInt()); else return false; b.preset = kb::scene::AIBrainPreset::Custom; return true; } },
