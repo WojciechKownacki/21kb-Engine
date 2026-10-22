@@ -2481,18 +2481,25 @@ bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emit
     bool collisionPlane = false;
     bool forces = false;
     bool eventActions = false;
+    std::uint8_t fieldTypes = 0U;
     for (std::uint8_t index = 0U; index < emitter.moduleCount; ++index) {
         const auto& module = emitter.modules[index];
         if (!module.enabled) continue;
         if (module.type == kb::scene::ParticleModuleType::CollisionPlane) {
-            // A plane runs on the GPU too, but in world space only.
-            if (local || trail) return false;
+            // The GPU plane only bounces; retain CPU simulation for contact deaths.
+            if (local || trail || std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload).killOnContact) return false;
             collisionPlane = true;
         } else if (module.type == kb::scene::ParticleModuleType::Noise ||
                    module.type == kb::scene::ParticleModuleType::AxisRotation ||
                    module.type == kb::scene::ParticleModuleType::Attraction) {
             // The stateful kernel integrates them; a trail follows the closed form, which they break.
             if (trail) return false;
+            // The GPU parameter block holds one field of each type. Repeated fields must
+            // execute in authored order on the CPU rather than overwrite an earlier field.
+            const std::uint8_t fieldType = module.type == kb::scene::ParticleModuleType::Noise ? 1U :
+                (module.type == kb::scene::ParticleModuleType::AxisRotation ? 2U : 4U);
+            if ((fieldTypes & fieldType) != 0U) return false;
+            fieldTypes |= fieldType;
             forces = true;
         } else if (module.type == kb::scene::ParticleModuleType::TorusSwirl ||
                    module.type == kb::scene::ParticleModuleType::Separation) {
@@ -2573,8 +2580,9 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
             params.attractionRadius = attraction.radius;
         }
     }
-    // A colliding emitter also bounces off the surfaces the renderer's depth buffer shows.
-    params.sceneDepthCollision = params.hasPlane;
+    // An authored plane has no screen-depth semantics. Depth collision is a separate,
+    // explicit renderer capability and must not depend on the presence of a plane.
+    params.sceneDepthCollision = false;
     params.localSpace = emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local;
     params.acceleration = acceleration;
     params.drag = drag;

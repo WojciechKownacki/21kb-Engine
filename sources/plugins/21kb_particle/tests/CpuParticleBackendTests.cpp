@@ -2858,8 +2858,9 @@ void TestFieldModules() {
 
 // A collision plane that kills on contact removes the particle where it struck.
 void TestCollisionKillOnContact() {
-    const auto liveAfterFall = [](bool kill) {
+    const auto liveAfterFall = [](bool kill, bool gpuPreferred) {
         auto effect = Fixture::MakeEffect(0.0F, 4U);
+        if (gpuPreferred) effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
         auto& emitter = effect.emitters[0];
         emitter.localPosition = {0.0F, 0.1F, 0.0F};
         emitter.spawn.direction = {0.0F, -1.0F, 0.0F};
@@ -2873,17 +2874,95 @@ void TestCollisionKillOnContact() {
         Fixture fixture(std::move(effect));
         kb::particle_plugin::CpuParticleBackend backend;
         backend.Warmup();
+        Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded() &&
+                kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(),
+            "kill on contact fixture could not register its snapshot channel");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, gpuPreferred);
         const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
         Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+                backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
                 backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(),
             "kill on contact fixture setup failed");
         for (int step = 0; step < 3; ++step) {
-            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "kill step failed");
+            Require(backend.Simulate(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "kill step failed");
         }
-        return backend.Query(fixture.scene, created.instanceId).liveParticleCount;
+        const auto live = backend.Query(fixture.scene, created.instanceId).liveParticleCount;
+        if (kill || !gpuPreferred) {
+            const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+            Require(snapshot && snapshot->Particles().size() == live,
+                "collision survivors and the renderer snapshot disagree");
+            std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+            kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+            Require(commands.empty(), "a killing plane submitted particles to the bouncing GPU kernel");
+        }
+        Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
+            "kill on contact fixture could not release its backend");
+        return live;
     };
-    Require(liveAfterFall(true) == 0U, "a particle striking a killing plane survived");
-    Require(liveAfterFall(false) == 1U, "a particle bouncing off a plane died");
+    Require(liveAfterFall(true, false) == 0U, "a particle striking a killing plane survived");
+    Require(liveAfterFall(false, false) == 1U, "a particle bouncing off a plane died");
+    Require(liveAfterFall(true, true) == 0U, "a GPU-preferred particle striking a killing plane survived");
+}
+
+void TestRepeatedFieldsPreserveCpuSemantics() {
+    using Type = kb::scene::ParticleModuleType;
+    for (const Type type : {Type::Noise, Type::AxisRotation, Type::Attraction}) {
+        const auto run = [type](bool gpuPreferred, bool firstEnabled, bool secondEnabled) {
+            auto effect = Fixture::MakeEffect(0.0F, 4U);
+            if (gpuPreferred) effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+            auto& emitter = effect.emitters[0];
+            emitter.spawn.randomization = 0.0F;
+            emitter.spawn.spreadDegrees = 0.0F;
+            if (type == Type::Noise) {
+                AddModule(emitter, 1U, type, kb::scene::ParticleNoiseModule{.strength = 0.7F, .frequency = 0.5F});
+                AddModule(emitter, 2U, type, kb::scene::ParticleNoiseModule{.strength = 1.3F, .frequency = 2.0F});
+            } else if (type == Type::AxisRotation) {
+                AddModule(emitter, 1U, type, kb::scene::ParticleAxisRotationModule{.axis = {0.0F, 1.0F, 0.0F}, .degreesPerSecond = 90.0F});
+                AddModule(emitter, 2U, type, kb::scene::ParticleAxisRotationModule{.axis = {1.0F, 0.0F, 0.0F}, .degreesPerSecond = 60.0F});
+            } else {
+                AddModule(emitter, 1U, type, kb::scene::ParticleAttractionModule{.point = {1.0F, 2.0F, 0.0F}, .strength = 3.0F});
+                AddModule(emitter, 2U, type, kb::scene::ParticleAttractionModule{.point = {-2.0F, 0.0F, 3.0F}, .strength = 5.0F});
+            }
+            emitter.modules[0].enabled = firstEnabled;
+            emitter.modules[1].enabled = secondEnabled;
+            Fixture fixture(std::move(effect));
+            kb::particle_plugin::CpuParticleBackend backend;
+            backend.Warmup();
+            kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, gpuPreferred);
+            const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+            Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+                    backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+                    backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(),
+                "repeated field fixture could not emit");
+            for (int step = 0; step < 12; ++step) {
+                Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+                    "repeated field step failed");
+            }
+            const auto states = CopyBackendStates(backend, fixture, created.instanceId);
+            std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+            kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+            if (gpuPreferred && !(firstEnabled && secondEnabled)) {
+                std::size_t spawns = 0U;
+                for (const auto& command : commands) spawns += command.spawns.size();
+                Require(states.empty() && spawns == 1U, "a disabled duplicate field unnecessarily prevented GPU simulation");
+                return kb::particles::ParticleRuntimeState{};
+            }
+            Require(states.size() == 1U, "repeated fields must retain CPU simulation instead of losing a field on the GPU");
+            Require(commands.empty(), "repeated fields submitted an incomplete GPU parameter block");
+            return states.front();
+        };
+        const auto expected = run(false, true, true);
+        const auto actual = run(true, true, true);
+        const auto distance = [](const auto& a, const auto& b) {
+            return kb::math::Length(a.position - b.position) + kb::math::Length(a.velocity - b.velocity);
+        };
+        Require(distance(actual, expected) < 0.00001F, "GPU-preferred repeated fields changed the CPU result");
+        Require(distance(expected, run(false, false, true)) > 0.0001F &&
+                distance(expected, run(false, true, false)) > 0.0001F,
+            "repeated field fixture did not observe both authored modules");
+        static_cast<void>(run(true, false, true));
+        static_cast<void>(run(true, true, false));
+    }
 }
 
 // A WhileAlive binding gives birth at its rate at every live particle of its source emitter.
@@ -3047,7 +3126,7 @@ void TestGpuEmitterRouting() {
 }
 
 // An emitter with a collision plane is eligible for the GPU path too: the plane travels with the emitter
-// parameters (the kernel bounces particles off it and off the scene depth); a sub-emitter still needs the CPU.
+// parameters; it does not enable screen-depth collisions. A sub-emitter still needs the CPU.
 void TestGpuEmitterCollisionRouting() {
     const auto firstCommand = [](bool withSubEmitter) {
         auto effect = Fixture::MakeEffect(600.0F, 200'000U);
@@ -3087,7 +3166,7 @@ void TestGpuEmitterCollisionRouting() {
         return std::pair{ source, cpuLive };
     };
     const auto [onGpu, gpuCpuLive] = firstCommand(false);
-    Require(onGpu.hasParams && onGpu.params.hasPlane && onGpu.params.sceneDepthCollision &&
+    Require(onGpu.hasParams && onGpu.params.hasPlane && !onGpu.params.sceneDepthCollision &&
             onGpu.params.plane.distance == 1.5F && onGpu.params.plane.restitution == 0.4F &&
             onGpu.params.plane.friction == 0.1F && onGpu.params.plane.normal.y == 1.0F && gpuCpuLive == 0U,
         "An emitter with a collision plane must run on the GPU with its plane");
@@ -3304,6 +3383,7 @@ void TestGpuSubEmitterEvents() {
 
 int main() {
     try {
+        TestRepeatedFieldsPreserveCpuSemantics();
         TestGpuSubEmitterEvents();
         TestGpuMeshAndTrailRouting();
         TestCpuParticleSpin();

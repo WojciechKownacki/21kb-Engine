@@ -7845,7 +7845,7 @@ void RunRendererSortsAlphaGpuParticlesTest() {
 // its emitter to the GPU queue, the renderer drains the queue, simulates and draws on a hidden D3D11 device,
 // and the pixels are read back. Particles leave the origin along +x at 4 m/s, so after one second the
 // right half of the image holds a bright line and the left half stays dark.
-void RunRendererDrawsAuthoredParticleFileTest() {
+std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingPlane = false, bool gpuPreferred = true) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_particle_file_to_pixel_" + std::to_string(GetCurrentProcessId()));
     std::error_code error;
@@ -7859,7 +7859,8 @@ void RunRendererDrawsAuthoredParticleFileTest() {
     effect.determinismSeed = 0x5EEDF11EULL;
     effect.durationSeconds = 5.0F;
     effect.looping = true;
-    effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    effect.backendPolicy = gpuPreferred ? kb::scene::ParticleBackendPolicy::GpuVisualPreferred :
+        kb::scene::ParticleBackendPolicy::CpuDeterministic;
     kb::scene::ParticleEmitterAsset emitter;
     emitter.emitterId = 1U;
     emitter.name = "Sparks";
@@ -7876,6 +7877,11 @@ void RunRendererDrawsAuthoredParticleFileTest() {
     emitter.output.material.virtualPath = "/Game/Materials/Spark.21kb";
     emitter.output.blend = kb::scene::ParticleBlendMode::Add;
     emitter.output.depthTest = false;
+    if (killingPlane) {
+        emitter.modules.push_back({.moduleId = 1U, .type = kb::scene::ParticleModuleType::CollisionPlane,
+            .payload = kb::scene::ParticleCollisionPlaneModule{.normal = {-1.0F, 0.0F, 0.0F}, .distance = -1.0F,
+                .maxEventsPerStep = 256U, .killOnContact = true}});
+    }
     effect.emitters.push_back(std::move(emitter));
     Require(kb::scene::ParticleEffectAssetIO::Save(root / "spark.kbvfx", effect), "File-to-pixel test could not write its effect file");
 
@@ -7952,11 +7958,18 @@ void RunRendererDrawsAuthoredParticleFileTest() {
     const double left = MeanBrightness(pixels, NativeTestSurface::kExtent, 0, 28, 8, 36);
     std::fprintf(stderr, "file_to_pixel right=%.1f left=%.1f gpu_consumer=%d gpu_draws=%u cpu_particles=%zu%c",
         right, left, consumer ? 1 : 0, gpuDrawCalls, cpuParticles, 10);
-    // Only the particles born before the renderer registered as consumer (the first frames) live on the CPU.
-    Require(consumer && gpuDrawCalls >= 1U && cpuParticles <= 4U,
-        "File-to-pixel test: the effect must be simulated and drawn on the GPU, not on the CPU");
-    Require(right > 40.0, "File-to-pixel test: the particles from the authored file must be visible along +x");
+    if (killingPlane) {
+        Require(consumer && gpuDrawCalls >= 1U && cpuParticles > 0U,
+            "File-to-pixel test: a killing plane must retain CPU simulation and render its survivors");
+        Require(right > 5.0, "File-to-pixel test: particles before contact must remain visible");
+    } else {
+        // Only births before the renderer registered its consumer live on the CPU.
+        Require(consumer && gpuDrawCalls >= 1U && cpuParticles <= 4U,
+            "File-to-pixel test: the effect must be simulated and drawn on the GPU, not on the CPU");
+        Require(right > 40.0, "File-to-pixel test: the particles from the authored file must be visible along +x");
+    }
     Require(left < 5.0, "File-to-pixel test: nothing may be drawn to the left of the emitter");
+    return pixels;
 }
 void RunRendererMillionParticleFileTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
@@ -8382,6 +8395,31 @@ void RunRendererRendersPointLightShadowTest() {
 }
 #endif
 
+void RunRendererParticleCollisionFallbackTest() {
+#if defined(_WIN32) && defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    const auto reference = RunRendererDrawsAuthoredParticleFileTest(true, false);
+    const auto preferred = RunRendererDrawsAuthoredParticleFileTest(true, true);
+    const auto freeFlight = RunRendererDrawsAuthoredParticleFileTest();
+    Require(reference.size() == preferred.size() && reference.size() == freeFlight.size(),
+        "Collision fallback images have different extents");
+    // Allow two byte values of rounding error per channel on at most one percent of
+    // the image. The CPU reference and preferred fallback use the same draw path.
+    std::size_t mismatches = 0U;
+    std::uint64_t contactDifference = 0U;
+    for (std::size_t index = 0U; index < reference.size(); ++index) {
+        if (index % 4U == 3U) continue;
+        if (std::abs(int(reference[index]) - int(preferred[index])) > 2) ++mismatches;
+        contactDifference += static_cast<std::uint64_t>(std::abs(int(reference[index]) - int(freeFlight[index])));
+    }
+    std::fprintf(stderr, "particle_collision_fallback mismatches=%zu contact_difference=%llu\n",
+        mismatches, static_cast<unsigned long long>(contactDifference));
+    Require(mismatches * 100U <= reference.size(), "GPU-preferred contact deaths changed the rendered CPU result");
+    Require(contactDifference > reference.size() / 2U, "Contact deaths did not visibly remove the free-flying particles");
+#else
+    throw std::runtime_error("Particle collision readback requires the Windows renderer and particle provider module");
+#endif
+}
+
 void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererSubmitsParticleMeshSnapshotAsOneDrawTest();
 #if defined(_WIN32)
@@ -8412,6 +8450,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererFollowsLocalSpaceGpuParticlesTest();
     RunRendererKeepsGpuParticlesAcrossRenderOriginMovesTest();
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    RunRendererParticleCollisionFallbackTest();
     RunRendererDrawsAuthoredParticleFileTest();
     RunRendererMillionParticleFileTest();
 #endif
