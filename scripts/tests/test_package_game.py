@@ -1895,7 +1895,7 @@ class PackageGameTests(unittest.TestCase):
                 package_game._sign_with_pfx_signer(signer, pfx, "wrong-" + password, [unsigned], None, root)
 
     def test_windows_images_are_signed_after_every_binary_edit(self) -> None:
-        plugins = ("kb_physics_jolt_plugin", "kb_audio_miniaudio_plugin", "kb_basic_lighting_plugin", "kb_21kb_particle_plugin")
+        plugins = ("kb_physics_jolt_plugin", "kb_audio_miniaudio_plugin", "kb_basic_lighting_plugin", "kb_ai_plugin", "kb_21kb_particle_plugin")
         with tempfile.TemporaryDirectory() as temporary_text:
             root = Path(temporary_text)
             built = root / "build" / "bin"
