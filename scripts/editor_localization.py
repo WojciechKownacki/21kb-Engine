@@ -55,7 +55,8 @@ def collect():
             if not name.endswith(('.cpp', '.hpp', '.h')):
                 continue
             path = os.path.join(directory, name)
-            source = open(path, encoding='utf-8').read()
+            with open(path, encoding='utf-8') as source_file:
+                source = source_file.read()
             found = [(m.group(1), {'text': unescape(m.group(2))}) for m in TEXT_CALL.finditer(source)]
             found += [(m.group(1), {'one': unescape(m.group(2)), 'other': unescape(m.group(3))})
                       for m in PLURAL_CALL.finditer(source)]
@@ -76,7 +77,8 @@ def quote(text):
 
 def read_catalog(path):
     """language -> key -> {'text': ...} or {category: ...}, read like LocalizationCatalogIO."""
-    tokens = re.findall(r'"(?:[^"\\]|\\.)*"|\S+', open(path, encoding='utf-8').read())
+    with open(path, encoding='utf-8') as catalog_file:
+        tokens = re.findall(r'"(?:[^"\\]|\\.)*"|\S+', catalog_file.read())
     catalog = {}
     language = None
     index = 0
@@ -113,7 +115,8 @@ def extract():
         else:
             lines.append(f'plural {quote(key)} "one" {quote(message["one"])}')
             lines.append(f'plural {quote(key)} "other" {quote(message["other"])}')
-    open(os.path.join(CATALOGS, 'source.kbloc'), 'w', encoding='utf-8', newline='\n').write('\n'.join(lines) + '\n')
+    with open(os.path.join(CATALOGS, 'source.kbloc'), 'w', encoding='utf-8', newline='\n') as catalog_file:
+        catalog_file.write('\n'.join(lines) + '\n')
     print(f'{len(messages)} editor texts written to source.kbloc')
     return 1 if problems else 0
 
