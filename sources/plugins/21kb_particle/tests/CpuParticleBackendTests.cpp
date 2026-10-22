@@ -3074,6 +3074,7 @@ void TestGpuEmitterFieldsAndLargeBursts() {
 void TestGpuEmitterRouting() {
     auto effect = Fixture::MakeEffect(600.0F, 200'000U);
     effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    effect.emitters[0].output.sort = kb::scene::ParticleSortMode::Age;
     AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
         kb::scene::ParticleGravityModule{ .acceleration = { 0.0F, -2.0F, 0.0F }, .sceneGravityScale = 0.0F });
     AddModule(effect.emitters[0], 2U, kb::scene::ParticleModuleType::Drag, kb::scene::ParticleDragModule{ .coefficient = 0.5F });
@@ -3101,6 +3102,7 @@ void TestGpuEmitterRouting() {
     std::size_t spawned = 0U;
     for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
         Require(command.hasParams && command.params.capacity == 200'000U &&
+                command.params.sort == kb::particles::ParticleRenderSortMode::Age &&
                 command.params.acceleration.y == -2.0F && command.params.drag == 0.5F &&
                 command.key.instanceId == created.instanceId && command.key.emitterId == 1U,
             "GPU emitter command carries wrong parameters");

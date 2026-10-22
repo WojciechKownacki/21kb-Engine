@@ -421,6 +421,7 @@ void ParticleGpuRenderer::DispatchGpuEmitters(
     collision.viewProjection = RendererMatrixMath::ViewProjection(camera);
     collision.inverseViewProjection = RendererMatrixMath::Inverse(collision.viewProjection);
     collision.cameraPosition = SceneLightingPacker::CameraPosition(&camera);
+    collision.cameraDepth = {camera.view[2], camera.view[6], camera.view[10], camera.view[14]};
     collision.texelSize = { 1.0F / static_cast<float>(std::max(viewportWidth, 1U)), 1.0F / static_cast<float>(std::max(viewportHeight, 1U)) };
     collision.homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
     collision.resources = &resources;

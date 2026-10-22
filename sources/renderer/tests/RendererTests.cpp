@@ -60,6 +60,7 @@ void RunRendererVisibilityFeedbackTest();
 void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
 void RunRendererParticleCollisionFallbackTest();
+void RunRendererParticleSortModesTest();
 void RunRendererScreenSpaceEffectTests();
 void RunRendererParticleStripSnapshotSubmitTest();
 void RunRendererParticleVolumetricSnapshotSubmitTest();
@@ -229,6 +230,15 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view{ argv[1] } == "scene-render-target-format") {
         kb::render::tests::RunSceneRenderTargetFormatTests();
         return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-sort-modes") {
+        try {
+            kb::render::tests::RunRendererParticleSortModesTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "%s\n", error.what());
+            return EXIT_FAILURE;
+        }
     }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-collision-fallback") {
         try {

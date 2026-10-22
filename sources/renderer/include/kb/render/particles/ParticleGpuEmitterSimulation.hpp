@@ -56,12 +56,14 @@ public:
     // from the newest simulated time.
     void Advance(std::uint64_t sceneId, float frameDeltaSeconds) noexcept;
     // What the frame gives the simulation: the scene depth the camera has drawn so far (colliding emitters
-    // bounce off it) and the camera position (alpha-blended emitters are sorted back to front from it).
+    // bounce off it) and the camera data used by the authored particle sort.
     struct FrameContext {
         bgfx::TextureHandle depthTexture = BGFX_INVALID_HANDLE;
         std::array<float, 16> viewProjection{};
         std::array<float, 16> inverseViewProjection{};
         std::array<float, 4> cameraPosition{};
+        // The view matrix's depth row, including translation, in render space.
+        std::array<float, 4> cameraDepth{0.0F, 0.0F, 1.0F, 0.0F};
         std::array<float, 2> texelSize{};
         bool homogeneousDepth = false;
         // Resolve the material of a mesh emitter, whose base colour goes into the instance colour.
@@ -139,7 +141,7 @@ private:
     [[nodiscard]] bool EnsureState(Emitter& emitter) noexcept;
     // Creates the sort buffers of an alpha-blended emitter; false when the budget or a kernel is missing.
     [[nodiscard]] bool EnsureSort(Emitter& emitter) noexcept;
-    void SortInstances(bgfx::ViewId viewId, const Emitter& emitter, const std::array<float, 4>& cameraPosition) noexcept;
+    void SortInstances(bgfx::ViewId viewId, const Emitter& emitter, const FrameContext& frame, float simTime) noexcept;
     // Moves the records of the scene's world-space emitters from the record origin to the render origin.
     void Rebase(bgfx::ViewId viewId, std::uint64_t sceneId, SceneClock& clock) noexcept;
     // Whether the draw order of this emitter's instances matters: alpha-blended billboards, and mesh particles
@@ -166,11 +168,12 @@ private:
     bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackDepth_ = BGFX_INVALID_HANDLE;
-    // Optional kernels of the back-to-front sort (all three are needed).
+    // Optional kernels of the authored particle sort (all three are needed).
     bgfx::ProgramHandle sortKeysProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle sortStepProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle sortGatherProgram_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sortCameraUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle sortDepthUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sortParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle motionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle timeUniform_ = BGFX_INVALID_HANDLE;

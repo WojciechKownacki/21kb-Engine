@@ -2604,6 +2604,7 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
         ? std::min(emitter.maxParticles, maxParticlesOverrides_[denseIndex]) : emitter.maxParticles;
     params.output = ToRenderOutput(emitter.outputType);
     params.blend = ToRenderBlend(emitter.blendMode);
+    params.sort = ToRenderSort(emitter.sortMode);
     params.depth = ToRenderDepth(emitter.depthTest, emitter.depthWrite);
     params.alignment = ToRenderAlignment(emitter.alignment);
     params.softParticles = emitter.softParticles;

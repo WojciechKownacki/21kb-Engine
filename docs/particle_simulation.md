@@ -20,3 +20,20 @@ regressions. On Windows, `kb_renderer_tests particle-collision-fallback`
 loads an authored effect through the particle provider and compares hidden
 D3D11 readback against CPU simulation and a free-flight control. This check
 also runs in the renderer's particle mesh suite.
+
+The authored sort mode reaches GPU emitters as well as CPU render snapshots:
+
+| Mode | Order |
+| --- | --- |
+| None | Original instance order |
+| BackToFront | Descending view-space depth |
+| FrontToBack | Ascending view-space depth |
+| Distance | Descending distance from the camera |
+| Age | Descending normalized age, quantized to 16 bits |
+
+Additive billboards retain their instance order on both paths. Mesh particles
+sort when their material is translucent. Depth sorting uses the view matrix,
+including rotated and orthographic cameras, rather than radial distance.
+`kb_renderer_tests particle-sort-modes` verifies the draw order with hidden
+D3D11 readback, overlapping colours, a changed camera and off-axis particles
+whose depth order differs from their distance order.

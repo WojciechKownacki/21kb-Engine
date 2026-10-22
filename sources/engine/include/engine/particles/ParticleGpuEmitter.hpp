@@ -50,6 +50,7 @@ struct ParticleGpuEmitterParams {
     std::uint32_t capacity = 0U;
     ParticleRenderOutput output = ParticleRenderOutput::Billboard;
     ParticleRenderBlendMode blend = ParticleRenderBlendMode::Alpha;
+    ParticleRenderSortMode sort = ParticleRenderSortMode::BackToFront;
     ParticleRenderDepthMode depth = ParticleRenderDepthMode::ReadOnly;
     ParticleRenderAlignment alignment = ParticleRenderAlignment::CameraFacing;
     bool softParticles = false;

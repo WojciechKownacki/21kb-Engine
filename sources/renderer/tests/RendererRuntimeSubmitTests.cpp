@@ -7402,7 +7402,9 @@ void RunVoxelGridFollowsMeshGeometryTest() {
 // Two overlapping alpha-blended particles of one GPU emitter: the older one is blue, the younger red (the
 // colour curve turns blue at half the life). Whichever is nearer to the camera must end up on top,
 // whatever the order of their ring slots.
-[[nodiscard]] std::array<int, 3> OverlappingAlphaParticlesCentre(bool olderIsNearer) {
+[[nodiscard]] std::array<int, 3> OverlappingAlphaParticlesCentre(bool olderIsNearer,
+    kb::particles::ParticleRenderSortMode sort = kb::particles::ParticleRenderSortMode::BackToFront,
+    bool offAxis = false, bool reverseCamera = false) {
     constexpr std::uint16_t kSize = 64U;
     SceneRenderLightingConfig lighting{};
     const auto queue = [&](kb::scene::Scene& scene, int frame) {
@@ -7411,24 +7413,34 @@ void RunVoxelGridFollowsMeshGeometryTest() {
         command.key = { 1U, 1U };
         command.simTime = 10.0;
         command.hasParams = true;
-        command.params.capacity = 16U;
+        command.params.capacity = 5U; // Includes dead slots and non-power-of-two sort padding.
         command.params.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+        command.params.sort = sort;
         command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
         for (std::size_t sample = 0U; sample < command.params.color.size(); ++sample) {
             command.params.color[sample] = sample < 3U ? std::array<float, 4>{ 1.0F, 0.0F, 0.0F, 0.9F }
                                                        : std::array<float, 4>{ 0.0F, 0.0F, 1.0F, 0.9F };
         }
-        command.params.size.fill(2.0F);
+        // Match projected size at view depths 5 and 9 so the last particle's
+        // colour, rather than a larger apparent radius, determines the result.
+        for (std::size_t sample = 0U; sample < command.params.size.size(); ++sample) {
+            command.params.size[sample] = sample < 3U ? (olderIsNearer ? 3.6F : 2.0F) : (olderIsNearer ? 2.0F : 3.6F);
+        }
+        if (offAxis) {
+            for (std::size_t sample = 0U; sample < command.params.size.size(); ++sample) {
+                command.params.size[sample] = sample < 3U ? 24.0F : 6.0F;
+            }
+        }
         const float olderZ = olderIsNearer ? -1.0F : 3.0F;
         const float youngerZ = olderIsNearer ? 3.0F : -1.0F;
         // The older particle takes ring slot 0, the younger slot 1: drawn in slot order, the younger would win.
         command.spawns.push_back(kb::particles::ParticleGpuSpawn{
-            .position = { 0.0F, 0.0F, olderZ }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+            .position = { offAxis ? 2.0F : 0.0F, 0.0F, olderZ }, .birthTime = 0.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
         command.spawns.push_back(kb::particles::ParticleGpuSpawn{
-            .position = { 0.0F, 0.0F, youngerZ }, .birthTime = 8.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
+            .position = { offAxis ? 8.0F : 0.0F, 0.0F, youngerZ }, .birthTime = 8.0F, .velocity = { 0.0F, 0.0F, 0.0F }, .lifetime = 20.0F });
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
     };
-    const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, -6.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F }, 30.0F, lighting, 4,
+    const auto pixels = RenderScreenSpaceScene({}, {}, bx::Vec3{ 0.0F, 0.0F, reverseCamera ? 6.0F : -6.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F }, 30.0F, lighting, 4,
         kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
     // The particle core is drawn white whatever its colour; its soft edge, a few pixels out, keeps the tint.
     const std::size_t offset = (32U * kSize + 42U) * 4U;
@@ -7837,6 +7849,27 @@ void RunRendererSortsAlphaGpuParticlesTest() {
         olderNearer[0], olderNearer[1], olderNearer[2], youngerNearer[0], youngerNearer[1], youngerNearer[2], 10);
     Require(olderNearer[2] > olderNearer[0] + 20, "GPU sort test: the nearer, older (blue) particle must be drawn over the farther one");
     Require(youngerNearer[0] > youngerNearer[2] + 20, "GPU sort test: the nearer, younger (red) particle must be drawn over the farther one");
+    using Sort = kb::particles::ParticleRenderSortMode;
+    for (const Sort mode : {Sort::None, Sort::FrontToBack, Sort::Age, Sort::Distance}) {
+        const auto colour = OverlappingAlphaParticlesCentre(true, mode);
+        std::fprintf(stderr, "gpu_particle_sort mode=%u colour=%d,%d,%d\n",
+            static_cast<unsigned>(mode), colour[0], colour[1], colour[2]);
+        if (mode == Sort::Distance) {
+            Require(colour[2] > colour[0] + 20, "GPU distance sort did not draw the nearer blue particle last");
+        } else {
+            Require(colour[0] > colour[2] + 20, "GPU sort mode was ignored: the red particle must be drawn last");
+        }
+    }
+    const auto reversed = OverlappingAlphaParticlesCentre(true, Sort::BackToFront, false, true);
+    Require(reversed[0] > reversed[2] + 20, "GPU view-depth sort did not follow the changed camera");
+    // The red particle is nearer in view depth but farther in Euclidean distance:
+    // sqrt(8^2 + 5^2) > sqrt(2^2 + 9^2). Both soft edges cover the sampled pixel.
+    const auto depth = OverlappingAlphaParticlesCentre(false, Sort::BackToFront, true);
+    const auto distance = OverlappingAlphaParticlesCentre(false, Sort::Distance, true);
+    std::fprintf(stderr, "gpu_particle_sort off_axis_depth=%d,%d,%d distance=%d,%d,%d\n",
+        depth[0], depth[1], depth[2], distance[0], distance[1], distance[2]);
+    Require(depth[0] > distance[0] + 3 && distance[2] > depth[2] + 3,
+        "GPU distance sorting was substituted for authored view-depth sorting");
 }
 
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
@@ -8394,6 +8427,14 @@ void RunRendererRendersPointLightShadowTest() {
     Require(shadowed * 10 < unshadowed * 8, "Point shadow test: the plate must darken the floor beneath it");
 }
 #endif
+
+void RunRendererParticleSortModesTest() {
+#if defined(_WIN32)
+    RunRendererSortsAlphaGpuParticlesTest();
+#else
+    throw std::runtime_error("Particle sort readback requires the Windows renderer");
+#endif
+}
 
 void RunRendererParticleCollisionFallbackTest() {
 #if defined(_WIN32) && defined(KB_21KB_PARTICLE_PLUGIN_PATH)
