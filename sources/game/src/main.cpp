@@ -725,7 +725,11 @@ int RunGame(const GameOptions& options) {
                         + " entity=" + std::to_string(event.entityId) + " mesh=" + std::to_string(event.meshAssetId)
                         + " material=" + std::to_string(event.materialAssetId) + " texture=" + std::to_string(event.textureAssetId)
                         + " profile=" + std::to_string(event.postProcessProfileAssetId)
-                        + "; drawn with the fallback material or skipped");
+                        + " particle_instance=" + std::to_string(event.particleInstanceId)
+                        + " particle_emitter=" + std::to_string(event.particleEmitterId)
+                        + " particle_update=" + std::string{kb::render::ParticleGpuUpdateFailureName(event.particleGpuUpdateFailure)}
+                        + (event.kind == kb::render::SceneRenderDiagnosticKind::ParticleGpuUpdateRejected
+                            ? "; retained the last complete GPU emitter state" : "; drawn with the fallback material or skipped"));
                 }
             }
         }

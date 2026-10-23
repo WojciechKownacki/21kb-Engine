@@ -1,5 +1,6 @@
 #include "CliCommands.hpp"
 #include "CliMaterialShared.hpp"
+#include "engine/scene/ParticleEffectAssetSchema.hpp"
 
 #include <algorithm>
 #include <array>
@@ -49,11 +50,12 @@ struct ProfileOptions {
     std::uint32_t warmup = 60U;
     std::uint32_t frames = 180U;
     std::uint32_t samples = 64U;
+    std::uint64_t bufferBudget = 0U;
 };
 
 std::optional<ProfileOptions> ParseProfileOptions(const ArgumentList& arguments, CommandIo io) {
-    constexpr std::array<std::string_view, 7U> allowed{
-        "--project", "--effect", "--backend", "--warmup", "--frames", "--samples", "--require-gpu"};
+    constexpr std::array<std::string_view, 8U> allowed{
+        "--project", "--effect", "--backend", "--warmup", "--frames", "--samples", "--require-gpu", "--gpu-buffer-budget"};
     if (!arguments.Errors().empty() || !arguments.UnknownOptions(allowed).empty() || !arguments.Positionals().empty()) {
         io.err << "error: vfx-profile received an unknown option or positional argument\n";
         return std::nullopt;
@@ -65,7 +67,7 @@ std::optional<ProfileOptions> ParseProfileOptions(const ArgumentList& arguments,
         }
     }
     ProfileOptions options;
-    const auto parse = [&](std::string_view name, std::uint32_t& value, std::uint32_t minimum, std::uint32_t maximum) {
+    const auto parse = [&](std::string_view name, auto& value, auto minimum, auto maximum) {
         const auto text = arguments.Option(name);
         if (!text) return true;
         const auto result = std::from_chars(text->data(), text->data() + text->size(), value);
@@ -77,7 +79,8 @@ std::optional<ProfileOptions> ParseProfileOptions(const ArgumentList& arguments,
     };
     if (!parse("--warmup", options.warmup, 0U, 36000U) ||
         !parse("--frames", options.frames, 1U, 36000U) ||
-        !parse("--samples", options.samples, 1U, 4096U)) return std::nullopt;
+        !parse("--samples", options.samples, 1U, 4096U) ||
+        !parse("--gpu-buffer-budget", options.bufferBudget, std::uint64_t{0U}, kb::scene::kParticleEffectMaxGpuResourceBytes)) return std::nullopt;
     return options;
 }
 
@@ -209,6 +212,7 @@ int Profile(const ArgumentList& arguments, ProfileOptions options, CommandIo io)
     DisplayConfig config;
     config.syncMode = DisplaySyncMode::Uncapped;
     config.preferredBgfxRendererType = static_cast<std::int32_t>(rendererType);
+    config.particleGpuBufferBudgetBytes = options.bufferBudget;
     if (!renderer.Initialize(surface, &config) || bgfx::getRendererType() != rendererType) {
         io.err << "error: requested bgfx backend unavailable\n"; return 1;
     }
@@ -270,9 +274,12 @@ int Profile(const ArgumentList& arguments, ProfileOptions options, CommandIo io)
     };
     const auto processBefore = CpuNanoseconds(true);
     const auto threadBefore = CpuNanoseconds(false);
+    bool renderingSucceeded = true;
     for (std::uint32_t i = 0U; i < options.frames; ++i) {
         const auto begin = Clock::now();
         if (!frame()) { io.err << "error: measured frame failed or exceeded two minutes\n"; return 1; }
+        renderingSucceeded = renderingSucceeded && !renderer.LastSceneDiagnostics().HasErrors() &&
+            !renderer.LastSceneSubmitStats().HasMissingResources() && renderer.LastSceneSubmitStats().droppedInstanceCount == 0U;
         wallTimes.push_back(std::chrono::duration<double, std::nano>(Clock::now() - begin).count());
         const auto* stats = bgfx::getStats();
         if (stats) {
@@ -300,6 +307,7 @@ int Profile(const ArgumentList& arguments, ProfileOptions options, CommandIo io)
     report.Set("admission_frames", JsonValue::MakeNumber(1.0));
     report.Set("warmup_frames", JsonValue::MakeNumber(options.warmup));
     report.Set("measured_frames", JsonValue::MakeNumber(options.frames));
+    report.Set("gpu_buffer_budget_bytes", Integer(options.bufferBudget == 0U ? kb::scene::kParticleEffectMaxGpuResourceBytes : options.bufferBudget));
     report.Set("first_measured_bgfx_frame", Integer(firstFrame));
     report.Set("last_measured_bgfx_frame", Integer(lastFrame));
     report.Set("process_cpu_ns", CpuDifference(processBefore, processAfter));
@@ -350,6 +358,7 @@ int Profile(const ArgumentList& arguments, ProfileOptions options, CommandIo io)
     auto captures = JsonValue::MakeArray();
     bool readbackSucceeded = true;
     const auto draws = renderer.GpuParticleDraws(scene);
+    const auto rejectedUpdates = renderer.RejectedGpuParticleUpdates(scene);
     if (snapshot) {
         for (const auto& emitter : snapshot->Emitters()) {
             if (emitter.simulationPath == kb::particles::ParticleEmitterSimulationPath::Gpu) {
@@ -381,11 +390,20 @@ int Profile(const ArgumentList& arguments, ProfileOptions options, CommandIo io)
         row.Set("raw_instance_records", std::move(records));
         captures.Append(std::move(row));
     }
-    const bool execution = allGpu && !draws.empty() && readbackSucceeded && computeSubmissions > 0U && particleDraws > 0U;
+    const bool execution = allGpu && !draws.empty() && readbackSucceeded && rejectedUpdates.empty() && computeSubmissions > 0U && particleDraws > 0U;
     report.Set("gpu_execution_observed", JsonValue::MakeBool(execution));
     report.Set("gpu_captures", std::move(captures));
     report.Set("readback_outside_measurement", JsonValue::MakeBool(true));
-    const bool succeeded = snapshot && !snapshot->Emitters().empty() && readbackSucceeded &&
+    auto rejections = JsonValue::MakeArray();
+    for (const auto& rejection : rejectedUpdates) {
+        auto row = JsonValue::MakeObject();
+        row.Set("instance_id", Integer(rejection.key.instanceId));
+        row.Set("emitter_id", Integer(rejection.key.emitterId));
+        row.Set("reason", JsonValue::MakeString(std::string{ParticleGpuUpdateFailureName(rejection.failure)}));
+        rejections.Append(std::move(row));
+    }
+    report.Set("rejected_gpu_updates", std::move(rejections));
+    const bool succeeded = snapshot && !snapshot->Emitters().empty() && readbackSucceeded && renderingSucceeded && rejectedUpdates.empty() &&
         (!arguments.Flag("--require-gpu") || (execution && !gpuTimes.empty()));
     report.Set("succeeded", JsonValue::MakeBool(succeeded));
     snapshot.reset();

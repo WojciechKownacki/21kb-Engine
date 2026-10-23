@@ -97,6 +97,18 @@ string(JSON count GET "${last_report}" gpu_captures 0 ordered_motion_operation_c
 if(NOT count EQUAL 6)
     message(FATAL_ERROR "Repeated mixed modules were lost: ${last_report}")
 endif()
+execute_process(COMMAND "${CLI}" vfx-profile --project "${project}" --effect /Game/Particles/Probe.kbvfx
+    --warmup 0 --frames 8 --require-gpu --gpu-buffer-budget 224
+    RESULT_VARIABLE code OUTPUT_VARIABLE report ERROR_VARIABLE error TIMEOUT 150)
+if(code EQUAL 0)
+    message(FATAL_ERROR "Rejected GPU allocation passed the strict profile: ${report}")
+endif()
+string(JSON reason GET "${report}" rejected_gpu_updates 0 reason)
+string(JSON succeeded GET "${report}" succeeded)
+string(JSON executed GET "${report}" gpu_execution_observed)
+if(NOT reason STREQUAL "resource-creation" OR succeeded OR executed)
+    message(FATAL_ERROR "CLI hid the actual GPU allocation rejection: ${report}")
+endif()
 cli(vfx-set --project "${project}" --effect /Game/Particles/Probe.kbvfx --set effect.backendPolicy=CpuDeterministic)
 cli(vfx-profile --project "${project}" --effect /Game/Particles/Probe.kbvfx --warmup 0 --frames 8 --samples 8)
 string(JSON path GET "${last_output}" emitters 0 path)
@@ -115,7 +127,7 @@ if(succeeded)
     message(FATAL_ERROR "Failed strict GPU profile reported success")
 endif()
 foreach(invalid IN ITEMS "--frames;0" "--frames;-1" "--frames;36001" "--samples;0" "--samples;4097"
-    "--warmup;bad" "--backend;noop" "--unknown;1" "--quiet" "--frames;1;--frames;2")
+    "--warmup;bad" "--backend;noop" "--unknown;1" "--quiet" "--frames;1;--frames;2" "--gpu-buffer-budget;-1" "--gpu-buffer-budget;18446744073709551615")
     execute_process(COMMAND "${CLI}" vfx-profile --project "${project}" --effect /Game/Particles/Probe.kbvfx ${invalid}
         RESULT_VARIABLE code OUTPUT_VARIABLE report ERROR_VARIABLE error TIMEOUT 10)
     if(code EQUAL 0)

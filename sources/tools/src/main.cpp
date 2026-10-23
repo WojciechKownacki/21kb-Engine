@@ -168,6 +168,7 @@ R"(  animator     Build an Animator Controller, the state machine that picks a c
                  --project <dir> --effect /Game/<path>.kbvfx
                  [--backend d3d11|d3d12|vulkan|opengl] [--warmup 60] [--frames 180]
                  [--samples 64] [--require-gpu]
+                 [--gpu-buffer-budget <bytes>] (0: engine limit; bounds logical buffers)
                Versioned JSON includes actual routing, buffer readback, process/thread
                CPU time, GPU timestamps and memory. Asset backend policy is preserved.
   vfx-set      Change values of a particle effect (keys as vfx-show prints them, e.g.

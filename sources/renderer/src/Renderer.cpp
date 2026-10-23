@@ -314,7 +314,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     ShaderLoader::SetBinaryProvider(shaderBinaryProvider_);
 
     sceneRenderer_ = std::make_unique<SceneRenderer>();
-    if (!sceneRenderer_->Initialize()) {
+    if (!sceneRenderer_->Initialize(displayConfig_.particleGpuBufferBudgetBytes)) {
         Shutdown();
         return false;
     }
@@ -1090,6 +1090,15 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     particleRenderSynchronizer_->Sync(scene, renderScene);
     sceneRenderer_->SyncGpuParticleEmitters(const_cast<kb::scene::Scene&>(scene), frameDeltaSeconds_,
         static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL, renderScene.RenderOrigin());
+    for (const auto& rejection : sceneRenderer_->RejectedGpuParticleUpdates(scene.Id())) {
+        lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+            .severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::ParticleGpuUpdateRejected,
+            .particleEmitterId = rejection.key.emitterId,
+            .particleInstanceId = rejection.key.instanceId,
+            .particleGpuUpdateFailure = rejection.failure,
+        });
+    }
     if (const auto& particleSnapshot = renderScene.ParticleRenderSnapshot(); particleSnapshot != nullptr) {
         if (RendererDebugLogEnabled("renderer")) {
             std::ostringstream message;
@@ -2452,6 +2461,11 @@ std::span<const ParticleGpuEmitterSimulation::Draw> Renderer::GpuParticleDraws(c
 
 std::uint64_t Renderer::GpuEmitterAllocatedBytes() const noexcept {
     return sceneRenderer_ == nullptr ? 0U : sceneRenderer_->GpuEmitterAllocatedBytes();
+}
+
+std::span<const ParticleGpuEmitterSimulation::RejectedUpdate> Renderer::RejectedGpuParticleUpdates(const kb::scene::Scene& scene) const noexcept {
+    return sceneRenderer_ == nullptr ? std::span<const ParticleGpuEmitterSimulation::RejectedUpdate>{}
+        : sceneRenderer_->RejectedGpuParticleUpdates(scene.Id());
 }
 
 void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {

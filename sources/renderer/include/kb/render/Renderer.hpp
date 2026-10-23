@@ -278,6 +278,7 @@ public:
     // Counts are buffer capacities, and bytes are requested allocations rather than physical residency.
     [[nodiscard]] std::span<const ParticleGpuEmitterSimulation::Draw> GpuParticleDraws(const kb::scene::Scene& scene) const noexcept;
     [[nodiscard]] std::uint64_t GpuEmitterAllocatedBytes() const noexcept;
+    [[nodiscard]] std::span<const ParticleGpuEmitterSimulation::RejectedUpdate> RejectedGpuParticleUpdates(const kb::scene::Scene& scene) const noexcept;
     // When the render origin of a scene follows its viewing camera (docs/large_worlds.md).
     void SetRenderOriginPolicy(const RenderOriginPolicy& policy) noexcept;
     [[nodiscard]] const RenderOriginPolicy& CurrentRenderOriginPolicy() const noexcept;

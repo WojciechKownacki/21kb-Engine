@@ -118,6 +118,7 @@ add_library(kb_renderer STATIC
     include/kb/render/gi/SceneGiVoxelGrid.hpp
     include/kb/render/particles/ParticleGpuEmitterSimulation.hpp
     include/kb/render/particles/ParticleGpuReadback.hpp
+    include/kb/render/particles/ParticleGpuUpdateFailure.hpp
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
     src/bake/MeshBaker.cpp

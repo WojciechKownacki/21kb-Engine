@@ -362,6 +362,120 @@ void VerifyContactReadback(MotionReadback& readback) {
     simulation.Shutdown();
     std::fprintf(stderr, "particle_contact_float_readback birth=live contact=dead retained=dead reused=live\n");
 }
+
+void VerifyRejectedStateUpdates() {
+    ParticleGpuEmitterSimulation simulation;
+    Require(simulation.Initialize(224U), "GPU state-budget test requires actual compute support");
+    kb::particles::ParticleGpuEmitterCommand first;
+    first.key = {1U, 1U};
+    first.hasParams = true;
+    first.params.capacity = 1U;
+    first.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+    first.params.size.fill(1.0F);
+    first.params.color.fill({1.0F, 1.0F, 1.0F, 1.0F});
+    first.spawns.push_back({.position = {0.0F, 0.2F, 0.0F}, .velocity = {0.0F, -12.0F, 0.0F}, .lifetime = 8.0F});
+    auto second = first;
+    second.key.instanceId = 2U;
+    const std::array commands{first, second};
+    simulation.Apply(1U, commands);
+    const auto dispatch = [&] {
+        simulation.Advance(1U, kStep);
+        simulation.Dispatch(0U, 1U, {});
+        static_cast<void>(bgfx::frame());
+    };
+    const auto draw = [&] {
+        const auto draws = simulation.Draws(1U);
+        const auto found = std::find_if(draws.begin(), draws.end(), [&](const auto& row) { return row.key == first.key; });
+        Require(found != draws.end(), "Rejected update destroyed the prior GPU emitter");
+        return *found;
+    };
+    dispatch();
+    const auto handle = draw().instances;
+    Require(simulation.AllocatedBytes() == 224U, "GPU budget fixture did not allocate two real emitters");
+    auto update = first;
+    update.spawns = {{.position = {99.0F, 99.0F, 99.0F}, .lifetime = 8.0F}};
+    update.simTime = 0.2;
+    update.params.hasPlane = true;
+    update.params.plane.killOnContact = true;
+    update.params.size.fill(2.0F);
+    update.params.drag = 0.7F;
+    update.params.motionModuleCount = 2U;
+    update.params.motionModules[0] = {.type = Motion::Noise, .strength = 0.7F, .parameter = 0.5F, .seed = 3U};
+    update.params.motionModules[1] = {.type = Motion::Noise, .strength = 1.3F, .parameter = 2.0F, .seed = 6U};
+    simulation.Apply(1U, {&update, 1U});
+    dispatch();
+    Require(simulation.RejectedUpdates(1U).size() == 1U &&
+        simulation.RejectedUpdates(1U)[0].key == first.key &&
+        simulation.RejectedUpdates(1U)[0].failure == ParticleGpuUpdateFailure::StateAllocation,
+        "State allocation rejection lost its emitter identity or reason");
+    ParticleGpuReadback capture;
+    Require(draw().instances.idx == handle.idx && draw().params->drag == 0.0F && draw().params->size[0] == 1.0F &&
+        !draw().params->hasPlane && draw().params->motionModuleCount == 0U && simulation.AllocatedBytes() == 224U &&
+        capture.Read(draw(), 1U), "Rejected state update changed the previous complete GPU parameters or resources");
+    Require(std::abs(capture.Records()[0][1] + 2.2F) < 0.0001F && capture.Records()[0][3] == 1.0F && capture.Records()[0][9] == -12.0F,
+        "Rejected state update applied its changed size, drag or birth data to the actual GPU buffer");
+    kb::particles::ParticleGpuEmitterCommand clock;
+    clock.key = first.key;
+    clock.simTime = 0.3;
+    simulation.Apply(1U, {&clock, 1U});
+    dispatch();
+    Require(simulation.RejectedUpdates(1U).size() == 1U, "A clock-only update hid an unresolved GPU rejection");
+    update.params.capacity = 4U;
+    simulation.Apply(1U, {&update, 1U});
+    dispatch();
+    Require(simulation.RejectedUpdates(1U)[0].failure == ParticleGpuUpdateFailure::ResourceCreation &&
+        draw().instances.idx == handle.idx && draw().capacity == 1U && simulation.AllocatedBytes() == 224U,
+        "Failed GPU resize destroyed or replaced the last complete emitter");
+    kb::particles::ParticleGpuEmitterCommand release;
+    release.key = second.key;
+    release.release = true;
+    simulation.Apply(1U, {&release, 1U});
+    Require(simulation.AllocatedBytes() == 112U, "Releasing the other emitter did not restore budget headroom");
+    update.params.capacity = 1U;
+    update.clear = true;
+    update.simTime = 0.35;
+    update.spawns = {{.position = {0.0F, 0.2F, 0.0F}, .birthTime = 0.3F, .velocity = {0.0F, -12.0F, 0.0F}, .lifetime = 8.0F}};
+    simulation.Apply(1U, {&update, 1U});
+    dispatch();
+    Require(simulation.RejectedUpdates(1U).empty() && simulation.AllocatedBytes() == 144U &&
+        draw().params->plane.killOnContact && draw().params->motionModuleCount == 2U &&
+        draw().params->motionModules[0].strength == 0.7F && draw().params->motionModules[1].strength == 1.3F && capture.Read(draw(), 1U),
+        "GPU update did not accept all collision/motion parameters after budget became available");
+    Require(std::all_of(capture.Records()[0].begin(), capture.Records()[0].end(), [](float value) { return value == 0.0F; }),
+        "Accepted contact/motion retry did not kill the actual GPU particle");
+    update.params.motionModuleCount = 17U;
+    simulation.Apply(1U, {&update, 1U});
+    Require(simulation.RejectedUpdates(1U).size() == 1U &&
+        simulation.RejectedUpdates(1U)[0].failure == ParticleGpuUpdateFailure::InvalidParameters && draw().params->motionModuleCount == 2U,
+        "Oversized GPU motion input was not rejected before accessing the operation array");
+    simulation.ReleaseScene(1U);
+    Require(simulation.AllocatedBytes() == 0U && simulation.RejectedUpdates(1U).empty(), "GPU release retained buffers or rejected update metadata");
+    simulation.Shutdown();
+    Require(simulation.Initialize(448U), "GPU resize retry could not initialize its bounded budget");
+    simulation.Apply(1U, {&first, 1U});
+    dispatch();
+    const auto oldHandle = draw().instances;
+    update.params.capacity = 2U;
+    update.params.motionModuleCount = 2U;
+    update.simTime = 0.1;
+    update.spawns = {{.position = {1.0F, 1.0F, 0.0F}, .birthTime = 0.1F, .lifetime = 8.0F},
+        {.position = {2.0F, 1.0F, 0.0F}, .birthTime = 0.1F, .lifetime = 8.0F}};
+    simulation.Apply(1U, {&update, 1U});
+    dispatch();
+    const bool resizedRead = capture.Read(draw(), 2U);
+    std::fprintf(stderr, "particle_gpu_resize bytes=%llu capacity=%u old=%u new=%u read=%d rows=%zu x=%g/%g size=%g\n",
+        static_cast<unsigned long long>(simulation.AllocatedBytes()), draw().capacity, oldHandle.idx, draw().instances.idx,
+        resizedRead ? 1 : 0, capture.Records().size(), capture.Records().empty() ? -1.0F : capture.Records()[0][0],
+        capture.Records().size() < 2U ? -1.0F : capture.Records()[1][0], capture.Records().empty() ? -1.0F : capture.Records()[0][3]);
+    Require(simulation.RejectedUpdates(1U).empty() && simulation.AllocatedBytes() == 288U && draw().capacity == 2U &&
+        draw().instances.idx != oldHandle.idx && resizedRead &&
+        capture.Records()[0][0] == 1.0F && capture.Records()[1][0] == 2.0F && capture.Records()[0][3] == 2.0F,
+        "Successful GPU resize did not replace the complete allocation and both actual instance records");
+    simulation.ReleaseScene(1U);
+    Require(simulation.AllocatedBytes() == 0U, "Successful GPU resize leaked its replacement buffers");
+    simulation.Shutdown();
+    std::fprintf(stderr, "particle_gpu_state_budget rejection=typed prior_state=preserved resize=atomic clock_error=persistent retry=complete contact=dead invalid_motion=rejected release_bytes=0\n");
+}
 #endif
 } // namespace
 
@@ -378,6 +492,7 @@ void RunParticleGpuMotionTests(bool kernelOnly) {
         MotionReadback readback;
         VerifyNativeReadbackBounds();
         VerifyContactReadback(readback);
+        VerifyRejectedStateUpdates();
         for (int kind = 0; kind < 5; ++kind) {
             std::array<float, 20> baseline{};
             for (int variant = 0; variant < (kind >= 3 ? 4 : 2); ++variant) {

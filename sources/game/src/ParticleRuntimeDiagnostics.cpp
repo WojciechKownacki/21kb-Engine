@@ -162,8 +162,18 @@ ParticleRuntimeDiagnosticResult CaptureParticleRuntimeDiagnostics(
         captures.Append(std::move(row));
     }
     report.Set("gpu_captures", std::move(captures));
-    result.gpuExecutionObserved = allGpu && !draws.empty() && captured && observedCompute > 0U && observedParticleDraws > 0U;
-    result.succeeded = snapshot && !snapshot->Emitters().empty() && captured &&
+    auto rejections = JsonValue::MakeArray();
+    const auto rejectedUpdates = renderer.RejectedGpuParticleUpdates(scene);
+    for (const auto& rejection : rejectedUpdates) {
+        auto row = JsonValue::MakeObject();
+        row.Set("instance_id", Integer(rejection.key.instanceId));
+        row.Set("emitter_id", Integer(rejection.key.emitterId));
+        row.Set("reason", JsonValue::MakeString(std::string{kb::render::ParticleGpuUpdateFailureName(rejection.failure)}));
+        rejections.Append(std::move(row));
+    }
+    report.Set("rejected_gpu_updates", std::move(rejections));
+    result.gpuExecutionObserved = allGpu && !draws.empty() && captured && rejectedUpdates.empty() && observedCompute > 0U && observedParticleDraws > 0U;
+    result.succeeded = snapshot && !snapshot->Emitters().empty() && captured && rejectedUpdates.empty() &&
         (!packaged || kb::render::ShaderLoader::HasBinaryProvider());
     auto image = CaptureImage(scene, renderer);
     const auto* imageSucceeded = image.Find("succeeded");

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/frame/RenderPassKind.hpp"
+#include "kb/render/particles/ParticleGpuUpdateFailure.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/SceneGpuDrivenFeatureState.hpp"
@@ -603,6 +604,7 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     // Instances simulated on the GPU (mesh particles) keep no previous transforms: their own motion is not
     // written and their pixels keep the camera motion.
     MotionVectorGpuInstancesUnsupported,
+    ParticleGpuUpdateRejected,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -635,6 +637,8 @@ struct SceneRenderDiagnosticEvent {
     std::uint16_t materialProgramHandle = bgfx::kInvalidHandle;
     SceneRenderMaterialProgramStatus materialProgramStatus = SceneRenderMaterialProgramStatus::None;
     std::uint64_t postProcessProfileAssetId = 0U;
+    std::uint64_t particleInstanceId = 0U;
+    ParticleGpuUpdateFailure particleGpuUpdateFailure = ParticleGpuUpdateFailure::None;
 };
 
 struct SceneRenderDiagnostics {

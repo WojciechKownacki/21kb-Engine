@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/particles/ParticleGpuEmitter.hpp"
+#include "kb/render/particles/ParticleGpuUpdateFailure.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -44,7 +45,8 @@ public:
         std::uint64_t requestedBufferBytes = 0U;
     };
 
-    [[nodiscard]] bool Initialize();
+    // Logical emitter buffer budget; zero uses the engine limit. Fixed until Shutdown.
+    [[nodiscard]] bool Initialize(std::uint64_t maxBufferBytes = 0U);
     void Shutdown() noexcept;
     [[nodiscard]] bool IsReady() const noexcept;
 
@@ -55,6 +57,12 @@ public:
     // Applies one frame of drained commands for a scene: creates emitters, uploads spawn records,
     // releases emitters. Positions are carried from each command's simulation origin to the render origin.
     void Apply(std::uint64_t sceneId, std::span<const kb::particles::ParticleGpuEmitterCommand> commands) noexcept;
+    struct RejectedUpdate {
+        kb::particles::ParticleGpuEmitterKey key{};
+        ParticleGpuUpdateFailure failure = ParticleGpuUpdateFailure::None;
+    };
+    // Rejections persist until the same emitter receives accepted parameters or is released.
+    [[nodiscard]] std::span<const RejectedUpdate> RejectedUpdates(std::uint64_t sceneId) const noexcept;
     // Moves the scene render clock forward by the frame time, never more than one fixed step away
     // from the newest simulated time.
     void Advance(std::uint64_t sceneId, float frameDeltaSeconds) noexcept;
@@ -132,9 +140,10 @@ private:
         // render origin as of the last Dispatch. Records uploaded before the next Dispatch are converted to it.
         kb::math::DVec3 recordOrigin{};
         std::vector<Draw> draws;
+        std::vector<RejectedUpdate> rejections;
     };
 
-    [[nodiscard]] bool Create(const Key& key, const kb::particles::ParticleGpuEmitterParams& params) noexcept;
+    [[nodiscard]] bool Create(Emitter& emitter, const kb::particles::ParticleGpuEmitterParams& params) noexcept;
     void Destroy(Emitter& emitter) noexcept;
     void Upload(Emitter& emitter, std::span<const kb::particles::ParticleGpuSpawn> spawns) noexcept;
     void Clear(Emitter& emitter) noexcept;
@@ -150,6 +159,7 @@ private:
     [[nodiscard]] static bool NeedsSort(const kb::particles::ParticleGpuEmitterParams& params, bool translucentMaterial) noexcept;
 
     std::vector<kb::particles::ParticleGpuSpawn> spawnScratch_;
+    std::uint64_t maxBufferBytes_ = 0U;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     // Required for the GPU consumer: absence keeps authored collision/force semantics on the CPU.
     bgfx::ProgramHandle collideProgram_ = BGFX_INVALID_HANDLE;

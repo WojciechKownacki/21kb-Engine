@@ -146,6 +146,8 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "UI frame refused";
     case render::SceneRenderDiagnosticKind::UITextUnavailable:
         return "UI text unavailable";
+    case render::SceneRenderDiagnosticKind::ParticleGpuUpdateRejected:
+        return "GPU particle update rejected";
     }
     return "unknown render diagnostic";
 }
@@ -156,7 +158,10 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "Renderer submission failed without scene diagnostics.";
     }
 
-    const render::SceneRenderDiagnosticEvent& event = diagnostics.events.front();
+    const auto particleFailure = std::find_if(diagnostics.events.begin(), diagnostics.events.end(), [](const auto& event) {
+        return event.kind == render::SceneRenderDiagnosticKind::ParticleGpuUpdateRejected;
+    });
+    const render::SceneRenderDiagnosticEvent& event = particleFailure != diagnostics.events.end() ? *particleFailure : diagnostics.events.front();
     std::string detail = std::string{"Renderer diagnostic: "} + DiagnosticKindLabel(event.kind);
     if (event.entityId != 0U) {
         detail += " entity=" + std::to_string(event.entityId);
@@ -177,6 +182,11 @@ void EnsureParentChildClipping(HWND parent) noexcept {
     }
     if (event.instanceCount != 0U) {
         detail += " instances=" + std::to_string(event.instanceCount);
+    }
+    if (event.kind == render::SceneRenderDiagnosticKind::ParticleGpuUpdateRejected) {
+        detail += " particleInstance=" + std::to_string(event.particleInstanceId);
+        detail += " emitter=" + std::to_string(event.particleEmitterId);
+        detail += " reason=" + std::string{render::ParticleGpuUpdateFailureName(event.particleGpuUpdateFailure)};
     }
     return detail;
 }
@@ -840,6 +850,7 @@ void EditorSceneBgfxViewport::ReleaseWindow(HWND window) noexcept {
 }
 
 void EditorSceneBgfxViewport::ShutdownGpuResources() noexcept {
+    lastGpuParticleRejection_.clear();
     ShutdownSessionFramebuffers();
     renderer_.Shutdown();
     hostSurfaceStore_.DestroyWindows();
@@ -902,6 +913,21 @@ void EditorSceneBgfxViewport::ReportAaRouteTrace(std::string_view message, bool 
     }
     lastConsoleAaRouteTrace_ = std::string{ message };
     aaTraceReporter_(lastConsoleAaRouteTrace_);
+}
+
+void EditorSceneBgfxViewport::ReportGpuParticleRejection() {
+    const auto& events = renderer_.LastSceneDiagnostics().events;
+    const bool rejected = std::any_of(events.begin(), events.end(), [](const auto& event) {
+        return event.kind == render::SceneRenderDiagnosticKind::ParticleGpuUpdateRejected;
+    });
+    if (!rejected) {
+        lastGpuParticleRejection_.clear();
+        return;
+    }
+    const auto detail = RendererFailureDetail(renderer_);
+    if (detail == lastGpuParticleRejection_) return;
+    lastGpuParticleRejection_ = detail;
+    if (errorReporter_) errorReporter_(detail);
 }
 
 void EditorSceneBgfxViewport::FailRender(const char* reason) noexcept {

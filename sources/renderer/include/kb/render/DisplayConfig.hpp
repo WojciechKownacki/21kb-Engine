@@ -27,6 +27,8 @@ struct DisplayConfig {
     // the desktop host's existing current-directory/temp behavior. Sandboxed hosts such as
     // Android must provide their internal data directory explicitly.
     std::string writableStorageRoot;
+    // Logical GPU particle buffers across this renderer; zero uses the engine limit.
+    std::uint64_t particleGpuBufferBudgetBytes = 0U;
 
     [[nodiscard]] std::uint32_t ComputeResetFlags() const noexcept;
 };

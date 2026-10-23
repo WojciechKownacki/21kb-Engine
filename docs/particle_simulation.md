@@ -240,7 +240,7 @@ The source-profile execution/readback/timestamp smoke check also passed with
 the repeated-field/contact source on Windows bgfx D3D12, Vulkan and OpenGL.
 Those checks do not extend the D3D11 numerical/pixel parity result or these
 measurements to other backends. Packaged execution checks below cover D3D11.
-Live state-buffer allocation failure remains a separate verification requirement.
+Live state-buffer rejection and retry checks are described below.
 
 Packaged Windows runtimes accept `--particle-diagnostics --headless --frames=N`
 for bounded particle verification. This explicit diagnostic mode advances the
@@ -289,7 +289,41 @@ bounce control differed from contact death by 64 channels. An unavailable GPU,
 fallback, failed capture or missing shader compiler fails this test.
 It requires Python 3.10+ and the pinned shaderc target, or an explicit
 `KB_COOKER_SHADERC` path when the compiler is built separately.
-Other packaged backends and live allocation rejection remain unverified here.
+Other packaged backends remain unverified here.
+
+GPU resource failures reject a complete parameter update rather than clearing
+collision or motion features. The last accepted parameters and GPU records stay
+active; rejected commands do not apply their transform, clear or birth payloads.
+Resizing prepares the complete replacement before releasing the previous buffers,
+so the logical budget must temporarily accommodate both allocations. A caller
+can release resources and retry the full update. This does not select CPU or
+remove the explicit CPU and device capability fallbacks.
+
+`DisplayConfig::particleGpuBufferBudgetBytes` limits logical emitter buffers;
+zero uses the engine limit, and larger values are clamped to that limit. Set it
+before renderer initialization. `vfx-profile --gpu-buffer-budget <bytes>` exposes
+the same bound for reproducible resource diagnostics. It measures requested
+buffers, not physical VRAM or driver allocation success. The default is unchanged.
+
+`Renderer::RejectedGpuParticleUpdates(scene)` identifies the emitter and typed
+reason: invalid parameters, resource creation, state allocation or diagnostic
+capacity. Rejections persist across clock-only updates until accepted parameters
+or emitter release. A bounded diagnostic overflow remains an error until scene
+release. Renderer submission reports `ParticleGpuUpdateRejected` errors; the
+editor writes a deduplicated error to its console while keeping the viewport
+active. CLI profiles and packaged particle reports expose `rejected_gpu_updates`
+and cannot report successful GPU execution while any update is rejected.
+
+The real D3D11 motion/kernel tests force a 224-byte logical budget with two
+one-slot emitters. They verify native GPU buffer preservation after a rejected
+stateful update and resize, a persistent typed error, release-and-retry of the
+complete contact/noise update, actual contact-dead records and zero released
+bytes. A separate successful resize verifies both replacement instance records.
+The renderer particle mesh suite checks the typed error with emitter identity
+through submission, persistence and successful retry. The CLI profiler test
+requires a failed JSON report when its configured budget cannot admit the effect.
+These tests exercise real bgfx allocations and readback within an engine logical
+budget; they do not claim to reproduce physical device exhaustion.
 
 The authored sort mode reaches GPU emitters as well as CPU render snapshots:
 

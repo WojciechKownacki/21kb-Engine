@@ -95,7 +95,7 @@ void CreateDecalBox(bgfx::VertexBufferHandle& vertices, bgfx::IndexBufferHandle&
 
 } // namespace
 
-bool ParticleGpuRenderer::Initialize() {
+bool ParticleGpuRenderer::Initialize(std::uint64_t particleBufferBudgetBytes) {
     if (IsInitialized()) return true;
     program_ = ShaderLoader::LoadProgram("vs_particle_instanced.sc", "fs_particle_instanced.sc");
     atlasSampler_ = bgfx::createUniform("s_particleAtlas", bgfx::UniformType::Sampler);
@@ -123,7 +123,7 @@ bool ParticleGpuRenderer::Initialize() {
         return false;
     }
     static_cast<void>(visualSimulation_.Initialize());
-    static_cast<void>(gpuEmitters_.Initialize());
+    static_cast<void>(gpuEmitters_.Initialize(particleBufferBudgetBytes));
     if (!IsInitialized()) {
         Shutdown();
         return false;
@@ -447,6 +447,10 @@ std::span<const ParticleGpuEmitterSimulation::Draw> ParticleGpuRenderer::GpuEmit
 }
 
 std::uint64_t ParticleGpuRenderer::GpuEmitterAllocatedBytes() const noexcept { return gpuEmitters_.AllocatedBytes(); }
+
+std::span<const ParticleGpuEmitterSimulation::RejectedUpdate> ParticleGpuRenderer::RejectedGpuUpdates(std::uint64_t sceneId) const noexcept {
+    return gpuEmitters_.RejectedUpdates(sceneId);
+}
 
 ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
     bgfx::ViewId viewId,

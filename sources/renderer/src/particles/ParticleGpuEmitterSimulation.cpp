@@ -82,8 +82,10 @@ bool ParticleGpuEmitterSimulation::NeedsSort(const kb::particles::ParticleGpuEmi
     return billboard && params.blend != kb::particles::ParticleRenderBlendMode::Add;
 }
 
-bool ParticleGpuEmitterSimulation::Initialize() {
+bool ParticleGpuEmitterSimulation::Initialize(std::uint64_t maxBufferBytes) {
     if (IsReady()) return true;
+    maxBufferBytes_ = maxBufferBytes == 0U ? kb::scene::kParticleEffectMaxGpuResourceBytes
+        : std::min(maxBufferBytes, kb::scene::kParticleEffectMaxGpuResourceBytes);
     const bgfx::Caps* caps = bgfx::getCaps();
     if (caps == nullptr || (caps->supported & BGFX_CAPS_COMPUTE) == 0U) return false;
     program_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_emit.sc");
@@ -156,15 +158,14 @@ void ParticleGpuEmitterSimulation::Shutdown() noexcept {
     program_ = BGFX_INVALID_HANDLE;
 }
 
-bool ParticleGpuEmitterSimulation::Create(const Key& key, const kb::particles::ParticleGpuEmitterParams& params) noexcept {
+bool ParticleGpuEmitterSimulation::Create(Emitter& emitter, const kb::particles::ParticleGpuEmitterParams& params) noexcept {
     const std::uint32_t capacity = std::clamp(params.capacity, 1U, kb::particles::kParticleGpuMaxCapacity);
     const std::uint32_t perSlot = InstancesPerSlot(params);
     if (static_cast<std::uint64_t>(capacity) * perSlot > kb::particles::kParticleGpuMaxTrailSegments &&
         perSlot > 1U) return false;
     const std::uint64_t bytes = static_cast<std::uint64_t>(capacity) *
         (sizeof(kb::particles::ParticleGpuSpawn) + static_cast<std::uint64_t>(kInstanceBytes) * perSlot);
-    if (allocatedBytes_ + bytes > kb::scene::kParticleEffectMaxGpuResourceBytes) return false;
-    Emitter emitter{};
+    if (allocatedBytes_ + bytes > maxBufferBytes_) return false;
     emitter.params = params;
     emitter.params.capacity = capacity;
     emitter.capacity = capacity;
@@ -191,7 +192,6 @@ bool ParticleGpuEmitterSimulation::Create(const Key& key, const kb::particles::P
     // Sorting is an enhancement: without budget or kernels the emitter is simply drawn in ring order. (A mesh
     // emitter finds out whether its material is translucent at dispatch.)
     if (NeedsSort(params, false)) static_cast<void>(EnsureSort(emitter));
-    emitters_[key] = emitter;
     return true;
 }
 
@@ -202,7 +202,7 @@ bool ParticleGpuEmitterSimulation::EnsureSort(Emitter& emitter) noexcept {
     const std::uint32_t padded = PaddedSortCount(emitter.capacity);
     const std::uint64_t sortBytes = static_cast<std::uint64_t>(padded) * kSortKeyBytes +
         static_cast<std::uint64_t>(emitter.capacity) * kInstanceBytes;
-    if (allocatedBytes_ + sortBytes > kb::scene::kParticleEffectMaxGpuResourceBytes) return false;
+    if (allocatedBytes_ + sortBytes > maxBufferBytes_) return false;
     bgfx::VertexLayout keyLayout{};
     keyLayout.begin().add(bgfx::Attrib::TexCoord0, 4U, bgfx::AttribType::Float).end();
     emitter.sortKeys = bgfx::createDynamicVertexBuffer(padded, keyLayout, BGFX_BUFFER_COMPUTE_READ_WRITE);
@@ -252,7 +252,7 @@ void ParticleGpuEmitterSimulation::SortInstances(
 bool ParticleGpuEmitterSimulation::EnsureState(Emitter& emitter) noexcept {
     if (bgfx::isValid(emitter.state)) return true;
     const std::uint64_t stateBytes = static_cast<std::uint64_t>(emitter.capacity) * kStateBytes;
-    if (allocatedBytes_ + stateBytes > kb::scene::kParticleEffectMaxGpuResourceBytes) return false;
+    if (allocatedBytes_ + stateBytes > maxBufferBytes_) return false;
     // A zeroed record never matches a birth stamp, so every particle starts from its birth record.
     const bgfx::Memory* zero = bgfx::alloc(static_cast<std::uint32_t>(stateBytes));
     if (zero == nullptr || zero->data == nullptr) return false;
@@ -356,6 +356,17 @@ void ParticleGpuEmitterSimulation::Apply(
     std::uint64_t sceneId, std::span<const kb::particles::ParticleGpuEmitterCommand> commands) noexcept {
     if (!IsReady()) return;
     SceneClock& clock = scenes_[sceneId];
+    const auto clearRejection = [&](const kb::particles::ParticleGpuEmitterKey& key) {
+        std::erase_if(clock.rejections, [&](const RejectedUpdate& rejection) { return rejection.key == key; });
+    };
+    const auto reject = [&](const kb::particles::ParticleGpuEmitterKey& key, ParticleGpuUpdateFailure failure) {
+        const auto found = std::find_if(clock.rejections.begin(), clock.rejections.end(),
+            [&](const RejectedUpdate& rejection) { return rejection.key == key; });
+        if (found != clock.rejections.end()) found->failure = failure;
+        else if (clock.rejections.size() < kb::scene::kParticleEffectMaxInstancesPerScene * kb::scene::kParticleEffectMaxEmitters)
+            clock.rejections.push_back({key, failure});
+        else clock.rejections.back() = {{}, ParticleGpuUpdateFailure::DiagnosticCapacity};
+    };
     for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
         const Key key{ sceneId, command.key.instanceId, command.key.emitterId };
         clock.latest = std::max(clock.latest, command.simTime);
@@ -365,6 +376,7 @@ void ParticleGpuEmitterSimulation::Apply(
         const kb::math::Vec3 recordOffset = kb::math::RelativeTo(command.simulationOrigin, clock.recordOrigin);
         auto found = emitters_.find(key);
         if (command.release) {
+            clearRejection(command.key);
             if (found != emitters_.end()) {
                 allocatedBytes_ -= found->second.bytes;
                 Destroy(found->second);
@@ -374,29 +386,34 @@ void ParticleGpuEmitterSimulation::Apply(
         }
         if (command.hasParams) {
             kb::particles::ParticleGpuEmitterParams params = command.params;
+            if (params.motionModuleCount > params.motionModules.size()) {
+                reject(command.key, ParticleGpuUpdateFailure::InvalidParameters);
+                continue;
+            }
             params.plane.distance += kb::math::Dot(params.plane.normal, recordOffset);
             const std::uint32_t capacity = std::clamp(params.capacity, 1U, kb::particles::kParticleGpuMaxCapacity);
-            if (found != emitters_.end() && (found->second.capacity != capacity || found->second.perSlot != InstancesPerSlot(params))) {
-                allocatedBytes_ -= found->second.bytes;
-                Destroy(found->second);
-                emitters_.erase(found);
-                found = emitters_.end();
-            }
-            if (found == emitters_.end()) {
-                if (!Create(key, params)) continue;
-                found = emitters_.find(key);
+            if (found == emitters_.end() || found->second.capacity != capacity || found->second.perSlot != InstancesPerSlot(params)) {
+                Emitter replacement{};
+                if (!Create(replacement, params)) {
+                    reject(command.key, ParticleGpuUpdateFailure::ResourceCreation);
+                    continue;
+                }
+                if (found == emitters_.end()) found = emitters_.emplace(key, std::move(replacement)).first;
+                else {
+                    allocatedBytes_ -= found->second.bytes;
+                    Destroy(found->second);
+                    found->second = std::move(replacement);
+                }
             } else {
+                if (params.NeedsState() && !EnsureState(found->second)) {
+                    reject(command.key, ParticleGpuUpdateFailure::StateAllocation);
+                    continue;
+                }
                 found->second.params = params;
                 found->second.params.capacity = capacity;
                 if (NeedsSort(params, false)) static_cast<void>(EnsureSort(found->second));
-                if (params.NeedsState() && !EnsureState(found->second)) {
-                    // No budget left for the state: the emitter keeps simulating in closed form, without
-                    // collisions and fields.
-                    found->second.params.hasPlane = false;
-                    found->second.params.sceneDepthCollision = false;
-                    found->second.params.motionModuleCount = 0U;
-                }
             }
+            clearRejection(command.key);
         }
         if (found == emitters_.end()) continue;
         if (command.hasWorldMatrix) {
@@ -550,6 +567,11 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
 std::span<const ParticleGpuEmitterSimulation::Draw> ParticleGpuEmitterSimulation::Draws(std::uint64_t sceneId) const noexcept {
     const auto found = scenes_.find(sceneId);
     return found == scenes_.end() ? std::span<const Draw>{} : std::span<const Draw>{ found->second.draws };
+}
+
+std::span<const ParticleGpuEmitterSimulation::RejectedUpdate> ParticleGpuEmitterSimulation::RejectedUpdates(std::uint64_t sceneId) const noexcept {
+    const auto found = scenes_.find(sceneId);
+    return found == scenes_.end() ? std::span<const RejectedUpdate>{} : std::span<const RejectedUpdate>{found->second.rejections};
 }
 
 bool ParticleGpuEmitterSimulation::HasEmitters(std::uint64_t sceneId) const noexcept {
