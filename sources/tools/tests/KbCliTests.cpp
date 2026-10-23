@@ -3286,10 +3286,20 @@ void RunWorldCommandTests() {
     Require(again.exitCode == 1 && Contains(again.output, "already exists"), "world migrate overwrote an existing world");
     // Without --project the build finds the project above the world.
     const CommandRun build = Run(&kb::cli::RunWorldCommand, { "build", "--world", (root / "Assets" / "Level.21kbworld").string() });
+#if defined(KB_CLI_WORLD_HLOD)
     Require(build.exitCode == 0 && Contains(build.output, "built 3 cells and 1 HLOD proxies from 3 objects"), build.output.c_str());
+#else
+    Require(build.exitCode == 0 && Contains(build.output, "built 3 cells and 0 HLOD proxies from 3 objects") &&
+            Contains(build.output, "without the renderer; HLOD proxies are not built"), build.output.c_str());
+#endif
     const kb::world::WorldCellIndexReadResult index =
         kb::world::WorldCellIndexIO::Read(kb::world::WorldPaths::CellIndexPath(root / "Assets" / "Level.21kbworld"));
-    Require(index.succeeded && index.index.units.size() == 3U && index.index.hlods.size() == 1U, "world build did not write cells and the proxy");
+    Require(index.succeeded && index.index.units.size() == 3U, "world build did not write every cell");
+#if defined(KB_CLI_WORLD_HLOD)
+    Require(index.index.hlods.size() == 1U, "world build did not write the proxy");
+#else
+    Require(index.index.hlods.empty(), "world build advertised unavailable HLOD proxies");
+#endif
     std::filesystem::create_directories(TestRoot() / "world_without_project", error);
     std::filesystem::copy(root / "Assets" / "Level.21kbworld", TestRoot() / "world_without_project" / "Level.21kbworld",
         std::filesystem::copy_options::overwrite_existing, error);
@@ -3297,8 +3307,13 @@ void RunWorldCommandTests() {
         "--world", (TestRoot() / "world_without_project" / "Level.21kbworld").string() });
     Require(orphan.exitCode == 1 && Contains(orphan.output, "--project"), "a folder without a project file is not a project");
     const CommandRun chunks = Run(&kb::cli::RunWorldCommand, { "chunks", "--project", rootText });
+#if defined(KB_CLI_WORLD_HLOD)
     Require(chunks.exitCode == 0 && Contains(chunks.output, "chunk Level.r_0_0=/Game/Level.cells/base/r_0_0/,/Game/Level.cells/hlod/r_0_0/"),
         chunks.output.c_str());
+#else
+    Require(chunks.exitCode == 0 && Contains(chunks.output, "chunk Level.r_0_0=/Game/Level.cells/base/r_0_0/") &&
+            !Contains(chunks.output, "/hlod/"), chunks.output.c_str());
+#endif
     const CommandRun claimed = Run(&kb::cli::RunWorldCommand, { "chunks", "--project", rootText, "--exclude", "/Game/Level.cells/" });
     Require(claimed.exitCode == 0 && !Contains(claimed.output, "chunk "), "excluded world files must not form chunks");
     const CommandRun unknown = Run(&kb::cli::RunWorldCommand, { "explode" });

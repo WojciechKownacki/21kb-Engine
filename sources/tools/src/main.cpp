@@ -461,8 +461,7 @@ int Dispatch(int argc, char** argv) {
 #if KB_CLI_RENDERER
         return kb::cli::RunVfxCommand(command, arguments, io);
 #else
-        std::cerr << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF
-";
+        std::cerr << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
         return 1;
 #endif
     }
