@@ -106,8 +106,6 @@ private:
         std::array<float, 12> basis{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F };
         // Fields of an emitter with forces, in the frame of its records (ParticleGpuEmitterCommand::hasField).
         kb::math::Vec3 fieldOrigin{};
-        kb::math::Vec3 fieldAxis{ 0.0F, 1.0F, 0.0F };
-        kb::math::Vec3 attractionTarget{};
         bgfx::DynamicVertexBufferHandle spawns = BGFX_INVALID_HANDLE;
         bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;
         // Per-slot position/velocity record of the stateful kernel; only created for emitters that need it
@@ -150,7 +148,7 @@ private:
 
     std::vector<kb::particles::ParticleGpuSpawn> spawnScratch_;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
-    // Optional: without it (e.g. no variant for this backend) colliding emitters use the closed-form kernel.
+    // Required for the GPU consumer: absence keeps authored collision/force semantics on the CPU.
     bgfx::ProgramHandle collideProgram_ = BGFX_INVALID_HANDLE;
     // Optional: without it the live particles of world-space emitters are cleared when the render origin moves.
     bgfx::ProgramHandle rebaseProgram_ = BGFX_INVALID_HANDLE;
@@ -182,6 +180,7 @@ private:
     bgfx::UniformHandle outputUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle spinUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle basisUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle fieldUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle forcesUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle noiseOriginUniform_ = BGFX_INVALID_HANDLE;
     std::unordered_map<Key, Emitter, KeyHash> emitters_;

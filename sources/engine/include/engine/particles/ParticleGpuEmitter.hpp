@@ -13,9 +13,8 @@ namespace kb::particles {
 
 // GPU-simulated emitters keep no per-particle state on the CPU. At birth the simulation backend
 // writes one 32-byte record per particle (world-space start position and velocity, birth time and
-// lifetime); the renderer uploads the records into a ring buffer and a compute pass evaluates every
-// particle in closed form (constant acceleration plus linear drag), so cost and capacity no longer
-// scale with the CPU particle pipeline.
+// lifetime); the renderer uploads them into a ring buffer. Compute evaluates free flight in closed
+// form and integrates stateful collisions and fields, without CPU per-particle simulation.
 inline constexpr std::size_t kParticleGpuCurveSamples = 8U;
 inline constexpr std::uint32_t kParticleGpuMaxCapacity = 1'048'576U;
 // A trail emitter draws one stretched quad per trail segment of every slot; this bounds capacity x segments.
@@ -38,6 +37,20 @@ struct ParticleGpuCollisionPlane {
     float restitution = 0.5F;
     float friction = 0.0F;
     bool killOnContact = false;
+};
+
+inline constexpr std::size_t kParticleGpuMaxMotionModules = 16U;
+enum class ParticleGpuMotionType : std::uint8_t { Acceleration = 1U, Drag, Noise, AxisRotation, Attraction };
+
+// One authored motion operation. Vectors are in world axes: acceleration, rotation axis or target offset.
+// strength is drag, noise amplitude, angular speed (radians/s) or attraction strength;
+// parameter is noise frequency or attraction radius. The full 32-bit noise seed is retained.
+struct ParticleGpuMotionModule {
+    ParticleGpuMotionType type = ParticleGpuMotionType::Acceleration;
+    kb::math::Vec3 vector{};
+    float strength = 0.0F;
+    float parameter = 0.0F;
+    std::uint32_t seed = 0U;
 };
 
 // Appearance and motion constants of one GPU emitter. Colour and size over normalized age are
@@ -85,20 +98,18 @@ struct ParticleGpuEmitterParams {
     kb::math::Vec3 spinMax{};
     kb::math::Vec3 spinRateMin{};
     kb::math::Vec3 spinRateMax{};
-    // Fields the stateful kernel integrates like the CPU modules (a strength of 0 is off): curl noise (strength,
-    // frequency in cycles per metre, the module's seed), a turn about an axis through the field origin, and a
-    // pull toward a point (radius 0 = everywhere). Axis, field origin and point arrive with every step
-    // (ParticleGpuEmitterCommand::hasField), in the frame of the birth records.
-    float noiseStrength = 0.0F;
-    float noiseFrequency = 1.0F;
-    std::uint32_t noiseSeed = 0U;
-    float axisRadiansPerSecond = 0.0F;
-    float attractionStrength = 0.0F;
-    float attractionRadius = 0.0F;
+    // All active motion modules in authored CPU execution order, including interspersed acceleration and drag.
+    std::array<ParticleGpuMotionModule, kParticleGpuMaxMotionModules> motionModules{};
+    std::uint32_t motionModuleCount = 0U;
 
     [[nodiscard]] constexpr bool HasCollision() const noexcept { return hasPlane || sceneDepthCollision; }
     [[nodiscard]] constexpr bool HasForces() const noexcept {
-        return noiseStrength != 0.0F || axisRadiansPerSecond != 0.0F || attractionStrength != 0.0F;
+        for (std::size_t index = 0U; index < motionModuleCount && index < motionModules.size(); ++index) {
+            const auto& module = motionModules[index];
+            // Zero-strength authored fields still keep the surrounding acceleration/drag operation order.
+            if (module.type >= ParticleGpuMotionType::Noise) return true;
+        }
+        return false;
     }
     // Collisions and the fields make the motion depend on its history: the stateful kernel integrates it.
     [[nodiscard]] constexpr bool NeedsState() const noexcept { return HasCollision() || HasForces(); }
@@ -129,12 +140,9 @@ struct ParticleGpuEmitterCommand {
     bool hasOrientation = false;
     std::array<float, 4> orientation{ 0.0F, 0.0F, 0.0F, 1.0F };
     std::array<float, 3> origin{ 0.0F, 0.0F, 0.0F };
-    // Where the fields of an emitter with forces are this step, in the frame of its birth records: the
-    // emitter's origin, the turning axis (unit) and the point particles are pulled toward.
+    // Current emitter origin for world-axis rotation and attraction, relative to simulationOrigin.
     bool hasField = false;
     kb::math::Vec3 fieldOrigin{};
-    kb::math::Vec3 fieldAxis{ 0.0F, 1.0F, 0.0F };
-    kb::math::Vec3 attractionTarget{};
     std::vector<ParticleGpuSpawn> spawns;
     // The simulation origin (ParticlePlayback::SimulationOrigin) the positions, world matrix and collision plane
     // of this command are relative to.

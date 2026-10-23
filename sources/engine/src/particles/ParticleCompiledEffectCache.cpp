@@ -298,10 +298,9 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
 [[nodiscard]] bool ValidEffect(const ParticleCompiledEffect& effect) noexcept {
     if (effect.emitterCount == 0U || effect.durationSeconds < 0.0F) return false;
     std::uint64_t totalCapacity = 0U;
-    kb::scene::ParticleStableId previousEmitterId = 0U;
     for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
         const auto& emitter = effect.emitters[emitterIndex];
-        if (emitter.emitterId == 0U || emitter.emitterId <= previousEmitterId || emitter.materialAssetId == 0U ||
+        if (emitter.emitterId == 0U || emitter.materialAssetId == 0U ||
             ((emitter.outputType == kb::scene::ParticleOutputType::Mesh) != (emitter.meshAssetId != 0U)) ||
             emitter.maxParticles == 0U ||
             emitter.maxParticles > kb::scene::ParticleEmitterCapacityLimit(effect.backendPolicy) || emitter.rateKeyCount == 0U ||
@@ -323,17 +322,19 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             emitter.volumetricHighQualitySteps < emitter.volumetricLowQualitySteps ||
             emitter.volumetricHighQualitySteps > 256U)
             return false;
-        previousEmitterId = emitter.emitterId;
+        // Compiled records follow authored execution order, independently of their stable IDs.
+        for (std::uint8_t previous = 0U; previous < emitterIndex; ++previous)
+            if (effect.emitters[previous].emitterId == emitter.emitterId) return false;
         totalCapacity += emitter.maxParticles;
         for (std::uint8_t index = 1U; index < emitter.rateKeyCount; ++index)
             if (emitter.rateKeys[index].time <= emitter.rateKeys[index - 1U].time) return false;
         for (std::uint8_t index = 1U; index < emitter.burstCount; ++index)
             if (emitter.bursts[index].timeSeconds < emitter.bursts[index - 1U].timeSeconds) return false;
-        kb::scene::ParticleStableId previousModuleId = 0U;
         for (std::uint8_t index = 0U; index < emitter.moduleCount; ++index) {
             const auto& module = emitter.modules[index];
-            if (module.moduleId == 0U || module.moduleId <= previousModuleId) return false;
-            previousModuleId = module.moduleId;
+            if (module.moduleId == 0U) return false;
+            for (std::uint8_t previous = 0U; previous < index; ++previous)
+                if (emitter.modules[previous].moduleId == module.moduleId) return false;
         }
     }
     if (totalCapacity > kb::scene::ParticleEffectCapacityLimit(effect.backendPolicy)) return false;

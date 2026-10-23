@@ -4639,6 +4639,42 @@ ReadScriptValue(
                 " redo=" + std::to_string(redone) + " restored=" + std::to_string(restored)};
     }
 
+    if (*operation == "verify_particle_ordered_motion") {
+        const auto original = *state.context.ParticleEditorWorkingAsset();
+        auto candidate = original;
+        candidate.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        if (!state.context.ApplyParticleEditorWorkingCopy(candidate)) return {false, "GPU preview policy was rejected"};
+        using Type = kb::scene::ParticleModuleType;
+        const std::array types{Type::Noise, Type::AxisRotation, Type::Attraction, Type::Noise, Type::AxisRotation, Type::Attraction};
+        kb::scene::ParticleStableId first = 0U;
+        for (const auto type : types) {
+            if (!state.context.AddParticleEditorModule(type, 0U)) return {false, "repeatable motion module was rejected"};
+            const auto selected = state.context.ParticleEditorWorkspace().SelectedModuleId();
+            if (first == 0U) first = selected;
+            const auto inspector = state.context.ParticleEditorInspector();
+            const auto row = std::find_if(inspector.properties.begin(), inspector.properties.end(), [selected](const auto& value) {
+                return value.moduleId == selected && value.property == kb::particle_editor::ParticleEditorProperty::ModulePayload &&
+                    value.payloadField == 0U;
+            });
+            if (row == inspector.properties.end()) return {false, "motion property control is missing"};
+            const auto index = static_cast<std::size_t>(row - inspector.properties.begin());
+            if (!state.context.EditParticleEditorProperty(index, type == Type::Noise ? "0.7" : "1 2 3"))
+                return {false, "motion property edit was rejected"};
+        }
+        const bool moved = state.context.MoveParticleEditorModule(first, 7U);
+        const bool undone = moved && state.context.UndoParticleEditorCommand();
+        const bool redone = undone && state.context.RedoParticleEditorCommand();
+        const bool preview = state.automation.PresentParticlePreview() &&
+            state.context.TickParticleEditorPreview(1.0F / 60.0F) && state.automation.PresentParticlePreview();
+        const auto inspector = state.context.ParticleEditorInspector();
+        const bool gpu = inspector.execution && inspector.execution->path == kb::particles::ParticleEmitterSimulationPath::Gpu &&
+            inspector.execution->reason == kb::particles::ParticleGpuFallbackReason::None;
+        const bool restored = state.context.ApplyParticleEditorWorkingCopy(original);
+        return {moved && undone && redone && preview && gpu && restored,
+            "ordered motion move=" + std::to_string(moved) + " undo=" + std::to_string(undone) + " redo=" +
+                std::to_string(redone) + " preview=" + std::to_string(preview) + " gpu=" + std::to_string(gpu)};
+    }
+
     if (*operation == "verify_particle_emitter_material") {
         const auto* original = state.context.ParticleEditorWorkingAsset();
         const auto* shared = state.context.Scene().Assets().Manager().Registry().FindByPath(

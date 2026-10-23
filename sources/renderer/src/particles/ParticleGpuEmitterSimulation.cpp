@@ -95,7 +95,8 @@ bool ParticleGpuEmitterSimulation::Initialize() {
     outputUniform_ = bgfx::createUniform("u_gpuParticleOutput", bgfx::UniformType::Vec4);
     spinUniform_ = bgfx::createUniform("u_gpuParticleSpin", bgfx::UniformType::Vec4, 4U);
     basisUniform_ = bgfx::createUniform("u_gpuParticleBasis", bgfx::UniformType::Vec4, 3U);
-    forcesUniform_ = bgfx::createUniform("u_gpuParticleForces", bgfx::UniformType::Vec4, 4U);
+    forcesUniform_ = bgfx::createUniform("u_gpuParticleForces", bgfx::UniformType::Vec4, static_cast<std::uint16_t>(2U * kb::particles::kParticleGpuMaxMotionModules));
+    fieldUniform_ = bgfx::createUniform("u_gpuParticleField", bgfx::UniformType::Vec4);
     noiseOriginUniform_ = bgfx::createUniform("u_gpuParticleNoiseOrigin", bgfx::UniformType::Vec4);
     collideProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_collide.sc");
     rebaseProgram_ = ShaderLoader::LoadComputeProgram("cs_particle_gpu_rebase.sc");
@@ -129,7 +130,8 @@ bool ParticleGpuEmitterSimulation::Initialize() {
 
 bool ParticleGpuEmitterSimulation::IsReady() const noexcept {
     return bgfx::isValid(program_) && bgfx::isValid(motionUniform_) && bgfx::isValid(timeUniform_) &&
-        bgfx::isValid(colorUniform_) && bgfx::isValid(sizeUniform_);
+        bgfx::isValid(colorUniform_) && bgfx::isValid(sizeUniform_) && bgfx::isValid(collideProgram_) &&
+        bgfx::isValid(forcesUniform_) && bgfx::isValid(fieldUniform_) && bgfx::isValid(noiseOriginUniform_);
 }
 
 void ParticleGpuEmitterSimulation::Shutdown() noexcept {
@@ -138,7 +140,7 @@ void ParticleGpuEmitterSimulation::Shutdown() noexcept {
              &collisionUniform_, &depthBounceUniform_, &texelUniform_, &viewProjectionUniform_, &depthSampler_,
              &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_, &sortCameraUniform_,
              &sortParamsUniform_, &sortDepthUniform_, &outputUniform_, &spinUniform_, &basisUniform_, &rebaseUniform_, &forcesUniform_,
-             &noiseOriginUniform_ }) {
+             &noiseOriginUniform_, &fieldUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
     }
@@ -332,10 +334,10 @@ void ParticleGpuEmitterSimulation::Rebase(bgfx::ViewId viewId, std::uint64_t sce
     const kb::math::Vec3 shift = kb::math::RelativeTo(clock.recordOrigin, clock.renderOrigin);
     clock.recordOrigin = clock.renderOrigin;
     for (auto& [key, emitter] : emitters_) {
-        if (key.sceneId != sceneId || emitter.params.localSpace) continue;
-        emitter.params.plane.distance += kb::math::Dot(emitter.params.plane.normal, shift);
+        if (key.sceneId != sceneId) continue;
         emitter.fieldOrigin = emitter.fieldOrigin + shift;
-        emitter.attractionTarget = emitter.attractionTarget + shift;
+        if (emitter.params.localSpace) continue;
+        emitter.params.plane.distance += kb::math::Dot(emitter.params.plane.normal, shift);
         if (!bgfx::isValid(rebaseProgram_)) {
             Clear(emitter);
             continue;
@@ -392,9 +394,7 @@ void ParticleGpuEmitterSimulation::Apply(
                     // collisions and fields.
                     found->second.params.hasPlane = false;
                     found->second.params.sceneDepthCollision = false;
-                    found->second.params.noiseStrength = 0.0F;
-                    found->second.params.axisRadiansPerSecond = 0.0F;
-                    found->second.params.attractionStrength = 0.0F;
+                    found->second.params.motionModuleCount = 0U;
                 }
             }
         }
@@ -411,11 +411,7 @@ void ParticleGpuEmitterSimulation::Apply(
             found->second.origin = { command.origin[0] + offset.x, command.origin[1] + offset.y, command.origin[2] + offset.z };
         }
         if (command.hasField) {
-            // A local-space field is in the owner's frame; a world-space one moves to the records' origin.
-            const kb::math::Vec3 shift = found->second.params.localSpace ? kb::math::Vec3{} : recordOffset;
-            found->second.fieldOrigin = command.fieldOrigin + shift;
-            found->second.fieldAxis = command.fieldAxis;
-            found->second.attractionTarget = command.attractionTarget + shift;
+            found->second.fieldOrigin = command.fieldOrigin + recordOffset;
         }
         if (command.clear) Clear(found->second);
         if (found->second.params.localSpace || (recordOffset.x == 0.0F && recordOffset.y == 0.0F && recordOffset.z == 0.0F)) {
@@ -473,17 +469,29 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         // In particular, contact deaths must never revive through the closed-form path.
         const bool colliding = bgfx::isValid(emitter.state) && bgfx::isValid(collideProgram_);
         if (colliding) {
-            const std::array<float, 16> forces{
-                params.noiseStrength, params.noiseFrequency, static_cast<float>(params.noiseSeed), 0.0F,
-                emitter.fieldAxis.x, emitter.fieldAxis.y, emitter.fieldAxis.z, params.axisRadiansPerSecond,
-                emitter.attractionTarget.x, emitter.attractionTarget.y, emitter.attractionTarget.z, params.attractionStrength,
-                emitter.fieldOrigin.x, emitter.fieldOrigin.y, emitter.fieldOrigin.z, params.attractionRadius };
+            std::array<float, 8U * kb::particles::kParticleGpuMaxMotionModules> forces{};
+            const auto count = std::min(params.motionModuleCount, static_cast<std::uint32_t>(params.motionModules.size()));
+            for (std::size_t index = 0U; index < count; ++index) {
+                const auto& module = params.motionModules[index];
+                const std::size_t base = index * 8U;
+                forces[base] = static_cast<float>(module.type);
+                forces[base + 1U] = module.strength;
+                forces[base + 2U] = module.parameter;
+                // Two exactly representable halves preserve every uint32 seed across all shader languages.
+                forces[base + 3U] = static_cast<float>(module.seed & 0xFFFFU);
+                forces[base + 4U] = module.vector.x;
+                forces[base + 5U] = module.vector.y;
+                forces[base + 6U] = module.vector.z;
+                forces[base + 7U] = static_cast<float>(module.seed >> 16U);
+            }
+            const std::array<float, 4> field{emitter.fieldOrigin.x, emitter.fieldOrigin.y, emitter.fieldOrigin.z, static_cast<float>(count)};
+            bgfx::setUniform(fieldUniform_, field.data());
             // Noise lies in the world: the records (world space) or the owner's matrix (local space) are relative
             // to an origin the kernel adds back.
             const kb::math::DVec3& noiseOrigin = params.localSpace ? clock.renderOrigin : clock.recordOrigin;
             const std::array<float, 4> noiseOriginData{
                 static_cast<float>(noiseOrigin.x), static_cast<float>(noiseOrigin.y), static_cast<float>(noiseOrigin.z), 0.0F };
-            bgfx::setUniform(forcesUniform_, forces.data(), 4U);
+            bgfx::setUniform(forcesUniform_, forces.data(), static_cast<std::uint16_t>(2U * kb::particles::kParticleGpuMaxMotionModules));
             bgfx::setUniform(noiseOriginUniform_, noiseOriginData.data());
             const kb::particles::ParticleGpuCollisionPlane& plane = params.plane;
             const std::array<float, 8> planeData{

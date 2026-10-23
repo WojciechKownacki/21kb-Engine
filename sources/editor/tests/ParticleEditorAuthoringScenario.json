@@ -13,6 +13,7 @@
     { "op": "verify_particle_execution" },
     { "op": "verify_particle_depth_authoring" },
     { "op": "verify_particle_contact_authoring" },
+    { "op": "verify_particle_ordered_motion" },
     { "op": "verify_particle_emitter_material" },
     { "op": "verify_scene_render_target_after_secondary", "checkpoint": "scene-after-particle" },
     { "op": "create_entity", "id": "particleEntity", "name": "Particle Entity" },

@@ -704,6 +704,58 @@ void TestProductionBakeCacheAndCapabilityGates() {
     Require(contactBake.Succeeded() && contactHit.status == ParticleBakeStatus::UpToDate &&
         contactBake.cachePath != first.cachePath && hasContactDeath(*contactBake.effect) && hasContactDeath(*contactHit.effect),
         "contact death did not survive compiled cache rebuild and hit");
+    auto orderedMotion = effect;
+    auto& motionSource = orderedMotion.emitters[0].modules;
+    for (std::uint32_t index = 0U; index < 6U; ++index) {
+        const auto type = index % 3U == 0U ? kb::scene::ParticleModuleType::Noise :
+            (index % 3U == 1U ? kb::scene::ParticleModuleType::AxisRotation : kb::scene::ParticleModuleType::Attraction);
+        auto payload = kb::scene::DefaultParticleModulePayload(type);
+        if (type == kb::scene::ParticleModuleType::Noise)
+            payload = kb::scene::ParticleNoiseModule{.strength = 0.7F + index, .frequency = 0.5F + index};
+        else if (type == kb::scene::ParticleModuleType::AxisRotation)
+            payload = kb::scene::ParticleAxisRotationModule{.axis = {1.0F, 0.0F, 0.0F}, .degreesPerSecond = 10.0F + index};
+        else payload = kb::scene::ParticleAttractionModule{.point = {1.0F, 2.0F, 3.0F}, .strength = 2.0F + index, .radius = 4.0F + index};
+        motionSource.push_back({.moduleId = 30U + index, .authoringOrder = 2U + index, .type = type, .payload = std::move(payload)});
+    }
+    std::swap(motionSource[2].authoringOrder, motionSource[5].authoringOrder);
+    const auto motionBake = bake(orderedMotion);
+    const auto motionHit = bake(orderedMotion);
+    Require(motionBake.Succeeded() && motionHit.status == ParticleBakeStatus::UpToDate &&
+        motionBake.cachePath != first.cachePath && motionHit.effect->emitters[0].moduleCount == 8U,
+        "repeatable motion compilation/cache failed");
+    const auto& cachedMotion = motionHit.effect->emitters[0].modules;
+    Require(cachedMotion[2].moduleId == 33U && cachedMotion[5].moduleId == 30U &&
+        std::get<kb::scene::ParticleNoiseModule>(cachedMotion[2].payload).strength == 3.7F &&
+        std::get<kb::scene::ParticleNoiseModule>(cachedMotion[5].payload).frequency == 0.5F &&
+        std::get<kb::scene::ParticleAxisRotationModule>(cachedMotion[3].payload).degreesPerSecond == 11.0F &&
+        std::get<kb::scene::ParticleAxisRotationModule>(cachedMotion[6].payload).degreesPerSecond == 14.0F &&
+        std::get<kb::scene::ParticleAttractionModule>(cachedMotion[4].payload).radius == 6.0F &&
+        std::get<kb::scene::ParticleAttractionModule>(cachedMotion[7].payload).strength == 7.0F,
+        "compiled cache lost a repeated motion parameter or authored order");
+    auto duplicateModule = *motionHit.effect;
+    duplicateModule.emitters[0].modules[1].moduleId = duplicateModule.emitters[0].modules[0].moduleId;
+    const auto duplicatePath = root / "Duplicate.kbcache";
+    Require(kb::particles::ParticleCompiledEffectCache::Save(duplicatePath, motionHit.key, duplicateModule) ==
+        kb::particles::ParticleCompiledEffectCacheStatus::Success &&
+        !kb::particles::ParticleCompiledEffectCache::Load(duplicatePath, motionHit.key).Succeeded(),
+        "compiled cache accepted duplicate module identities");
+    auto reorderedEmitters = orderedMotion;
+    auto secondEmitter = reorderedEmitters.emitters[0];
+    secondEmitter.emitterId = 12U;
+    secondEmitter.authoringOrder = 0U;
+    reorderedEmitters.emitters[0].authoringOrder = 1U;
+    reorderedEmitters.emitters.push_back(std::move(secondEmitter));
+    const auto emitterBake = bake(reorderedEmitters);
+    const auto emitterHit = bake(reorderedEmitters);
+    Require(emitterBake.Succeeded() && emitterHit.status == ParticleBakeStatus::UpToDate &&
+        emitterHit.effect->emitters[0].emitterId == 12U && emitterHit.effect->emitters[1].emitterId == 11U,
+        "compiled cache changed authored emitter execution order");
+    auto duplicateEmitter = *emitterHit.effect;
+    duplicateEmitter.emitters[1].emitterId = duplicateEmitter.emitters[0].emitterId;
+    Require(kb::particles::ParticleCompiledEffectCache::Save(duplicatePath, emitterHit.key, duplicateEmitter) ==
+        kb::particles::ParticleCompiledEffectCacheStatus::Success &&
+        !kb::particles::ParticleCompiledEffectCache::Load(duplicatePath, emitterHit.key).Succeeded(),
+        "compiled cache accepted duplicate emitter identities");
     kb::particle_plugin::ParticleCompilerCapabilities reducedCapabilities;
     reducedCapabilities.pointSprite = false;
     const ParticleBakeResult alternateCapabilities = ParticleBakeService::Bake({.workingAsset = effect, .owner = owner,

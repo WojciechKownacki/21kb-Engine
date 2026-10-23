@@ -43,16 +43,24 @@ An authored plane never implicitly enables
 screen-depth collision; the renderer's explicit depth-collision parameter is
 independent of the plane.
 
-The GPU parameter block represents one Noise, AxisRotation and Attraction
-module each. Emitters with multiple enabled modules of any of these types use
-CPU simulation, preserving every module and its authored order. Disabled
-modules do not affect eligibility.
+The GPU parameter block carries up to 16 active motion operations in authored
+CPU execution order. Repeated Noise, AxisRotation and Attraction modules retain
+their individual parameters. Acceleration and drag operations stay interleaved
+with them, so mixed fields do not silently change order. Noise seeds retain all
+32 bits through two exactly representable uniform values. Disabled modules do
+not enter the motion stream. Field vectors remain in world axes, including for
+local-space emitters under owner rotation and nonuniform scale.
+Every eligible emitter sends a fixed-step clock update between births, so
+impulse effects keep moving and reach their lifetimes. Missing stateful shader
+support leaves the GPU consumer unavailable and retains CPU simulation.
+The compiled cache preserves authored module and emitter order independently
+of stable IDs, while rejecting duplicate identities.
 
 Each `ParticleRenderEmitterRecord` reports `simulationPath` and
 `gpuFallbackReason` for that emitter at publication. The provider uses the same
 decision to route births and publish the record. `ParticleGpuFallbackReasonName`
-returns a stable code such as `repeated-noise`,
-`repeated-axis-rotation` or `repeated-attraction`. `none` identifies GPU routing;
+returns a stable code such as `local-plane-collision` or `trail-force-field`.
+`none` identifies GPU routing;
 `cpu-policy` identifies deliberate CPU simulation, and `gpu-consumer-unavailable`
 means that no GPU emitter consumer is attached. The first applicable restriction
 is reported. A single effect can have both CPU and GPU emitters.
@@ -61,7 +69,7 @@ These fields describe routing rather than a GPU timing measurement. Retained
 particles can complete on their previous path after a live edit. The instance's
 `ParticleRuntimeQueryResult::executionPath` describes its selected backend policy;
 use the per-emitter records to inspect actual routing.
-The current GPU command layout requires engine module ABI 8. Rebuild providers with
+The current GPU command layout requires engine module ABI 9. Rebuild providers with
 the current SDK; the host rejects earlier module versions before creation.
 
 `kb_cli run --project <dir> --report particles` runs the normal scene lifecycle
@@ -89,6 +97,23 @@ The existing source and compiled cache formats preserve the flag; this change
 does not require an asset migration. This check also runs in the renderer's
 particle mesh suite. Other bgfx backends have compiled shader variants;
 these readback results establish execution on D3D11 only.
+
+`kb_renderer_tests particle-motion` (CTest `kb_renderer_particle_motion`) also
+reads the actual GPU-written instance buffer through an RGBA32F compute image
+and bgfx texture readback. It compares position and velocity with the CPU
+provider after 60 fixed steps. Cases include two modules of each field type,
+mixed order with wind and drag, the 16-operation limit, disabled modules,
+removal of the first field, reversal of mixed order, zero-strength fields with
+interleaved acceleration/drag, and transformed local emitters. The numerical
+tolerances are 0.001 m and 0.003 m/s for accumulated
+single-precision noise and transcendental rounding; control trajectories must
+differ by more than 0.01 in position or velocity. A CPU fallback fails the test.
+It also verifies contact death in the actual render records and compares a
+mixed-field/contact effect's rendered image with CPU and no-field controls.
+`particle-motion-kernel` exercises the same operation cases with direct GPU
+commands, independently of provider routing. Both require a real GPU host;
+unavailable support fails rather than passing as skipped. D3D11 is the verified
+backend; compiled variants alone do not establish other backend results.
 
 The authored sort mode reaches GPU emitters as well as CPU render snapshots:
 

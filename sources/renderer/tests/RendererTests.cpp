@@ -60,6 +60,8 @@ void RunRendererVisibilityFeedbackTest();
 void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
 void RunRendererParticleContactDeathTest();
+void RunParticleGpuMotionTests(bool kernelOnly);
+void RunRendererParticleMotionPixelsTest();
 void RunRendererParticleDepthAuthoringTest();
 void RunRendererParticleSortModesTest();
 void RunRendererScreenSpaceEffectTests();
@@ -249,6 +251,11 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", error.what());
             return EXIT_FAILURE;
         }
+    }
+    if (argc == 2 && (std::string_view{argv[1]} == "particle-motion" || std::string_view{argv[1]} == "particle-motion-kernel")) {
+        kb::render::tests::RunParticleGpuMotionTests(std::string_view{argv[1]} == "particle-motion-kernel");
+        if (std::string_view{argv[1]} == "particle-motion") kb::render::tests::RunRendererParticleMotionPixelsTest();
+        return EXIT_SUCCESS;
     }
     if (argc == 2 && (std::string_view{ argv[1] } == "particle-contact-death" || std::string_view{ argv[1] } == "particle-collision-fallback")) {
         try {

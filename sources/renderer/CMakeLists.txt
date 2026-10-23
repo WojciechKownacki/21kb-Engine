@@ -643,6 +643,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_visual_integrate.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_emit.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_collide.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_inspect.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_rebase.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_keys.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_gpu_sort_step.sc
@@ -825,6 +826,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/GraphForwardGpuRenderTests.cpp
         tests/RendererCapabilityReportTests.cpp
         tests/RendererRuntimeSubmitTests.cpp
+        tests/ParticleGpuMotionTests.cpp
         tests/MeshPipelineTests.cpp
         tests/SceneDisplayCompositeTests.cpp
         tests/SceneExposureMeterTests.cpp
@@ -867,6 +869,10 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             KB_21KB_PARTICLE_PLUGIN_PATH="$<TARGET_FILE:kb_21kb_particle_plugin>")
         add_dependencies(kb_renderer_tests kb_21kb_particle_plugin)
         if(WIN32)
+            add_test(NAME kb_renderer_particle_motion
+                COMMAND $<TARGET_FILE:kb_renderer_tests> particle-motion)
+            set_tests_properties(kb_renderer_particle_motion PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
             add_test(NAME kb_renderer_particle_contact_death
                 COMMAND $<TARGET_FILE:kb_renderer_tests> particle-contact-death)
             set_tests_properties(kb_renderer_particle_contact_death PROPERTIES

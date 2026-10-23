@@ -7951,7 +7951,7 @@ void RunRendererSortsAlphaGpuParticlesTest() {
 // and the pixels are read back. Particles leave the origin along +x at 4 m/s, so after one second the
 // right half of the image holds a bright line and the left half stays dark.
 std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingPlane = false, bool gpuPreferred = true,
-                                                               bool screenDepth = false) {
+                                                               bool screenDepth = false, bool orderedMotion = false) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_particle_file_to_pixel_" + std::to_string(GetCurrentProcessId()));
     std::error_code error;
@@ -7988,6 +7988,18 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
         emitter.modules.push_back({.moduleId = 1U, .type = kb::scene::ParticleModuleType::CollisionPlane,
             .payload = kb::scene::ParticleCollisionPlaneModule{.normal = {-1.0F, 0.0F, 0.0F}, .distance = -1.0F,
                 .maxEventsPerStep = 256U, .killOnContact = true}});
+    }
+    if (orderedMotion) {
+        const auto add = [&](kb::scene::ParticleModuleType type, kb::scene::ParticleModulePayload payload) {
+            const auto count = static_cast<std::uint32_t>(emitter.modules.size());
+            emitter.modules.push_back({.moduleId = count + 2U, .authoringOrder = count, .type = type, .payload = std::move(payload)});
+        };
+        add(kb::scene::ParticleModuleType::Noise, kb::scene::ParticleNoiseModule{.strength = 0.7F, .frequency = 0.5F});
+        add(kb::scene::ParticleModuleType::AxisRotation, kb::scene::ParticleAxisRotationModule{.axis = {0.0F, 1.0F, 0.0F}, .degreesPerSecond = 80.0F});
+        add(kb::scene::ParticleModuleType::Attraction, kb::scene::ParticleAttractionModule{.point = {1.0F, 1.0F, 0.0F}, .strength = 3.0F, .radius = 4.0F});
+        add(kb::scene::ParticleModuleType::Noise, kb::scene::ParticleNoiseModule{.strength = 1.3F, .frequency = 2.0F});
+        add(kb::scene::ParticleModuleType::AxisRotation, kb::scene::ParticleAxisRotationModule{.axis = {1.0F, 0.0F, 0.0F}, .degreesPerSecond = 60.0F});
+        add(kb::scene::ParticleModuleType::Attraction, kb::scene::ParticleAttractionModule{.point = {-2.0F, 0.0F, 3.0F}, .strength = 2.0F});
     }
     effect.emitters.push_back(std::move(emitter));
     Require(kb::scene::ParticleEffectAssetIO::Save(root / "spark.kbvfx", effect), "File-to-pixel test could not write its effect file");
@@ -8272,10 +8284,11 @@ void RunRendererProjectsParticleDecalsTest() {
         command.params.size.fill(0.6F);
         // The first visit integrates a quarter second at most (born half a second ago, drawn in that one frame):
         // 720 degrees a second turn it half a turn.
-        command.params.axisRadiansPerSecond = turn ? 4.0F * 3.14159265F : 0.0F;
+        command.params.motionModuleCount = 1U;
+        command.params.motionModules[0] = {.type = kb::particles::ParticleGpuMotionType::AxisRotation,
+            .vector = {0.0F, 0.0F, 1.0F}, .strength = turn ? 4.0F * 3.14159265F : 0.0F};
         command.hasField = true;
         command.fieldOrigin = {0.0F, 0.0F, 5.0F};
-        command.fieldAxis = {0.0F, 0.0F, 1.0F};
         command.spawns.push_back(kb::particles::ParticleGpuSpawn{
             .position = {2.0F, 0.0F, 5.0F}, .birthTime = 0.5F, .velocity = {0.0F, 0.0F, 0.0F}, .lifetime = 20.0F});
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
@@ -8544,6 +8557,28 @@ void RunRendererParticleDepthAuthoringTest() {
         "An explicitly enabled depth response without a surface changed authored particle motion");
 #else
     throw std::runtime_error("Particle depth readback requires the Windows renderer and particle module");
+#endif
+}
+
+void RunRendererParticleMotionPixelsTest() {
+#if defined(_WIN32) && defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    const auto cpu = RunRendererDrawsAuthoredParticleFileTest(true, false, false, true);
+    const auto gpu = RunRendererDrawsAuthoredParticleFileTest(true, true, false, true);
+    const auto withoutFields = RunRendererDrawsAuthoredParticleFileTest(true, true);
+    Require(cpu.size() == gpu.size() && cpu.size() == withoutFields.size(), "Particle motion image extents changed");
+    std::size_t mismatches = 0U;
+    std::uint64_t difference = 0U;
+    for (std::size_t index = 0U; index < cpu.size(); ++index) {
+        if (index % 4U == 3U) continue;
+        if (std::abs(int(cpu[index]) - int(gpu[index])) > 2) ++mismatches;
+        difference += static_cast<std::uint64_t>(std::abs(int(gpu[index]) - int(withoutFields[index])));
+    }
+    std::fprintf(stderr, "particle_motion_pixels mismatches=%zu field_difference=%llu\n", mismatches,
+        static_cast<unsigned long long>(difference));
+    Require(mismatches * 100U <= cpu.size(), "Ordered GPU motion and contact deaths changed the CPU image");
+    Require(difference > 100U, "Ordered GPU fields did not change the rendered image");
+#else
+    Require(false, "Particle motion pixel verification requires the Windows GPU host and particle provider");
 #endif
 }
 

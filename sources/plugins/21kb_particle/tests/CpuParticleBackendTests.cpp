@@ -2930,19 +2930,16 @@ void TestEmitterExecutionDiagnostics() {
         auto repeated = Fixture::MakeEffect(0.0F, 4U);
         repeated.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
         auto& emitter = repeated.emitters[0];
-        Reason expected = Reason::RepeatedAttraction;
         for (std::uint64_t id = 1U; id <= 2U; ++id) {
             if (type == kb::scene::ParticleModuleType::Noise) {
                 AddModule(emitter, id, type, kb::scene::ParticleNoiseModule{});
-                expected = Reason::RepeatedNoise;
             } else if (type == kb::scene::ParticleModuleType::AxisRotation) {
                 AddModule(emitter, id, type, kb::scene::ParticleAxisRotationModule{});
-                expected = Reason::RepeatedAxisRotation;
             } else {
                 AddModule(emitter, id, type, kb::scene::ParticleAttractionModule{});
             }
         }
-        check(repeated, true, {expected});
+        check(repeated, true, {Reason::None});
         emitter.modules[1].enabled = false;
         check(repeated, true, {Reason::None});
     }
@@ -3045,22 +3042,27 @@ void TestRepeatedFieldsPreserveCpuSemantics() {
             const auto states = CopyBackendStates(backend, fixture, created.instanceId);
             std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
             kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
-            if (gpuPreferred && !(firstEnabled && secondEnabled)) {
+            if (gpuPreferred) {
                 std::size_t spawns = 0U;
-                for (const auto& command : commands) spawns += command.spawns.size();
-                Require(states.empty() && spawns == 1U, "a disabled duplicate field unnecessarily prevented GPU simulation");
+                bool complete = false;
+                for (const auto& command : commands) {
+                    spawns += command.spawns.size();
+                    if (command.hasParams) complete = command.params.motionModuleCount ==
+                        static_cast<std::uint32_t>(firstEnabled) + static_cast<std::uint32_t>(secondEnabled);
+                }
+                Require(complete && states.empty() && spawns == 1U, "repeated or disabled field routing lost an active GPU motion operation");
                 return kb::particles::ParticleRuntimeState{};
             }
-            Require(states.size() == 1U, "repeated fields must retain CPU simulation instead of losing a field on the GPU");
-            Require(commands.empty(), "repeated fields submitted an incomplete GPU parameter block");
+            Require(states.size() == 1U, "explicit CPU repeated fields lost their particle");
+            Require(commands.empty(), "explicit CPU repeated fields submitted GPU commands");
             return states.front();
         };
         const auto expected = run(false, true, true);
-        const auto actual = run(true, true, true);
+        static_cast<void>(run(true, true, true));
         const auto distance = [](const auto& a, const auto& b) {
             return kb::math::Length(a.position - b.position) + kb::math::Length(a.velocity - b.velocity);
         };
-        Require(distance(actual, expected) < 0.00001F, "GPU-preferred repeated fields changed the CPU result");
+        // Numerical CPU/GPU parity is verified with actual renderer float readback, not this routing fixture.
         Require(distance(expected, run(false, false, true)) > 0.0001F &&
                 distance(expected, run(false, true, false)) > 0.0001F,
             "repeated field fixture did not observe both authored modules");
@@ -3161,13 +3163,13 @@ void TestGpuEmitterFieldsAndLargeBursts() {
     for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
         spawned += command.spawns.size();
         if (command.hasParams) {
-            params = command.params.noiseStrength == 3.0F && command.params.noiseFrequency == 0.4F &&
-                command.params.noiseSeed == 7U && std::abs(command.params.axisRadiansPerSecond - 1.5707963F) < 0.0001F &&
-                command.params.attractionStrength == 4.0F && command.params.NeedsState();
+            const auto& modules = command.params.motionModules;
+            params = command.params.motionModuleCount == 3U && modules[0].strength == 3.0F && modules[0].parameter == 0.4F &&
+                modules[0].seed == 7U && std::abs(modules[1].strength - 1.5707963F) < 0.0001F &&
+                modules[1].vector.y == 1.0F && modules[2].strength == 4.0F && modules[2].vector.y == 1.0F && command.params.NeedsState();
         }
         if (command.hasField) {
-            field = std::abs(command.fieldOrigin.y - 3.0F) < 0.0001F && std::abs(command.fieldAxis.y - 1.0F) < 0.0001F &&
-                std::abs(command.attractionTarget.y - 4.0F) < 0.0001F;
+            field = std::abs(command.fieldOrigin.y - 3.0F) < 0.0001F;
         }
     }
     Require(spawned == 100'000U, "a GPU burst was cut to the CPU's spawns per step");
@@ -3205,7 +3207,13 @@ void TestGpuEmitterRouting() {
     kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
     std::size_t spawned = 0U;
     for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
-        Require(command.hasParams && command.params.capacity == 200'000U &&
+        Require(command.key.instanceId == created.instanceId && command.key.emitterId == 1U,
+            "GPU emitter clock carries the wrong identity");
+        if (!command.hasParams) {
+            Require(command.spawns.empty(), "A GPU birth omitted its parameters");
+            continue;
+        }
+        Require(command.params.capacity == 200'000U &&
                 command.params.sort == kb::particles::ParticleRenderSortMode::Age &&
                 command.params.acceleration.y == -2.0F && command.params.drag == 0.5F &&
                 command.key.instanceId == created.instanceId && command.key.emitterId == 1U,
@@ -3268,7 +3276,7 @@ void TestGpuEmitterCollisionRouting() {
         const std::size_t cpuLive = backend.Query(fixture.scene, created.instanceId).liveParticleCount;
         kb::particles::ParticleGpuEmitterCommand source{};
         for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
-            if (command.key.emitterId == 1U) source = command;
+            if (command.key.emitterId == 1U && command.hasParams) source = command;
         }
         return std::pair{ source, cpuLive };
     };
@@ -3490,7 +3498,9 @@ void TestGpuSubEmitterEvents() {
             birthChildren.front().birthTime < birthParents.front().birthTime + 0.1F,
         "A birth sub-emitter of a GPU emitter must spawn its children at the parent's birth");
     const auto [collisionCommands, collisionCpuLive] = run(kb::scene::ParticleEventTrigger::Collision, 30);
-    Require(collisionCommands.empty() && collisionCpuLive > 0U,
+    Require(std::all_of(collisionCommands.begin(), collisionCommands.end(), [](const auto& command) {
+            return command.key.emitterId != 1U && command.spawns.empty();
+        }) && collisionCpuLive > 0U,
         "An emitter with a collision-triggered sub-emitter must stay on the CPU");
 }
 

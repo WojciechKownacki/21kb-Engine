@@ -2521,7 +2521,6 @@ kb::particles::ParticleGpuFallbackReason CpuParticleBackend::GpuFallbackReason(
     bool collisionPlane = false;
     bool forces = false;
     bool eventActions = false;
-    std::uint8_t fieldTypes = 0U;
     for (std::uint8_t index = 0U; index < emitter.moduleCount; ++index) {
         const auto& module = emitter.modules[index];
         if (!module.enabled) continue;
@@ -2535,16 +2534,6 @@ kb::particles::ParticleGpuFallbackReason CpuParticleBackend::GpuFallbackReason(
                    module.type == kb::scene::ParticleModuleType::Attraction) {
             // The stateful kernel integrates them; a trail follows the closed form, which they break.
             if (trail) return Reason::TrailField;
-            // The GPU parameter block holds one field of each type. Repeated fields must
-            // execute in authored order on the CPU rather than overwrite an earlier field.
-            const std::uint8_t fieldType = module.type == kb::scene::ParticleModuleType::Noise ? 1U :
-                (module.type == kb::scene::ParticleModuleType::AxisRotation ? 2U : 4U);
-            if ((fieldTypes & fieldType) != 0U) {
-                if (module.type == kb::scene::ParticleModuleType::Noise) return Reason::RepeatedNoise;
-                if (module.type == kb::scene::ParticleModuleType::AxisRotation) return Reason::RepeatedAxisRotation;
-                return Reason::RepeatedAttraction;
-            }
-            fieldTypes |= fieldType;
             forces = true;
         } else if (module.type == kb::scene::ParticleModuleType::TorusSwirl ||
                    module.type == kb::scene::ParticleModuleType::Separation) {
@@ -2592,6 +2581,8 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
     const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
     const CompiledEmitter& emitter = effect.emitters[emitterIndex];
     kb::particles::ParticleGpuEmitterParams params{};
+    using Motion = kb::particles::ParticleGpuMotionType;
+    static_assert(kb::particles::kParticleGpuMaxMotionModules >= kb::scene::kParticleEffectMaxModulesPerEmitter);
     bool alphaOverLife = false;
     kb::math::Vec3 acceleration{};
     float drag = 0.0F;
@@ -2600,12 +2591,17 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
         if (!module.enabled) continue;
         if (module.type == kb::scene::ParticleModuleType::Gravity) {
             const auto& gravity = std::get<kb::scene::ParticleGravityModule>(module.payload);
-            acceleration = acceleration + gravity.acceleration +
-                kb::scene::kParticleEffectDefaultSceneGravity * gravity.sceneGravityScale;
+            const auto value = gravity.acceleration + kb::scene::kParticleEffectDefaultSceneGravity * gravity.sceneGravityScale;
+            acceleration = acceleration + value;
+            params.motionModules[params.motionModuleCount++] = {.type = Motion::Acceleration, .vector = value};
         } else if (module.type == kb::scene::ParticleModuleType::Wind) {
-            acceleration = acceleration + std::get<kb::scene::ParticleWindModule>(module.payload).acceleration;
+            const auto value = std::get<kb::scene::ParticleWindModule>(module.payload).acceleration;
+            acceleration = acceleration + value;
+            params.motionModules[params.motionModuleCount++] = {.type = Motion::Acceleration, .vector = value};
         } else if (module.type == kb::scene::ParticleModuleType::Drag) {
-            drag += std::get<kb::scene::ParticleDragModule>(module.payload).coefficient;
+            const float value = std::get<kb::scene::ParticleDragModule>(module.payload).coefficient;
+            drag += value;
+            params.motionModules[params.motionModuleCount++] = {.type = Motion::Drag, .strength = value};
         } else if (module.type == kb::scene::ParticleModuleType::AlphaOverLife) {
             alphaOverLife = true;
         } else if (module.type == kb::scene::ParticleModuleType::CollisionPlane) {
@@ -2616,16 +2612,16 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
             params.hasPlane = true;
         } else if (module.type == kb::scene::ParticleModuleType::Noise) {
             const auto& noise = std::get<kb::scene::ParticleNoiseModule>(module.payload);
-            params.noiseStrength = noise.strength;
-            params.noiseFrequency = noise.frequency;
-            params.noiseSeed = static_cast<std::uint32_t>(module.moduleId);
+            params.motionModules[params.motionModuleCount++] = {.type = Motion::Noise, .strength = noise.strength,
+                .parameter = noise.frequency, .seed = static_cast<std::uint32_t>(module.moduleId)};
         } else if (module.type == kb::scene::ParticleModuleType::AxisRotation) {
-            params.axisRadiansPerSecond =
-                std::get<kb::scene::ParticleAxisRotationModule>(module.payload).degreesPerSecond * 0.017453292F;
+            const auto& rotation = std::get<kb::scene::ParticleAxisRotationModule>(module.payload);
+            params.motionModules[params.motionModuleCount++] = {.type = Motion::AxisRotation, .vector = rotation.axis,
+                .strength = rotation.degreesPerSecond * 0.017453292F};
         } else if (module.type == kb::scene::ParticleModuleType::Attraction) {
             const auto& attraction = std::get<kb::scene::ParticleAttractionModule>(module.payload);
-            params.attractionStrength = attraction.strength;
-            params.attractionRadius = attraction.radius;
+            params.motionModules[params.motionModuleCount++] = {.type = Motion::Attraction, .vector = attraction.point,
+                .strength = attraction.strength, .parameter = attraction.radius};
         }
     }
     // An authored plane has no screen-depth semantics. Depth collision is a separate,
@@ -2769,8 +2765,7 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(*gpuScene_, std::move(command));
     }
     gpuPending_.clear();
-    // Local-space emitters follow their owner (world matrix) and mesh emitters orient their instances by it
-    // (owner rotation times the emitter's own): refresh both of them each step.
+    // Advance every GPU emitter's clock even between births. Refresh owner and field poses as needed.
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
         if (playbackStates_[denseIndex] == PlaybackState::Stopped) continue;
         const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
@@ -2783,7 +2778,7 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
                     return module.enabled && (module.type == kb::scene::ParticleModuleType::AxisRotation ||
                         module.type == kb::scene::ParticleModuleType::Attraction);
                 });
-            if ((!local && !mesh && !field) || !GpuEligible(denseIndex, emitterIndex, UINT8_MAX)) {
+            if (!GpuEligible(denseIndex, emitterIndex, UINT8_MAX)) {
                 continue;
             }
             const kb::scene::WorldTransform& owner = ownerTransforms_[denseIndex];
@@ -2808,23 +2803,9 @@ void CpuParticleBackend::FlushGpuSpawns() noexcept {
                 command.origin = { origin.x, origin.y, origin.z };
             }
             if (field) {
-                // The fields as the CPU modules place them (about the emitter's origin, the axis and point in world
-                // axes), in the frame of the birth records: the owner's for a local-space emitter.
-                const kb::math::Quat toRecords = local ? kb::math::Conjugate(owner.rotation) : kb::math::Quat{};
+                // Motion vectors remain in world axes, matching CPU execution even for local-space births.
                 command.hasField = true;
-                command.fieldOrigin = local ? emitter.localPosition
-                    : owner.position + TransformDirection(owner, Scale(emitter.localPosition, owner.scale));
-                for (std::uint8_t moduleIndex = 0U; moduleIndex < emitter.moduleCount; ++moduleIndex) {
-                    const CompiledEmitter::Module& module = emitter.modules[moduleIndex];
-                    if (!module.enabled) continue;
-                    if (module.type == kb::scene::ParticleModuleType::AxisRotation) {
-                        command.fieldAxis = kb::math::Rotate(toRecords,
-                            std::get<kb::scene::ParticleAxisRotationModule>(module.payload).axis);
-                    } else if (module.type == kb::scene::ParticleModuleType::Attraction) {
-                        command.attractionTarget = command.fieldOrigin + kb::math::Rotate(toRecords,
-                            std::get<kb::scene::ParticleAttractionModule>(module.payload).point);
-                    }
-                }
+                command.fieldOrigin = owner.position + TransformDirection(owner, Scale(emitter.localPosition, owner.scale));
             }
             kb::particles::ParticlePlayback::QueueGpuEmitterCommand(*gpuScene_, std::move(command));
         }
