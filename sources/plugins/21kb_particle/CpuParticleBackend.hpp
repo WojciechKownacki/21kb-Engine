@@ -185,6 +185,10 @@ private:
     };
 
     static constexpr std::uint32_t kInvalidDenseIndex = UINT32_MAX;
+    void ReserveParticleStorage(std::size_t capacity);
+    [[nodiscard]] std::size_t ParticleStorageRequirement(
+        const CompiledEffect* candidate = nullptr,
+        std::uint32_t replacedEffect = kInvalidDenseIndex) const noexcept;
 
     [[nodiscard]] static std::uint64_t MakeInstanceId(std::uint32_t slot, std::uint32_t generation) noexcept;
     [[nodiscard]] std::uint32_t ResolveDenseIndex(std::uint64_t instanceId) const noexcept;

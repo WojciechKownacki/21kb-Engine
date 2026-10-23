@@ -35,10 +35,19 @@
 #include <type_traits>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
+#endif
+
 namespace {
 
 std::atomic<bool> g_countAllocations{ false };
 std::atomic<std::size_t> g_allocationCount{ 0U };
+std::atomic<bool> g_failNextAllocation{false};
 
 void CountAllocation() noexcept {
     if (g_countAllocations.load(std::memory_order_relaxed)) {
@@ -2170,8 +2179,8 @@ void TestValidationAndLifecycle() {
         "create before warmup was accepted");
     backend.Warmup();
     backend.Warmup();
-    Require(backend.ParticleCapacity() == kb::scene::kParticleEffectMaxCpuParticlesPerScene,
-        "particle SoA capacity diverged from the schema ceiling");
+    Require(backend.ParticleCapacity() == 0U,
+        "empty warmed backend reserved particle SoA storage before effect admission");
     Require(backend.CommandCapacity() == kb::scene::kParticleEffectMaxCommandsPerStep &&
             backend.EventCapacity() == kb::scene::kParticleEffectMaxEventsPerStep,
         "buffer capacities diverged from schema ceilings");
@@ -2542,6 +2551,7 @@ void TestTerminalSnapshotRetentionFailurePreservesBackendOwnership() {
 } // namespace
 
 void* operator new(std::size_t size) {
+    if (g_failNextAllocation.exchange(false, std::memory_order_relaxed)) throw std::bad_alloc{};
     CountAllocation();
     if (void* memory = std::malloc(size == 0U ? 1U : size)) return memory;
     throw std::bad_alloc{};
@@ -3383,8 +3393,107 @@ void TestGpuSubEmitterEvents() {
         "An emitter with a collision-triggered sub-emitter must stay on the CPU");
 }
 
-int main() {
+void TestLazyParticleStorageAdmissionAndReload() {
+    auto effect = Fixture::MakeEffect(0.0F, 4U);
+    Fixture fixture(effect);
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    Require(backend.ParticleCapacity() == 0U, "empty backend reserved a scene-sized particle pool");
+    const auto first = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(first.Succeeded() && backend.ParticleCapacity() >= 4U && backend.ParticleCapacity() <= 16U,
+        "small effect admission did not size the particle pool to its authored capacity");
+    Require(backend.Emit(fixture.scene, first.instanceId, 4U).Succeeded(), "small admitted pool did not fill");
+    bool rejectedAllocation = false;
+    g_failNextAllocation.store(true);
     try {
+        static_cast<void>(backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner));
+    } catch (const std::bad_alloc&) {
+        rejectedAllocation = true;
+    }
+    g_failNextAllocation.store(false);
+    Require(rejectedAllocation && backend.LiveInstanceCount() == 1U && backend.CompiledEffectCount() == 1U &&
+            backend.Query(fixture.scene, first.instanceId).liveParticleCount == 4U,
+        "failed admission leaked an instance or damaged the existing particle pool");
+    const auto second = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(second.Succeeded() && backend.ParticleCapacity() >= 8U && backend.ParticleCapacity() <= 16U &&
+            backend.Emit(fixture.scene, second.instanceId, 4U).Succeeded() &&
+            backend.Query(fixture.scene, first.instanceId).liveParticleCount == 4U,
+        "admitting another instance damaged live SoA data or failed to grow all columns");
+    effect.emitters[0].maxParticles = 4096U;
+    Require(fixture.scene.Assets().Manager().PublishRuntimeAsset(kb::assets::AssetId{fixture.effectAssetId},
+            std::make_shared<kb::scene::ParticleEffectAsset>(effect)), "capacity reload asset publication failed");
+    Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            backend.ParticleCapacity() >= 8192U && backend.ParticleCapacity() <= 16384U,
+        "reload did not reserve capacity before replacing both active instances");
+    Require(backend.Emit(fixture.scene, first.instanceId, 4096U).Succeeded() &&
+            backend.Emit(fixture.scene, second.instanceId, 4096U).Succeeded(),
+        "reloaded particle pool did not grow every SoA column");
+    Require(backend.Release(fixture.scene, first.instanceId).Succeeded() &&
+            backend.Query(fixture.scene, second.instanceId).liveParticleCount == 4096U &&
+            backend.Release(fixture.scene, second.instanceId).Succeeded(),
+        "particle pool growth broke release or dense instance relocation");
+}
+
+void ReportParticleProcessMemory(std::string_view phase) {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    Require(K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) != 0,
+        "process memory counters were unavailable");
+    std::cout << "{\"phase\":\"" << phase << "\",\"rssBytes\":" << counters.WorkingSetSize
+        << ",\"commitBytes\":" << counters.PagefileUsage << ",\"peakRssBytes\":" << counters.PeakWorkingSetSize
+        << ",\"peakCommitBytes\":" << counters.PeakPagefileUsage << "}\n";
+#else
+    std::cout << "{\"phase\":\"" << phase << "\",\"processMemory\":\"unavailable\"}\n";
+#endif
+}
+
+void RunParticleSceneMemoryProbe() {
+    ReportParticleProcessMemory("process_baseline");
+    {
+        auto effect = Fixture::MakeEffect(0.0F, 4096U);
+        effect.emitters[0].spawn.lifetimeMin = effect.emitters[0].spawn.lifetimeMax = 60.0F;
+        Fixture fixture(effect);
+        ReportParticleProcessMemory("scene_without_particle_system");
+        const auto system = fixture.scene.Runtime().AddSceneSystem(
+            std::make_unique<kb::particle_plugin::ParticleSceneSystem>());
+        Require(system.IsValid(), "memory probe scene system registration failed");
+        for (std::uint32_t step = 0U; step < 4U; ++step) {
+            static_cast<void>(fixture.scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+        }
+        ReportParticleProcessMemory("empty_particle_scene");
+        const auto created = kb::particles::ParticlePlayback::Create(
+            fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded(), "memory probe effect admission failed");
+        ReportParticleProcessMemory("effect_admitted");
+        Require(kb::particles::ParticlePlayback::Emit(fixture.scene, created.instanceId, 4096U).Succeeded(),
+            "memory probe emit failed");
+        std::array<std::shared_ptr<const kb::particles::ParticleRenderSnapshot>, 4U> retained;
+        for (auto& snapshot : retained) {
+            static_cast<void>(fixture.scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+            snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+            Require(snapshot && snapshot->Particles().size() == 4096U, "memory probe snapshot was incomplete");
+        }
+        ReportParticleProcessMemory("four_retained_batches");
+        retained = {};
+        for (std::uint32_t step = 0U; step < 120U; ++step) {
+            static_cast<void>(fixture.scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+        }
+        Require(kb::particles::ParticlePlayback::Query(fixture.scene, created.instanceId).liveParticleCount == 4096U,
+            "memory probe soak lost live particles");
+        ReportParticleProcessMemory("soak_reuse");
+        Require(fixture.scene.Runtime().RemoveSceneSystem(system), "memory probe system unload failed");
+        ReportParticleProcessMemory("provider_unloaded");
+    }
+    ReportParticleProcessMemory("scene_unloaded");
+}
+
+int main(int argc, char** argv) {
+    try {
+        if (argc == 2 && std::string_view{argv[1]} == "--memory-probe") {
+            RunParticleSceneMemoryProbe();
+            return 0;
+        }
+        TestLazyParticleStorageAdmissionAndReload();
         TestRepeatedFieldsPreserveCpuSemantics();
         TestGpuSubEmitterEvents();
         TestGpuMeshAndTrailRouting();

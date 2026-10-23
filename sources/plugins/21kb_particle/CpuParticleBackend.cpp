@@ -19,6 +19,7 @@
 #include "engine/particles/ParticlePlayback.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <numeric>
 #include <cmath>
 #include <cstring>
@@ -264,23 +265,6 @@ void CpuParticleBackend::Warmup() {
     nextEvents_.reserve(kb::scene::kParticleEffectMaxEventsPerStep);
     prewarmCurrentEvents_.reserve(kb::scene::kParticleEffectMaxEventsPerStep);
     prewarmNextEvents_.reserve(kb::scene::kParticleEffectMaxEventsPerStep);
-    particleInstanceIds_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleIds_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleSpawnOrdinals_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleRibbonGroups_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleEmitterIndices_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particlePositions_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particlePreviousPositions_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleVelocities_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleAges_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleLifetimes_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleColors_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleSizes_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleSpins_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleSpinRates_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleSizeScales_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particleEventDepths_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
-    particlePrewarmGroups_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     renderEmitterScratch_.resize(kb::particles::kParticleRenderSnapshotMaxEmitterRecords);
     renderParticleScratch_.reserve(4'096U);
     constexpr std::size_t renderGroupCount = kb::scene::kParticleEffectMaxInstancesPerScene *
@@ -293,6 +277,44 @@ void CpuParticleBackend::Warmup() {
     renderRejectedByEventBudget_.resize(renderGroupCount);
     collisionEventsThisStep_.resize(renderGroupCount * kb::scene::kParticleEffectMaxModulesPerEmitter);
     warmedUp_ = true;
+}
+
+void CpuParticleBackend::ReserveParticleStorage(std::size_t capacity) {
+    if (capacity != 0U) capacity = std::bit_ceil(capacity);
+    particleInstanceIds_.reserve(capacity);
+    particleIds_.reserve(capacity);
+    particleSpawnOrdinals_.reserve(capacity);
+    particleRibbonGroups_.reserve(capacity);
+    particleEmitterIndices_.reserve(capacity);
+    particlePositions_.reserve(capacity);
+    particlePreviousPositions_.reserve(capacity);
+    particleVelocities_.reserve(capacity);
+    particleAges_.reserve(capacity);
+    particleLifetimes_.reserve(capacity);
+    particleColors_.reserve(capacity);
+    particleSizes_.reserve(capacity);
+    particleSpins_.reserve(capacity);
+    particleSpinRates_.reserve(capacity);
+    particleSizeScales_.reserve(capacity);
+    particleEventDepths_.reserve(capacity);
+    particlePrewarmGroups_.reserve(capacity);
+}
+
+std::size_t CpuParticleBackend::ParticleStorageRequirement(
+    const CompiledEffect* candidate, std::uint32_t replacedEffect) const noexcept {
+    std::size_t capacity = 0U;
+    const auto include = [&](const CompiledEffect& effect) {
+        for (std::uint8_t emitter = 0U; emitter < effect.emitterCount; ++emitter) {
+            capacity = std::min(capacity + effect.emitters[emitter].maxParticles,
+                static_cast<std::size_t>(kb::scene::kParticleEffectMaxCpuParticlesPerScene));
+        }
+    };
+    for (std::uint32_t dense = 0U; dense < denseInstanceCount_; ++dense) {
+        const std::uint32_t compiled = instanceRuntime_[dense].compiledEffectIndex;
+        include(candidate != nullptr && compiled == replacedEffect ? *candidate : *compiledEffects_[compiled].effect);
+    }
+    if (candidate != nullptr && replacedEffect == kInvalidDenseIndex) include(*candidate);
+    return capacity;
 }
 
 bool CpuParticleBackend::IsWarmedUp() const noexcept { return warmedUp_; }
@@ -410,6 +432,14 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Create(
         return Result(kb::particles::ParticleRuntimeStatus::InstanceLimitReached);
     }
 
+    // Admit the full authored CPU budget before publishing the instance. GPU effects retain
+    // this conservative fallback budget, so a renderer transition does not allocate in a spawn.
+    try {
+        ReserveParticleStorage(ParticleStorageRequirement(compiledEffects_[compiledEffectIndex].effect.get()));
+    } catch (...) {
+        ReleaseCompiledEffect(compiledEffectIndex);
+        throw;
+    }
     const std::uint32_t denseIndex = denseInstanceCount_++;
     slotToDense_[slot] = denseIndex;
     denseToSlot_[denseIndex] = slot;
@@ -1067,6 +1097,7 @@ void CpuParticleBackend::RefreshCompiledEffects(kb::scene::Scene& scene) {
         }
         CompiledEffectEntry& candidate = compiledEffects_[candidateIndex];
         --candidate.referenceCount;
+        ReserveParticleStorage(ParticleStorageRequirement(candidate.effect.get(), previousIndex));
         const bool compatible = TopologyCompatible(*previous.effect, *candidate.effect);
         const std::uint16_t transferredReferences = previous.referenceCount;
         previous.referenceCount = 0U;

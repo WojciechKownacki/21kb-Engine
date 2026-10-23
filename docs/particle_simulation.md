@@ -51,4 +51,16 @@ Warm up the expected payload sizes and retained-slot count before measuring
 steady-state allocations. A larger workload can allocate when it first grows
 a free slot. `kb_21kb_particle_snapshot_tests` checks empty-channel allocations,
 growth failure, retained readers, concurrent reads and allocation-free reuse.
-The CPU simulation pool has a separate capacity budget.
+The CPU simulation pool has a separate capacity budget. Warmup reserves its
+bounded instance, command and event metadata, leaving particle columns empty.
+Effect admission reserves every particle column for the combined authored
+instance capacities, rounded up to a power of two and capped at the existing
+scene limit. Reload reserves the replacement budget before changing live
+instances. GPU effects keep the same conservative CPU fallback budget.
+Capacity is reused after releases and reclaimed when the provider is destroyed.
+
+Run `kb_21kb_particle_cpu_backend_tests --memory-probe` for a headless scene
+measurement covering an empty provider, effect admission, four retained batches,
+steady updates and unload. Windows reports working set, process commit and
+their peaks; other hosts explicitly report unavailable process counters.
+These counters include allocator and runtime overhead, unlike particle capacity.

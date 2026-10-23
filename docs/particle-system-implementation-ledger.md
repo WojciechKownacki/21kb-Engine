@@ -225,7 +225,7 @@ selection is driven entirely by the `RenderMaterial`'s own shader assignment —
 
 - Plugin-owned `CpuParticleBackend` registers only while its `ParticleSceneSystem` is attached and unregisters only its own backend during detach/reload.
 - Instances use generation-safe IDs over a dense 256-instance store; stale handles cannot address a reused slot.
-- Particle SoA capacity, command/event buffers, and per-instance scalar overrides derive from shared schema ceilings and are reserved by explicit `Warmup()`.
+- Command/event buffers and per-instance scalar overrides derive from shared schema ceilings and are reserved by explicit `Warmup()`. Particle SoA storage is reserved when effects are admitted or reloaded, using their combined authored capacities up to the scene ceiling.
 - Real lifecycle, validation, query, and bounded-copy behavior are present before simulation; non-zero `Emit` explicitly returns `UnsupportedOutput` until the fixed-step kernel exists.
 - Focused tests prove limits, stale handles, backend ownership/reload, caller-span bounds, and zero global allocations after warmup for the lifecycle/query path.
 
