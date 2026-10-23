@@ -2560,8 +2560,11 @@ void* operator new(std::size_t size) {
 void* operator new[](std::size_t size) { return ::operator new(size); }
 void operator delete(void* memory) noexcept { std::free(memory); }
 void operator delete[](void* memory) noexcept { std::free(memory); }
+// The Microsoft runtime forwards sized deletes to these unsized replacements.
+#if !defined(_MSC_VER)
 void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
+#endif
 
 void TestEditorStyleScenePulseFollowsOwner() {
     auto effect = Fixture::MakeEffect(60.0F, 4U);
@@ -2864,6 +2867,85 @@ void TestFieldModules() {
     const kb::math::Vec3 fromRing{rolled.position.x - 1.0F, rolled.position.y - 2.0F, rolled.position.z};
     Require(std::abs(std::sqrt(kb::math::Dot(fromRing, fromRing)) - 1.0F) < 0.05F && std::abs(rolled.position.y - 2.0F) > 0.9F,
         "a torus swirl did not roll the particle about its ring");
+}
+
+void TestEmitterExecutionDiagnostics() {
+    using Reason = kb::particles::ParticleGpuFallbackReason;
+    using Path = kb::particles::ParticleEmitterSimulationPath;
+    const auto check = [](kb::scene::ParticleEffectAsset effect, bool consumer, const std::vector<Reason>& expected) {
+        Fixture fixture(std::move(effect));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded() &&
+            kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(),
+            "execution diagnostics could not register snapshot publication");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(fixture.scene, consumer);
+        const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+            backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded() &&
+            backend.Simulate(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "execution diagnostics could not simulate the effect");
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(snapshot && snapshot->Emitters().size() == expected.size(), "execution diagnostics lost an emitter");
+        std::size_t gpuEmitters = 0U;
+        for (std::size_t index = 0U; index < expected.size(); ++index) {
+            const auto& emitter = snapshot->Emitters()[index];
+            Require(emitter.gpuFallbackReason == expected[index] &&
+                emitter.simulationPath == (expected[index] == Reason::None ? Path::Gpu : Path::Cpu),
+                "emitter snapshot did not report the actual simulation route and fallback reason");
+            Require(!kb::particles::ParticleGpuFallbackReasonName(expected[index]).empty(), "fallback reason has no stable name");
+            if (expected[index] == Reason::None) ++gpuEmitters;
+        }
+        std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+        kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+        std::size_t gpuSpawns = 0U;
+        for (const auto& command : commands) gpuSpawns += command.spawns.size();
+        Require(gpuSpawns == gpuEmitters, "reported GPU emitters disagree with submitted GPU births");
+        Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
+            "execution diagnostics could not release its backend");
+    };
+    auto effect = Fixture::MakeEffect(0.0F, 4U);
+    check(effect, false, {Reason::CpuPolicy});
+    effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    check(effect, false, {Reason::ConsumerUnavailable});
+    check(effect, true, {Reason::None});
+    effect.emitters[0].output.alignment = kb::scene::ParticleAlignment::Local;
+    check(effect, true, {Reason::LocalAlignment});
+    effect.emitters[0].output.alignment = kb::scene::ParticleAlignment::CameraFacing;
+    AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane,
+        kb::scene::ParticleCollisionPlaneModule{.killOnContact = true});
+    check(effect, true, {Reason::ContactDeath});
+    effect.emitters[0].modules[0].enabled = false;
+    check(effect, true, {Reason::None});
+    auto second = effect.emitters[0];
+    second.emitterId = 2U;
+    second.authoringOrder = 1U;
+    second.modules[0].enabled = true;
+    effect.emitters.push_back(std::move(second));
+    check(effect, true, {Reason::None, Reason::ContactDeath});
+    for (const auto type : {kb::scene::ParticleModuleType::Noise,
+                           kb::scene::ParticleModuleType::AxisRotation,
+                           kb::scene::ParticleModuleType::Attraction}) {
+        auto repeated = Fixture::MakeEffect(0.0F, 4U);
+        repeated.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        auto& emitter = repeated.emitters[0];
+        Reason expected = Reason::RepeatedAttraction;
+        for (std::uint64_t id = 1U; id <= 2U; ++id) {
+            if (type == kb::scene::ParticleModuleType::Noise) {
+                AddModule(emitter, id, type, kb::scene::ParticleNoiseModule{});
+                expected = Reason::RepeatedNoise;
+            } else if (type == kb::scene::ParticleModuleType::AxisRotation) {
+                AddModule(emitter, id, type, kb::scene::ParticleAxisRotationModule{});
+                expected = Reason::RepeatedAxisRotation;
+            } else {
+                AddModule(emitter, id, type, kb::scene::ParticleAttractionModule{});
+            }
+        }
+        check(repeated, true, {expected});
+        emitter.modules[1].enabled = false;
+        check(repeated, true, {Reason::None});
+    }
 }
 
 // A collision plane that kills on contact removes the particle where it struck.
@@ -3494,6 +3576,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         TestLazyParticleStorageAdmissionAndReload();
+        TestEmitterExecutionDiagnostics();
         TestRepeatedFieldsPreserveCpuSemantics();
         TestGpuSubEmitterEvents();
         TestGpuMeshAndTrailRouting();

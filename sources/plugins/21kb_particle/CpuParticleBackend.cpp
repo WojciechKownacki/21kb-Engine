@@ -2292,6 +2292,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
                 ownerTransforms_[denseIndex], emitter.localPosition);
             renderGroupWriteOffsets_[groupIndex] = particleOffset;
             renderGroupRecordIndices_[groupIndex] = static_cast<std::uint16_t>(emitterRecordCount);
+            const auto fallback = GpuFallbackReason(denseIndex, emitterIndex, UINT8_MAX);
             renderEmitterScratch_[emitterRecordCount++] = {
                 .instanceId = instanceId,
                 .effectAssetId = effectEntry.assetId,
@@ -2334,6 +2335,9 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
                         ? kb::particles::ParticleRenderEmitterFlag::ReceivesShadow
                         : kb::particles::ParticleRenderEmitterFlag::None),
                 .backendPolicy = effect.backendPolicy,
+                .simulationPath = fallback == kb::particles::ParticleGpuFallbackReason::None
+                    ? kb::particles::ParticleEmitterSimulationPath::Gpu : kb::particles::ParticleEmitterSimulationPath::Cpu,
+                .gpuFallbackReason = fallback,
                 .flipbookColumnsEncoded = static_cast<std::uint8_t>(emitter.flipbookColumns),
                 .flipbookRowsEncoded = static_cast<std::uint8_t>(emitter.flipbookRows),
                 .localBasisQuaternionSnorm = PackQuaternion(kb::math::Normalize(
@@ -2480,33 +2484,38 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderTom
 }
 
 bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint8_t prewarmGroup) const noexcept {
-    if (gpuScene_ == nullptr || prewarmGroup != UINT8_MAX || prewarmingInstanceId_ != 0U ||
-        !kb::particles::ParticlePlayback::HasGpuEmitterConsumer(*gpuScene_)) {
-        return false;
-    }
+    return GpuFallbackReason(denseIndex, emitterIndex, prewarmGroup) == kb::particles::ParticleGpuFallbackReason::None;
+}
+
+kb::particles::ParticleGpuFallbackReason CpuParticleBackend::GpuFallbackReason(
+    std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint8_t prewarmGroup) const noexcept {
+    using Reason = kb::particles::ParticleGpuFallbackReason;
     const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
-    if (effect.backendPolicy == kb::scene::ParticleBackendPolicy::CpuDeterministic || emitterIndex >= effect.emitterCount) {
-        return false;
+    if (emitterIndex >= effect.emitterCount) return Reason::InvalidEmitter;
+    if (effect.backendPolicy == kb::scene::ParticleBackendPolicy::CpuDeterministic) return Reason::CpuPolicy;
+    if (gpuScene_ == nullptr || !kb::particles::ParticlePlayback::HasGpuEmitterConsumer(*gpuScene_)) {
+        return Reason::ConsumerUnavailable;
     }
+    if (prewarmGroup != UINT8_MAX || prewarmingInstanceId_ != 0U) return Reason::Prewarm;
     const CompiledEmitter& emitter = effect.emitters[emitterIndex];
-    if ((emitter.simulationSpace != kb::scene::ParticleSimulationSpace::World &&
-         emitter.simulationSpace != kb::scene::ParticleSimulationSpace::Local) ||
-        (emitter.outputType != kb::scene::ParticleOutputType::Billboard &&
-         emitter.outputType != kb::scene::ParticleOutputType::StretchedBillboard &&
-         emitter.outputType != kb::scene::ParticleOutputType::Mesh &&
-         emitter.outputType != kb::scene::ParticleOutputType::Trail) ||
-        emitter.alignment == kb::scene::ParticleAlignment::Local || emitter.flipbookFrameCount > 1U ||
-        emitter.maxParticles > kb::particles::kParticleGpuMaxCapacity) {
-        return false;
-    }
+    if (emitter.simulationSpace != kb::scene::ParticleSimulationSpace::World &&
+        emitter.simulationSpace != kb::scene::ParticleSimulationSpace::Local) return Reason::SimulationSpace;
+    if (emitter.outputType != kb::scene::ParticleOutputType::Billboard &&
+        emitter.outputType != kb::scene::ParticleOutputType::StretchedBillboard &&
+        emitter.outputType != kb::scene::ParticleOutputType::Mesh &&
+        emitter.outputType != kb::scene::ParticleOutputType::Trail) return Reason::Output;
+    if (emitter.alignment == kb::scene::ParticleAlignment::Local) return Reason::LocalAlignment;
+    if (emitter.flipbookFrameCount > 1U) return Reason::Flipbook;
+    if (emitter.maxParticles > kb::particles::kParticleGpuMaxCapacity) return Reason::ParticleCapacity;
     if (emitter.outputType == kb::scene::ParticleOutputType::Mesh && (emitter.meshAssetId == 0U || emitter.materialAssetId == 0U)) {
-        return false;
+        return Reason::MeshAssets;
     }
     // A trail follows the closed form back in time, which a colliding or local-space particle does not obey.
     const bool trail = emitter.outputType == kb::scene::ParticleOutputType::Trail;
-    if (trail && (emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local || emitter.trailMaxSamplesPerParticle < 2U ||
+    if (trail && emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local) return Reason::LocalTrail;
+    if (trail && (emitter.trailMaxSamplesPerParticle < 2U ||
         static_cast<std::uint64_t>(emitter.maxParticles) * (emitter.trailMaxSamplesPerParticle - 1U) > kb::particles::kParticleGpuMaxTrailSegments)) {
-        return false;
+        return Reason::TrailHistory;
     }
     const bool local = emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local;
     bool collisionPlane = false;
@@ -2518,41 +2527,49 @@ bool CpuParticleBackend::GpuEligible(std::uint32_t denseIndex, std::uint8_t emit
         if (!module.enabled) continue;
         if (module.type == kb::scene::ParticleModuleType::CollisionPlane) {
             // The GPU plane only bounces; retain CPU simulation for contact deaths.
-            if (local || trail || std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload).killOnContact) return false;
+            if (local) return Reason::LocalPlane;
+            if (trail) return Reason::TrailCollision;
+            if (std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload).killOnContact) return Reason::ContactDeath;
             collisionPlane = true;
         } else if (module.type == kb::scene::ParticleModuleType::Noise ||
                    module.type == kb::scene::ParticleModuleType::AxisRotation ||
                    module.type == kb::scene::ParticleModuleType::Attraction) {
             // The stateful kernel integrates them; a trail follows the closed form, which they break.
-            if (trail) return false;
+            if (trail) return Reason::TrailField;
             // The GPU parameter block holds one field of each type. Repeated fields must
             // execute in authored order on the CPU rather than overwrite an earlier field.
             const std::uint8_t fieldType = module.type == kb::scene::ParticleModuleType::Noise ? 1U :
                 (module.type == kb::scene::ParticleModuleType::AxisRotation ? 2U : 4U);
-            if ((fieldTypes & fieldType) != 0U) return false;
+            if ((fieldTypes & fieldType) != 0U) {
+                if (module.type == kb::scene::ParticleModuleType::Noise) return Reason::RepeatedNoise;
+                if (module.type == kb::scene::ParticleModuleType::AxisRotation) return Reason::RepeatedAxisRotation;
+                return Reason::RepeatedAttraction;
+            }
             fieldTypes |= fieldType;
             forces = true;
         } else if (module.type == kb::scene::ParticleModuleType::TorusSwirl ||
                    module.type == kb::scene::ParticleModuleType::Separation) {
             // A field the GPU kernel does not integrate: the CPU path follows it.
-            return false;
+            return module.type == kb::scene::ParticleModuleType::TorusSwirl ? Reason::TorusSwirl : Reason::Separation;
         } else if (module.type == kb::scene::ParticleModuleType::SubEmitter) {
             // Collision events would have to come back from the GPU.
             if (std::get<kb::scene::ParticleSubEmitterModule>(module.payload).trigger == kb::scene::ParticleEventTrigger::Collision) {
-                return false;
+                return Reason::CollisionEvent;
             }
             eventActions = true;
         }
     }
-    if (emitter.beam.enabled || emitter.absolutePosition || emitter.shape.type == kb::scene::ParticleSpawnShape::Mesh) return false;
+    if (emitter.beam.enabled) return Reason::Beam;
+    if (emitter.absolutePosition) return Reason::AbsolutePosition;
+    if (emitter.shape.type == kb::scene::ParticleSpawnShape::Mesh) return Reason::MeshSpawn;
     for (std::uint8_t index = 0U; index < effect.eventBindingCount; ++index) {
         if (effect.eventBindings[index].sourceEmitterIndex != emitterIndex) continue;
-        if (effect.eventBindings[index].trigger == kb::scene::ParticleEventTrigger::Collision ||
-            effect.eventBindings[index].trigger == kb::scene::ParticleEventTrigger::WhileAlive) return false;
+        if (effect.eventBindings[index].trigger == kb::scene::ParticleEventTrigger::Collision) return Reason::CollisionEvent;
+        if (effect.eventBindings[index].trigger == kb::scene::ParticleEventTrigger::WhileAlive) return Reason::WhileAliveEvent;
         eventActions = true;
     }
     // Death positions come from the closed form, which needs a free-flying world-space particle.
-    return !(eventActions && (collisionPlane || forces || local));
+    return eventActions && (collisionPlane || forces || local) ? Reason::EventMotion : Reason::None;
 }
 
 namespace {

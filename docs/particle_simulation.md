@@ -15,6 +15,20 @@ module each. Emitters with multiple enabled modules of any of these types use
 CPU simulation, preserving every module and its authored order. Disabled
 modules do not affect eligibility.
 
+Each `ParticleRenderEmitterRecord` reports `simulationPath` and
+`gpuFallbackReason` for that emitter at publication. The provider uses the same
+decision to route births and publish the record. `ParticleGpuFallbackReasonName`
+returns a stable code such as `kill-on-contact`, `repeated-noise`,
+`repeated-axis-rotation` or `repeated-attraction`. `none` identifies GPU routing;
+`cpu-policy` identifies deliberate CPU simulation, and `gpu-consumer-unavailable`
+means that no GPU emitter consumer is attached. The first applicable restriction
+is reported. A single effect can have both CPU and GPU emitters.
+
+These fields describe routing rather than a GPU timing measurement. Retained
+particles can complete on their previous path after a live edit. The instance's
+`ParticleRuntimeQueryResult::executionPath` describes its selected backend policy;
+use the per-emitter records to inspect actual routing.
+
 Run `kb_21kb_particle_cpu_backend_tests` for collision, field and routing
 regressions. On Windows, `kb_renderer_tests particle-collision-fallback`
 loads an authored effect through the particle provider and compares hidden

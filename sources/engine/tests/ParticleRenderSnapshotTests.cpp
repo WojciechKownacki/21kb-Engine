@@ -118,6 +118,8 @@ private:
             kb::particles::ParticleRenderEmitterFlag::CastsShadow |
             kb::particles::ParticleRenderEmitterFlag::ReceivesShadow,
         .backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired,
+        .simulationPath = kb::particles::ParticleEmitterSimulationPath::Cpu,
+        .gpuFallbackReason = kb::particles::ParticleGpuFallbackReason::RepeatedNoise,
         .flipbookColumnsEncoded = 8U,
         .flipbookRowsEncoded = 4U,
         .localBasisQuaternionSnorm = {0, 16'384, 0, 28'377},
@@ -170,6 +172,9 @@ void TestCompleteContractAndMalformedRanges() {
             snapshot->Particles().size() == 2U,
         "snapshot header or batch ranges were not retained");
     const auto& emitter = snapshot->Emitters()[1];
+    Require(emitter.simulationPath == kb::particles::ParticleEmitterSimulationPath::Cpu &&
+        emitter.gpuFallbackReason == kb::particles::ParticleGpuFallbackReason::RepeatedNoise,
+        "snapshot did not retain emitter execution diagnostics");
     Require(emitter.instanceId == 8U && emitter.effectAssetId == 1008U && emitter.emitterId == 2008U &&
             emitter.assetGeneration == 9U && emitter.materialAssetId == 3008U &&
             emitter.meshAssetId == 4008U && emitter.textureAtlasAssetId == 5008U &&
@@ -247,6 +252,22 @@ void TestCompleteContractAndMalformedRanges() {
     malformed[0].alignment = static_cast<kb::particles::ParticleRenderAlignment>(255U);
     Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
         "unknown alignment enum was accepted");
+    malformed = emitters;
+    malformed[0].simulationPath = static_cast<kb::particles::ParticleEmitterSimulationPath>(255U);
+    Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
+        "unknown simulation path was accepted");
+    malformed = emitters;
+    malformed[0].gpuFallbackReason = static_cast<kb::particles::ParticleGpuFallbackReason>(255U);
+    Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
+        "unknown GPU fallback reason was accepted");
+    malformed = emitters;
+    malformed[0].simulationPath = kb::particles::ParticleEmitterSimulationPath::Gpu;
+    Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
+        "GPU simulation with a CPU fallback reason was accepted");
+    malformed = emitters;
+    malformed[0].gpuFallbackReason = kb::particles::ParticleGpuFallbackReason::None;
+    Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
+        "CPU simulation without a reason was accepted");
     malformed = emitters;
     malformed[0].flags = static_cast<kb::particles::ParticleRenderEmitterFlag>(1U << 7U);
     Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
@@ -631,8 +652,11 @@ void* operator new(std::size_t size) {
 void* operator new[](std::size_t size) { return ::operator new(size); }
 void operator delete(void* memory) noexcept { std::free(memory); }
 void operator delete[](void* memory) noexcept { std::free(memory); }
+// The Microsoft runtime forwards sized deletes to these unsized replacements.
+#if !defined(_MSC_VER)
 void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
+#endif
 
 int main() {
     try {

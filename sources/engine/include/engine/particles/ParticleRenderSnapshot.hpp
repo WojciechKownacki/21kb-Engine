@@ -2,6 +2,7 @@
 
 #include "engine/math/DVec3.hpp"
 #include "engine/math/EngineMath.hpp"
+#include "engine/particles/ParticleEmitterExecution.hpp"
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
 
 #include <cstddef>
@@ -149,6 +150,10 @@ struct ParticleRenderEmitterRecord {
     ParticleRenderAlignment alignment = ParticleRenderAlignment::CameraFacing;
     ParticleRenderEmitterFlag flags = ParticleRenderEmitterFlag::None;
     kb::scene::ParticleBackendPolicy backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
+    // Current emitter routing, independent of the instance-level backend policy.
+    // Retained particles can finish on their previous path after a live edit.
+    ParticleEmitterSimulationPath simulationPath = ParticleEmitterSimulationPath::Cpu;
+    ParticleGpuFallbackReason gpuFallbackReason = ParticleGpuFallbackReason::CpuPolicy;
     // A zero encoded axis represents 256, preserving the authored 1..256 grid
     // without widening the renderer ABI for the common 1x1 case.
     std::uint8_t flipbookColumnsEncoded = 1U;
@@ -200,7 +205,7 @@ struct ParticleRenderEmitterRecord {
 static_assert(std::is_trivially_copyable_v<ParticleRenderEmitterRecord>);
 // The bounded record carries all authored output contracts while remaining a
 // compact, fixed-stride GPU upload payload.
-static_assert(sizeof(ParticleRenderEmitterRecord) <= 264U);
+static_assert(sizeof(ParticleRenderEmitterRecord) <= 272U);
 
 struct ParticleRenderSnapshotHeader {
     std::uint64_t revision = 0U;

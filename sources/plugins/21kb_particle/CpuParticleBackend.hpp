@@ -256,6 +256,8 @@ private:
         std::vector<kb::particles::ParticleGpuSpawn> spawns;
     };
     [[nodiscard]] bool GpuEligible(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint8_t prewarmGroup) const noexcept;
+    [[nodiscard]] kb::particles::ParticleGpuFallbackReason GpuFallbackReason(
+        std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint8_t prewarmGroup) const noexcept;
     void SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count,
         const kb::math::Vec3* eventPosition, std::uint8_t eventDepth = 0U) noexcept;
     // Birth and death events of GPU particles are known when the particle is born (its motion is closed
