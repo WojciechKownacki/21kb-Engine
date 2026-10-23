@@ -2150,17 +2150,15 @@ namespace detail {
 
 template <typename Component>
 [[nodiscard]] bool IsPackedFloat2Layout(float Component::*x, float Component::*y) noexcept {
-    if constexpr (std::is_standard_layout_v<Component> && std::is_trivially_copyable_v<Component> && std::is_default_constructible_v<Component>) {
+    if constexpr (std::is_standard_layout_v<Component> && std::is_trivially_copyable_v<Component> &&
+                  std::is_default_constructible_v<Component> && sizeof(Component) == sizeof(float) * 2U &&
+                  alignof(Component) >= alignof(float)) {
+        if (x == nullptr || y == nullptr) return false;
         Component probe{};
-        const auto* base = reinterpret_cast<const std::byte*>(std::addressof(probe));
+        const auto bytes = std::as_bytes(std::span{std::addressof(probe), 1U});
         const auto* xAddress = reinterpret_cast<const std::byte*>(std::addressof(probe.*x));
         const auto* yAddress = reinterpret_cast<const std::byte*>(std::addressof(probe.*y));
-        const std::size_t xOffset = static_cast<std::size_t>(xAddress - base);
-        const std::size_t yOffset = static_cast<std::size_t>(yAddress - base);
-        return sizeof(Component) == sizeof(float) * 2U &&
-            alignof(Component) >= alignof(float) &&
-            xOffset == 0U &&
-            yOffset == sizeof(float);
+        return xAddress == bytes.data() && yAddress == bytes.data() + sizeof(float);
     } else {
         static_cast<void>(x);
         static_cast<void>(y);

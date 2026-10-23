@@ -1437,6 +1437,14 @@ void RunEcsHotKernelDenseFloat2UpdateTest() {
     kb::tests::Require(
         !kb::ecs::CanUseDensePackedFloat2Velocity(&EcsPaddedPosition::x, &EcsPaddedPosition::y, &EcsPaddedVelocity::x, &EcsPaddedVelocity::y),
         "ECS hot packed float2 kernel accepted a padded component layout");
+    kb::tests::Require(
+        !kb::ecs::CanUseDensePackedFloat2Velocity(&EcsPosition::y, &EcsPosition::x, &EcsVelocity::x, &EcsVelocity::y) &&
+        !kb::ecs::CanUseDensePackedFloat2Velocity(&EcsPosition::x, &EcsPosition::x, &EcsVelocity::x, &EcsVelocity::y) &&
+        !kb::ecs::CanUseDensePackedFloat2Velocity(static_cast<float EcsPosition::*>(nullptr), &EcsPosition::y,
+            &EcsVelocity::x, &EcsVelocity::y) &&
+        !kb::ecs::CanUseDensePackedFloat2Velocity(&EcsPosition::x, &EcsPosition::y,
+            &EcsVelocity::x, static_cast<float EcsVelocity::*>(nullptr)),
+        "ECS hot packed float2 kernel accepted reversed, aliased or missing members");
 
     std::array<EcsPosition, kCount> reduced = sourcePositions;
     const double reducedChecksum = kb::ecs::ApplyDenseFloat2VelocityAndReduceX(
