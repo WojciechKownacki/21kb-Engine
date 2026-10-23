@@ -17,6 +17,11 @@ public:
     [[nodiscard]] ParticleAssetLoadResult Load(const std::filesystem::path& path) const;
     [[nodiscard]] ParticleEditorResult Save(const std::filesystem::path& path,
                                             const kb::scene::ParticleEffectAsset& asset) const;
+    // Create an effect and import its shared default material beside it, keeping
+    // the resulting dependency inside the project's content for cooking.
+    [[nodiscard]] ParticleEditorResult SaveNewProjectEffect(const std::filesystem::path& path,
+        const std::filesystem::path& virtualPath, kb::scene::ParticleEffectAsset asset,
+        const std::filesystem::path& defaultMaterialSource) const;
 };
 
 } // namespace kb::particle_editor

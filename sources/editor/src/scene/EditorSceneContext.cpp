@@ -2742,7 +2742,10 @@ bool EditorSceneContext::CreateParticleEffectAsset(const std::filesystem::path& 
     const kb::scene::ParticleEffectAsset effect =
         kb::particle_editor::ParticleEditorCommands::NewEffect(path.stem().string());
 
-    const kb::particle_editor::ParticleEditorResult saved = particleEditorGateway_.Save(path, effect);
+    const auto* defaultMaterial = manager.Registry().FindByPath("/21kbParticle/Materials/DefaultParticle.kbmat");
+    const kb::particle_editor::ParticleEditorResult saved = particleEditorGateway_.SaveNewProjectEffect(
+        path, virtualFolder / path.filename(), effect,
+        defaultMaterial == nullptr ? std::filesystem::path{} : defaultMaterial->physicalPath);
     if (!saved.Succeeded()) {
         console_.Error("Particles", "Particle effect could not be created: " + saved.message);
         return false;

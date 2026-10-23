@@ -27,6 +27,7 @@
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -82,6 +83,38 @@ void Require(bool condition, std::string_view message) {
 [[nodiscard]] std::string ReadBytes(const std::filesystem::path& path) {
     std::ifstream input{path, std::ios::binary};
     return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+}
+
+void TestNewProjectEffectMaterialDependency() {
+    const auto root = TestRoot() / ("project-material-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    Require(!error, "project material fixture directory creation failed");
+    const auto source = root / "source.kbmat";
+    { std::ofstream file{source, std::ios::binary}; file << "version 1\nmaterialType builtin.pbr\nbaseColor 1 1 1 1\n"; }
+    const auto occupied = root / "LocalMaterial.kbmat";
+    { std::ofstream file{occupied, std::ios::binary}; file << "existing project material\n"; }
+    const auto asset = kb::particle_editor::ParticleEditorCommands::NewEffect("Local");
+    kb::particle_editor::ParticleAssetGateway gateway;
+    const auto effectFile = root / "Local.kbvfx";
+    Require(gateway.SaveNewProjectEffect(effectFile, "/Game/Effects/Local.kbvfx", asset, source).Succeeded(),
+        "new project effect could not import its default material");
+    const auto loaded = gateway.Load(effectFile);
+    Require(loaded.asset && loaded.asset->emitters[0].output.material.virtualPath == "/Game/Effects/LocalMaterial1.kbmat" &&
+        loaded.asset->emitters[0].output.material.assetId == 0U && ReadBytes(root / "LocalMaterial1.kbmat") == ReadBytes(source),
+        "new project effect did not persist its project material dependency");
+    Require(ReadBytes(occupied) == "existing project material\n", "creating a particle effect overwrote a project material");
+    const auto before = ReadBytes(effectFile);
+    Require(!gateway.SaveNewProjectEffect(effectFile, "/Game/Effects/Local.kbvfx", asset, source).Succeeded() &&
+        ReadBytes(effectFile) == before && !std::filesystem::exists(root / "LocalMaterial2.kbmat"),
+        "creating an effect over an existing asset modified project data");
+    Require(!gateway.SaveNewProjectEffect(root / "Missing.kbvfx", "/Game/Effects/Missing.kbvfx", asset, root / "absent").Succeeded() &&
+        !std::filesystem::exists(root / "Missing.kbvfx"), "missing shared material silently created an unrunnable effect");
+    Require(!gateway.SaveNewProjectEffect(root / "Invalid.kbvfx", "/Game/../Invalid.kbvfx", asset, source).Succeeded(),
+        "project particle creation accepted a noncanonical virtual path");
+    Require(gateway.SaveNewProjectEffect(root / "Custom.kbvfx", "/Game/Effects/Custom.kbvfx", MakeEffect(), root / "absent").Succeeded(),
+        "an explicitly assigned project material unnecessarily required shared content");
 }
 
 void TestDocumentHistorySavePointAndAtomicFailure() {
@@ -996,6 +1029,7 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
 
 int main() {
     try {
+        TestNewProjectEffectMaterialDependency();
         TestDocumentHistorySavePointAndAtomicFailure();
         TestEmitterListCommandsAndAuthoredCompileOrder();
         TestModuleStackCommandsCapabilitiesAndAuthoredOrder();

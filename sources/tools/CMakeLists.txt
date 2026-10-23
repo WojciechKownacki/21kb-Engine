@@ -53,6 +53,14 @@ if(WIN32)
 endif()
 
 set_target_properties(kb_cli PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+if(KB_BUILD_RENDERER)
+    add_custom_target(kb_cli_stage_particle_content
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content/Materials"
+            "$<TARGET_FILE_DIR:kb_cli>/Content/21kbParticle/Materials"
+        VERBATIM)
+    add_dependencies(kb_cli kb_cli_stage_particle_content)
+endif()
 if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
     add_custom_target(kb_cli_stage_particle_plugin
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_cli>"
@@ -96,6 +104,14 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)
+    if(KB_BUILD_RENDERER)
+        add_custom_target(kb_cli_tests_stage_particle_content
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content/Materials"
+                "$<TARGET_FILE_DIR:kb_cli_tests>/Content/21kbParticle/Materials"
+            VERBATIM)
+        add_dependencies(kb_cli_tests kb_cli_tests_stage_particle_content)
+    endif()
     if(WIN32)
         # The commands run in-process here, under the same code page as kb_cli.
         target_sources(kb_cli_tests PRIVATE kb_cli.manifest)

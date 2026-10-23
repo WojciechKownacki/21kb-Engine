@@ -4,6 +4,12 @@ The particle provider selects simulation per emitter. `GpuVisualPreferred`
 allows CPU simulation when an emitter needs behavior the GPU kernel cannot
 preserve. CPU particles still use the renderer's particle draw path.
 
+Creating an effect in the editor or with `vfx-new` copies the shared default
+material beside the effect under a unique name. The effect references that
+project asset, so the material joins the normal cook dependency closure and
+the cooked runtime can load it. Existing material files are never overwritten;
+an explicitly assigned material keeps its authored reference.
+
 Collision planes with `killOnContact` use CPU simulation: particles end their
 lifetime at contact and disappear from subsequent render snapshots. Bouncing
 planes can use GPU simulation. An authored plane never implicitly enables

@@ -418,9 +418,7 @@ void RunParticleReportCommandTests() {
     const auto setEffect = [](const kb::cli::ArgumentList& args, kb::cli::CommandIo io) {
         return kb::cli::RunVfxCommand("vfx-set", args, io);
     };
-    Require(Run(&kb::cli::RunMaterialNewCommand, {"--project", project, "--name", "ParticleMaterial"}).exitCode == 0 &&
-        Run(newEffect, {"--project", project, "--name", "ReportEffect", "--set",
-            "effect.emitter[0].output.material.path=/Game/Materials/ParticleMaterial.kbmat"}).exitCode == 0 &&
+    Require(Run(newEffect, {"--project", project, "--name", "ReportEffect"}).exitCode == 0 &&
         Run(&kb::cli::RunEntityCommand, {"add", "--project", project, "--name", "Emitter"}).exitCode == 0 &&
         Run(&kb::cli::RunComponentCommand, {"add", "--project", project, "--entity", "Emitter", "--type", "Particle Effect",
             "--set", "effectAssetId=/Game/Particles/ReportEffect.kbvfx"}).exitCode == 0,
