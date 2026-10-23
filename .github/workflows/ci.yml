@@ -68,7 +68,7 @@ jobs:
           if ("${{ github.event_name }}" -eq "pull_request") {
             $base = "${{ github.event.pull_request.base.sha }}"
           }
-          if ($base -and $base -ne "0000000000000000000000000000000000000000" -and (git cat-file -e "$base^{commit}" 2>$null)) {
+          if ($base -and $base -ne "0000000000000000000000000000000000000000" -and (git rev-parse --verify --quiet "$base^{commit}" 2>$null)) {
             git diff --check $base HEAD
           } else {
             git diff --check HEAD^ HEAD
@@ -197,7 +197,7 @@ jobs:
           }
           $scope = ""
           if ("${{ github.event_name }}" -ne "schedule" -and "${{ github.event_name }}" -ne "workflow_dispatch" -and
-              $base -and $base -ne "0000000000000000000000000000000000000000" -and (git cat-file -e "$base^{commit}" 2>$null)) {
+              $base -and $base -ne "0000000000000000000000000000000000000000" -and (git rev-parse --verify --quiet "$base^{commit}" 2>$null)) {
             $scope = "--changed-since $base"
           }
           cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && python scripts/clang_tidy_gate.py --build-dir build/tidy --jobs 4 $scope"
