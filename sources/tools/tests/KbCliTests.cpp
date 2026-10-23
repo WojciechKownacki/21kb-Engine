@@ -14,6 +14,7 @@
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneJointComponents.hpp"
@@ -423,6 +424,17 @@ void RunParticleReportCommandTests() {
         Run(&kb::cli::RunComponentCommand, {"add", "--project", project, "--entity", "Emitter", "--type", "Particle Effect",
             "--set", "effectAssetId=/Game/Particles/ReportEffect.kbvfx"}).exitCode == 0,
         "particle report could not author its effect through the public commands");
+    Require(Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx", "--set",
+        "effect.emitter[0].screenDepthCollision=true"}).exitCode == 0,
+        "CLI could not enable explicit screen-depth collision");
+    const auto authoredDepth = kb::scene::ParticleEffectAssetIO::LoadDetailed(parent / "Sample/Assets/Particles/ReportEffect.kbvfx");
+    Require(authoredDepth.Succeeded() && authoredDepth.asset->emitters[0].screenDepthCollision,
+        "CLI screen-depth edit did not persist");
+    Require(Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx", "--set",
+        "effect.emitter[0].screenDepthCollision=false"}).exitCode == 0 &&
+        Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx", "--set",
+        "effect.emitter[0].screenDepthCollision=invalid"}).exitCode != 0,
+        "CLI screen-depth disable or invalid-value rejection failed");
     const auto active = reportFor(project);
     const auto* emitters = active.Find("emitters");
     Require(active.Find("provider_available")->AsBool() && active.Find("snapshot_available")->AsBool() &&
@@ -2165,7 +2177,7 @@ void RunNewCommandTests() {
     // The project directory alone is enough to run it, whatever the descriptor's name.
     const CommandRun ran = Run(&kb::cli::RunRunCommand,
         { "--project", (parent / "Gra").string(), "--scene", "/Game/Scenes/Main.21kbscene", "--frames", "1" });
-    Require(ran.exitCode == 0, "a new project could not be run from its directory");
+    Require(ran.exitCode == 0, "a new project could not be run from its directory: " + ran.output);
     Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Gra" }).exitCode != 0,
         "new over an existing project must be refused");
     Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "zla nazwa" }).exitCode != 0,

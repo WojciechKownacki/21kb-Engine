@@ -55,7 +55,7 @@ void WriteSpawnExtras(std::vector<std::uint8_t>& bytes, const ParticleCompiledEm
     WriteFloat(bytes, e.startDelaySeconds); WriteFloat(bytes, e.cycleSeconds); WriteBool(bytes, e.cycleLooping);
     WriteBool(bytes, e.beam.enabled); WriteUInt8(bytes, static_cast<std::uint8_t>(e.beam.ends));
     WriteUInt32(bytes, e.beam.segments); WriteVec3(bytes, e.beam.start); WriteVec3(bytes, e.beam.end);
-    WriteFloat(bytes, e.beam.noise); WriteBool(bytes, e.absolutePosition);
+    WriteFloat(bytes, e.beam.noise); WriteBool(bytes, e.absolutePosition); WriteBool(bytes, e.screenDepthCollision);
     WriteFloat(bytes, e.colorIntensity);
     WriteBool(bytes, e.lightEnabled); WriteFloat(bytes, e.lightRadius); WriteFloat(bytes, e.lightIntensity);
     WriteUInt32(bytes, e.lightMaxCount); WriteFloat(bytes, e.decalDepth);
@@ -200,7 +200,7 @@ class Reader {
             !F(e.startDelaySeconds) || !F(e.cycleSeconds) || !Bool(e.cycleLooping) || !Bool(e.beam.enabled) ||
             !U8(ends) || ends > static_cast<std::uint8_t>(kb::scene::ParticleBeamEnds::ShapeToEmitter) ||
             !U32(e.beam.segments) || !Vec3(e.beam.start) || !Vec3(e.beam.end) || !F(e.beam.noise) ||
-            !Bool(e.absolutePosition) || !F(e.colorIntensity) || !Bool(e.lightEnabled) || !F(e.lightRadius) || !F(e.lightIntensity) ||
+            !Bool(e.absolutePosition) || !Bool(e.screenDepthCollision) || !F(e.colorIntensity) || !Bool(e.lightEnabled) || !F(e.lightRadius) || !F(e.lightIntensity) ||
             !U32(e.lightMaxCount) || !F(e.decalDepth))
             return false;
         s.type = static_cast<kb::scene::ParticleSpawnShape>(shape);

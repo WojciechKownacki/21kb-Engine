@@ -32,7 +32,7 @@ enum class ParticleEditorProperty : std::uint16_t {
     SpawnRateCurve, SpawnBurstsSummary, SpawnLifetimeMin, SpawnLifetimeMax, SpawnSpeedMin, SpawnSpeedMax, SpawnDirection,
     SpawnSpreadDegrees, SpawnRandomization, SpawnPrewarmSeconds, SpawnStartColor, SpawnStartSize,
     SpawnRotationMin, SpawnRotationMax, SpawnAngularVelocityMin, SpawnAngularVelocityMax,
-    OutputBlend, OutputSort, OutputDepthTest, OutputDepthWrite, OutputSoftParticles,
+    OutputBlend, OutputSort, OutputDepthTest, OutputDepthWrite, OutputScreenDepthCollision, OutputSoftParticles,
     OutputAntiAliasing, OutputAlignment, FlipbookColumns, FlipbookRows,
     FlipbookFramesPerSecond, FlipbookLooping, OutputVelocityScale, OutputMinimumLength,
     OutputPointDiameter, ModulePayload,

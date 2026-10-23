@@ -3222,12 +3222,13 @@ void TestGpuEmitterRouting() {
 // An emitter with a collision plane is eligible for the GPU path too: the plane travels with the emitter
 // parameters; it does not enable screen-depth collisions. A sub-emitter still needs the CPU.
 void TestGpuEmitterCollisionRouting() {
-    const auto firstCommand = [](bool withSubEmitter) {
+    const auto firstCommand = [](bool withSubEmitter, bool screenDepth = false, bool plane = true) {
         auto effect = Fixture::MakeEffect(600.0F, 200'000U);
+        effect.emitters[0].screenDepthCollision = screenDepth;
         effect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
         AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
             kb::scene::ParticleGravityModule{ .acceleration = { 0.0F, -2.0F, 0.0F }, .sceneGravityScale = 0.0F });
-        AddModule(effect.emitters[0], 2U, kb::scene::ParticleModuleType::CollisionPlane,
+        if (plane) AddModule(effect.emitters[0], 2U, kb::scene::ParticleModuleType::CollisionPlane,
             kb::scene::ParticleCollisionPlaneModule{
                 .normal = { 0.0F, 1.0F, 0.0F }, .distance = 1.5F, .restitution = 0.4F, .friction = 0.1F, .maxEventsPerStep = 4U });
         if (withSubEmitter) {
@@ -3264,6 +3265,12 @@ void TestGpuEmitterCollisionRouting() {
             onGpu.params.plane.distance == 1.5F && onGpu.params.plane.restitution == 0.4F &&
             onGpu.params.plane.friction == 0.1F && onGpu.params.plane.normal.y == 1.0F && gpuCpuLive == 0U,
         "An emitter with a collision plane must run on the GPU with its plane");
+    const auto [depthOnly, depthCpuLive] = firstCommand(false, true, false);
+    Require(depthOnly.hasParams && depthOnly.params.sceneDepthCollision && !depthOnly.params.hasPlane && depthCpuLive == 0U,
+        "Explicit screen-depth collision did not reach GPU parameters independently of a plane");
+    const auto [both, bothCpuLive] = firstCommand(false, true);
+    Require(both.hasParams && both.params.hasPlane && both.params.sceneDepthCollision && bothCpuLive == 0U,
+        "Explicit screen-depth collision did not coexist with the authored plane");
     const auto [onCpu, cpuLive] = firstCommand(true);
     Require(!onCpu.hasParams && cpuLive > 0U,
         "An emitter with a plane and a death sub-emitter must stay on the CPU: the death position is not closed form");

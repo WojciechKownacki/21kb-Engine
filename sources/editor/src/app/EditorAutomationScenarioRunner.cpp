@@ -4583,6 +4583,32 @@ ReadScriptValue(
             std::to_string(*frames) + " editor particle frame(s)" };
     }
 
+    if (*operation == "verify_particle_depth_authoring") {
+        using Property = kb::particle_editor::ParticleEditorProperty;
+        const auto inspector = state.context.ParticleEditorInspector();
+        const auto row = std::find_if(inspector.properties.begin(), inspector.properties.end(), [](const auto& value) {
+            return value.property == Property::OutputScreenDepthCollision;
+        });
+        if (row == inspector.properties.end() || row->boolValue) return {false, "expected a disabled screen-depth toggle"};
+        const auto index = static_cast<std::size_t>(row - inspector.properties.begin());
+        if (!state.context.EditParticleEditorProperty(index, "true")) return {false, "screen-depth toggle was rejected"};
+        const auto enabled = state.context.ParticleEditorInspector();
+        const bool warning = std::any_of(enabled.diagnostics.begin(), enabled.diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.propertyPath.ends_with(".screenDepthCollision") &&
+                diagnostic.severity == kb::scene::ParticleEffectDiagnosticSeverity::Warning;
+        });
+        const bool requested = state.context.ParticleEditorWorkingAsset()->emitters.front().screenDepthCollision;
+        const bool disabled = state.context.EditParticleEditorProperty(index, "false") &&
+            !state.context.ParticleEditorWorkingAsset()->emitters.front().screenDepthCollision;
+        const bool undone = state.context.UndoParticleEditorCommand() &&
+            state.context.ParticleEditorWorkingAsset()->emitters.front().screenDepthCollision;
+        const bool redone = state.context.RedoParticleEditorCommand() &&
+            !state.context.ParticleEditorWorkingAsset()->emitters.front().screenDepthCollision;
+        return {requested && warning && disabled && undone && redone,
+            "screen-depth requested=" + std::to_string(requested) + " warning=" + std::to_string(warning) +
+                " disabled=" + std::to_string(disabled) + " undo=" + std::to_string(undone) + " redo=" + std::to_string(redone)};
+    }
+
     if (*operation == "verify_particle_emitter_material") {
         const auto* original = state.context.ParticleEditorWorkingAsset();
         const auto* shared = state.context.Scene().Assets().Manager().Registry().FindByPath(

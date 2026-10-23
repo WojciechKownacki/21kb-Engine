@@ -19,6 +19,15 @@ Adding an emitter in the editor inherits the selected emitter's material unless
 a material is explicitly chosen. This preserves project material dependencies
 as an effect grows.
 
+Each emitter can explicitly request `screenDepthCollision` (default `false`).
+The particle editor exposes it as **Screen depth collision (GPU)**; CLI authors
+can use `vfx-set --set effect.emitter[0].screenDepthCollision=true`. The source,
+compiled artifact and versioned cache preserve the choice independently of
+collision-plane modules. GPU simulation uses the renderer's available scene
+depth through bgfx. CPU simulation and frames without usable scene depth
+continue without this optional screen-space response; the compiler reports
+that limitation as a warning. Collision planes retain their own behavior.
+
 Collision planes with `killOnContact` use CPU simulation: particles end their
 lifetime at contact and disappear from subsequent render snapshots. Bouncing
 planes can use GPU simulation. An authored plane never implicitly enables

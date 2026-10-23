@@ -212,6 +212,26 @@ void RunSpinSchemaTest() {
     Require(!ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "a reversed spin range passed validation");
 }
 
+void RunScreenDepthCollisionSchemaTest() {
+    auto asset = MakeComprehensiveAsset();
+    std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
+    const auto legacy = kb::scene::ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(legacy && legacy->find("screenDepthCollision") == std::string::npos,
+        "default particle assets unexpectedly enabled screen-depth collision");
+    const auto oldAsset = kb::scene::ParticleEffectAssetIO::Parse(*legacy);
+    Require(oldAsset.Succeeded() && !oldAsset.asset->emitters[0].screenDepthCollision,
+        "an older particle asset did not retain disabled screen-depth collision");
+    asset.emitters[0].screenDepthCollision = true;
+    const auto text = kb::scene::ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(text && text->find("effect.emitter[0].screenDepthCollision true") != std::string::npos,
+        "screen-depth collision was not serialized explicitly");
+    const auto loaded = kb::scene::ParticleEffectAssetIO::Parse(*text);
+    Require(loaded.Succeeded() && loaded.asset->emitters[0].screenDepthCollision,
+        "screen-depth collision did not survive the source round trip");
+    Require(!kb::scene::ParticleEffectAssetIO::Parse(*legacy + "effect.emitter[0].screenDepthCollision invalid\n").Succeeded(),
+        "screen-depth collision accepted an invalid boolean");
+}
+
 // The spawn shape, velocity modes, emitter clock, beam, field modules, killing plane, WhileAlive rate and the
 // output's colour intensity, light and decal depth survive a save and a load; an asset without them writes none.
 void RunMotionAndOutputSchemaTest() {
@@ -1224,6 +1244,7 @@ int main() {
         RunCanonicalGoldenTest();
         RunComprehensiveSchemaTest();
         RunSpinSchemaTest();
+        RunScreenDepthCollisionSchemaTest();
         RunMotionAndOutputSchemaTest();
         RunAuthoringOrderTest();
         RunHardLimitBoundaryTest();

@@ -14,8 +14,8 @@
 
 namespace kb::modules {
 
-// Particle render records include per-emitter execution metadata.
-inline constexpr std::uint32_t kEngineModuleAbiVersion = 6U;
+// Compiled particle emitters carry independent screen-depth collision intent.
+inline constexpr std::uint32_t kEngineModuleAbiVersion = 7U;
 inline constexpr const char* kEngineModuleCreateSymbol = "kb_create_engine_module";
 inline constexpr const char* kEngineModuleDestroySymbol = "kb_destroy_engine_module";
 inline constexpr const char* kEngineModuleAbiVersionSymbol = "kb_engine_module_abi_version";

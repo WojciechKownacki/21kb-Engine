@@ -675,6 +675,17 @@ void TestProductionBakeCacheAndCapabilityGates() {
     Require(alternatePlatform.status == ParticleBakeStatus::Baked &&
             alternatePlatform.key.platform != first.key.platform && alternatePlatform.cachePath != first.cachePath,
         "typed compiler platform was omitted from the Bake cache key");
+    auto withDepth = effect;
+    withDepth.emitters[0].screenDepthCollision = true;
+    const auto depthBake = bake(withDepth);
+    const auto depthHit = bake(withDepth);
+    Require(depthBake.Succeeded() && depthBake.effect->emitters[0].screenDepthCollision &&
+        depthBake.cachePath != first.cachePath && depthHit.status == ParticleBakeStatus::UpToDate &&
+        depthHit.effect->emitters[0].screenDepthCollision && !hit.effect->emitters[0].screenDepthCollision &&
+        std::any_of(depthBake.diagnostics.begin(), depthBake.diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.propertyPath == "effect.emitter[0].screenDepthCollision" &&
+                diagnostic.severity == kb::scene::ParticleEffectDiagnosticSeverity::Warning;
+        }), "screen-depth authoring did not survive compilation/cache or expose unavailable-depth semantics");
     kb::particle_plugin::ParticleCompilerCapabilities reducedCapabilities;
     reducedCapabilities.pointSprite = false;
     const ParticleBakeResult alternateCapabilities = ParticleBakeService::Bake({.workingAsset = effect, .owner = owner,

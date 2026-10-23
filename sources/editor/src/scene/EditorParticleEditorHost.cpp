@@ -840,6 +840,16 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
         if (parsed) output.sort = static_cast<kb::scene::ParticleSortMode>(uintValue); break;
     case kb::particle_editor::ParticleEditorProperty::OutputDepthTest: parsed = setBool(output.depthTest); break;
     case kb::particle_editor::ParticleEditorProperty::OutputDepthWrite: parsed = setBool(output.depthWrite); break;
+    case kb::particle_editor::ParticleEditorProperty::OutputScreenDepthCollision: {
+        if (!ParseBool(text, boolValue)) return false;
+        auto candidate = *asset;
+        const auto selected = std::find_if(candidate.emitters.begin(), candidate.emitters.end(), [&](const auto& value) {
+            return value.emitterId == inspector.emitterId;
+        });
+        if (selected == candidate.emitters.end()) return false;
+        selected->screenDepthCollision = boolValue;
+        return ApplyParticleEditorWorkingCopy(std::move(candidate));
+    }
     case kb::particle_editor::ParticleEditorProperty::OutputSoftParticles: parsed = setBool(output.softParticles); break;
     case kb::particle_editor::ParticleEditorProperty::OutputAntiAliasing: parsed = setBool(output.antiAliasing); break;
     case kb::particle_editor::ParticleEditorProperty::OutputAlignment:

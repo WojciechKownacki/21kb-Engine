@@ -608,7 +608,8 @@ if(TARGET kb_engine_tests)
 endif()
 
 if(TARGET kb_cli_tests)
-    add_dependencies(kb_cli_tests kb_physics_jolt_plugin)
+    add_dependencies(kb_cli_tests kb_physics_jolt_plugin kb_audio_miniaudio_plugin
+        kb_basic_lighting_plugin kb_21kb_particle_plugin kb_ai_plugin)
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
         set(KB_PHYSICS_JOLT_CLI_TEST_PLUGIN_PATH "$<TARGET_FILE:kb_physics_jolt_plugin>")
     else()

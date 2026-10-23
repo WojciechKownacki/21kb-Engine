@@ -505,6 +505,8 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
                         ParseEnum<ParticleSimulationSpace>, ParticleEffectDiagnosticCode::InvalidEnum);
         static_cast<void>(reader.Optional(IndexPath(emitterIndex, "absolutePosition"), emitter.absolutePosition,
                                           ParseBool));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "screenDepthCollision"), emitter.screenDepthCollision,
+                                          ParseBool));
         reader.Required(IndexPath(emitterIndex, "spawn.mode"), emitter.spawn.mode, ParseEnum<ParticleSpawnMode>,
                         ParticleEffectDiagnosticCode::InvalidEnum);
         ReadCurve(reader, IndexPath(emitterIndex, "spawn.rate"), emitter.spawn.rateOverTime);
@@ -1148,6 +1150,7 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
         Line(out, IndexPath(ei, "maxParticles"), std::to_string(e.maxParticles));
         Line(out, IndexPath(ei, "simulationSpace"), EnumText(e.simulationSpace));
         if (e.absolutePosition) BoolLine(out, IndexPath(ei, "absolutePosition"), true);
+        if (e.screenDepthCollision) BoolLine(out, IndexPath(ei, "screenDepthCollision"), true);
         Line(out, IndexPath(ei, "spawn.mode"), EnumText(e.spawn.mode));
         WriteCurve(out, IndexPath(ei, "spawn.rate"), e.spawn.rateOverTime);
         Line(out, IndexPath(ei, "spawn.burstCount"), std::to_string(e.spawn.bursts.size()));

@@ -9,7 +9,7 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint64_t kParticleCompiledEffectCacheFormatVersion = 2U;
+inline constexpr std::uint64_t kParticleCompiledEffectCacheFormatVersion = 3U;
 inline constexpr std::uint64_t kParticleCompiledEffectCacheMaxBytes = 512U * 1024U;
 
 struct ParticleCompiledEffectCacheKey {

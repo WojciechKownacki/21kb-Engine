@@ -482,6 +482,9 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
             selected->output.depthTest ? "true" : "false"), selected->output.depthTest);
         AddToggle(addProperty(ParticleEditorProperty::OutputDepthWrite, std::string{ ParticleText("particle.property.depth_write", "Depth write") },
             selected->output.depthWrite ? "true" : "false"), selected->output.depthWrite);
+        AddToggle(addProperty(ParticleEditorProperty::OutputScreenDepthCollision,
+            std::string{ParticleText("particle.property.screen_depth_collision", "Screen depth collision (GPU)")},
+            selected->screenDepthCollision ? "true" : "false"), selected->screenDepthCollision);
         AddToggle(addProperty(ParticleEditorProperty::OutputSoftParticles, std::string{ ParticleText("particle.property.soft_particles", "Soft particles") },
             selected->output.softParticles ? "true" : "false"), selected->output.softParticles);
         AddToggle(addProperty(ParticleEditorProperty::OutputAntiAliasing, std::string{ ParticleText("particle.property.anti_aliasing", "Anti-aliasing") },

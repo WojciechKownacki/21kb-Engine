@@ -7878,7 +7878,8 @@ void RunRendererSortsAlphaGpuParticlesTest() {
 // its emitter to the GPU queue, the renderer drains the queue, simulates and draws on a hidden D3D11 device,
 // and the pixels are read back. Particles leave the origin along +x at 4 m/s, so after one second the
 // right half of the image holds a bright line and the left half stays dark.
-std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingPlane = false, bool gpuPreferred = true) {
+std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingPlane = false, bool gpuPreferred = true,
+                                                               bool screenDepth = false) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_particle_file_to_pixel_" + std::to_string(GetCurrentProcessId()));
     std::error_code error;
@@ -7897,6 +7898,7 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
     kb::scene::ParticleEmitterAsset emitter;
     emitter.emitterId = 1U;
     emitter.name = "Sparks";
+    emitter.screenDepthCollision = screenDepth;
     emitter.maxParticles = 4096U;
     emitter.spawn.rateOverTime.keyframes = { { .time = 0.0F, .value = 120.0F } };
     emitter.spawn.lifetimeMin = 2.0F;
@@ -8218,6 +8220,7 @@ void RunRendererCollidesGpuParticlesTest() {
     const double freeFall = CollidingParticleBrightness(false, false, false, forward);
     const double plane = CollidingParticleBrightness(false, true, false, forward);
     const double floorOnly = CollidingParticleBrightness(true, false, false, forward);
+    const double emptyDepth = CollidingParticleBrightness(false, false, true, forward);
     // The depth buffer is a render target of the forward path and a G-buffer texture of the deferred one.
     const double sceneDepthForward = CollidingParticleBrightness(true, false, true, forward);
     const double sceneDepthDeferred = CollidingParticleBrightness(true, false, true, deferred);
@@ -8226,6 +8229,7 @@ void RunRendererCollidesGpuParticlesTest() {
     Require(freeFall < 50.0, "GPU collision test: without collisions the particle must have fallen out of view");
     Require(plane > 400.0, "GPU collision test: a collision plane must keep the particle near the floor level");
     Require(floorOnly < 300.0, "GPU collision test: the bare floor must be darker than the particle");
+    Require(emptyDepth < 50.0, "GPU collision test: empty scene depth must not invent a collision surface");
     Require(sceneDepthForward > 400.0, "GPU collision test: the particle must bounce off the floor shown in the forward depth buffer");
     Require(sceneDepthDeferred > 400.0, "GPU collision test: the particle must bounce off the floor shown in the G-buffer depth");
 }
@@ -8433,6 +8437,24 @@ void RunRendererParticleSortModesTest() {
     RunRendererSortsAlphaGpuParticlesTest();
 #else
     throw std::runtime_error("Particle sort readback requires the Windows renderer");
+#endif
+}
+
+void RunRendererParticleDepthAuthoringTest() {
+#if defined(_WIN32) && defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    RunRendererCollidesGpuParticlesTest();
+    const auto disabled = RunRendererDrawsAuthoredParticleFileTest();
+    const auto enabledWithoutSurface = RunRendererDrawsAuthoredParticleFileTest(false, true, true);
+    Require(disabled.size() == enabledWithoutSurface.size(), "Depth authoring images have different extents");
+    std::size_t mismatches = 0U;
+    for (std::size_t index = 0U; index < disabled.size(); ++index) {
+        if (index % 4U != 3U && std::abs(int(disabled[index]) - int(enabledWithoutSurface[index])) > 2) ++mismatches;
+    }
+    std::fprintf(stderr, "particle_depth_empty_surface mismatches=%zu%c", mismatches, 10);
+    Require(mismatches <= disabled.size() / 100U,
+        "An explicitly enabled depth response without a surface changed authored particle motion");
+#else
+    throw std::runtime_error("Particle depth readback requires the Windows renderer and particle module");
 #endif
 }
 

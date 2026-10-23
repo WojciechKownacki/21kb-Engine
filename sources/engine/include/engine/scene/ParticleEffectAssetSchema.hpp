@@ -381,6 +381,8 @@ struct ParticleEmitterAsset {
     // World space: localPosition is a point of the world; the emitter stays there while its owner moves
     // (the crater at the end of a meteor's flight).
     bool absolutePosition = false;
+    // Optional visual response to the available GPU scene depth; independent of collision planes.
+    bool screenDepthCollision = false;
     ParticleSpawnAsset spawn;
     std::vector<ParticleModuleAsset> modules;
     ParticleOutputAsset output;

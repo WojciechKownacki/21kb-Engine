@@ -230,6 +230,11 @@ displayed render payloads; it does not measure per-emitter CPU/GPU timings.
 from the selected emitter, and preservation of a new effect's project material.
 It saves the resulting two-emitter document for dependency/cook verification.
 
+`verify_particle_depth_authoring` exercises the screen-depth toggle through the
+normal particle property handler, its capability warning, and Undo/Redo. The
+renderer test `particle-depth-collision` checks bgfx compute/readback on the
+forward and deferred depth paths and an authored effect without a depth surface.
+
 ## Honest boundary
 
 The runner can verify engine state, editor documents, imported binary fixtures,

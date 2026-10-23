@@ -2630,7 +2630,7 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
     }
     // An authored plane has no screen-depth semantics. Depth collision is a separate,
     // explicit renderer capability and must not depend on the presence of a plane.
-    params.sceneDepthCollision = false;
+    params.sceneDepthCollision = emitter.screenDepthCollision;
     params.localSpace = emitter.simulationSpace == kb::scene::ParticleSimulationSpace::Local;
     params.acceleration = acceleration;
     params.drag = drag;
