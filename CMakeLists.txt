@@ -660,6 +660,9 @@ if(KB_BUILD_RENDERER)
 
     include(CMake/KbBgfxRuntimeShaders.cmake)
     add_subdirectory(sources/renderer renderer)
+    if(TARGET kb_cli)
+        kb_target_copy_bgfx_runtime_shaders(kb_cli)
+    endif()
     # The terrain editor imports heightmaps through bimg_decode, which comes with the renderer.
     add_subdirectory(sources/plugins/terrain_editor terrain_editor)
     add_subdirectory(sources/game game)

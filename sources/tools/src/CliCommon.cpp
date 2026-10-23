@@ -79,6 +79,16 @@ const std::vector<std::string>& ArgumentList::Errors() const noexcept {
     return errors_;
 }
 
+std::vector<std::string> ArgumentList::UnknownOptions(std::span<const std::string_view> allowed) const {
+    std::vector<std::string> unknown;
+    const auto check = [&](const std::string& name) {
+        if (std::find(allowed.begin(), allowed.end(), name) == allowed.end()) unknown.push_back(name);
+    };
+    for (const auto& option : options_) check(option.first);
+    for (const auto& flag : flags_) check(flag);
+    return unknown;
+}
+
 bool MountProjectAssets(
     kb::scene::Scene& scene,
     const std::filesystem::path& projectRoot,

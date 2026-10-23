@@ -133,6 +133,115 @@ readback with the independent compute/texture readback above and exercise
 normal renderer buffers, emitter identities, allocation totals and invalid
 capture boundaries on D3D11.
 
+`kb_cli vfx-profile --project <dir> --effect /Game/Particles/Effect.kbvfx`
+profiles the selected source effect in an isolated runtime scene with a hidden
+Windows bgfx host and a 64x64 offscreen target. It uses the project's configured
+particle provider, asset loading/compiler cache and normal renderer submission.
+It preserves the effect's backend policy. It does not load the startup scene.
+The component seed is fixed to 1 and simulation advances at 1/60 s per update.
+One admission update precedes `--warmup` updates (default 60), followed by
+`--frames` measured updates (default 180). Warmup accepts 0..36000, measured
+frames 1..36000, and the entire simulation loop has a two-minute wall limit.
+
+The command emits `21kb.particle-profile/v1` JSON on stdout; errors use stderr.
+`--backend` selects `d3d11` (default), `d3d12`, `vulkan` or `opengl`; initialization
+must obtain that actual backend. The initial native hidden host is Windows-only;
+other platforms return an error. Backend selection alone is not verification.
+`--require-gpu` fails unless every emitter uses GPU simulation without fallback
+or retained CPU particles, every GPU emitter exposes an actual buffer capture,
+compute and particle draws are observed, and measured GPU timestamps exist.
+Explicit CPU selection remains supported without that flag.
+
+Reports contain per-emitter routing/reasons, CPU render counts and bounded CPU
+position/velocity samples. GPU captures include emitter identities, capacity,
+output enum, ordered operation count, contact-death flag, requested buffer bytes
+and raw 20-float instance records. `--samples` accepts 1..4096, default 64, capped
+by each draw's capacity. These are sampled ring slots, including dead/unborn
+records, not a measured live-particle count. Output layouts are defined in
+`particle_gpu_common.sh`; billboard position/size occupy floats 0..3 and
+velocity occupies 8..10, while mesh translation occupies 12..14. A contact-dead
+record contains twenty zeros. Captures occur after measurement and do not
+advance scene simulation.
+
+`process_cpu_ns` and `calling_thread_cpu_ns` use Windows process/thread kernel
+and user CPU counters over the measured loop; they include diagnostic collection
+and all work charged to that process/thread, not per-emitter attribution.
+Short windows can be quantized by the OS accounting clock. `frame_wall` measures
+scene update and renderer submission elapsed time, including queue waits.
+`frame_gpu` measures whole bgfx GPU frames, including compute and rendering,
+using positive backend timestamp intervals. Completed frame IDs must lie in the
+measured submission range and are counted once; the report lists those IDs and
+sample coverage. Sixteen empty renderer frames drain delayed queries outside
+the measurement window; missing samples are not fabricated. Observed maximum
+bgfx compute/draw counters are observations, not aggregate frame counts.
+
+Memory snapshots cover the pre-scene process, empty host, warm effect, measured
+effect, released renderer scene, renderer shutdown and provider/scene shutdown.
+Windows working set, private usage and peaks describe the whole process.
+Requested emitter buffer bytes are logical allocations, not physical residency.
+`bgfx_gpu_memory_used_bytes` is a backend/device counter that can include other
+workloads; unavailable values are null. Releasing logical resources need not
+immediately reduce driver/allocator residency or process peaks.
+
+CTest `kb_cli_particle_profile` runs the actual command on D3D11. It checks live
+and contact-dead buffer records, six repeated mixed motion operations, real GPU
+timing, process counters, released allocation accounting, explicit CPU policy,
+strict rejection of CPU fallback, and malformed options. It fails on unavailable
+GPU support. Numerical CPU/GPU parity and pixel rendering remain covered by the
+separate motion/contact tests described above. Source profiling does not prove
+execution from a packaged runtime.
+
+Local reference measurements (Windows x64, Release, bgfx D3D11, 2026-10-24)
+use one billboard emitter, a single burst equal to capacity, a sphere of
+radius 2 m, initial speed 0.15 m/s, size 0.03 m, 100 s lifetime and additive
+output without soft particles/depth testing. Six authored fields execute as
+Noise (0.7, frequency 0.5), Y-axis rotation (10 degrees/s), Attraction
+(point 1,1,0; strength 0.3; radius 4), Noise (1.3, frequency 2), X-axis rotation
+(15 degrees/s), Attraction (point -2,0,3; strength 0.2; unlimited radius).
+The contact variant adds a killing Y-plane at -1.5 m. Each cell below is the
+median of three independent process runs: 60 warmup plus 300 measured fixed
+updates after admission. The source is identical between CPU/GPU runs except
+for backend policy. These are whole isolated host/scene costs, not kernel-only
+times or portable performance promises; OS accounting and GPU clock/driver
+variation particularly affect the short GPU windows.
+
+| Effect | Capacity | CPU policy: process ms/frame | CPU policy: GPU frame ms | GPU policy: process ms/frame | GPU policy: GPU frame ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Six fields | 1,000 | 0.573 | 0.011 | 0.469 | 0.131 |
+| Six fields | 10,000 | 4.167 | 0.039 | 0.417 | 0.046 |
+| Six fields | 60,000 | 23.802 | 0.435 | 0.312 | 0.126 |
+| Six fields + contact death | 1,000 | 0.417 | 0.009 | 0.417 | 0.066 |
+| Six fields + contact death | 10,000 | 2.760 | 0.026 | 0.260 | 0.087 |
+| Six fields + contact death | 60,000 | 15.208 | 0.298 | 0.208 | 0.112 |
+
+CPU-policy GPU times include rendering CPU-simulated particles. Contact deaths
+reduce live work over time: the CPU reference ends with 432, 4,135 and 24,552
+records respectively, rather than the initial capacities. GPU ring capacity
+and requested allocation remain constant after death; its raw sample is not
+a full live-count reduction. GPU timing coverage across the 36 runs is
+166..300 of 300 unique measured frames.
+
+| Effect | Capacity | CPU policy: private / working set MiB | GPU policy: private / working set MiB | GPU requested buffers MiB |
+| --- | ---: | ---: | ---: | ---: |
+| Six fields | 1,000 | 194.8 / 128.1 | 171.8 / 95.0 | 0.137 |
+| Six fields | 10,000 | 186.9 / 120.5 | 174.1 / 91.3 | 1.373 |
+| Six fields | 60,000 | 215.9 / 150.6 | 199.4 / 103.0 | 8.240 |
+| Six fields + contact death | 1,000 | 195.4 / 128.8 | 171.9 / 94.9 | 0.137 |
+| Six fields + contact death | 10,000 | 187.2 / 120.4 | 181.8 / 103.2 | 1.373 |
+| Six fields + contact death | 60,000 | 216.6 / 150.7 | 201.0 / 103.8 | 8.240 |
+
+GPU-policy runs retain the provider's conservative CPU fallback pool budget;
+process memory therefore includes more than GPU command records. Requested GPU
+buffers were 144 bytes per capacity slot in these unsorted stateful effects
+and returned to zero after scene release in every GPU run. Whole-device memory
+is deliberately excluded from per-effect attribution.
+
+The source-profile execution/readback/timestamp smoke check also passed with
+the repeated-field/contact source on Windows bgfx D3D12, Vulkan and OpenGL.
+Those checks do not extend the D3D11 numerical/pixel parity result or these
+measurements to other backends. Packaged runtime GPU readback and resource
+failure handling remain separate verification requirements.
+
 The authored sort mode reaches GPU emitters as well as CPU render snapshots:
 
 | Mode | Order |

@@ -164,6 +164,12 @@ R"(  animator     Build an Animator Controller, the state machine that picks a c
                  --project <dir> --name <Name> [--folder Assets/Particles] [--set key=value ...]
   vfx-show     Print a particle effect: every key=value of its file.
                  --project <dir> --effect /Game/<path>.kbvfx
+  vfx-profile  Profile an isolated effect with a hidden bgfx GPU host (Windows).
+                 --project <dir> --effect /Game/<path>.kbvfx
+                 [--backend d3d11|d3d12|vulkan|opengl] [--warmup 60] [--frames 180]
+                 [--samples 64] [--require-gpu]
+               Versioned JSON includes actual routing, buffer readback, process/thread
+               CPU time, GPU timestamps and memory. Asset backend policy is preserved.
   vfx-set      Change values of a particle effect (keys as vfx-show prints them, e.g.
                effect.emitter[0].spawn.shape.type=Sphere).
                  --project <dir> --effect <path> --set key=value [...]
@@ -311,7 +317,7 @@ Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).
 )";
 
-constexpr std::array<std::string_view, 4> kFlagNames{ "--anti-rollback", "--disabled", "--quiet", "--update-baseline" };
+constexpr std::array<std::string_view, 5> kFlagNames{ "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu" };
 
 } // namespace
 
@@ -460,6 +466,7 @@ int Dispatch(int argc, char** argv) {
     }
     if (command.starts_with("vfx-")) {
 #if KB_CLI_RENDERER
+        if (command == "vfx-profile") return kb::cli::RunVfxProfileCommand(arguments, io);
         return kb::cli::RunVfxCommand(command, arguments, io);
 #else
         std::cerr << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";

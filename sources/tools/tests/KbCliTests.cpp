@@ -198,6 +198,12 @@ void RunArgumentListTests() {
     const std::vector<std::string> broken{ "--project" };
     const kb::cli::ArgumentList brokenArguments{ broken, kFlagNames };
     Require(!brokenArguments.Errors().empty(), "ArgumentList did not flag a value-less option");
+    constexpr std::array<std::string_view, 2U> allowed{ "--project", "--quiet" };
+    Require(arguments.UnknownOptions(allowed) == std::vector<std::string>{"--frames"},
+        "ArgumentList did not reject an unknown value option");
+    constexpr std::array<std::string_view, 2U> valuesOnly{ "--project", "--frames" };
+    Require(arguments.UnknownOptions(valuesOnly) == std::vector<std::string>{"--quiet"},
+        "ArgumentList did not reject an unknown flag");
 }
 
 void PrepareProject() {

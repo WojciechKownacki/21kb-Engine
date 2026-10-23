@@ -34,6 +34,7 @@ if(KB_BUILD_RENDERER)
         src/CliMaterialGraphCommands.cpp
         src/CliPostProcessCommands.cpp
         src/CliParticleCommands.cpp
+        src/CliParticleProfileCommand.cpp
         src/private/CliMaterialShared.hpp)
 endif()
 
@@ -119,6 +120,13 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_cli_tests COMMAND $<TARGET_FILE:kb_cli_tests>)
     set_tests_properties(kb_cli_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS tools)
+    if(WIN32 AND KB_BUILD_RENDERER AND KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        add_test(NAME kb_cli_particle_profile COMMAND ${CMAKE_COMMAND}
+            "-DCLI=$<TARGET_FILE:kb_cli>"
+            "-DTEST_ROOT=${CMAKE_BINARY_DIR}/particle_profile_tests"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliParticleProfileTests.cmake")
+        set_tests_properties(kb_cli_particle_profile PROPERTIES LABELS "tools;gpu" TIMEOUT 180)
+    endif()
 
     kb_apply_quality_gates(kb_cli_tests)
 
