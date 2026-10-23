@@ -37,3 +37,18 @@ including rotated and orthographic cameras, rather than radial distance.
 `kb_renderer_tests particle-sort-modes` verifies the draw order with hidden
 D3D11 readback, overlapping colours, a changed camera and off-axis particles
 whose depth order differs from their distance order.
+
+Snapshot channel warmup creates the bounded slot metadata without reserving
+particle payloads. The first nonempty publication prepares 4 KiB for each
+free slot. Larger publications grow only their selected slot, doubling its
+capacity up to the existing 16 MiB limit.
+Slots reuse their capacity after readers release them; the 64 MiB aggregate
+payload limit and typed backpressure remain unchanged. Empty publications
+and terminal snapshots need no payload. Allocation failure preserves the
+latest complete revision and permits retrying the same publication.
+
+Warm up the expected payload sizes and retained-slot count before measuring
+steady-state allocations. A larger workload can allocate when it first grows
+a free slot. `kb_21kb_particle_snapshot_tests` checks empty-channel allocations,
+growth failure, retained readers, concurrent reads and allocation-free reuse.
+The CPU simulation pool has a separate capacity budget.

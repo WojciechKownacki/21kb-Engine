@@ -19,6 +19,8 @@ namespace {
 
 std::atomic<bool> g_countAllocations{false};
 std::atomic<std::size_t> g_allocationCount{0U};
+std::atomic<std::size_t> g_allocationBytes{0U};
+std::atomic<bool> g_failNextAllocation{false};
 
 void Require(bool condition, std::string_view message) {
     if (!condition) throw std::runtime_error{std::string{message}};
@@ -570,11 +572,57 @@ void TestGpuVisualStepJournalAcknowledgesExactlyOnceAndOverflows() {
         "GPU visual step journal fixture did not release its core ownership");
 }
 
+void TestLazyPayloadGrowthAndAllocationFailure() {
+    using namespace kb::particles;
+    ParticleRenderSnapshotChannel channel;
+    g_allocationBytes.store(0U);
+    g_countAllocations.store(true);
+    const auto warmed = channel.Warmup(909U);
+    g_countAllocations.store(false);
+    const auto warmupBytes = g_allocationBytes.load();
+    Require(warmed.Succeeded() && warmupBytes < 64U * 1024U,
+        "empty snapshot channel reserved particle payloads during warmup");
+    g_allocationCount.store(0U);
+    g_countAllocations.store(true);
+    const auto empty = channel.Publish(1U, {.revision = 1U});
+    g_countAllocations.store(false);
+    Require(empty.Succeeded() && g_allocationCount.load() == 0U,
+        "empty snapshot publication allocated a payload");
+    const auto retainedEmpty = channel.Read();
+    std::vector<ParticleRenderRecord> particles(2048U, Record(1U));
+    const std::array emitters{Emitter(1U, 0U, static_cast<std::uint32_t>(particles.size()))};
+    const ParticleRenderSnapshotPublishDesc grown{
+        .revision = 2U, .emitters = emitters, .particles = particles};
+    g_failNextAllocation.store(true);
+    const auto failed = channel.Publish(1U, grown);
+    g_failNextAllocation.store(false);
+    Require(failed.status == ParticleRenderSnapshotStatus::AllocationFailed &&
+            channel.Read()->Revision() == 1U && retainedEmpty->Particles().empty(),
+        "failed payload growth damaged the latest complete snapshot");
+    Require(channel.Publish(1U, grown).Succeeded(), "payload growth could not retry its revision");
+    const auto retainedLarge = channel.Read();
+    Require(retainedLarge->Particles().size() == particles.size() && retainedEmpty->Emitters().empty(),
+        "payload growth modified a retained empty snapshot");
+    // A second slot grows independently while a renderer retains the first payload.
+    particles.resize(8192U, Record(2U));
+    const std::array largerEmitters{Emitter(2U, 0U, static_cast<std::uint32_t>(particles.size()))};
+    Require(channel.Publish(1U, {.revision = 3U, .emitters = largerEmitters, .particles = particles}).Succeeded() &&
+            retainedLarge->Particles().size() == 2048U && retainedLarge->Particles()[0].particleId == 1U,
+        "growing another payload invalidated a retained render batch");
+    const auto retainedLarger = channel.Read();
+    Require(channel.Publish(1U, {.revision = 4U, .tombstone = true}).Succeeded() &&
+            retainedLarger->Particles().size() == 8192U,
+        "terminal publication invalidated a retained payload");
+    std::cout << "snapshot warmup allocation bytes=" << warmupBytes << '\n';
+}
+
 } // namespace
 
 void* operator new(std::size_t size) {
+    if (g_failNextAllocation.exchange(false, std::memory_order_relaxed)) throw std::bad_alloc{};
     if (g_countAllocations.load(std::memory_order_relaxed)) {
         g_allocationCount.fetch_add(1U, std::memory_order_relaxed);
+        g_allocationBytes.fetch_add(size, std::memory_order_relaxed);
     }
     if (void* memory = std::malloc(size == 0U ? 1U : size)) return memory;
     throw std::bad_alloc{};
@@ -588,6 +636,7 @@ void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); 
 
 int main() {
     try {
+        TestLazyPayloadGrowthAndAllocationFailure();
         TestCompleteContractAndMalformedRanges();
         TestRetentionBackpressureAllocationAndEpoch();
         TestConcurrentReadsAreCompleteAndMonotonic();

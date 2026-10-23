@@ -270,9 +270,9 @@ selection is driven entirely by the `RenderMaterial`'s own shader assignment —
 ### Stage 4A — immutable render snapshot core: `accepted checkpoint`
 
 - `kb_engine` owns the renderer-neutral 64-byte packed particle stream and the complete per-emitter batch metadata; no renderer or provider type is part of either DTO.
-- A scene-owned channel preallocates four immutable 16 MiB retained slots. Its header carries monotonic revision, scene ID, backend epoch, fixed-step index, and tombstone state.
+- A scene-owned channel retains four immutable slots with lazily allocated payloads, each capped at 16 MiB. Its header carries monotonic revision, scene ID, backend epoch, fixed-step index, and tombstone state.
 - Publication validates batch ranges, capacity, enums, finite bounds, compact particle payload, and drop diagnostics before replacing the retained revision. Exhaustion is explicit `SnapshotBackpressure` and leaves the last complete snapshot intact.
-- The channel owns all control blocks and storage in `kb_engine`, so a retained reader remains valid after provider unload and scene destruction. Focused tests prove concurrent readers, no-allocation publish after warmup, metadata retention, and lifecycle safety.
+- The channel owns all control blocks and storage in `kb_engine`, so a retained reader remains valid after provider unload and scene destruction. Focused tests prove concurrent readers, allocation-free reuse of warmed payload capacity, metadata retention, and lifecycle safety.
 
 ### Stage 4B — CPU-preview snapshot publication and tombstone: `accepted checkpoint`
 

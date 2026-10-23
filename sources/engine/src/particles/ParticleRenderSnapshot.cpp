@@ -115,6 +115,7 @@ template <typename Enum>
 struct ParticleRenderSnapshot::Storage {
     ParticleRenderSnapshotHeader header{};
     std::unique_ptr<std::byte[]> payload;
+    std::size_t payloadCapacity = 0U;
     std::size_t emitterCount = 0U;
     std::size_t particleOffset = 0U;
     std::size_t particleCount = 0U;
@@ -171,7 +172,6 @@ ParticleRenderSnapshotResult ParticleRenderSnapshotChannel::Warmup(std::uint64_t
         std::array<std::shared_ptr<ParticleRenderSnapshot>, kParticleRenderSnapshotSlotCount> terminalSlots;
         for (std::shared_ptr<ParticleRenderSnapshot>& slot : payloadSlots) {
             slot = std::make_shared<ParticleRenderSnapshot>();
-            slot->storage_->payload = std::make_unique_for_overwrite<std::byte[]>(kParticleRenderSnapshotBytesPerSlot);
         }
         for (std::shared_ptr<ParticleRenderSnapshot>& slot : terminalSlots) {
             slot = std::make_shared<ParticleRenderSnapshot>();
@@ -234,6 +234,33 @@ ParticleRenderSnapshotResult ParticleRenderSnapshotChannel::Publish(
     if (freeSlot == candidateSlots.size()) return {ParticleRenderSnapshotStatus::SnapshotBackpressure};
 
     ParticleRenderSnapshot::Storage& destination = *candidateSlots[freeSlot]->storage_;
+    const std::size_t requiredBytes = particleOffset + desc.particles.size_bytes();
+    if (requiredBytes != 0U) {
+        std::array<std::unique_ptr<std::byte[]>, kParticleRenderSnapshotSlotCount> allocations;
+        std::array<std::size_t, kParticleRenderSnapshotSlotCount> capacities{};
+        try {
+            for (std::size_t index = 0U; index < candidateSlots.size(); ++index) {
+                if (candidateSlots[index].use_count() != 1L) continue;
+                const std::size_t previousCapacity = candidateSlots[index]->storage_->payloadCapacity;
+                // Prime small free slots together so retaining the first batch does not allocate
+                // on the next small publication. Larger workloads grow only the selected slot.
+                const std::size_t requested = index == freeSlot ? requiredBytes : std::size_t{4096U};
+                if (requested <= previousCapacity) continue;
+                std::size_t capacity = std::max(std::size_t{4096U}, previousCapacity);
+                while (capacity < requested) capacity *= 2U;
+                allocations[index] = std::make_unique_for_overwrite<std::byte[]>(capacity);
+                capacities[index] = capacity;
+            }
+        } catch (const std::bad_alloc&) {
+            return {ParticleRenderSnapshotStatus::AllocationFailed};
+        }
+        // Commit only after all allocations succeed, preserving the latest complete batch on failure.
+        for (std::size_t index = 0U; index < candidateSlots.size(); ++index) {
+            if (!allocations[index]) continue;
+            candidateSlots[index]->storage_->payload = std::move(allocations[index]);
+            candidateSlots[index]->storage_->payloadCapacity = capacities[index];
+        }
+    }
     if (emitterBytes != 0U) std::memcpy(destination.payload.get(), desc.emitters.data(), emitterBytes);
     if (!desc.particles.empty()) {
         std::memcpy(destination.payload.get() + particleOffset, desc.particles.data(), desc.particles.size_bytes());
