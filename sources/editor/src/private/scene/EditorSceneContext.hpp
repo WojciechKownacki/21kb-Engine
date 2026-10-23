@@ -1452,7 +1452,7 @@ private:
     void InvalidateHierarchyRows() noexcept;
     [[nodiscard]] bool PrefabAssetHasSceneInstances(kb::assets::AssetId id, std::string_view action);
     void RebuildHierarchyRowsIfNeeded() const;
-    void ResetSceneEditState();
+    void ResetSceneEditState(bool clearHistory = true);
     void AdvanceSceneDocumentGeneration() noexcept;
     void SelectFirstSceneEntityOrClear() noexcept;
     [[nodiscard]] bool SaveSceneToPath(const std::filesystem::path& path);
@@ -1548,6 +1548,7 @@ private:
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
     bool sceneGraphCookPending_ = true;
     EditorCommandStack commandStack_;
+    EditorCommandStack playModeDocumentCommands_;
     // The scene document's undo history, selection and unsaved state, kept aside while a prefab is edited.
     EditorCommandStack documentCommands_;
     std::vector<kb::scene::SceneEntity> documentSelection_;

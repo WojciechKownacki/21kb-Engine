@@ -25,6 +25,7 @@ public:
     [[nodiscard]] bool Redo(EditorCommandHistoryKey key);
     void Clear() noexcept;
     void Clear(EditorCommandHistoryKey key) noexcept;
+    void SwapHistory(EditorCommandHistoryKey key, EditorCommandStack& other);
     void RemapEntities(EditorCommandHistoryKey key, std::span<const kb::scene::SceneEntityRemap> remap);
 
     [[nodiscard]] std::size_t UndoCount() const noexcept;

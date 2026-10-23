@@ -3693,6 +3693,25 @@ ReadScriptValue(
         return { true, *alias + '=' + std::to_string(nodeId) };
     }
 
+    if (*operation == "focus_material_node") {
+        const auto alias = StringMember(step, "node", error);
+        if (!alias) return { false, error };
+        const auto node = state.materialNodes.find(*alias);
+        return { node != state.materialNodes.end() && state.context.FocusMaterialGraphNode(node->second), *alias };
+    }
+
+    if (*operation == "assert_material_node_count") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto kindText = StringMember(step, "kind", error);
+        const auto expected = UInt32Member(step, "count", error);
+        if (!asset || !kindText || !expected) return { false, error };
+        const auto kind = kb::render::ParseRenderMaterialGraphNodeKind(*kindText);
+        const auto document = state.context.ReadMaterialDocumentAsset(ResolveAsset(state, *asset));
+        if (!kind || !document) return { false, "asset or node kind is invalid" };
+        const auto count = std::ranges::count(document->graph.nodes, *kind, &kb::render::RenderMaterialGraphNode::kind);
+        return { count == *expected, "node count=" + std::to_string(count) };
+    }
+
     if (*operation == "connect_material_nodes") {
         const auto asset = StringMember(step, "asset", error);
         const auto from = StringMember(step, "from", error);

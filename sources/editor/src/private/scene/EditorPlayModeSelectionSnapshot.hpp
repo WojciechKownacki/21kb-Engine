@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneHistory.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
 
 #include <algorithm>
@@ -55,6 +56,16 @@ public:
             }
         }
         selection.SelectEntities(restored);
+    }
+
+    [[nodiscard]] std::vector<kb::scene::SceneEntityRemap> RecreatedEntities(const kb::scene::Scene& scene) const {
+        std::vector<kb::scene::SceneEntityRemap> remap;
+        remap.reserve(authoredPaths_.size());
+        for (const auto& [id, path] : authoredPaths_) {
+            const auto entity = ResolvePath(scene, path);
+            if (scene.Entities().IsAlive(entity)) remap.push_back({kb::scene::SceneEntity{id}, entity});
+        }
+        return remap;
     }
 
     void Clear() noexcept {

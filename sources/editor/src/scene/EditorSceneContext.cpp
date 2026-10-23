@@ -5562,12 +5562,13 @@ void EditorSceneContext::RebuildHierarchyRowsIfNeeded() const {
     }
 }
 
-void EditorSceneContext::ResetSceneEditState() {
+void EditorSceneContext::ResetSceneEditState(bool clearHistory) {
     ClearMaterialEditorWorkingCopyRuntimePreview();
     terrainStroke_.reset();
     terrainReadCache_.reset();
     EditorTerrainService::ToolState().strokeActive = false;
-    commandStack_.Clear();
+    if (clearHistory) commandStack_.Clear();
+    else commandStack_.Clear(EditorCommandHistoryKey::Scene());
     pendingSceneTransactionLabel_.reset();
     activeTransformEdit_.Clear();
     activeMaterialEditAsset_ = {};

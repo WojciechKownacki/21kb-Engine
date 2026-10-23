@@ -108,6 +108,16 @@ void EditorCommandStack::Clear() noexcept {
     partitions_.clear();
 }
 
+void EditorCommandStack::SwapHistory(EditorCommandHistoryKey key, EditorCommandStack& other) {
+    if (&other == this) return;
+    HistoryPartition& left = PartitionFor(key);
+    HistoryPartition& right = other.PartitionFor(key);
+    left.undoStack.swap(right.undoStack);
+    left.redoStack.swap(right.redoStack);
+    Touch(left);
+    other.Touch(right);
+}
+
 void EditorCommandStack::RemapEntities(EditorCommandHistoryKey key, std::span<const kb::scene::SceneEntityRemap> remap) {
     HistoryPartition* partition = FindPartition(key);
     if (partition == nullptr || remap.empty()) {

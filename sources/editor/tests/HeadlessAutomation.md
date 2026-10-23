@@ -209,6 +209,17 @@ script diagnostics, render invalidation, and quit handling. Editor authoring
 is exercised through semantic operations and the production Inspector
 pointer/text/key handlers.
 
+## Play history regression
+
+`HeadlessPlayHistoryScenario.json` checks that Play/Stop preserves authored scene
+Undo/Redo, selection and unsaved state while discarding runtime scene commands.
+It also checks both material history directions and prefab instance bindings
+across repeated sessions. CTest runs it as `kb_editor_play_history_headless`.
+
+`focus_material_node` accepts a node alias and uses the normal graph focus action,
+so subsequent Undo/Redo commands target the open material. `assert_material_node_count`
+accepts `asset`, `kind` and `count` to check the resulting working document.
+
 ## Honest boundary
 
 The runner can verify engine state, editor documents, imported binary fixtures,

@@ -208,6 +208,10 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     if (RejectWhilePrefabEditing()) {
         return false;
     }
+    static_cast<void>(CommitHierarchyRename());
+    inspector_.EndTextEdit();
+    static_cast<void>(CommitActiveTransformEdit());
+    if (pendingSceneTransactionLabel_.has_value()) static_cast<void>(CommitSceneEditTransaction());
     auto phaseStarted = std::chrono::steady_clock::now();
     if (plugins_.HasPendingReload() && !ReloadSceneFromProject()) {
         return false;
@@ -238,6 +242,8 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
         return false;
     }
     trace.Phase(phaseStarted, "transition=begin phase=capture-snapshot");
+    playModeDocumentCommands_.Clear();
+    commandStack_.SwapHistory(EditorCommandHistoryKey::Scene(), playModeDocumentCommands_);
     phaseStarted = std::chrono::steady_clock::now();
     // Establish the complete play-session state before attaching the Script
     // module. On its first attachment the module immediately runs
@@ -294,7 +300,9 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
 
     playModeSelectionSnapshot_.Restore(*scene_, hierarchySelection_);
     playModeSelectionSnapshot_.Clear();
-    ResetSceneEditState();
+    ResetSceneEditState(false);
+    commandStack_.SwapHistory(EditorCommandHistoryKey::Scene(), playModeDocumentCommands_);
+    commandStack_.RemapEntities(EditorCommandHistoryKey::Scene(), playModeSceneSession_.RestoredEntities());
     ClearSceneDocumentDirty();
     if (playModeDocumentWasDirty_) {
         MarkSceneDocumentDirty();

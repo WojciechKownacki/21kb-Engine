@@ -1209,15 +1209,21 @@ bool EditorHeadlessAutomation::VerifyPrefabRoundTrip() {
     const std::filesystem::path scenePath = EditorProjectPaths::ScenesRoot() / "PrefabRoundTrip.21kbscene";
     if (!step("save", context_.SaveCurrentSceneAs(scenePath)) ||
         !step("reopen", context_.OpenScene(scenePath) && positionX("RoundTripCrate") == 4.0F && positionX("RoundTripPlaced") == 4.0F) ||
+        !step("edit-before-play", context_.ToggleEntityVisibility(findNamed("RoundTripPlaced"))) ||
         !step("play", context_.BeginPlayModeSceneSession() && context_.TickPlayModeSceneSession(1.0F / 60.0F)) ||
         !step("stop", context_.RestorePlayModeSceneSession())) {
         return false;
     }
 
-    // Stopping Play starts a fresh history, so the undo step undoes an edit made after it.
-    return step("edit", context_.ToggleEntityVisibility(findNamed("RoundTripPlaced"))) &&
-        step("undo", context_.UndoSceneCommand() &&
-            context_.Scene().Components().Visibility().Get(findNamed("RoundTripPlaced")).mode != kb::scene::VisibilityMode::Hidden);
+    const auto sourcePrefab = context_.Scene().Prefabs().SourcePrefab(
+        context_.Scene().Prefabs().RootInstance(findNamed("RoundTripCrate")));
+    return step("undo-before-play-edit", context_.UndoSceneCommand() &&
+            context_.Scene().Components().Visibility().Get(findNamed("RoundTripPlaced")).mode != kb::scene::VisibilityMode::Hidden) &&
+        step("play-with-redo", context_.BeginPlayModeSceneSession()) &&
+        step("stop-with-redo", context_.RestorePlayModeSceneSession()) &&
+        step("redo-before-play-edit", context_.RedoSceneCommand() &&
+            context_.Scene().Components().Visibility().Get(findNamed("RoundTripPlaced")).mode == kb::scene::VisibilityMode::Hidden) &&
+        step("instance-count", context_.Scene().Prefabs().RefreshInstances(sourcePrefab) == 2U);
 }
 
 bool EditorHeadlessAutomation::VerifyUI2DEditing() {
