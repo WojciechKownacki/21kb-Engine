@@ -140,7 +140,9 @@ bgfx::ShaderHandle ShaderLoader::Load(const char* name) {
 
     const bgfx::Memory* memory = bgfx::copy(bytes.data(), static_cast<std::uint32_t>(bytes.size()));
     bgfx::ShaderHandle shader = bgfx::createShader(memory);
-    bgfx::setName(shader, resolvedPath[0] == '\0' ? name : resolvedPath);
+    if (bgfx::isValid(shader)) {
+        bgfx::setName(shader, resolvedPath[0] == '\0' ? name : resolvedPath);
+    }
     return shader;
 }
 

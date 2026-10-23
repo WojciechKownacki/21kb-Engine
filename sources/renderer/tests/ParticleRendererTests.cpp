@@ -1,6 +1,8 @@
 #include "engine/particles/ParticleRenderSnapshot.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/ShaderBinaryProvider.hpp"
+#include "kb/render/ShaderLoader.hpp"
 #include "kb/render/particles/ParticleMeshBatchBuilder.hpp"
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
 #include "kb/render/particles/ParticleStripGeometryBuilder.hpp"
@@ -15,11 +17,22 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
 
 namespace {
 
@@ -108,6 +121,50 @@ void TestGpuParticleProgramLoadsThroughRendererInitialization() {
         "renderer did not load the staged 21kb Particle System GPU program");
     renderer.Shutdown();
 }
+
+#if defined(_WIN32)
+void TestRejectedShaderDoesNotNameAnInvalidHandle() {
+    struct Surface final : kb::render::RenderSurface {
+        HWND window = CreateWindowExW(0U, L"STATIC", L"Shader validation", WS_OVERLAPPEDWINDOW,
+            0, 0, 16, 16, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        ~Surface() override { if (window != nullptr) DestroyWindow(window); }
+        std::uint32_t Width() const noexcept override { return 16U; }
+        std::uint32_t Height() const noexcept override { return 16U; }
+        void* NativeWindowHandle() const noexcept override { return window; }
+        void* NativeDisplayHandle() const noexcept override { return nullptr; }
+    } surface;
+    Require(surface.window != nullptr, "shader rejection fixture could not create a hidden surface");
+    kb::render::DisplayConfig config{};
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    kb::render::Renderer renderer;
+    Require(renderer.Initialize(surface, &config) && bgfx::getRendererType() == bgfx::RendererType::Direct3D11,
+        "shader rejection fixture requires a real D3D11 backend");
+    struct Provider final : kb::render::ShaderBinaryProvider {
+        mutable std::uint32_t reads = 0U;
+        bool ReadFixedShader(bgfx::RendererType::Enum, std::string_view,
+            std::vector<std::uint8_t>& bytes, std::uint64_t& revision) const override {
+            ++reads;
+            bytes.assign(64U, 0U); // An invalid magic, not a missing file.
+            revision = 1U;
+            return true;
+        }
+        bool ReadMaterialShader(std::uint64_t, std::uint64_t, std::string_view,
+            bgfx::RendererType::Enum, std::string_view, std::vector<std::uint8_t>&, std::uint64_t&) const override { return false; }
+        std::uint64_t MaterialShaderRevision(std::uint64_t, std::uint64_t,
+            std::string_view, bgfx::RendererType::Enum) const noexcept override { return 0U; }
+    };
+    const auto provider = std::make_shared<Provider>();
+    kb::render::ShaderLoader::SetBinaryProvider(provider);
+    const auto program = kb::render::ShaderLoader::LoadComputeProgram("invalid_shader.sc");
+    kb::render::ShaderLoader::ClearBinaryProvider(provider);
+    Require(provider->reads == 1U && !bgfx::isValid(program),
+        "invalid shader bytes did not return an invalid program without naming the rejected handle");
+    const auto valid = kb::render::ShaderLoader::LoadComputeProgram("cs_particle_gpu_emit.sc");
+    Require(bgfx::isValid(valid), "a rejected shader prevented a subsequent valid program load");
+    bgfx::destroy(valid);
+    renderer.Shutdown();
+}
+#endif
 
 [[nodiscard]] std::uint64_t PackedId(const kb::render::ParticleGpuInstance& value) noexcept {
     return static_cast<std::uint64_t>(std::bit_cast<std::uint32_t>(value.frameAgeIdentity[2])) |
@@ -853,6 +910,9 @@ void TestParticleLightsFollowTheSnapshot() {
 
 int main() {
     try {
+#if defined(_WIN32)
+        TestRejectedShaderDoesNotNameAnInvalidHandle();
+#endif
         TestGpuParticleProgramLoadsThroughRendererInitialization();
         TestSortBlendFlipbookAndSoftContract();
         TestCapacitySplitNoProxyGrowthTwoViewsAndNoAllocation();
