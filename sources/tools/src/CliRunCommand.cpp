@@ -287,7 +287,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         }
     }
     if (sceneOption.has_value()) {
-        if (!sceneOption->empty() && sceneOption->front() == '/') {
+        if (scene.Assets().Manager().Mounts().Resolve(*sceneOption).has_value()) {
             const kb::assets::AssetMetadata* metadata =
                 FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), *sceneOption);
             if (metadata == nullptr) {

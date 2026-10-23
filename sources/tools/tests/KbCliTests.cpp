@@ -2526,11 +2526,33 @@ void RunEntityComponentCommandTests() {
         "new failed");
     const std::filesystem::path foreign = parent / "Obcy" / "Assets" / "Scenes" / "Main.21kbscene";
     const auto foreignSize = std::filesystem::file_size(foreign);
-    for (const std::string& scenePath : { foreign.string(), std::string{ "../Obcy/Assets/Scenes/Main.21kbscene" } }) {
+    for (const std::string& scenePath : { foreign.string(), std::string{ "../Obcy/Assets/Scenes/Main.21kbscene" },
+             std::string{ "/UnregisteredAssets/Scenes/Main.21kbscene" } }) {
         const CommandRun outside = Run(&kb::cli::RunEntityCommand, { "add", "--project", project, "--scene", scenePath,
             "--name", "Intruder" });
         Require(outside.exitCode != 0 && Contains(outside.output, "is outside the project"),
             "a scene outside the project must be refused: " + outside.output);
+        const CommandRun sceneOutside = Run(&kb::cli::RunSceneListCommand,
+            { "--project", project, "--scene", scenePath });
+        Require(sceneOutside.exitCode != 0 && Contains(sceneOutside.output, "is outside the project"),
+            "scene-list must distinguish physical paths from mounted assets: " + sceneOutside.output);
+        const CommandRun runOutside = Run(&kb::cli::RunRunCommand,
+            { "--project", project, "--scene", scenePath, "--frames", "1" });
+        Require(runOutside.exitCode != 0 && Contains(runOutside.output, "is outside the project"),
+            "run must distinguish physical paths from mounted assets: " + runOutside.output);
+    }
+    const auto projectScene = std::filesystem::path{ project } / "Assets" / "Scenes" / "Main.21kbscene";
+    for (const std::string& scenePath : { projectScene.generic_string(), std::string{ "/Game/Scenes/Main.21kbscene" } }) {
+        const CommandRun inside = Run(&kb::cli::RunEntityCommand,
+            { "rename", "--project", project, "--scene", scenePath, "--name", "Door", "--to", "PathProbe" });
+        Require(inside.exitCode == 0,
+            "physical and mounted project scene paths must remain editable: " + inside.output);
+        Require(Run(&kb::cli::RunEntityCommand,
+                    { "rename", "--project", project, "--scene", scenePath, "--name", "PathProbe", "--to", "Door" }).exitCode == 0,
+            "project scene path probe could not restore the entity name");
+        const CommandRun sceneInside = Run(&kb::cli::RunSceneListCommand,
+            { "--project", project, "--scene", scenePath });
+        Require(sceneInside.exitCode == 0, "scene-list rejected a project scene path: " + sceneInside.output);
     }
     Require(std::filesystem::file_size(foreign) == foreignSize, "another project's scene must stay untouched");
     std::filesystem::remove_all(parent, error);

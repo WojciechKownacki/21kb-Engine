@@ -102,7 +102,7 @@ struct SceneSession {
             kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(projectFile.parent_path()));
         sceneOption = settings.settings.defaultMap;
     }
-    if (!sceneOption.empty() && sceneOption.front() == '/') {
+    if (session.scene->Assets().Manager().Mounts().Resolve(Utf8Path(sceneOption)).has_value()) {
         const kb::assets::AssetMetadata* metadata =
             FindAssetByFlexiblePath(session.scene->Assets().Manager().Registry(), sceneOption);
         if (metadata == nullptr) {

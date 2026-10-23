@@ -123,7 +123,10 @@ struct SceneFileResolution {
     }
 
     const std::filesystem::path projectRoot = arguments.Option("--project").value_or("");
-    if (!sceneOption->empty() && sceneOption->front() == '/') {
+    const bool virtualPath = mountedScene != nullptr
+        ? mountedScene->Assets().Manager().Mounts().Resolve(*sceneOption).has_value()
+        : sceneOption->starts_with("/Game/") || sceneOption->starts_with("/Engine/");
+    if (virtualPath) {
         if (mountedScene == nullptr) {
             resolution.error = "virtual scene paths require --project <dir>";
             return resolution;
