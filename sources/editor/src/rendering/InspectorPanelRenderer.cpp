@@ -2533,14 +2533,17 @@ void PaintUIDropdownBody(HDC dc, RECT body, const EditorTheme& theme, const Edit
     for (const InspectorUIPropertyRow& row : rows)
         if (row.name == "optionCount") options = static_cast<std::uint32_t>(std::stoul(row.value));
     for (const DropdownInspectorItem& item : layout.items) {
-        const InspectorUIPropertyRow* row = item.row >= 0 ? &rows[static_cast<std::size_t>(item.row)] : nullptr;
+        const InspectorUIPropertyRow* row = item.row >= 0 && static_cast<std::size_t>(item.row) < rows.size()
+            ? &rows[static_cast<std::size_t>(item.row)] : nullptr;
         const bool selectedOption = item.option >= 0 && item.option == state.DropdownSelectedOption();
         switch (item.kind) {
         case DropdownInspectorItem::Kind::Object:
+            if (row == nullptr) break;
             DrawAssetFieldRow(dc, item.rect, theme, state, section, property, InspectorPropertyId::UIAssetPicker, row->label,
                 InspectorUIComponentModel::EntityReferenceLabel(sceneContext.Scene(), std::stoull(row->value)), item.row);
             break;
         case DropdownInspectorItem::Kind::Field:
+            if (row == nullptr) break;
             DrawFieldRow(dc, item.rect, theme, state, section, property, row->label, row->value, item.row);
             break;
         case DropdownInspectorItem::Kind::Warning:
@@ -2552,9 +2555,11 @@ void PaintUIDropdownBody(HDC dc, RECT body, const EditorTheme& theme, const Edit
             inspector_panel_rows::DrawGroupRow(dc, item.rect, theme, item.label);
             break;
         case DropdownInspectorItem::Kind::OptionText:
+            if (row == nullptr) break;
             DrawDropdownOptionTextRow(dc, item.rect, theme, state, section, property, item.row, item.option, row->value, selectedOption);
             break;
         case DropdownInspectorItem::Kind::OptionImage:
+            if (row == nullptr) break;
             DrawAssetFieldRow(dc, item.rect, theme, state, section, property, InspectorPropertyId::UIAssetPicker, "      " + item.label,
                 AssetDisplayName(sceneContext, std::stoull(row->value)), item.row);
             if (selectedOption) {
