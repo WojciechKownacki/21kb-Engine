@@ -23,6 +23,7 @@ jobs:
           - name: Windows MSVC
             os: windows-2025-vs2026
             generator: "Visual Studio 18 2026"
+            configuration: "Release"
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "OFF"
@@ -32,6 +33,7 @@ jobs:
           - name: Windows MSVC ASan
             os: windows-2025-vs2026
             generator: "Visual Studio 18 2026"
+            configuration: "Debug"
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "ON"
@@ -41,6 +43,7 @@ jobs:
           - name: Linux GCC ASan UBSan
             os: ubuntu-24.04
             generator: "Unix Makefiles"
+            configuration: "Debug"
             build_editor: "OFF"
             build_renderer: "OFF"
             sanitizer: "ON"
@@ -88,7 +91,7 @@ jobs:
             "-DKB_STRICT_OWN_WARNINGS=ON"
           )
           if (-not "${{ matrix.generator }}".StartsWith("Visual Studio")) {
-            $configureArgs += "-DCMAKE_BUILD_TYPE=Debug"
+            $configureArgs += "-DCMAKE_BUILD_TYPE=${{ matrix.configuration }}"
           }
           cmake @configureArgs
 
@@ -97,7 +100,7 @@ jobs:
         run: |
           # Full jobs build the default graph, including every registered test executable.
           # The focused sanitizer job builds only the targets selected by its test regex.
-          $buildArgs = @("--build", "build/ci", "--config", "Debug", "--parallel", "4")
+          $buildArgs = @("--build", "build/ci", "--config", "${{ matrix.configuration }}", "--parallel", "4")
           if ("${{ matrix.targets }}") {
             $buildArgs += "--target"
             $buildArgs += "${{ matrix.targets }}".Split(';')
@@ -110,7 +113,7 @@ jobs:
       - name: Test
         shell: pwsh
         run: |
-          $testArgs = @("--test-dir", "build/ci", "-C", "Debug", "--output-on-failure",
+          $testArgs = @("--test-dir", "build/ci", "-C", "${{ matrix.configuration }}", "--output-on-failure",
             "--no-tests=error", "--output-junit", "TestResults.xml")
           # Sanitizers deliberately distort timings; correctness and safety tests still run,
           # while the performance budget remains enforced by the unsanitized Windows job.
@@ -147,7 +150,7 @@ jobs:
         if: matrix.api_compat_check == 'ON'
         shell: pwsh
         run: |
-          & "build/ci/bin/Debug/kb_cli.exe" api-check --baseline tests/api_baseline/script_api.json
+          & "build/ci/bin/${{ matrix.configuration }}/kb_cli.exe" api-check --baseline tests/api_baseline/script_api.json
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
