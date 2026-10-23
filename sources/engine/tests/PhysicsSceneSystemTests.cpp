@@ -2061,8 +2061,9 @@ void RunPhysicsSleepingContactAndDampingTest() {
     };
     run(10);
     kb::tests::Require(count(events, box.Entity(), kb::scene::PhysicsContactPhase::Enter) == 1 &&
-            count(events, inside.Entity(), kb::scene::PhysicsContactPhase::Enter) == 1,
-        "Resting box and trigger occupant must enter their contacts");
+            count(events, inside.Entity(), kb::scene::PhysicsContactPhase::Enter) == 1 &&
+            count(events, trigger.Entity(), kb::scene::PhysicsContactPhase::Enter) == 1,
+        "Resting box and both sides of the trigger pair must enter their contacts");
     kb::tests::Require(kb::scene::PhysicsBackend::Sleep(scene, box.Entity()) && kb::scene::PhysicsBackend::Sleep(scene, inside.Entity()),
         "Bodies must be put to sleep");
     run(30);
@@ -2070,8 +2071,10 @@ void RunPhysicsSleepingContactAndDampingTest() {
             count(events, floor.Entity(), kb::scene::PhysicsContactPhase::Exit) == 0,
         "A contact that falls asleep must not raise Exit");
     kb::tests::Require(count(events, inside.Entity(), kb::scene::PhysicsContactPhase::Exit) == 0 &&
-            count(events, inside.Entity(), kb::scene::PhysicsContactPhase::Stay) == 30,
-        "A sleeping trigger occupant must keep Stay and never Exit");
+            count(events, inside.Entity(), kb::scene::PhysicsContactPhase::Stay) == 30 &&
+            count(events, trigger.Entity(), kb::scene::PhysicsContactPhase::Exit) == 0 &&
+            count(events, trigger.Entity(), kb::scene::PhysicsContactPhase::Stay) == 30,
+        "Both sides of a sleeping trigger pair must keep Stay and never Exit");
     kb::tests::Require(kb::scene::PhysicsBackend::Wake(scene, box.Entity()), "Box must wake");
     run(5);
     kb::tests::Require(count(events, box.Entity(), kb::scene::PhysicsContactPhase::Enter) == 0 &&
