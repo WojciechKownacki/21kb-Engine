@@ -94,4 +94,31 @@ if(BUILD_TESTING)
     set_tests_properties(kb_cli_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS tools)
 
     kb_apply_quality_gates(kb_cli_tests)
+
+    if(WIN32 AND KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        add_dependencies(kb_cli kb_physics_jolt_plugin kb_audio_miniaudio_plugin
+            kb_basic_lighting_plugin kb_21kb_particle_plugin kb_ai_plugin)
+        add_test(NAME kb_native_sdk_layout COMMAND ${CMAKE_COMMAND}
+            "-DCLI=$<TARGET_FILE:kb_cli>"
+            "-DENGINE_ROOT=${PROJECT_SOURCE_DIR}"
+            "-DSDK_GENERATOR=${CMAKE_GENERATOR}"
+            "-DCOMPILER=${CMAKE_CXX_COMPILER}"
+            "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+            "-DTEST_ROOT=${CMAKE_BINARY_DIR}/native-sdk-layout"
+            "-DENGINE_LIBRARY=$<TARGET_FILE:kb_engine>"
+            "-DFLECS_LIBRARY=$<TARGET_FILE:flecs_static>"
+            "-DPHYSICS_PLUGIN=$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "-DAUDIO_PLUGIN=$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "-DLIGHTING_PLUGIN=$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "-DPARTICLES_PLUGIN=$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "-DAI_PLUGIN=$<TARGET_FILE:kb_ai_plugin>"
+            "-Dlua_LIBRARY=$<TARGET_FILE:kb_lua>"
+            "-Dufbx_LIBRARY=$<TARGET_FILE:kb_ufbx>"
+            "-Dmonocypher_LIBRARY=$<TARGET_FILE:kb_monocypher>"
+            "-Dzstd_LIBRARY=$<TARGET_FILE:kb_zstd>"
+            "-Drecast_LIBRARY=$<TARGET_FILE:kb_recast>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/NativeSdkLayout.cmake")
+        set_tests_properties(kb_native_sdk_layout PROPERTIES
+            CONFIGURATIONS "Release;RelWithDebInfo" LABELS "tools;native-sdk" TIMEOUT 240)
+    endif()
 endif()

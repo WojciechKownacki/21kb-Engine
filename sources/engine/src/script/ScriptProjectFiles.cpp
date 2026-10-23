@@ -126,6 +126,7 @@ struct NativeSdk {
     std::filesystem::path root;
     std::filesystem::path buildTree;
     std::filesystem::path configFolder;
+    std::string generator;
     // A single-config tree also names the tools it was built with, so a script builds with the same
     // compiler and does not need a Visual Studio installation: CMake, Ninja, the MSVC compiler, and the
     // script that sets up that compiler's environment, with the toolset version to ask it for.
@@ -181,27 +182,35 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
     }
 }
 
-// The single-config Release build tree the running editor or kb_cli came from, which holds the
-// libraries it links.
+// Find the build cache above the executable, including a multi-config output directory.
 [[nodiscard]] std::optional<NativeSdk> RunningBuildTreeSdk() {
     const std::filesystem::path executable = kb::platform::RunningExecutablePath();
     if (executable.empty()) {
         return std::nullopt;
     }
-    const std::filesystem::path buildTree = executable.parent_path().parent_path();
+    std::filesystem::path buildTree = executable.parent_path();
+    while (!std::filesystem::is_regular_file(buildTree / "CMakeCache.txt")) {
+        const std::filesystem::path parent = buildTree.parent_path();
+        if (parent.empty() || parent == buildTree) return std::nullopt;
+        buildTree = parent;
+    }
     std::ifstream cache{ buildTree / "CMakeCache.txt" };
     std::string line;
     NativeSdk sdk{ .buildTree = buildTree };
     bool release = false;
     bool ninjaGenerator = false;
+    std::string configurations;
     while (std::getline(cache, line)) {
         const std::string value = line.substr(line.find('=') + 1U);
         if (line.starts_with("CMAKE_HOME_DIRECTORY:INTERNAL=")) {
             sdk.root = std::filesystem::path{ value };
         } else if (line.starts_with("CMAKE_BUILD_TYPE:")) {
             release = value == "Release" || value == "RelWithDebInfo";
+        } else if (line.starts_with("CMAKE_CONFIGURATION_TYPES:")) {
+            configurations = ';' + value + ';';
         } else if (line.starts_with("CMAKE_GENERATOR:INTERNAL=")) {
-            ninjaGenerator = value == "Ninja";
+            sdk.generator = value;
+            ninjaGenerator = value == "Ninja" || value == "Ninja Multi-Config";
         } else if (line.starts_with("CMAKE_COMMAND:INTERNAL=")) {
             sdk.cmake = std::filesystem::path{ value };
         } else if (line.starts_with("CMAKE_MAKE_PROGRAM:")) {
@@ -209,6 +218,12 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
         } else if (line.starts_with("CMAKE_CXX_COMPILER:")) {
             sdk.compiler = std::filesystem::path{ value };
         }
+    }
+    if (!configurations.empty()) {
+        const std::string configuration = executable.parent_path().filename().string();
+        release = (configuration == "Release" || configuration == "RelWithDebInfo") &&
+            configurations.find(';' + configuration + ';') != std::string::npos;
+        if (release) sdk.configFolder = configuration;
     }
     if (sdk.root.empty() || !release) {
         return std::nullopt;
@@ -284,7 +299,9 @@ void FindCompilerEnvironment(NativeSdk& sdk) {
     const std::string source = "\"Source/NativeScripts/" + target + "\"";
     const std::string binary = "\"Saved/NativeScripts/" + target + "\"";
     if (sdk.compilerEnvironment.empty()) {
-        return "cmake -S " + source + " -B " + binary + " -A x64 && cmake --build " + binary + " --config Release --target " + target;
+        const std::string generator = sdk.generator.starts_with("Visual Studio ")
+            ? " -G \"" + sdk.generator + "\"" : std::string{};
+        return "cmake -S " + source + " -B " + binary + generator + " -A x64 && cmake --build " + binary + " --config Release --target " + target;
     }
     const std::string cmake = Quoted(sdk.cmake);
     const std::string toolset = sdk.toolsetVersion.empty() ? std::string{} : " -vcvars_ver=" + sdk.toolsetVersion;
