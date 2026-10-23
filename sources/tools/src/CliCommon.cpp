@@ -1,18 +1,18 @@
 #include "CliCommon.hpp"
 
+#include "engine/assets/AssetImportPreset.hpp"
+#include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/math/ColorSpace.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #if KB_CLI_RENDERER
-#include "engine/assets/AssetManager.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #if KB_CLI_RENDERER
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #endif
-#include "engine/assets/AssetImportPreset.hpp"
 #endif
 
 #include <cmath>
