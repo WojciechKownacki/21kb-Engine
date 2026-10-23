@@ -56,7 +56,9 @@ kb::scene::Vec3 At(const kb::scene::Scene& scene, kb::scene::SceneEntity entity)
 float Flat(kb::scene::Vec3 a, kb::scene::Vec3 b) { return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z)); }
 
 void Run(kb::scene::Scene& scene, float seconds) {
-    for (float time = 0.0F; time < seconds; time += 0.05F) static_cast<void>(scene.Runtime().Update(0.05F));
+    constexpr float deltaSeconds = 0.05F;
+    const int steps = static_cast<int>(std::ceil(seconds / deltaSeconds));
+    for (int step = 0; step < steps; ++step) static_cast<void>(scene.Runtime().Update(deltaSeconds));
     Require(scene.Runtime().DrainSceneSystemErrors().empty(), "the AI produced scene system errors");
 }
 
