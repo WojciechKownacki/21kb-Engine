@@ -363,6 +363,85 @@ void VerifyContactReadback(MotionReadback& readback) {
     std::fprintf(stderr, "particle_contact_float_readback birth=live contact=dead retained=dead reused=live\n");
 }
 
+void VerifyMissingDepthResource(MotionReadback& readback) {
+    ParticleGpuEmitterSimulation simulation;
+    Require(simulation.Initialize(), "Missing-depth readback requires actual GPU compute support");
+    std::array<float, 16U * 16U> surfaceDepth{};
+    surfaceDepth.fill(0.5F);
+    const auto depthTexture = bgfx::createTexture2D(16U, 16U, false, 1U, bgfx::TextureFormat::R32F,
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+        bgfx::copy(surfaceDepth.data(), static_cast<std::uint32_t>(sizeof(surfaceDepth))));
+    Require(bgfx::isValid(depthTexture), "Missing-depth fixture could not create its actual sampled GPU surface");
+    ParticleGpuEmitterSimulation::FrameContext frame;
+    frame.depthTexture = depthTexture;
+    bx::mtxIdentity(frame.viewProjection.data());
+    bx::mtxIdentity(frame.inverseViewProjection.data());
+    frame.cameraPosition = {0.0F, 0.0F, -2.0F, 1.0F};
+    frame.texelSize = {1.0F / 16.0F, 1.0F / 16.0F};
+    const auto commandsAt = [](float birthTime) {
+        std::array<kb::particles::ParticleGpuEmitterCommand, 4U> commands{};
+        for (std::size_t index = 0U; index < commands.size(); ++index) {
+            auto& command = commands[index];
+            command.key = {1U, index + 1U};
+            command.hasParams = command.clear = true;
+            command.params.capacity = 1U;
+            command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+            command.params.size.fill(1.0F);
+            command.params.color.fill({1.0F, 1.0F, 1.0F, 1.0F});
+            command.params.sceneDepthCollision = index % 2U == 0U;
+            command.params.hasPlane = index >= 2U;
+            command.params.plane = {.normal = {0.0F, 0.0F, -1.0F}, .distance = -0.5F, .killOnContact = true};
+            command.spawns.push_back({.position = {0.1F, 0.2F, 0.35F}, .birthTime = birthTime,
+                .velocity = {0.0F, 0.0F, 6.0F}, .lifetime = 8.0F});
+        }
+        return commands;
+    };
+    const auto advance = [&](auto& commands, float time) {
+        for (auto& command : commands) command.simTime = time;
+        simulation.Apply(1U, commands);
+        simulation.Advance(1U, kStep);
+        simulation.Dispatch(0U, 1U, frame);
+        static_cast<void>(bgfx::frame());
+        for (auto& command : commands) {
+            command.hasParams = command.clear = false;
+            command.spawns.clear();
+        }
+    };
+    const auto capture = [&](std::uint64_t emitterId) {
+        const auto draws = simulation.Draws(1U);
+        const auto found = std::find_if(draws.begin(), draws.end(), [&](const auto& draw) { return draw.key.emitterId == emitterId; });
+        Require(found != draws.end(), "Missing-depth fixture lost an actual GPU emitter draw");
+        return readback.Read(*found);
+    };
+    auto commands = commandsAt(0.0F);
+    for (int step = 0; step < 3; ++step) advance(commands, static_cast<float>(step) * kStep);
+    const auto bounced = capture(1U), free = capture(2U);
+    Require(bounced[10] < 0.0F && free[10] == 6.0F && free[2] - bounced[2] > 0.1F,
+        "Sampled GPU depth fixture did not prove an active collision before resource loss");
+    const float restartTime = 3.0F * kStep;
+    commands = commandsAt(restartTime);
+    frame.depthTexture = BGFX_INVALID_HANDLE;
+    bgfx::destroy(depthTexture);
+    for (int step = 0; step < 10; ++step) advance(commands, restartTime + static_cast<float>(step) * kStep);
+    const auto missing = capture(1U), disabled = capture(2U);
+    const float expectedZ = 0.35F + 6.0F * (10.0F * kStep);
+    Require(missing[3] == 1.0F && missing[10] == 6.0F &&
+        std::abs(missing[2] - expectedZ) < 0.00001F && std::abs(missing[2] - disabled[2]) < 0.00001F &&
+        missing[0] == disabled[0] && missing[1] == disabled[1],
+        "Unavailable optional depth changed actual GPU free flight or retained a stale surface response");
+    for (const auto emitterId : {3U, 4U}) {
+        const auto dead = capture(emitterId);
+        Require(std::all_of(dead.begin(), dead.end(), [](float value) { return value == 0.0F; }),
+            "Missing frame depth disabled an independent GPU killing plane");
+    }
+    Require(simulation.RejectedUpdates(1U).empty() && simulation.AllocatedBytes() == 544U,
+        "Missing optional frame depth rejected emitter state or changed its allocations");
+    simulation.ReleaseScene(1U);
+    Require(simulation.AllocatedBytes() == 0U, "Missing-depth fixture leaked GPU emitter buffers");
+    simulation.Shutdown();
+    std::fprintf(stderr, "particle_gpu_missing_depth active_surface=bounce lost_resource=free_flight disabled_control=equal plane_kill=independent release_bytes=0\n");
+}
+
 void VerifyRejectedStateUpdates() {
     ParticleGpuEmitterSimulation simulation;
     Require(simulation.Initialize(224U), "GPU state-budget test requires actual compute support");
@@ -492,6 +571,7 @@ void RunParticleGpuMotionTests(bool kernelOnly) {
         MotionReadback readback;
         VerifyNativeReadbackBounds();
         VerifyContactReadback(readback);
+        VerifyMissingDepthResource(readback);
         VerifyRejectedStateUpdates();
         for (int kind = 0; kind < 5; ++kind) {
             std::array<float, 20> baseline{};

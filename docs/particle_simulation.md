@@ -32,6 +32,14 @@ Screen-depth collision sees the camera's nearest opaque surfaces. It cannot
 collide with geometry hidden behind an occluder. Explicit planes remain active
 regardless of that visibility. The `kb_renderer_particle_depth_collision`
 CTest checks these boundaries on the forward and deferred bgfx depth paths.
+The motion/kernel readback tests also sample an actual 16x16 R32F GPU depth
+fixture and require a bounce before removing that resource. After resetting the
+births, ten steps without a depth handle must match the explicitly disabled
+depth control and constant-velocity motion within 0.00001 m. Independently
+authored killing planes must still produce empty instance records. Native
+buffer capture is cross-checked against compute/texture readback; logical
+emitter allocations return from 544 bytes to zero. This checks the simulation's
+missing-resource boundary on D3D11, without forcing renderer allocation failure.
 
 Collision planes with `killOnContact` end particle life on the GPU at contact.
 The stateful bgfx kernel retains a death stamp and writes an empty render
