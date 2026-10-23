@@ -183,6 +183,9 @@ void* operator new(std::size_t size) {
 }
 
 void operator delete(void* memory) noexcept { std::free(memory); }
+#if !defined(_MSC_VER)
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+#endif
 
 int main(int argc, char** argv) {
     if (argc <= 1) {
