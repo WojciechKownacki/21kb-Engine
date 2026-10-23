@@ -53,6 +53,17 @@ if(WIN32)
 endif()
 
 set_target_properties(kb_cli PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+    add_custom_target(kb_cli_stage_particle_plugin
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_cli>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "$<TARGET_FILE_DIR:kb_cli>"
+        VERBATIM
+    )
+    add_dependencies(kb_cli_stage_particle_plugin kb_21kb_particle_plugin)
+    add_dependencies(kb_cli kb_cli_stage_particle_plugin)
+endif()
 if(WIN32)
     # UTF-8 process code page: Polish (any) letters in arguments and file names.
     target_sources(kb_cli PRIVATE kb_cli.manifest)

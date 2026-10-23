@@ -28,6 +28,18 @@ These fields describe routing rather than a GPU timing measurement. Retained
 particles can complete on their previous path after a live edit. The instance's
 `ParticleRuntimeQueryResult::executionPath` describes its selected backend policy;
 use the per-emitter records to inspect actual routing.
+The updated record layout requires engine module ABI 6. Rebuild providers with
+the current SDK; the host rejects earlier module versions before creation.
+
+`kb_cli run --project <dir> --report particles` runs the normal scene lifecycle
+and writes `21kb.particle-execution/v1` JSON to stdout, with logs on stderr.
+MCP `run_scene` accepts the same `report: "particles"` selector. The report
+contains exact decimal-string identities, each emitter's route and reason,
+and CPU render record counts and payload bytes from the retained snapshot
+captured before shutdown. Missing providers and snapshots are explicit.
+`runtime_update_wall_ns` is a decimal-string sum of wall time spent in scene
+updates. It is not CPU time or per-emitter time. Unmeasured per-emitter CPU
+and GPU times are `null`. This headless command does not create a GPU consumer.
 
 Run `kb_21kb_particle_cpu_backend_tests` for collision, field and routing
 regressions. On Windows, `kb_renderer_tests particle-collision-fallback`

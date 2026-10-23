@@ -1,5 +1,7 @@
 #include "CliCommands.hpp"
 
+#include "engine/core/JsonValue.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/project/ProjectSettings.hpp"
@@ -14,6 +16,7 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
 #include <filesystem>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -121,9 +124,40 @@ struct DiagnosticPrinter {
     }
 };
 
-} // namespace
+[[nodiscard]] kb::core::JsonValue ParticleExecutionReport(
+    const std::shared_ptr<const kb::particles::ParticleRenderSnapshot>& snapshot,
+    bool providerAvailable, std::uint64_t updateWallNanoseconds, bool succeeded) {
+    using kb::core::JsonValue;
+    auto report = JsonValue::MakeObject();
+    report.Set("schema", JsonValue::MakeString("21kb.particle-execution/v1"));
+    report.Set("succeeded", JsonValue::MakeBool(succeeded));
+    report.Set("provider_available", JsonValue::MakeBool(providerAvailable));
+    report.Set("snapshot_available", JsonValue::MakeBool(snapshot != nullptr));
+    report.Set("snapshot_revision", snapshot ? JsonValue::MakeString(std::to_string(snapshot->Revision())) : JsonValue::MakeNull());
+    report.Set("fixed_step", snapshot ? JsonValue::MakeString(std::to_string(snapshot->Header().fixedStepIndex)) : JsonValue::MakeNull());
+    report.Set("runtime_update_wall_ns", JsonValue::MakeString(std::to_string(updateWallNanoseconds)));
+    report.Set("gpu_time_ns", JsonValue::MakeNull());
+    auto emitters = JsonValue::MakeArray();
+    if (snapshot) {
+        for (const auto& emitter : snapshot->Emitters()) {
+            auto row = JsonValue::MakeObject();
+            row.Set("instance_id", JsonValue::MakeString(std::to_string(emitter.instanceId)));
+            row.Set("effect_asset_id", JsonValue::MakeString(std::to_string(emitter.effectAssetId)));
+            row.Set("emitter_id", JsonValue::MakeString(std::to_string(emitter.emitterId)));
+            row.Set("path", JsonValue::MakeString(emitter.simulationPath == kb::particles::ParticleEmitterSimulationPath::Gpu ? "gpu" : "cpu"));
+            row.Set("reason", JsonValue::MakeString(std::string{kb::particles::ParticleGpuFallbackReasonName(emitter.gpuFallbackReason)}));
+            row.Set("cpu_render_record_count", JsonValue::MakeNumber(emitter.particleCount));
+            row.Set("cpu_render_payload_bytes", JsonValue::MakeNumber(
+                static_cast<double>(emitter.particleCount) * sizeof(kb::particles::ParticleRenderRecord)));
+            row.Set("cpu_time_ns", JsonValue::MakeNull());
+            emitters.Append(std::move(row));
+        }
+    }
+    report.Set("emitters", std::move(emitters));
+    return report;
+}
 
-int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
+int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport) {
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
         io.err << "error: run requires --project <dir>\n";
@@ -315,8 +349,12 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), 0U);
     static_cast<void>(host.DrainSceneSystemDiagnostics());
 
+    std::uint64_t updateWallNanoseconds = 0U;
     for (int frame = 1; frame <= frames; ++frame) {
+        const auto updateStarted = std::chrono::steady_clock::now();
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
+        updateWallNanoseconds += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - updateStarted).count());
         const kb::script::ScriptRuntimeExecutionResult* result = host.InstalledSceneSystemLastResult();
         const kb::script::ScriptRuntimeAssetPrepareResult* prepare = host.InstalledSceneSystemLastPrepareResult();
         if (result == nullptr || prepare == nullptr) {
@@ -337,6 +375,9 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
         static_cast<void>(host.DrainSceneSystemDiagnostics());
     }
 
+    const auto particleSnapshot = particleReport != nullptr
+        ? kb::particles::ParticlePlayback::ReadRenderSnapshot(scene) : nullptr;
+    const bool particleProviderAvailable = kb::particles::ParticlePlayback::HasBackend(scene);
     if (!host.DispatchShutdownLifecycle(0.0F)) {
         io.err << "error: installed script scene system could not dispatch shutdown\n";
         return 1;
@@ -352,7 +393,27 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
 
     io.out << "done: " << frames << " frames, " << executedBehaviours << " behaviour executions, "
            << emittedEvents << " events, " << printer.total << " diagnostics\n";
+    if (particleReport != nullptr) {
+        *particleReport << ParticleExecutionReport(particleSnapshot, particleProviderAvailable,
+            updateWallNanoseconds, printer.total == 0U).Dump() << '\n';
+        if (!particleReport->good()) {
+            io.err << "error: particle execution report could not be written\n";
+            return 1;
+        }
+    }
     return printer.total == 0U ? 0 : 1;
+}
+
+} // namespace
+
+int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
+    const auto report = arguments.Option("--report");
+    if (report && *report != "particles") {
+        io.err << "error: --report expects particles\n";
+        return 1;
+    }
+    return report ? RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, &io.out)
+                  : RunSceneRuntime(arguments, io, nullptr);
 }
 
 } // namespace kb::cli

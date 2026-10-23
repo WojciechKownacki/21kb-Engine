@@ -237,7 +237,8 @@ R"(  animator     Build an Animator Controller, the state machine that picks a c
   run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on any error.
                  --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>]
-                 [--quiet]
+                 [--quiet] [--report particles]
+               Particle reports are versioned JSON on stdout; logs go to stderr.
   mcp          Serve the commands above as MCP tools over stdio (newline-
                delimited JSON-RPC), for use from MCP-compatible clients.
                  [--project <dir>]

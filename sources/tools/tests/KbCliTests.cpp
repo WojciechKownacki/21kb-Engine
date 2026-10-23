@@ -363,6 +363,86 @@ void RunRunCommandTests() {
         "run did not expose the project plugin load diagnostic");
 }
 
+void RunParticleReportCommandTests() {
+    PrepareProject();
+    const auto reportFor = [](const std::string& root) {
+        const std::vector<std::string> raw{
+            "--project", root, "--frames", "12", "--dt", "0.1", "--report", "particles"};
+        const kb::cli::ArgumentList arguments{raw, kFlagNames};
+        std::ostringstream out;
+        std::ostringstream err;
+        const int result = kb::cli::RunRunCommand(arguments, {.out = out, .err = err});
+        Require(result == 0, "particle report runtime failed: " + err.str());
+        JsonValue report;
+        std::string error;
+        Require(JsonValue::Parse(out.str(), report, error), "particle report stdout was not clean JSON");
+        Require(report.Find("schema") && report.Find("schema")->AsString() == "21kb.particle-execution/v1" &&
+            report.Find("succeeded") && report.Find("succeeded")->AsBool(), "particle report has no versioned success contract");
+        Require(Contains(err.str(), "done:") && report.Find("runtime_update_wall_ns") &&
+            report.Find("gpu_time_ns") && report.Find("gpu_time_ns")->IsNull(),
+            "particle report lost stderr logs or fabricated GPU timing");
+        return report;
+    };
+    const auto unavailable = reportFor(TestRoot().string());
+    Require(unavailable.Find("provider_available") && !unavailable.Find("provider_available")->AsBool() &&
+        unavailable.Find("emitters") && unavailable.Find("emitters")->Size() == 0U,
+        "particle report fabricated a provider for an empty project");
+    Require(Run(&kb::cli::RunRunCommand, {"--project", TestRoot().string(), "--report", "unknown"}).exitCode != 0,
+        "run accepted an unknown report format");
+
+    std::istringstream requests{R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_scene","arguments":{"scene":"/Game/Scenes/Main.21kbscene","frames":1,"report":"particles"}}})"};
+    std::ostringstream mcpOut;
+    std::ostringstream mcpErr;
+    const std::vector<std::string> mcpRaw{"--project", TestRoot().string()};
+    const kb::cli::ArgumentList mcpArguments{mcpRaw};
+    Require(kb::cli::RunMcpCommand(mcpArguments, requests, {.out = mcpOut, .err = mcpErr}) == 0,
+        "MCP particle report failed");
+    JsonValue response;
+    JsonValue mcpReport;
+    std::string parseError;
+    Require(JsonValue::Parse(mcpOut.str(), response, parseError) && response.Find("result"),
+        "MCP particle report response was not JSON-RPC");
+    const auto* content = response.Find("result")->Find("content");
+    Require(content && content->At(0U) && content->At(0U)->Find("text") &&
+        JsonValue::Parse(content->At(0U)->Find("text")->AsString(), mcpReport, parseError) && mcpReport.Find("schema"),
+        "MCP did not expose the same clean particle report as CLI");
+
+#if KB_CLI_RENDERER
+    const auto parent = TestRoot() / "ParticleReports";
+    Require(Run(&kb::cli::RunNewCommand, {"--parent", parent.string(), "--name", "Sample", "--template", "Empty"}).exitCode == 0,
+        "particle report could not create its project");
+    const auto project = (parent / "Sample").string();
+    const auto newEffect = [](const kb::cli::ArgumentList& args, kb::cli::CommandIo io) {
+        return kb::cli::RunVfxCommand("vfx-new", args, io);
+    };
+    const auto setEffect = [](const kb::cli::ArgumentList& args, kb::cli::CommandIo io) {
+        return kb::cli::RunVfxCommand("vfx-set", args, io);
+    };
+    Require(Run(&kb::cli::RunMaterialNewCommand, {"--project", project, "--name", "ParticleMaterial"}).exitCode == 0 &&
+        Run(newEffect, {"--project", project, "--name", "ReportEffect", "--set",
+            "effect.emitter[0].output.material.path=/Game/Materials/ParticleMaterial.kbmat"}).exitCode == 0 &&
+        Run(&kb::cli::RunEntityCommand, {"add", "--project", project, "--name", "Emitter"}).exitCode == 0 &&
+        Run(&kb::cli::RunComponentCommand, {"add", "--project", project, "--entity", "Emitter", "--type", "Particle Effect",
+            "--set", "effectAssetId=/Game/Particles/ReportEffect.kbvfx"}).exitCode == 0,
+        "particle report could not author its effect through the public commands");
+    const auto active = reportFor(project);
+    const auto* emitters = active.Find("emitters");
+    Require(active.Find("provider_available")->AsBool() && active.Find("snapshot_available")->AsBool() &&
+        emitters && emitters->Size() == 1U, "particle report lost the live provider or snapshot emitter");
+    const auto* emitter = emitters->At(0U);
+    Require(emitter->Find("path")->AsString() == "cpu" && emitter->Find("reason")->AsString() == "cpu-policy" &&
+        emitter->Find("cpu_render_record_count")->AsNumber() > 0.0 &&
+        emitter->Find("cpu_render_payload_bytes")->AsNumber() == emitter->Find("cpu_render_record_count")->AsNumber() * 80.0 &&
+        emitter->Find("cpu_time_ns")->IsNull() && emitter->Find("effect_asset_id")->GetKind() == JsonValue::Kind::String,
+        "particle report changed routing, payload units, unavailable timing or exact asset identity");
+    Require(Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx",
+        "--set", "effect.backendPolicy=GpuVisualPreferred"}).exitCode == 0, "particle report could not update backend policy");
+    const auto fallback = reportFor(project);
+    Require(fallback.Find("emitters")->At(0U)->Find("reason")->AsString() == "gpu-consumer-unavailable",
+        "headless particle report claimed GPU execution without a GPU consumer");
+#endif
+}
+
 // LIB-013: PlayerController.lua is no longer duplicated as a hardcoded
 // string in this test fixture — it is written by the REAL production path
 // a game author actually gets it through, `kb_cli init-agent`
@@ -3726,6 +3806,7 @@ int main() {
 #endif
     RunSceneCommandTests();
     RunRunCommandTests();
+    RunParticleReportCommandTests();
     RunPlayerControllerTemplateTests();
     RunNewCommandTests();
     RunSceneNewCommandTests();

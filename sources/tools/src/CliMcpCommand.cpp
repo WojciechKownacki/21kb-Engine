@@ -96,6 +96,7 @@ struct ToolProperty {
             ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...).", true },
             ToolProperty{ "frames", "number", "Frame count (default 60).", false },
             ToolProperty{ "dt", "number", "Delta seconds per frame (default 1/60).", false },
+            ToolProperty{ "report", "string", "Use particles for a versioned emitter execution report.", false },
         }));
     return tools;
 }
@@ -185,6 +186,7 @@ struct ToolCallOutcome {
         command = &RunSceneAttachCommand;
     } else if (toolName == "run_scene") {
         pushOption("--scene", GetStringArgument(toolArguments, "scene"));
+        pushOption("--report", GetStringArgument(toolArguments, "report"));
         if (toolArguments != nullptr) {
             if (const JsonValue* frames = toolArguments->Find("frames"); frames != nullptr && !frames->IsNull()) {
                 pushOption("--frames", std::to_string(static_cast<int>(frames->AsNumber())));
@@ -201,8 +203,11 @@ struct ToolCallOutcome {
     }
 
     std::ostringstream captured;
+    std::ostringstream diagnostics;
     const ArgumentList parsedArguments{ commandArguments, std::array<std::string_view, 1>{ "--disabled" } };
-    const int exitCode = command(parsedArguments, CommandIo{ .out = captured, .err = captured });
+    const bool particleReport = toolName == "run_scene" && GetStringArgument(toolArguments, "report") == "particles";
+    const int exitCode = command(parsedArguments, CommandIo{ .out = captured, .err = particleReport ? diagnostics : captured });
+    if (exitCode != 0) captured << diagnostics.str();
     return ToolCallOutcome{ .isError = exitCode != 0, .text = captured.str() };
 }
 
