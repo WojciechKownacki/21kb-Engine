@@ -28,6 +28,11 @@ depth through bgfx. CPU simulation and frames without usable scene depth
 continue without this optional screen-space response; the compiler reports
 that limitation as a warning. Collision planes retain their own behavior.
 
+Screen-depth collision sees the camera's nearest opaque surfaces. It cannot
+collide with geometry hidden behind an occluder. Explicit planes remain active
+regardless of that visibility. The `kb_renderer_particle_depth_collision`
+CTest checks these boundaries on the forward and deferred bgfx depth paths.
+
 Collision planes with `killOnContact` use CPU simulation: particles end their
 lifetime at contact and disappear from subsequent render snapshots. Bouncing
 planes can use GPU simulation. An authored plane never implicitly enables

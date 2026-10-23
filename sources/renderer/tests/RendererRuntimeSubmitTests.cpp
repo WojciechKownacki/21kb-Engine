@@ -7355,12 +7355,15 @@ void RunVoxelGridFollowsMeshGeometryTest() {
 // A GPU-simulated particle dropped from 2 m above the origin falls through the floor unless it collides.
 // Collision can come from a plane (exact) or from the surface the scene depth buffer shows; with either
 // the particle is still near the floor 1.5 s later, without it it is far below the camera's view.
-[[nodiscard]] double CollidingParticleBrightness(bool floor, bool plane, bool sceneDepth, SceneRenderLightingPath path) {
+[[nodiscard]] double CollidingParticleBrightness(bool floor, bool plane, bool sceneDepth, SceneRenderLightingPath path,
+                                               bool occluded = false) {
     constexpr std::uint16_t kSize = 64U;
     std::vector<SsBox> boxes;
     if (floor) {
         boxes.push_back({ { 0.0F, -0.5F, 0.0F }, { 40.0F, 1.0F, 40.0F } });
     }
+    // The wall lies between the camera and the particle but never intersects its vertical path.
+    if (occluded) boxes.push_back({ {0.0F, 1.0F, -2.0F}, {4.0F, 6.0F, 0.1F} });
     SceneRenderLightingConfig lighting{};
     lighting.lightingPath = path;
     const auto spawnAndStep = [&](kb::scene::Scene& scene, int frame) {
@@ -8224,14 +8227,23 @@ void RunRendererCollidesGpuParticlesTest() {
     // The depth buffer is a render target of the forward path and a G-buffer texture of the deferred one.
     const double sceneDepthForward = CollidingParticleBrightness(true, false, true, forward);
     const double sceneDepthDeferred = CollidingParticleBrightness(true, false, true, deferred);
+    const double occludedForward = CollidingParticleBrightness(true, false, true, forward, true);
+    const double occludedDeferred = CollidingParticleBrightness(true, false, true, deferred, true);
+    const double occludedPlane = CollidingParticleBrightness(true, true, false, forward, true);
     std::fprintf(stderr, "gpu_particle_collision free_fall=%.1f plane=%.1f floor_only=%.1f scene_depth forward=%.1f deferred=%.1f%c",
         freeFall, plane, floorOnly, sceneDepthForward, sceneDepthDeferred, 10);
+    std::fprintf(stderr, "gpu_particle_occluded_depth forward=%.1f deferred=%.1f plane=%.1f%c",
+        occludedForward, occludedDeferred, occludedPlane, 10);
     Require(freeFall < 50.0, "GPU collision test: without collisions the particle must have fallen out of view");
     Require(plane > 400.0, "GPU collision test: a collision plane must keep the particle near the floor level");
     Require(floorOnly < 300.0, "GPU collision test: the bare floor must be darker than the particle");
     Require(emptyDepth < 50.0, "GPU collision test: empty scene depth must not invent a collision surface");
     Require(sceneDepthForward > 400.0, "GPU collision test: the particle must bounce off the floor shown in the forward depth buffer");
     Require(sceneDepthDeferred > 400.0, "GPU collision test: the particle must bounce off the floor shown in the G-buffer depth");
+    Require(occludedForward < 300.0 && occludedDeferred < 300.0,
+        "GPU collision test: scene-depth collision must not collide with a floor hidden behind an opaque wall");
+    Require(occludedPlane > 400.0,
+        "GPU collision test: occluding scene depth must not change an explicit collision plane");
 }
 
 void RunRendererRendersScreenSpaceGiBounceTest() {
