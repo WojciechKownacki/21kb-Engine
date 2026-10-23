@@ -1584,7 +1584,7 @@ void RunSceneHistoryUndoRedoEachEditKindTest() {
     const kb::scene::SceneObject c = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "C" });
     const kb::scene::SceneObject a1 = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A1", .parent = a });
     const kb::scene::SceneObject a2 = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A2", .parent = a });
-    const kb::scene::SceneObject a3 = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A3", .parent = a });
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A3", .parent = a }));
     const kb::scene::SceneObject a2a = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A2a", .parent = a2 });
     scene.Components().Lights().Set(b.Entity(), kb::scene::LightComponent{ .intensity = 7.0F });
     scene.Components().Joints().Set(c.Entity(), kb::scene::JointComponent{ .connectedEntity = a1.Entity() });
