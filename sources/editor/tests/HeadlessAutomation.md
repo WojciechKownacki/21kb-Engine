@@ -220,6 +220,12 @@ across repeated sessions. CTest runs it as `kb_editor_play_history_headless`.
 so subsequent Undo/Redo commands target the open material. `assert_material_node_count`
 accepts `asset`, `kind` and `count` to check the resulting working document.
 
+`verify_particle_execution` presents the real particle preview, then checks the
+inspector's CPU policy, GPU route and local-alignment CPU fallback after live
+edits. It captures the Diagnostics section at each screenshot profile and
+restores the working asset and expanded sections. This checks routing and
+displayed render payloads; it does not measure per-emitter CPU/GPU timings.
+
 ## Honest boundary
 
 The runner can verify engine state, editor documents, imported binary fixtures,

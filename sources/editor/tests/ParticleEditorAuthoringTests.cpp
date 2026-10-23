@@ -261,6 +261,14 @@ void TestUnifiedInspectorStreamAndModuleHitTargets() {
             kb::editor::ParticleEditorPanelLayoutResolver::HitTest(*recipeLayout, recipe.x, recipe.y).recipeIndex == 1U,
         "recipe tile did not preserve its registry ordering during hit testing");
     kb::particle_editor::ParticleEditorWorkspaceState workspace;
+    Require(layout->executionRowCount == 3U && layout->executionRows.back().bottom <= layout->diagnosticRows.front().top,
+        "runtime execution data overlaps diagnostic navigation");
+    workspace.ToggleComposerSection(kb::particle_editor::ParticleEditorComposerSection::Diagnostics);
+    const auto collapsedDiagnostics = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
+        kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, rows, 0, 96U, &inspector, 0U, &workspace));
+    Require(collapsedDiagnostics->executionRowCount == 0U && collapsedDiagnostics->diagnosticRowCount == 0U,
+        "collapsed diagnostics retained runtime rows");
+    workspace.ToggleComposerSection(kb::particle_editor::ParticleEditorComposerSection::Diagnostics);
     workspace.ToggleComposerSection(kb::particle_editor::ParticleEditorComposerSection::Output);
     const auto collapsedOutput = std::make_unique<kb::editor::ParticleEditorPanelLayout>(
         kb::editor::ParticleEditorPanelLayoutResolver::Resolve(content, rows, 0, 96U, &inspector, 0U, &workspace));

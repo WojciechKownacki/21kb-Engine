@@ -175,6 +175,7 @@ public:
         std::string_view checkpoint);
     [[nodiscard]] bool CapturePanel(
         std::string_view panel, std::string_view checkpoint, int width = 900, int height = 700);
+    [[nodiscard]] bool PresentParticlePreview();
     [[nodiscard]] bool CapturePanelScreenshotMatrix(
         std::string_view panel, std::string_view checkpoint);
     [[nodiscard]] bool VerifyViewportHostLifecycle();

@@ -49,6 +49,7 @@
 #include "rendering/MainWindowBackBufferPainter.hpp"
 #include "rendering/PanelContentRenderer.hpp"
 #include "rendering/ParticleEditorPanelLayout.hpp"
+#include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -3881,6 +3882,16 @@ bool EditorHeadlessAutomation::CapturePanel(
         "capture_panel", succeeded,
         std::string{ panel } + ':' + path.filename().string());
     return succeeded;
+}
+
+bool EditorHeadlessAutomation::PresentParticlePreview() {
+    if (impl_->window == nullptr || !context_.HasParticleEditorAsset()) return false;
+    const DockPanel panel{.id = 15U, .kind = DockPanelKind::ParticleEditor};
+    impl_->viewport.BeginPaintLayout(impl_->window);
+    const bool presented = ParticleEditorPanelRenderer::PresentViewport(
+        impl_->viewport, impl_->window, RECT{0, 0, 960, 540}, panel, context_, impl_->backendSettings);
+    impl_->viewport.EndPaintLayout();
+    return presented && std::string_view{impl_->viewport.ActiveBackendLabel()} != "Not initialized";
 }
 
 bool EditorHeadlessAutomation::CapturePanelScreenshotMatrix(

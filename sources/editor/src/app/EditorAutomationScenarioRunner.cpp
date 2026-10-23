@@ -4583,6 +4583,47 @@ ReadScriptValue(
             std::to_string(*frames) + " editor particle frame(s)" };
     }
 
+    if (*operation == "verify_particle_execution") {
+        const auto* current = state.context.ParticleEditorWorkingAsset();
+        if (current == nullptr || current->emitters.empty()) return {false, "particle document is not open"};
+        const auto original = *current;
+        auto candidate = original;
+        if (!state.automation.PresentParticlePreview()) return {false, "particle preview renderer could not present"};
+        const auto check = [&](kb::particles::ParticleEmitterSimulationPath path,
+                               kb::particles::ParticleGpuFallbackReason reason) {
+            if (!state.context.ApplyParticleEditorWorkingCopy(candidate) ||
+                !state.context.TickParticleEditorPreview(1.0F / 60.0F)) return false;
+            const auto view = state.context.ParticleEditorInspector();
+            return view.execution && view.execution->path == path && view.execution->reason == reason &&
+                view.execution->snapshotRevision == state.context.ParticleEditorPreviewRevision();
+        };
+        using Path = kb::particles::ParticleEmitterSimulationPath;
+        using Reason = kb::particles::ParticleGpuFallbackReason;
+        candidate.backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
+        const bool cpu = check(Path::Cpu, Reason::CpuPolicy);
+        candidate.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        const bool gpu = check(Path::Gpu, Reason::None);
+        candidate.emitters.front().output.alignment = kb::scene::ParticleAlignment::Local;
+        const bool fallback = check(Path::Cpu, Reason::LocalAlignment);
+        using Section = kb::particle_editor::ParticleEditorComposerSection;
+        const std::array sections{Section::Emitters, Section::Settings, Section::Recipes, Section::Modules, Section::Output};
+        std::vector<Section> collapsed;
+        for (const auto section : sections) {
+            if (state.context.ParticleEditorWorkspace().ComposerSectionExpanded(section)) {
+                state.context.ToggleParticleEditorComposerSection(section);
+                collapsed.push_back(section);
+            }
+        }
+        const bool captured = state.automation.CapturePanelScreenshotMatrix("particle_editor", "particle-execution-diagnostics");
+        for (const auto section : collapsed) state.context.ToggleParticleEditorComposerSection(section);
+        const bool restored = state.context.ApplyParticleEditorWorkingCopy(original) &&
+            state.context.TickParticleEditorPreview(1.0F / 60.0F);
+        return {cpu && gpu && fallback && captured && restored,
+            "preview execution: cpu=" + std::to_string(cpu) + " gpu=" + std::to_string(gpu) +
+                " local-fallback=" + std::to_string(fallback) + " captured=" + std::to_string(captured) +
+                " restored=" + std::to_string(restored)};
+    }
+
     if (*operation == "verify_particle_picker") {
         return {
             state.automation.VerifyParticlePickerInteraction(),

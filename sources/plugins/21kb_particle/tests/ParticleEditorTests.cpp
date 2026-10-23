@@ -875,6 +875,44 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
             }),
         "preview retarget metadata registration failed");
 
+    {
+        using Model = kb::particle_editor::ParticleEmitterInspectorModel;
+        using Path = kb::particles::ParticleEmitterSimulationPath;
+        using Reason = kb::particles::ParticleGpuFallbackReason;
+        kb::particle_editor::ParticlePreviewSession routingPreview;
+        auto routingAsset = MakeEffect();
+        Require(routingPreview.Start(project, sourceRegistry, kb::assets::AssetId{71U},
+            "/Game/Effects/Routing.kbvfx", routingAsset).Succeeded() && routingPreview.Tick(0.05F).Succeeded(),
+            "routing preview could not start");
+        const auto retained = kb::particles::ParticlePlayback::ReadRenderSnapshot(routingPreview.PreviewScene());
+        const auto cpu = Model::ReadExecution(retained.get(), 71U, 11U);
+        Require(cpu && cpu->path == Path::Cpu && cpu->reason == Reason::CpuPolicy && cpu->cpuRenderRecords > 0U &&
+            cpu->cpuRenderBytes == cpu->cpuRenderRecords * sizeof(kb::particles::ParticleRenderRecord),
+            "inspector did not read actual CPU routing and render payload cost");
+        Require(!Model::ReadExecution(nullptr, 71U, 11U) && !Model::ReadExecution(retained.get(), 73U, 11U) &&
+            !Model::ReadExecution(retained.get(), 71U, 12U), "inspector reused data from another effect or emitter");
+        kb::particle_editor::ParticleEmitterInspectorView view;
+        Require(Model::ExecutionRows(view)[0] == "Simulation: Unavailable", "missing runtime data guessed the authored policy");
+        kb::particles::ParticlePlayback::SetGpuEmitterConsumer(routingPreview.PreviewScene(), true);
+        routingAsset.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+        Require(routingPreview.PublishWorkingCopy(routingAsset, false).Succeeded(), "GPU routing edit failed");
+        const auto gpuSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(routingPreview.PreviewScene());
+        view.execution = Model::ReadExecution(gpuSnapshot.get(), 71U, 11U);
+        Require(view.execution && view.execution->path == Path::Gpu && view.execution->reason == Reason::None &&
+            view.execution->snapshotRevision > cpu->snapshotRevision && Model::ExecutionRows(view)[0] == "Simulation: GPU",
+            "inspector did not follow the actual GPU route after a live edit");
+        routingAsset.emitters[0].output.alignment = kb::scene::ParticleAlignment::Local;
+        Require(routingPreview.PublishWorkingCopy(routingAsset, false).Succeeded(), "local alignment edit failed");
+        const auto fallbackSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(routingPreview.PreviewScene());
+        view.execution = Model::ReadExecution(fallbackSnapshot.get(), 71U, 11U);
+        Require(view.execution && view.execution->path == Path::Cpu && view.execution->reason == Reason::LocalAlignment &&
+            Model::ExecutionRows(view)[0] == "Simulation: CPU (local-alignment)" &&
+            Model::ExecutionRows(view)[2] == "CPU/GPU timings: Unavailable" &&
+            Model::ReadExecution(retained.get(), 71U, 11U)->reason == Reason::CpuPolicy,
+            "inspector lost the fallback reason, invented timings or mutated a retained snapshot");
+        routingPreview.Release([](const kb::scene::Scene&) {});
+    }
+
     kb::particle_editor::ParticlePreviewSession preview;
     const auto effect = MakeEffect();
     Require(preview.Start(project, sourceRegistry, kb::assets::AssetId{71U},

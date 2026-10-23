@@ -5,6 +5,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/library/EngineLibraryParsing.hpp"
+#include "engine/particles/ParticleRenderSnapshot.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -17,6 +18,41 @@
 #include <system_error>
 
 namespace kb::particle_editor {
+std::optional<ParticleEmitterExecutionView> ParticleEmitterInspectorModel::ReadExecution(
+    const kb::particles::ParticleRenderSnapshot* snapshot, std::uint64_t effectAssetId,
+    kb::scene::ParticleStableId emitterId) {
+    if (snapshot == nullptr || snapshot->IsTombstone() || effectAssetId == 0U || emitterId == 0U) return std::nullopt;
+    for (const auto& emitter : snapshot->Emitters()) {
+        if (emitter.effectAssetId != effectAssetId || emitter.emitterId != emitterId) continue;
+        return ParticleEmitterExecutionView{.path = emitter.simulationPath, .reason = emitter.gpuFallbackReason,
+            .snapshotRevision = snapshot->Revision(), .cpuRenderRecords = emitter.particleCount,
+            .cpuRenderBytes = static_cast<std::uint64_t>(emitter.particleCount) * sizeof(kb::particles::ParticleRenderRecord)};
+    }
+    return std::nullopt;
+}
+
+std::array<std::string, 3U> ParticleEmitterInspectorModel::ExecutionRows(const ParticleEmitterInspectorView& view) {
+    const std::string unavailable{ParticleText("particle.execution.unavailable", "Unavailable")};
+    std::string simulation = unavailable;
+    std::string records = unavailable;
+    if (view.execution) {
+        simulation = view.execution->path == kb::particles::ParticleEmitterSimulationPath::Gpu ? "GPU" : "CPU";
+        if (view.execution->reason != kb::particles::ParticleGpuFallbackReason::None) {
+            simulation += " (";
+            simulation += kb::particles::ParticleGpuFallbackReasonName(view.execution->reason);
+            simulation += ')';
+        }
+        records = ParticleFormat("particle.execution.records", "{count} ({bytes} bytes)", {
+            {"count", std::to_string(view.execution->cpuRenderRecords)},
+            {"bytes", std::to_string(view.execution->cpuRenderBytes)}});
+    }
+    return {
+        ParticleFormat("particle.execution.simulation", "Simulation: {value}", {{"value", simulation}}),
+        ParticleFormat("particle.execution.cpu_records", "CPU render records: {value}", {{"value", records}}),
+        ParticleFormat("particle.execution.timings", "CPU/GPU timings: {value}", {{"value", unavailable}}),
+    };
+}
+
 namespace {
 
 [[nodiscard]] std::string_view OutputName(kb::scene::ParticleOutputType type) {

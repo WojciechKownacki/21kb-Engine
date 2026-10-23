@@ -3,9 +3,11 @@
 #include "ParticleEffectCompiler.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/math/EngineMath.hpp"
+#include "engine/particles/ParticleEmitterExecution.hpp"
 #include "engine/scene/ParticleEffectAssetValidation.hpp"
 
 #include <array>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,8 +16,17 @@ namespace kb::assets {
 class AssetRegistry;
 struct AssetMetadata;
 }
+namespace kb::particles { class ParticleRenderSnapshot; }
 
 namespace kb::particle_editor {
+
+struct ParticleEmitterExecutionView {
+    kb::particles::ParticleEmitterSimulationPath path = kb::particles::ParticleEmitterSimulationPath::Cpu;
+    kb::particles::ParticleGpuFallbackReason reason = kb::particles::ParticleGpuFallbackReason::CpuPolicy;
+    std::uint64_t snapshotRevision = 0U;
+    std::uint32_t cpuRenderRecords = 0U;
+    std::uint64_t cpuRenderBytes = 0U;
+};
 
 enum class ParticleEditorProperty : std::uint16_t {
     SpawnRateCurve, SpawnBurstsSummary, SpawnLifetimeMin, SpawnLifetimeMax, SpawnSpeedMin, SpawnSpeedMax, SpawnDirection,
@@ -97,11 +108,16 @@ struct ParticleEmitterInspectorView {
     std::vector<ParticleEditorPropertyRow> properties;
     std::vector<ParticleDependencyRow> dependencies;
     std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
+    std::optional<ParticleEmitterExecutionView> execution;
 };
 
 class ParticleEmitterInspectorModel final {
 public:
     ParticleEmitterInspectorModel() = delete;
+    [[nodiscard]] static std::optional<ParticleEmitterExecutionView> ReadExecution(
+        const kb::particles::ParticleRenderSnapshot* snapshot, std::uint64_t effectAssetId,
+        kb::scene::ParticleStableId emitterId);
+    [[nodiscard]] static std::array<std::string, 3U> ExecutionRows(const ParticleEmitterInspectorView& view);
     [[nodiscard]] static std::string FormatColor(const kb::math::Color& color);
     [[nodiscard]] static std::string FormatGradient(const kb::math::Gradient& gradient);
     [[nodiscard]] static bool ParseColor(std::string_view text, kb::math::Color& value) noexcept;

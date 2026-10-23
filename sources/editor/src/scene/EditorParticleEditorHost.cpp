@@ -428,9 +428,14 @@ kb::particle_editor::ParticleEmitterInspectorView EditorSceneContext::ParticleEd
     if (asset == nullptr) return {};
     const auto& registry = scene_->Assets().Manager().Registry();
     const auto* owner = registry.Find(particleEditorAssetId_);
-    return kb::particle_editor::ParticleEmitterInspectorModel::Build(
+    auto view = kb::particle_editor::ParticleEmitterInspectorModel::Build(
         *asset, particleEditorWorkspace_.SelectedEmitterId(), particleEditorWorkspace_.SelectedModuleId(),
         owner, &registry);
+    const auto* preview = ParticleEditorPreviewScene();
+    const auto snapshot = preview == nullptr ? nullptr : kb::particles::ParticlePlayback::ReadRenderSnapshot(*preview);
+    view.execution = kb::particle_editor::ParticleEmitterInspectorModel::ReadExecution(
+        snapshot.get(), particleEditorAssetId_.value, view.emitterId);
+    return view;
 }
 
 std::vector<kb::assets::AssetMetadata> EditorSceneContext::ParticleEditorRecipes() const {

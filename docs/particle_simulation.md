@@ -4,6 +4,12 @@ The particle provider selects simulation per emitter. `GpuVisualPreferred`
 allows CPU simulation when an emitter needs behavior the GPU kernel cannot
 preserve. CPU particles still use the renderer's particle draw path.
 
+The particle editor's Diagnostics section reads the selected emitter's preview
+snapshot. It shows the active simulation path, fallback reason and CPU render
+record count and bytes. These records can include particles retained from a
+previous path after a live edit. Missing snapshot data and unmeasured CPU/GPU
+timings are shown as unavailable; authored policy is not used as a measurement.
+
 Creating an effect in the editor or with `vfx-new` copies the shared default
 material beside the effect under a unique name. The effect references that
 project asset, so the material joins the normal cook dependency closure and
