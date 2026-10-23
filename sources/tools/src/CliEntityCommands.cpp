@@ -47,6 +47,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Scene authoring for agents: the same entities and components the editor's hierarchy and Inspector
@@ -87,7 +88,9 @@ struct SceneSession {
         return std::nullopt;
     }
 
-    SceneSession session{ .descriptor = loaded.descriptor, .scene = std::make_unique<kb::scene::Scene>(loaded.descriptor) };
+    SceneSession session;
+    session.descriptor = std::move(loaded.descriptor);
+    session.scene = std::make_unique<kb::scene::Scene>(session.descriptor);
     if (!MountProjectAssets(*session.scene, projectFile.parent_path(), error)) {
         io.err << "error: " << error << '\n';
         return std::nullopt;
