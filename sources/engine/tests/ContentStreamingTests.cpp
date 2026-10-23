@@ -558,6 +558,11 @@ void BlocksBeyondFourGigabytesAreAddressed() {
         Purge(root);
         return;
     }
+#else
+    {
+        std::ofstream create{ path, std::ios::binary };
+        Require(create.is_open(), "The large fixture could not be created");
+    }
 #endif
     // Laid out by hand: a primary block at the front and a streamed block 5 GiB in. The bytes
     // between are a hole in a sparse file, so the test costs kilobytes of disk, not gigabytes.
@@ -608,6 +613,11 @@ void BlocksBeyondFourGigabytesAreAddressed() {
     {
         std::fstream output{ path, std::ios::binary | std::ios::in | std::ios::out };
         Require(output.is_open(), "The large fixture could not be opened");
+#if defined(_WIN32)
+        const DWORD attributes = GetFileAttributesW(path.c_str());
+        Require(attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0U,
+            "Opening the large fixture removed its sparse attribute");
+#endif
         output.write(reinterpret_cast<const char*>(headerBytes.data()), static_cast<std::streamsize>(headerBytes.size()));
         output.write(reinterpret_cast<const char*>(index.data()), static_cast<std::streamsize>(index.size()));
         output.seekp(static_cast<std::streamoff>(primaryOffset));
