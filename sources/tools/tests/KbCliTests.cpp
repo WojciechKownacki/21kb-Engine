@@ -326,6 +326,21 @@ void RunRunCommandTests() {
     Require(Contains(run.output, "PlayerTicked"), "run did not report emitted events");
     Require(Contains(run.output, "0 diagnostics"), "run summary is wrong");
 
+    const std::string diagnosticName = "Script diagnostic entity with a name longer than the small string buffer";
+    Require(Run(&kb::cli::RunEntityCommand, {
+        "rename", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
+        "--name", "Player", "--to", diagnosticName,
+    }).exitCode == 0, "run test could not rename the diagnostic entity");
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Player.lua",
+        "function Tick(self, dt) error('diagnostic lifetime probe') end\n");
+    const CommandRun failedScript = Run(&kb::cli::RunRunCommand, {
+        "--project", root, "--scene", "Assets/Scenes/Main.21kbscene", "--frames", "3",
+    });
+    Require(failedScript.exitCode != 0 &&
+            Contains(failedScript.output, "[script error] '" + diagnosticName + "', ") &&
+            Contains(failedScript.output, "diagnostic lifetime probe"),
+        "run did not preserve the full entity name while reporting a script failure");
+
     kb::project::ProjectDescriptor brokenDescriptor;
     brokenDescriptor.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Physics.Missing",

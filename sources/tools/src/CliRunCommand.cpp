@@ -86,7 +86,7 @@ struct DiagnosticPrinter {
         for (const kb::script::ScriptDiagnostic& diagnostic : diagnostics) {
             ++total;
             std::string line = "[script error] ";
-            const std::string_view entity = scene.Entities().Name(diagnostic.entity);
+            const std::string entity = scene.Entities().Name(diagnostic.entity);
             if (!entity.empty()) {
                 line += "'" + std::string{ entity } + "', ";
             }

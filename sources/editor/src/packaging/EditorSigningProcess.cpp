@@ -39,7 +39,8 @@ bool ValidSession(std::string_view value) noexcept {
 
 void SecureClear(std::string& value) noexcept {
     if (value.capacity() > value.size()) value.resize(value.capacity(), '\0');
-    volatile char* bytes = value.empty() ? nullptr : value.data();
+    if (value.empty()) return;
+    volatile char* bytes = value.data();
     for (std::size_t index = 0U; index < value.size(); ++index) bytes[index] = '\0';
     value.clear();
 }
