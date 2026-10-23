@@ -59,7 +59,7 @@ void RunRendererPacedSceneSubmitStressBenchmark(bool staticMillionSnapshot,
 void RunRendererVisibilityFeedbackTest();
 void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
-void RunRendererParticleCollisionFallbackTest();
+void RunRendererParticleContactDeathTest();
 void RunRendererParticleDepthAuthoringTest();
 void RunRendererParticleSortModesTest();
 void RunRendererScreenSpaceEffectTests();
@@ -250,9 +250,9 @@ int main(int argc, char** argv) {
             return EXIT_FAILURE;
         }
     }
-    if (argc == 2 && std::string_view{ argv[1] } == "particle-collision-fallback") {
+    if (argc == 2 && (std::string_view{ argv[1] } == "particle-contact-death" || std::string_view{ argv[1] } == "particle-collision-fallback")) {
         try {
-            kb::render::tests::RunRendererParticleCollisionFallbackTest();
+            kb::render::tests::RunRendererParticleContactDeathTest();
             return EXIT_SUCCESS;
         } catch (const std::exception& error) {
             std::fprintf(stderr, "%s\n", error.what());

@@ -2888,20 +2888,20 @@ void TestEmitterExecutionDiagnostics() {
             "execution diagnostics could not simulate the effect");
         const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
         Require(snapshot && snapshot->Emitters().size() == expected.size(), "execution diagnostics lost an emitter");
-        std::size_t gpuEmitters = 0U;
         for (std::size_t index = 0U; index < expected.size(); ++index) {
             const auto& emitter = snapshot->Emitters()[index];
             Require(emitter.gpuFallbackReason == expected[index] &&
                 emitter.simulationPath == (expected[index] == Reason::None ? Path::Gpu : Path::Cpu),
                 "emitter snapshot did not report the actual simulation route and fallback reason");
             Require(!kb::particles::ParticleGpuFallbackReasonName(expected[index]).empty(), "fallback reason has no stable name");
-            if (expected[index] == Reason::None) ++gpuEmitters;
         }
         std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
         kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
         std::size_t gpuSpawns = 0U;
         for (const auto& command : commands) gpuSpawns += command.spawns.size();
-        Require(gpuSpawns == gpuEmitters, "reported GPU emitters disagree with submitted GPU births");
+        // Emit(instance, 1) targets the first emitter; the other records describe routing without births.
+        Require(gpuSpawns == (expected.front() == Reason::None ? 1U : 0U),
+            "the first emitter's reported route disagrees with its submitted birth");
         Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
             "execution diagnostics could not release its backend");
     };
@@ -2915,7 +2915,7 @@ void TestEmitterExecutionDiagnostics() {
     effect.emitters[0].output.alignment = kb::scene::ParticleAlignment::CameraFacing;
     AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane,
         kb::scene::ParticleCollisionPlaneModule{.killOnContact = true});
-    check(effect, true, {Reason::ContactDeath});
+    check(effect, true, {Reason::None});
     effect.emitters[0].modules[0].enabled = false;
     check(effect, true, {Reason::None});
     auto second = effect.emitters[0];
@@ -2923,7 +2923,7 @@ void TestEmitterExecutionDiagnostics() {
     second.authoringOrder = 1U;
     second.modules[0].enabled = true;
     effect.emitters.push_back(std::move(second));
-    check(effect, true, {Reason::None, Reason::ContactDeath});
+    check(effect, true, {Reason::None, Reason::None});
     for (const auto type : {kb::scene::ParticleModuleType::Noise,
                            kb::scene::ParticleModuleType::AxisRotation,
                            kb::scene::ParticleModuleType::Attraction}) {
@@ -2979,13 +2979,24 @@ void TestCollisionKillOnContact() {
             Require(backend.Simulate(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(), "kill step failed");
         }
         const auto live = backend.Query(fixture.scene, created.instanceId).liveParticleCount;
-        if (kill || !gpuPreferred) {
+        if (!gpuPreferred) {
             const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
             Require(snapshot && snapshot->Particles().size() == live,
                 "collision survivors and the renderer snapshot disagree");
             std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
             kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
-            Require(commands.empty(), "a killing plane submitted particles to the bouncing GPU kernel");
+            Require(commands.empty(), "explicit CPU collision simulation submitted GPU commands");
+        } else {
+            std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
+            kb::particles::ParticlePlayback::DrainGpuEmitterCommands(fixture.scene, commands);
+            std::size_t births = 0U;
+            bool planeFlag = false;
+            for (const auto& command : commands) {
+                births += command.spawns.size();
+                if (command.hasParams) planeFlag = command.params.hasPlane && command.params.plane.killOnContact == kill;
+            }
+            Require(live == 0U && births == 1U && planeFlag,
+                "contact-death routing lost the GPU birth or plane flag");
         }
         Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
             "kill on contact fixture could not release its backend");
@@ -2993,7 +3004,8 @@ void TestCollisionKillOnContact() {
     };
     Require(liveAfterFall(true, false) == 0U, "a particle striking a killing plane survived");
     Require(liveAfterFall(false, false) == 1U, "a particle bouncing off a plane died");
-    Require(liveAfterFall(true, true) == 0U, "a GPU-preferred particle striking a killing plane survived");
+    // This checks routing only; renderer readback tests verify actual GPU contact deaths.
+    Require(liveAfterFall(true, true) == 0U, "GPU contact-death routing retained CPU particles");
 }
 
 void TestRepeatedFieldsPreserveCpuSemantics() {

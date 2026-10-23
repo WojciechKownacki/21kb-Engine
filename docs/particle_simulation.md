@@ -33,9 +33,13 @@ collide with geometry hidden behind an occluder. Explicit planes remain active
 regardless of that visibility. The `kb_renderer_particle_depth_collision`
 CTest checks these boundaries on the forward and deferred bgfx depth paths.
 
-Collision planes with `killOnContact` use CPU simulation: particles end their
-lifetime at contact and disappear from subsequent render snapshots. Bouncing
-planes can use GPU simulation. An authored plane never implicitly enables
+Collision planes with `killOnContact` end particle life on the GPU at contact.
+The stateful bgfx kernel retains a death stamp and writes an empty render
+instance immediately. Later dispatches, including removal of the plane during
+live editing, retain that death. Uploading a new birth resets the slot state,
+even when its timestamp matches the previous birth. Billboard and mesh output
+use the same death handling. Explicit CPU simulation remains available.
+An authored plane never implicitly enables
 screen-depth collision; the renderer's explicit depth-collision parameter is
 independent of the plane.
 
@@ -47,7 +51,7 @@ modules do not affect eligibility.
 Each `ParticleRenderEmitterRecord` reports `simulationPath` and
 `gpuFallbackReason` for that emitter at publication. The provider uses the same
 decision to route births and publish the record. `ParticleGpuFallbackReasonName`
-returns a stable code such as `kill-on-contact`, `repeated-noise`,
+returns a stable code such as `repeated-noise`,
 `repeated-axis-rotation` or `repeated-attraction`. `none` identifies GPU routing;
 `cpu-policy` identifies deliberate CPU simulation, and `gpu-consumer-unavailable`
 means that no GPU emitter consumer is attached. The first applicable restriction
@@ -57,7 +61,7 @@ These fields describe routing rather than a GPU timing measurement. Retained
 particles can complete on their previous path after a live edit. The instance's
 `ParticleRuntimeQueryResult::executionPath` describes its selected backend policy;
 use the per-emitter records to inspect actual routing.
-The updated record layout requires engine module ABI 6. Rebuild providers with
+The current GPU command layout requires engine module ABI 8. Rebuild providers with
 the current SDK; the host rejects earlier module versions before creation.
 
 `kb_cli run --project <dir> --report particles` runs the normal scene lifecycle
@@ -71,10 +75,20 @@ updates. It is not CPU time or per-emitter time. Unmeasured per-emitter CPU
 and GPU times are `null`. This headless command does not create a GPU consumer.
 
 Run `kb_21kb_particle_cpu_backend_tests` for collision, field and routing
-regressions. On Windows, `kb_renderer_tests particle-collision-fallback`
-loads an authored effect through the particle provider and compares hidden
-D3D11 readback against CPU simulation and a free-flight control. This check
-also runs in the renderer's particle mesh suite.
+regressions. On Windows, `kb_renderer_tests particle-contact-death` (CTest
+`kb_renderer_particle_contact_death`) loads an authored effect through the
+particle provider and compares hidden bgfx D3D11 readback against explicit
+CPU simulation and a free-flight control. It requires GPU routing with no
+fallback and zero CPU particles for the GPU case. Its image tolerance is two
+byte values per channel, with larger differences limited to one percent of
+the image for fixed-step contact/birth phase differences at particle edges.
+Separate billboard and mesh readbacks check visible births, persistent death,
+bounce controls, reuse of a slot with the same timestamp, and removal of the
+plane. The particle editor exposes **Kill on contact** with Undo/Redo.
+The existing source and compiled cache formats preserve the flag; this change
+does not require an asset migration. This check also runs in the renderer's
+particle mesh suite. Other bgfx backends have compiled shader variants;
+these readback results establish execution on D3D11 only.
 
 The authored sort mode reaches GPU emitters as well as CPU render snapshots:
 

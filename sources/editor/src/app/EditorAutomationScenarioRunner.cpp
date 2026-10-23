@@ -4609,6 +4609,36 @@ ReadScriptValue(
                 " disabled=" + std::to_string(disabled) + " undo=" + std::to_string(undone) + " redo=" + std::to_string(redone)};
     }
 
+    if (*operation == "verify_particle_contact_authoring") {
+        const auto original = *state.context.ParticleEditorWorkingAsset();
+        if (!state.context.AddParticleEditorModule(kb::scene::ParticleModuleType::CollisionPlane, 0U))
+            return {false, "collision module could not be added"};
+        const auto inspector = state.context.ParticleEditorInspector();
+        const auto row = std::find_if(inspector.properties.begin(), inspector.properties.end(), [](const auto& value) {
+            return value.property == kb::particle_editor::ParticleEditorProperty::ModulePayload && value.payloadField == 5U;
+        });
+        if (row == inspector.properties.end() || row->widget != kb::particle_editor::ParticleEditorPropertyWidget::Toggle || row->boolValue)
+            return {false, "expected a disabled kill-on-contact toggle"};
+        const auto index = static_cast<std::size_t>(row - inspector.properties.begin());
+        const auto killed = [&] {
+            const auto* asset = state.context.ParticleEditorWorkingAsset();
+            for (const auto& emitter : asset->emitters) {
+                for (const auto& module : emitter.modules) {
+                    if (module.type == kb::scene::ParticleModuleType::CollisionPlane)
+                        return std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload).killOnContact;
+                }
+            }
+            return false;
+        };
+        const bool enabled = state.context.EditParticleEditorProperty(index, "true") && killed();
+        const bool undone = state.context.UndoParticleEditorCommand() && !killed();
+        const bool redone = state.context.RedoParticleEditorCommand() && killed();
+        const bool restored = state.context.ApplyParticleEditorWorkingCopy(original);
+        return {enabled && undone && redone && restored,
+            "contact enabled=" + std::to_string(enabled) + " undo=" + std::to_string(undone) +
+                " redo=" + std::to_string(redone) + " restored=" + std::to_string(restored)};
+    }
+
     if (*operation == "verify_particle_emitter_material") {
         const auto* original = state.context.ParticleEditorWorkingAsset();
         const auto* shared = state.context.Scene().Assets().Manager().Registry().FindByPath(

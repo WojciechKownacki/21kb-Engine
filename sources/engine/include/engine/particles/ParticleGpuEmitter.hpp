@@ -31,12 +31,13 @@ struct ParticleGpuSpawn {
 static_assert(sizeof(ParticleGpuSpawn) == 32U);
 static_assert(std::is_trivially_copyable_v<ParticleGpuSpawn>);
 
-// A world-space plane (normal . p = distance) that particles bounce off, like the CPU collision module.
+// A world-space plane (normal . p = distance) that bounces or kills particles, like the CPU collision module.
 struct ParticleGpuCollisionPlane {
     kb::math::Vec3 normal{ 0.0F, 1.0F, 0.0F };
     float distance = 0.0F;
     float restitution = 0.5F;
     float friction = 0.0F;
+    bool killOnContact = false;
 };
 
 // Appearance and motion constants of one GPU emitter. Colour and size over normalized age are

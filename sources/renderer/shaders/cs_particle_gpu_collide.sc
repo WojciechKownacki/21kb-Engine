@@ -12,7 +12,7 @@ BUFFER_RW(stateRecords, vec4, 2);
 #include "particle_gpu_common.sh"
 
 SAMPLER2D(s_particleDepth, 3);
-uniform vec4 u_gpuParticlePlane[2];   // [0] = normal.xyz, distance; [1] = restitution, friction
+uniform vec4 u_gpuParticlePlane[2];   // [0] = normal.xyz, distance; [1] = restitution, friction, kill on contact
 uniform vec4 u_gpuParticleCollision;  // x = 1 when the plane collides, y = 1 when the depth buffer collides, z = depth thickness (m)
 uniform vec4 u_gpuParticleDepthBounce; // x = restitution, y = friction of a depth-buffer bounce
 uniform vec4 u_gpuParticleTexel;      // xy = 1 / depth texture size
@@ -192,6 +192,12 @@ void main()
     float lastTime = positionState.w;
     // The stamp is offset so that a zeroed state record never matches a birth time of 0.
     float stamp = start.w + 1.0;
+    if (velocityState.w == -stamp)
+    {
+        // Death survives later dispatches until Upload invalidates this slot for a new birth.
+        WriteDeadInstance(base);
+        return;
+    }
     if (velocityState.w != stamp)
     {
         // First visit of a particle born into this slot.
@@ -254,6 +260,13 @@ void main()
             if (signedDistance < 0.0)
             {
                 position -= plane.xyz * signedDistance;
+                if (response.z > 0.5)
+                {
+                    stateRecords[slot * 2u] = vec4(position, now);
+                    stateRecords[slot * 2u + 1u] = vec4(velocity, -stamp);
+                    WriteDeadInstance(base);
+                    return;
+                }
                 float normalVelocity = dot(velocity, plane.xyz);
                 if (normalVelocity < 0.0)
                 {

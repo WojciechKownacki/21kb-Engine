@@ -7402,6 +7402,75 @@ void RunVoxelGridFollowsMeshGeometryTest() {
     return best;
 }
 
+// A single ring slot is killed, remains dead, then is reused with the same birth timestamp.
+// Reusing a timestamp exercises state invalidation rather than just the birth-stamp comparison.
+[[nodiscard]] double GpuContactBrightness(bool kill, int frames, bool reuse, bool mesh, bool removePlane = false) {
+    constexpr std::uint16_t kSize = 64U;
+    const auto queue = [&](kb::scene::Scene& scene, int frame) {
+        if (frame == 0) return;
+        kb::particles::ParticleGpuEmitterCommand command{};
+        command.key = {1U, 1U};
+        command.simTime = static_cast<double>(frame - 1) / 60.0;
+        if (frame == 1) {
+            command.hasParams = true;
+            command.params.capacity = 1U;
+            command.params.hasPlane = true;
+            command.params.plane = {.restitution = 0.0F, .killOnContact = kill};
+            command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+            command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+            command.params.color.fill({1.0F, 1.0F, 1.0F, 1.0F});
+            command.params.size.fill(0.8F);
+            if (mesh) {
+                const auto* asset = scene.Assets().Manager().Registry().FindByPath("/Game/cube.obj");
+                Require(asset != nullptr, "GPU contact test lost its mesh");
+                command.params.output = kb::particles::ParticleRenderOutput::Mesh;
+                command.params.meshAssetId = asset->id.value;
+                command.params.materialAssetId = kb::assets::MakeAssetId("SsRed").value;
+            }
+            command.spawns.push_back({.position = {0.0F, removePlane ? -0.2F : 1.2F, 0.0F},
+                .velocity = {0.0F, removePlane ? 0.0F : -12.0F, 0.0F}, .lifetime = 20.0F});
+        }
+        if (reuse && frame == 20) {
+            command.spawns.push_back({.position = {0.0F, 0.6F, 0.0F}, .lifetime = 20.0F});
+        }
+        if (removePlane && frame == 10) {
+            command.hasParams = true;
+            command.params.capacity = 1U;
+            command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+            command.params.depth = kb::particles::ParticleRenderDepthMode::Disabled;
+            command.params.color.fill({1.0F, 1.0F, 1.0F, 1.0F});
+            command.params.size.fill(0.8F);
+        }
+        kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, command);
+    };
+    // The far box publishes the same mesh and material used by GPU mesh particles.
+    const std::vector<SsBox> boxes{{{0.0F, -40.0F, 0.0F}, {1.0F, 1.0F, 1.0F}, SsMaterial::Red}};
+    const auto pixels = RenderScreenSpaceScene(boxes, {{0.0F, 3.0F, -4.0F}}, {0.0F, 2.0F, -6.0F}, {0.0F, 0.2F, 0.0F},
+        30.0F, {}, frames, kSize, SceneRenderMeshPassMode::OpaqueAndTransparent, queue);
+    double best = 0.0;
+    for (int y = 20; y < 44; ++y) {
+        for (int x = 20; x < 44; ++x) best = std::max(best, MeanBrightness(pixels, kSize, x, y, x + 1, y + 1));
+    }
+    return best;
+}
+
+void RunRendererGpuContactStateTest() {
+    for (const bool mesh : {false, true}) {
+        const double birth = GpuContactBrightness(true, 4, false, mesh);
+        const double dead = GpuContactBrightness(true, 45, false, mesh);
+        const double bounce = GpuContactBrightness(false, 45, false, mesh);
+        const double reused = GpuContactBrightness(true, 45, true, mesh);
+        const double removed = GpuContactBrightness(true, 45, false, mesh, true);
+        std::fprintf(stderr, "gpu_contact mesh=%d birth=%.1f dead=%.1f bounce=%.1f same_time_reuse=%.1f removed_plane=%.1f\n",
+            mesh ? 1 : 0, birth, dead, bounce, reused, removed);
+        // Meshes are lit by the scene; even the dimmest red face must exceed the black target by 20.
+        const double visible = mesh ? 20.0 : 50.0;
+        Require(birth > dead + visible && bounce > dead + visible && reused > dead + visible,
+            "GPU contact death must hide both outputs persistently and allow a new birth in the same slot");
+        Require(std::abs(removed - dead) < 1.0, "Removing a GPU plane revived contact deaths");
+    }
+}
+
 // Two overlapping alpha-blended particles of one GPU emitter: the older one is blue, the younger red (the
 // colour curve turns blue at half the life). Whichever is nearer to the camera must end up on top,
 // whatever the order of their ring slots.
@@ -7960,6 +8029,7 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
 
     std::vector<std::uint8_t> pixels;
     bool consumer = false;
+    bool gpuRoute = false;
     std::size_t cpuParticles = 0U;
     std::uint32_t gpuDrawCalls = 0U;
     {
@@ -7976,12 +8046,17 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
             .selectionMaskEnabled = false,
             .selectionOutlineEnabled = false,
         };
+        SubmitLifecycleFrame(renderer, scene, desc, "File-to-pixel test could not attach its GPU consumer");
         for (int frame = 0; frame < 60; ++frame) {
             Require(scene.Runtime().Update(1.0F / 60.0F), "File-to-pixel test scene update failed");
             SubmitLifecycleFrame(renderer, scene, desc, "File-to-pixel test did not submit a frame");
         }
         pixels = target.ReadPixels();
         consumer = kb::particles::ParticlePlayback::HasGpuEmitterConsumer(scene);
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(scene);
+        Require(snapshot && snapshot->Emitters().size() == 1U, "File-to-pixel test did not publish its execution route");
+        gpuRoute = snapshot->Emitters()[0].simulationPath == kb::particles::ParticleEmitterSimulationPath::Gpu &&
+            snapshot->Emitters()[0].gpuFallbackReason == kb::particles::ParticleGpuFallbackReason::None;
         gpuDrawCalls = renderer.LastSceneSubmitStats().submittedParticleDrawCallCount;
         const auto ids = kb::particles::ParticlePlayback::LiveInstanceIds(scene);
         for (const std::uint64_t instance : ids) {
@@ -7994,14 +8069,16 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
 
     const double right = MeanBrightness(pixels, NativeTestSurface::kExtent, 20, 28, 60, 36);
     const double left = MeanBrightness(pixels, NativeTestSurface::kExtent, 0, 28, 8, 36);
-    std::fprintf(stderr, "file_to_pixel right=%.1f left=%.1f gpu_consumer=%d gpu_draws=%u cpu_particles=%zu%c",
-        right, left, consumer ? 1 : 0, gpuDrawCalls, cpuParticles, 10);
+    std::fprintf(stderr, "file_to_pixel right=%.1f left=%.1f gpu_consumer=%d gpu_route=%d draws=%u cpu_particles=%zu%c",
+        right, left, consumer ? 1 : 0, gpuRoute ? 1 : 0, gpuDrawCalls, cpuParticles, 10);
+    Require(gpuRoute == gpuPreferred, "File-to-pixel test used an unexpected simulation route or fallback");
+    Require(!gpuPreferred || cpuParticles == 0U, "GPU contact test retained CPU-simulated particles");
     if (killingPlane) {
-        Require(consumer && gpuDrawCalls >= 1U && cpuParticles > 0U,
-            "File-to-pixel test: a killing plane must retain CPU simulation and render its survivors");
+        Require(consumer && gpuDrawCalls >= 1U && (gpuPreferred || cpuParticles > 0U),
+            "File-to-pixel test: a killing plane must render particles before contact");
         Require(right > 5.0, "File-to-pixel test: particles before contact must remain visible");
     } else {
-        // Only births before the renderer registered its consumer live on the CPU.
+        // The consumer was attached before the first birth.
         Require(consumer && gpuDrawCalls >= 1U && cpuParticles <= 4U,
             "File-to-pixel test: the effect must be simulated and drawn on the GPU, not on the CPU");
         Require(right > 40.0, "File-to-pixel test: the particles from the authored file must be visible along +x");
@@ -8470,15 +8547,16 @@ void RunRendererParticleDepthAuthoringTest() {
 #endif
 }
 
-void RunRendererParticleCollisionFallbackTest() {
+void RunRendererParticleContactDeathTest() {
 #if defined(_WIN32) && defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+    RunRendererGpuContactStateTest();
     const auto reference = RunRendererDrawsAuthoredParticleFileTest(true, false);
     const auto preferred = RunRendererDrawsAuthoredParticleFileTest(true, true);
     const auto freeFlight = RunRendererDrawsAuthoredParticleFileTest();
     Require(reference.size() == preferred.size() && reference.size() == freeFlight.size(),
-        "Collision fallback images have different extents");
+        "Contact-death images have different extents");
     // Allow two byte values of rounding error per channel on at most one percent of
-    // the image. The CPU reference and preferred fallback use the same draw path.
+    // the image. The fixed-step CPU and GPU reference use identical births and the same draw path.
     std::size_t mismatches = 0U;
     std::uint64_t contactDifference = 0U;
     for (std::size_t index = 0U; index < reference.size(); ++index) {
@@ -8486,9 +8564,9 @@ void RunRendererParticleCollisionFallbackTest() {
         if (std::abs(int(reference[index]) - int(preferred[index])) > 2) ++mismatches;
         contactDifference += static_cast<std::uint64_t>(std::abs(int(reference[index]) - int(freeFlight[index])));
     }
-    std::fprintf(stderr, "particle_collision_fallback mismatches=%zu contact_difference=%llu\n",
+    std::fprintf(stderr, "particle_gpu_contact_death mismatches=%zu contact_difference=%llu\n",
         mismatches, static_cast<unsigned long long>(contactDifference));
-    Require(mismatches * 100U <= reference.size(), "GPU-preferred contact deaths changed the rendered CPU result");
+    Require(mismatches * 100U <= reference.size(), "GPU contact deaths changed the rendered CPU result");
     Require(contactDifference > reference.size() / 2U, "Contact deaths did not visibly remove the free-flying particles");
 #else
     throw std::runtime_error("Particle collision readback requires the Windows renderer and particle provider module");
@@ -8525,7 +8603,7 @@ void RunRendererParticleMeshSnapshotSubmitTest() {
     RunRendererFollowsLocalSpaceGpuParticlesTest();
     RunRendererKeepsGpuParticlesAcrossRenderOriginMovesTest();
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
-    RunRendererParticleCollisionFallbackTest();
+    RunRendererParticleContactDeathTest();
     RunRendererDrawsAuthoredParticleFileTest();
     RunRendererMillionParticleFileTest();
 #endif

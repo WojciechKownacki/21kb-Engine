@@ -229,6 +229,8 @@ void AddModuleProperties(ParticleEmitterInspectorView& view, const kb::scene::Pa
             AddSlider(add(std::string{ ParticleText("particle.property.restitution", "Restitution") }, ScalarText(payload.restitution)), payload.restitution, 0.0F, 1.0F);
             AddSlider(add(std::string{ ParticleText("particle.property.friction", "Friction") }, ScalarText(payload.friction)), payload.friction, 0.0F, 1.0F);
             AddIntegerSlider(add(std::string{ ParticleText("particle.property.max_events", "Max events") }, ScalarText(payload.maxEventsPerStep)), payload.maxEventsPerStep, 1U, 256U);
+            AddToggle(add(std::string{ ParticleText("particle.property.kill_on_contact", "Kill on contact") },
+                payload.killOnContact ? "true" : "false"), payload.killOnContact);
         } else if constexpr (std::is_same_v<T, kb::scene::ParticleSubEmitterModule>) {
             add(std::string{ ParticleText("particle.property.target_emitter", "Target emitter") }, ScalarText(payload.targetEmitterId));
             AddEnum(add(std::string{ ParticleText("particle.property.trigger", "Trigger") }, ScalarText(static_cast<std::uint32_t>(payload.trigger))),

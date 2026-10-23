@@ -2526,10 +2526,9 @@ kb::particles::ParticleGpuFallbackReason CpuParticleBackend::GpuFallbackReason(
         const auto& module = emitter.modules[index];
         if (!module.enabled) continue;
         if (module.type == kb::scene::ParticleModuleType::CollisionPlane) {
-            // The GPU plane only bounces; retain CPU simulation for contact deaths.
+            // Plane response uses world-space state; trails require a separate history representation.
             if (local) return Reason::LocalPlane;
             if (trail) return Reason::TrailCollision;
-            if (std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload).killOnContact) return Reason::ContactDeath;
             collisionPlane = true;
         } else if (module.type == kb::scene::ParticleModuleType::Noise ||
                    module.type == kb::scene::ParticleModuleType::AxisRotation ||
@@ -2612,7 +2611,8 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
         } else if (module.type == kb::scene::ParticleModuleType::CollisionPlane) {
             const auto& plane = std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload);
             params.plane = {
-                .normal = plane.normal, .distance = PlaneDistance(plane), .restitution = plane.restitution, .friction = plane.friction };
+                .normal = plane.normal, .distance = PlaneDistance(plane), .restitution = plane.restitution,
+                .friction = plane.friction, .killOnContact = plane.killOnContact };
             params.hasPlane = true;
         } else if (module.type == kb::scene::ParticleModuleType::Noise) {
             const auto& noise = std::get<kb::scene::ParticleNoiseModule>(module.payload);

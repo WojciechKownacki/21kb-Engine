@@ -867,6 +867,10 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
             KB_21KB_PARTICLE_PLUGIN_PATH="$<TARGET_FILE:kb_21kb_particle_plugin>")
         add_dependencies(kb_renderer_tests kb_21kb_particle_plugin)
         if(WIN32)
+            add_test(NAME kb_renderer_particle_contact_death
+                COMMAND $<TARGET_FILE:kb_renderer_tests> particle-contact-death)
+            set_tests_properties(kb_renderer_particle_contact_death PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;particle;headless" TIMEOUT 120)
             add_test(NAME kb_renderer_particle_depth_collision
                 COMMAND $<TARGET_FILE:kb_renderer_tests> particle-depth-collision)
             set_tests_properties(kb_renderer_particle_depth_collision PROPERTIES

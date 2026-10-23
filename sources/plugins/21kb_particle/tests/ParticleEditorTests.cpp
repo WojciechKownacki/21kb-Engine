@@ -686,6 +686,24 @@ void TestProductionBakeCacheAndCapabilityGates() {
             return diagnostic.propertyPath == "effect.emitter[0].screenDepthCollision" &&
                 diagnostic.severity == kb::scene::ParticleEffectDiagnosticSeverity::Warning;
         }), "screen-depth authoring did not survive compilation/cache or expose unavailable-depth semantics");
+    auto withContactDeath = effect;
+    withContactDeath.emitters[0].modules.push_back({.moduleId = 30U, .authoringOrder = 2U,
+        .type = kb::scene::ParticleModuleType::CollisionPlane,
+        .payload = kb::scene::ParticleCollisionPlaneModule{.killOnContact = true}});
+    const auto contactBake = bake(withContactDeath);
+    const auto contactHit = bake(withContactDeath);
+    const auto hasContactDeath = [](const auto& compiled) {
+        const auto& emitter = compiled.emitters[0];
+        for (std::size_t index = 0U; index < emitter.moduleCount; ++index) {
+            const auto& module = emitter.modules[index];
+            if (module.type == kb::scene::ParticleModuleType::CollisionPlane)
+                return std::get<kb::scene::ParticleCollisionPlaneModule>(module.payload).killOnContact;
+        }
+        return false;
+    };
+    Require(contactBake.Succeeded() && contactHit.status == ParticleBakeStatus::UpToDate &&
+        contactBake.cachePath != first.cachePath && hasContactDeath(*contactBake.effect) && hasContactDeath(*contactHit.effect),
+        "contact death did not survive compiled cache rebuild and hit");
     kb::particle_plugin::ParticleCompilerCapabilities reducedCapabilities;
     reducedCapabilities.pointSprite = false;
     const ParticleBakeResult alternateCapabilities = ParticleBakeService::Bake({.workingAsset = effect, .owner = owner,

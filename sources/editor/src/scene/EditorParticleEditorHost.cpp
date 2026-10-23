@@ -912,6 +912,7 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
                 else if (row.payloadField == 2U) parsed = setFloat(value.restitution);
                 else if (row.payloadField == 3U) parsed = setFloat(value.friction);
                 else if (row.payloadField == 4U) parsed = setUInt(value.maxEventsPerStep);
+                else if (row.payloadField == 5U) parsed = setBool(value.killOnContact);
             } else if constexpr (std::is_same_v<T, kb::scene::ParticleSubEmitterModule>) {
                 if (row.payloadField == 0U) { std::uint64_t id = 0U; parsed = ParseNumber(text, id); if (parsed) value.targetEmitterId = id; }
                 else if (row.payloadField == 1U) { parsed = ParseNumber(text, uintValue) && uintValue <= 2U; if (parsed) value.trigger = static_cast<kb::scene::ParticleEventTrigger>(uintValue); }

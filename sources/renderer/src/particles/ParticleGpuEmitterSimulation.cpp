@@ -291,6 +291,13 @@ void ParticleGpuEmitterSimulation::Upload(Emitter& emitter, std::span<const kb::
             spawns.data() + uploaded, chunk * static_cast<std::uint32_t>(sizeof(kb::particles::ParticleGpuSpawn)));
         if (memory == nullptr) return;
         bgfx::update(emitter.spawns, slot, memory);
+        if (bgfx::isValid(emitter.state)) {
+            // A recycled slot can have exactly the same birth time after a restart or a burst.
+            // Invalidate both live and contact-death stamps for every newly uploaded birth.
+            const bgfx::Memory* zero = bgfx::alloc(chunk * kStateBytes);
+            std::memset(zero->data, 0, chunk * kStateBytes);
+            bgfx::update(emitter.state, slot, zero);
+        }
         emitter.nextSlot += chunk;
         uploaded += chunk;
     }
@@ -462,7 +469,9 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         }
         bgfx::setBuffer(0U, emitter.spawns, bgfx::Access::Read);
         bgfx::setBuffer(1U, emitter.instances, bgfx::Access::Write);
-        const bool colliding = params.NeedsState() && bgfx::isValid(emitter.state) && bgfx::isValid(collideProgram_);
+        // Keep integrating an allocated state after a live edit removes the last force or plane.
+        // In particular, contact deaths must never revive through the closed-form path.
+        const bool colliding = bgfx::isValid(emitter.state) && bgfx::isValid(collideProgram_);
         if (colliding) {
             const std::array<float, 16> forces{
                 params.noiseStrength, params.noiseFrequency, static_cast<float>(params.noiseSeed), 0.0F,
@@ -478,7 +487,8 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
             bgfx::setUniform(noiseOriginUniform_, noiseOriginData.data());
             const kb::particles::ParticleGpuCollisionPlane& plane = params.plane;
             const std::array<float, 8> planeData{
-                plane.normal.x, plane.normal.y, plane.normal.z, plane.distance, plane.restitution, plane.friction, 0.0F, 0.0F };
+                plane.normal.x, plane.normal.y, plane.normal.z, plane.distance,
+                plane.restitution, plane.friction, plane.killOnContact ? 1.0F : 0.0F, 0.0F };
             const bool depth = params.sceneDepthCollision && bgfx::isValid(collision.depthTexture);
             const std::array<float, 4> collisionParams{ params.hasPlane ? 1.0F : 0.0F, depth ? 1.0F : 0.0F, kDepthCollisionThickness, 0.0F };
             const std::array<float, 4> bounce{
