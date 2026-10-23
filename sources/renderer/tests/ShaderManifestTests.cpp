@@ -237,7 +237,7 @@ void EveryRuntimeProgramExistsForEveryClaimedBackend() {
             Require(HasShaderHeader(vertex, 'V') && HasShaderHeader(fragment, 'F'),
                 "A runtime shader program is missing a stage on a backend the engine ships shaders for");
         }
-        // Compute kernels a packaged game requires on this backend (none where it has no compute).
+        // Packaged compute variants are present even when a device will choose CPU simulation.
         const ShaderRuntimeFeatureMask features = PackagedGameShaderFeatures(backend.bake);
         for (const ShaderManifestEntry& shader : RequiredShaderManifest()) {
             if (shader.stage != ShaderStage::Compute || !shader.required ||
@@ -257,9 +257,14 @@ void ShaderManifestFeatureRequirementsAreTargetSelectable() {
     Require(PackagedGameShaderFeatures(ShaderBakeBackend::Spirv) != 0U &&
             PackagedGameShaderFeatures(ShaderBakeBackend::Dxbc) != 0U &&
             PackagedGameShaderFeatures(ShaderBakeBackend::Wgsl) != 0U &&
-            PackagedGameShaderFeatures(ShaderBakeBackend::Essl) == 0U &&
-            PackagedGameShaderFeatures(ShaderBakeBackend::Glsl) == 0U,
-        "Packaged game shader features do not match backend compute support");
+            (PackagedGameShaderFeatures(ShaderBakeBackend::Essl) & ShaderRuntimeFeatureBit(ShaderRuntimeFeature::GpuDrivenCulling)) == 0U &&
+            (PackagedGameShaderFeatures(ShaderBakeBackend::Glsl) & ShaderRuntimeFeatureBit(ShaderRuntimeFeature::GpuDrivenCulling)) == 0U,
+        "Packaged game shader features do not match backend culling support");
+    const auto emitterFeature = ShaderRuntimeFeatureBit(ShaderRuntimeFeature::ParticleGpuEmitters);
+    for (std::uint32_t index = 0U; index < kb::assets::bake::kShaderBakeBackendCount; ++index) {
+        Require((PackagedGameShaderFeatures(static_cast<ShaderBakeBackend>(index)) & emitterFeature) != 0U,
+            "A packaged shader backend omitted the emitter simulation pipeline");
+    }
     const std::filesystem::path root =
         std::filesystem::temp_directory_path() / "21kb_shader_manifest_features";
     std::error_code error;
@@ -293,6 +298,15 @@ void ShaderManifestFeatureRequirementsAreTargetSelectable() {
     Require(!missing(compute, "cs_hzb_seed.sc") && !missing(compute, "cs_hzb_downsample.sc") &&
             !missing(compute, "cs_levg_meshlet_cull.sc") && !missing(compute, "cs_massive_fill.sc"),
         "Unused compute experiments must not block a production package");
+    const auto emitterShaders = RequiredPackagedShaderNames(emitterFeature);
+    const auto emitterValidation = ValidatePackagedShaderManifestProfile(root, emitterFeature);
+    for (const std::string_view name : {"cs_particle_gpu_emit.sc", "cs_particle_gpu_collide.sc", "cs_particle_gpu_rebase.sc",
+             "cs_particle_gpu_sort_keys.sc", "cs_particle_gpu_sort_step.sc", "cs_particle_gpu_sort_gather.sc"}) {
+        Require(std::ranges::find(emitterShaders, name) != emitterShaders.end() && missing(emitterValidation, name),
+            "A package can omit a required emitter kernel without failing validation");
+    }
+    Require(std::ranges::find(emitterShaders, "cs_particle_gpu_inspect.sc") == emitterShaders.end(),
+        "A developer-only inspection kernel became a packaged runtime dependency");
 
     const ShaderManifestValidationResult editor = ValidateShaderManifestProfile(
         root, ShaderRuntimeFeatureBit(ShaderRuntimeFeature::Editor));

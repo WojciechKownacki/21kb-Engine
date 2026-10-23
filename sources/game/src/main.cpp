@@ -1,6 +1,7 @@
 #include "GameProjectRuntime.hpp"
 #include "GameWindow.hpp"
 #include "RuntimeSceneFrameSync.hpp"
+#include "ParticleRuntimeDiagnostics.hpp"
 
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -67,6 +68,9 @@ struct GameOptions {
     bool headless = false;
     bool uncapped = false;
     bool profileFixedStep = false;
+    bool particleDiagnostics = false;
+    bool particleRequireGpu = false;
+    std::uint32_t particleSamples = 64U;
     std::filesystem::path profilePath;
     std::optional<kb::render::SceneRenderLightingPath> profileLighting;
     // -1 lets the renderer choose; otherwise a bgfx::RendererType.
@@ -89,6 +93,10 @@ Usage: kb_game [options]
   --fullscreen                      primary monitor, native resolution
   --headless                        render without showing the window (needs --frames)
   --frames=<n>                      stop after n frames
+  --particle-diagnostics            terminal particle JSON; fixed 1/60 step, uncapped
+                                    (needs --headless --frames=1..36000)
+  --particle-samples=<1..4096>       maximum captured ring slots per emitter (default 64)
+  --particle-require-gpu            fail diagnostic runs on fallback or missing GPU proof
   --uncapped                        no frame rate limit
   --screenshot-file=<file.png>      write frame --screenshot-frame as PNG (the file must not exist)
   --screenshot-frame=<n>            which frame to capture (within --frames)
@@ -206,6 +214,7 @@ constexpr std::array<std::wstring_view, 8U> kDevelopmentSwitches{
 [[nodiscard]] bool ParseArguments(int argc, wchar_t** argv, GameOptions& options) {
     bool explicitWidth = false;
     bool explicitHeight = false;
+    bool particleSamplesSpecified = false;
     for (int index = 1; index < argc; ++index) {
         const std::wstring_view argument{ argv[index] };
         if (argument == L"--help" || argument == L"-h") {
@@ -246,6 +255,16 @@ constexpr std::array<std::wstring_view, 8U> kDevelopmentSwitches{
             options.uncapped = true;
         } else if (argument == L"--headless") {
             options.headless = true;
+        } else if (argument == L"--particle-diagnostics") {
+            options.particleDiagnostics = true;
+        } else if (argument == L"--particle-require-gpu") {
+            options.particleRequireGpu = true;
+        } else if (HasPrefix(argument, L"--particle-samples=")) {
+            particleSamplesSpecified = true;
+            if (!ParseFrameLimit(argument.substr(19U), options.particleSamples) || options.particleSamples > 4096U) {
+                std::cerr << "kb_game: --particle-samples expects 1..4096\n";
+                return false;
+            }
         } else if (argument == L"--profile-fixed-step") {
             options.profileFixedStep = true;
         } else if (HasPrefix(argument, L"--screenshot-file=")) {
@@ -292,6 +311,11 @@ constexpr std::array<std::wstring_view, 8U> kDevelopmentSwitches{
     }
     if (options.headless && options.fullscreen) {
         std::cerr << "kb_game: --headless cannot use --fullscreen\n";
+        return false;
+    }
+    if ((options.particleDiagnostics && (!options.headless || options.frameLimit == 0U || options.frameLimit > 36000U)) ||
+        (!options.particleDiagnostics && (options.particleRequireGpu || particleSamplesSpecified))) {
+        std::cerr << "kb_game: particle diagnostics require --particle-diagnostics --headless --frames=1..36000\n";
         return false;
     }
     if (options.profileFixedStep && (!options.headless || options.profilePath.empty())) {
@@ -386,7 +410,7 @@ int RunGame(const GameOptions& options) {
     kb::render::DisplayConfig displayConfig{};
     displayConfig.enableEditorRendering = false;
     displayConfig.preferredBgfxRendererType = options.rendererType;
-    if (options.uncapped) {
+    if (options.uncapped || options.particleDiagnostics) {
         displayConfig.syncMode = kb::render::DisplaySyncMode::Uncapped;
     }
     kb::render::Renderer renderer;
@@ -483,7 +507,7 @@ int RunGame(const GameOptions& options) {
               << " modules=" << scene.ActiveModuleCount()
               << " backend=" << renderer.CapabilityReport().selectedBackendName
               << " resolution=" << window.Width() << 'x' << window.Height()
-              << " sync=" << (options.uncapped ? "uncapped" : "vsync")
+              << " sync=" << (options.uncapped || options.particleDiagnostics ? "uncapped" : "vsync")
               << " headless=" << options.headless
               << " gpu_vendor=" << renderer.CapabilityReport().vendorId
               << " gpu_device=" << renderer.CapabilityReport().deviceId << '\n';
@@ -528,6 +552,8 @@ int RunGame(const GameOptions& options) {
 
     std::uint32_t renderedFrames = 0U;
     std::uint32_t submittedFrames = 0U;
+    std::uint32_t observedParticleCompute = 0U;
+    std::uint32_t observedParticleDraws = 0U;
     bool runtimeClean = true;
     // A shipped game outlives faults in its content. Each distinct script,
     // scene-system or render error is logged once with the entity and asset it
@@ -547,9 +573,14 @@ int RunGame(const GameOptions& options) {
     kb::game::RuntimeSceneFrameSync renderSceneSync;
     renderer.PrepareParticleScene(scene);
     auto previousTick = std::chrono::steady_clock::now();
+    const auto particleDeadline = previousTick + std::chrono::minutes(2);
     while (window.PumpMessages() && !scene.Runtime().ShouldQuit()) {
+        if (options.particleDiagnostics && std::chrono::steady_clock::now() > particleDeadline) {
+            reportError("particle diagnostics exceeded two minutes");
+            break;
+        }
         if (window.Width() == 0U || window.Height() == 0U) {
-            if (!options.profilePath.empty()) {
+            if (!options.profilePath.empty() || options.particleDiagnostics) {
                 std::cerr << "kb_game: benchmark interrupted by minimization\n";
                 runtimeClean = false;
                 break;
@@ -570,7 +601,8 @@ int RunGame(const GameOptions& options) {
         const auto profileBegin = !options.profilePath.empty()
             ? now : std::chrono::steady_clock::time_point{};
         const double wallFrameMilliseconds = std::chrono::duration<double, std::milli>(now - previousTick).count();
-        const float deltaSeconds = options.profileFixedStep ? 1.0F / 60.0F : kb::game::RuntimeDeltaSeconds(previousTick, now);
+        const float deltaSeconds = options.profileFixedStep || options.particleDiagnostics
+            ? 1.0F / 60.0F : kb::game::RuntimeDeltaSeconds(previousTick, now);
         previousTick = now;
 
         if (!options.headless) inputCollector.Collect(scene.Input().MutableDeviceState(), window.Handle());
@@ -607,6 +639,11 @@ int RunGame(const GameOptions& options) {
             bgfx::requestScreenShot(BGFX_INVALID_HANDLE, options.screenshotPath.string().c_str());
         }
         renderer.EndFrame();
+        if (options.particleDiagnostics) {
+            const auto* stats = bgfx::getStats();
+            if (stats) observedParticleCompute = std::max(observedParticleCompute, stats->numCompute);
+            observedParticleDraws = std::max(observedParticleDraws, renderStats.submittedParticleDrawCallCount);
+        }
         if (!options.profilePath.empty()) {
             const auto renderCamera = kb::scene::SceneRenderFeedback::ScreenPointToRay(scene,
                 static_cast<float>(window.Width()) * 0.5F, static_cast<float>(window.Height()) * 0.5F);
@@ -699,6 +736,17 @@ int RunGame(const GameOptions& options) {
         if (options.frameLimit != 0U && renderedFrames >= options.frameLimit) {
             break;
         }
+    }
+
+    if (options.particleDiagnostics) {
+        auto capture = kb::game::CaptureParticleRuntimeDiagnostics(scene, renderer, options.particleSamples,
+            projectRuntime.IsPackaged(), submittedFrames, observedParticleCompute, observedParticleDraws);
+        const bool succeeded = capture.succeeded && runtimeClean && renderedFrames == options.frameLimit &&
+            scene.Runtime().FixedStepIndex() == options.frameLimit &&
+            (!options.particleRequireGpu || capture.gpuExecutionObserved);
+        capture.report.Set("succeeded", kb::core::JsonValue::MakeBool(succeeded));
+        std::cout << "kb_game: particle_diagnostics=" << capture.report.Dump() << '\n';
+        if (!succeeded) reportError("particle diagnostics did not satisfy the execution/readback requirements");
     }
 
     // "clean" is a claim about what ran, so a lifecycle that could not be

@@ -3219,7 +3219,8 @@ void TestGpuEmitterRouting() {
                 command.key.instanceId == created.instanceId && command.key.emitterId == 1U,
             "GPU emitter command carries wrong parameters");
         for (const kb::particles::ParticleGpuSpawn& spawn : command.spawns) {
-            Require(spawn.lifetime == 2.0F && spawn.velocity.x > 0.9F && spawn.birthTime > 0.0F &&
+            Require(spawn.lifetime == 2.0F && spawn.velocity.x > 0.9F && spawn.birthTime >= 0.0F &&
+                std::abs(command.simTime - spawn.birthTime - kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds) < 0.000001 &&
                 std::abs(std::sqrt(spawn.velocity.x * spawn.velocity.x + spawn.velocity.y * spawn.velocity.y +
                     spawn.velocity.z * spawn.velocity.z) - 1.0F) < 0.001F,
                 "GPU spawn record does not match the authored emitter");

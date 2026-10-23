@@ -239,8 +239,57 @@ is deliberately excluded from per-effect attribution.
 The source-profile execution/readback/timestamp smoke check also passed with
 the repeated-field/contact source on Windows bgfx D3D12, Vulkan and OpenGL.
 Those checks do not extend the D3D11 numerical/pixel parity result or these
-measurements to other backends. Packaged runtime GPU readback and resource
-failure handling remain separate verification requirements.
+measurements to other backends. Packaged execution checks below cover D3D11.
+Live state-buffer allocation failure remains a separate verification requirement.
+
+Packaged Windows runtimes accept `--particle-diagnostics --headless --frames=N`
+for bounded particle verification. This explicit diagnostic mode advances the
+normal startup scene by exactly 1/60 s per update, disables presentation pacing,
+requires 1..36000 frames and has a two-minute loop limit. It emits one terminal
+line beginning `kb_game: particle_diagnostics=` with
+`21kb.particle-runtime/v1` JSON. `--particle-require-gpu` fails on CPU fallback,
+retained CPU records, missing GPU draws/compute or failed readback.
+`--particle-samples=1..4096` bounds each emitter's samples (default 64); captures have
+an aggregate 4096-slot GPU limit shared fairly between GPU emitters, and a
+separate aggregate 4096-record CPU sample limit. Counts and actual samples are
+reported separately. These options require the diagnostic mode.
+
+The report identifies package loading, the exclusive package shader provider,
+actual fixed steps, per-emitter route/reason, CPU samples, ordered GPU operation
+types/vectors/strengths/parameters/seeds, contact-death flags and actual GPU
+instance records. A terminal 64x64 offscreen scene render also returns RGBA8
+pixels encoded as hexadecimal, without post processing, UI, shadows or editor
+overlays. This extra view and readback do not update simulation. They establish
+scene/particle material rendering, not the final display's post-process output.
+The mode writes no diagnostic files and does not change the shipped player's
+existing restrictions on project/scene selection or developer output switches.
+
+The cooker and package validator now require the complete emitter kernel
+closure for each target shader backend: emission, stateful collision/motion,
+rebasing and sorting. Device capability checks still choose CPU simulation when
+compute is unavailable. The developer inspection shader is not required by
+packages. Older packages that omitted emitter kernels must be recooked; missing
+required kernels fail package validation instead of silently changing the
+effect's simulation path. Automatic GPU births also start at the beginning of
+the fixed step in which CPU particles are aged and integrated. Manual/event
+births retain their current-time origin, preserving their later integration.
+
+CTest `kb_game_particle_gpu_package` authors two effects through CLI, cooks
+GPU/CPU/bounce-control packages, and launches the actual hidden player from
+directories containing only its executable, provider modules and package.
+There are no loose assets or shader directories. On bgfx D3D11 it verifies
+contact births, zero render records after death, six reordered mixed field
+operations with distinct parameters, actual buffer/image readback, explicit
+CPU policy, strict GPU rejection and malformed diagnostic arguments. After
+60 fixed steps the measured maximum position/velocity errors were
+0.000014 m / 0.000038 m/s, within the 0.001 m / 0.003 m/s rounding tolerances.
+Images before and after contact differed from CPU by 38 and 40 channels above
+the two-byte tolerance, below the existing one-percent image bound. The live
+bounce control differed from contact death by 64 channels. An unavailable GPU,
+fallback, failed capture or missing shader compiler fails this test.
+It requires Python 3.10+ and the pinned shaderc target, or an explicit
+`KB_COOKER_SHADERC` path when the compiler is built separately.
+Other packaged backends and live allocation rejection remain unverified here.
 
 The authored sort mode reaches GPU emitters as well as CPU render snapshots:
 

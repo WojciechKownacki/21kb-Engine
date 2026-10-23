@@ -1573,7 +1573,9 @@ void CpuParticleBackend::SpawnRequested(
     if (GpuEligible(denseIndex, emitterIndex, prewarmGroup)) {
         // GPU births are birth records the renderer's ring holds (as many as the emitter's capacity); they
         // do not take the CPU particles' spawns per step.
-        SpawnGpu(denseIndex, emitterIndex, count, nullptr);
+        // Automatic births precede CPU age/force integration in this fixed step.
+        // Their GPU records must start at the same step boundary, rather than one step later.
+        SpawnGpu(denseIndex, emitterIndex, count, nullptr, 0U, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds);
         stepTelemetry_.spawned += count;
         return;
     }
@@ -2670,7 +2672,7 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
 }
 
 void CpuParticleBackend::SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count,
-    const kb::math::Vec3* eventPosition, std::uint8_t eventDepth) noexcept {
+    const kb::math::Vec3* eventPosition, std::uint8_t eventDepth, float initialAge) noexcept {
     InstanceRuntime& runtime = instanceRuntime_[denseIndex];
     const CompiledEmitter& emitter = compiledEffects_[runtime.compiledEffectIndex].effect->emitters[emitterIndex];
     const std::uint64_t instanceId = MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]);
@@ -2710,7 +2712,7 @@ void CpuParticleBackend::SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitter
             emitter.addedVelocity;
         const kb::math::Vec3 position = origin + (local ? point : TransformDirection(ownerTransform, point));
         pending->spawns.push_back(kb::particles::ParticleGpuSpawn{
-            .position = position, .birthTime = static_cast<float>(gpuSimTime_), .velocity = velocity, .lifetime = lifetime });
+            .position = position, .birthTime = static_cast<float>(gpuSimTime_ - initialAge), .velocity = velocity, .lifetime = lifetime });
         ++runtime.spawnOrdinals[emitterIndex];
         eventPrototype.position = position;
         if (birthAction) {
@@ -2720,7 +2722,7 @@ void CpuParticleBackend::SpawnGpu(std::uint32_t denseIndex, std::uint8_t emitter
         if (deathAction) {
             eventPrototype.trigger = kb::scene::ParticleEventTrigger::Death;
             eventPrototype.position = GpuClosedFormPosition(position, velocity, motion.acceleration, motion.drag, lifetime);
-            ScheduleGpuDeath(eventPrototype, gpuSimTime_ + static_cast<double>(lifetime));
+            ScheduleGpuDeath(eventPrototype, gpuSimTime_ - initialAge + static_cast<double>(lifetime));
         }
     }
 }

@@ -23,6 +23,8 @@ endif()
 
 add_library(kb_game_core STATIC
     src/GameProjectRuntime.cpp
+    src/ParticleRuntimeDiagnostics.cpp
+    src/private/ParticleRuntimeDiagnostics.hpp
     src/private/GameProjectRuntime.hpp
     src/private/PackagedRuntimeModuleContract.hpp
 )
@@ -54,10 +56,15 @@ if(NOT ANDROID AND NOT EMSCRIPTEN)
         PRIVATE
             KB_COOKER_DEFAULT_ENGINE_ROOT="${CMAKE_SOURCE_DIR}"
     )
+    set(KB_COOKER_SHADERC "" CACHE FILEPATH "External pinned renderer shader compiler when shaderc is not built")
     if(TARGET bgfx::shaderc)
         add_dependencies(kb_cooker_core bgfx::shaderc)
         target_compile_definitions(kb_cooker_core
             PRIVATE KB_COOKER_DEFAULT_SHADERC="$<PATH:CMAKE_PATH,$<TARGET_FILE:bgfx::shaderc>>"
+        )
+    elseif(KB_COOKER_SHADERC)
+        target_compile_definitions(kb_cooker_core
+            PRIVATE KB_COOKER_DEFAULT_SHADERC="$<PATH:CMAKE_PATH,${KB_COOKER_SHADERC}>"
         )
     endif()
     add_dependencies(kb_cooker_core kb_renderer_shaders)
@@ -329,4 +336,28 @@ if(BUILD_TESTING)
     )
 
     kb_apply_quality_gates(kb_game_tests)
+    if(TARGET kb_cli AND KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+        add_dependencies(kb_game_tests kb_cli kb_cooker)
+        set(_kb_particle_test_shaderc "${KB_COOKER_SHADERC}")
+        if(TARGET bgfx::shaderc)
+            set(_kb_particle_test_shaderc "$<TARGET_FILE:bgfx::shaderc>")
+            add_dependencies(kb_game_tests bgfx::shaderc)
+        endif()
+        add_test(NAME kb_game_particle_gpu_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ParticlePackagedGpuTests.py"
+            "--cli" "$<TARGET_FILE:kb_cli>"
+            "--cooker" "$<TARGET_FILE:kb_cooker>"
+            "--player" "$<TARGET_FILE:kb_game>"
+            "--engine-root" "${CMAKE_SOURCE_DIR}"
+            "--test-root" "${CMAKE_BINARY_DIR}/particle_package_tests"
+            "--shaderc" "${_kb_particle_test_shaderc}"
+            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>")
+        set_tests_properties(kb_game_particle_gpu_package PROPERTIES
+            LABELS "game;runtime;packaging;gpu" TIMEOUT 360)
+    endif()
 endif()
