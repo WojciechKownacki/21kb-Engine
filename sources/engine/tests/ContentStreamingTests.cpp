@@ -2203,7 +2203,46 @@ void PackBlocksStreamAsynchronously() {
 
 } // namespace
 
+void PackSetPathsRequireValidUtf8() {
+    const auto root = Root() / "invalid-utf8";
+    std::filesystem::create_directories(root);
+    const auto indexPath = root / bake::kAssetPackSetFileName;
+    const std::array<std::string_view, 7U> malformed{
+        "\x80", "\xC0\xAF", "\xC2", "\xE2\x82", "\xED\xA0\x80", "\xF4\x90\x80\x80", "\xFF"};
+    for (const std::string_view bytes : malformed) {
+        const std::string path = std::string{bytes} + ".kbpack";
+        Require(!bake::IsValidAssetPackSetPath(path), "A pack set accepted a path with malformed UTF-8");
+        bake::AssetPackSetIndex index;
+        bake::AssetPackSetEntry unchanged;
+        unchanged.path = "Unchanged.kbpack";
+        index.packs.push_back(unchanged);
+        const auto previous = index;
+        Require(bake::ParseAssetPackSetIndex("21kb-pack-set 1\nbase " + path + '\n', index) ==
+                bake::AssetPackSetStatus::Malformed && index == previous,
+            "A malformed pack path modified the parsed index");
+        Require(bake::ResolveAssetPackSetPath("Game.kbpackset", path).empty(),
+            "Resolving a malformed pack path did not fail safely");
+        WriteText(indexPath, "21kb-pack-set 1\nbase " + path + '\n');
+        bake::RuntimeAssetPack runtime;
+        Require(runtime.MountSetIndex(indexPath, bake::WindowsX64BakeTargetProfile()) ==
+                bake::RuntimeAssetPackStatus::PackSetInvalid && !runtime.IsMounted(),
+            "The runtime did not reject a malformed UTF-8 pack index before opening its members");
+    }
+    for (const std::string_view path : {"Data/\xC5\xBC\xC3\xB3\xC5\x82\xC4\x87.kbpack",
+                                      "Data/\xF0\x9F\x9A\x80.kbpack"}) {
+        bake::AssetPackSetIndex index;
+        Require(bake::ParseAssetPackSetIndex("21kb-pack-set 1\nbase " + std::string{path} + '\n', index) ==
+                bake::AssetPackSetStatus::Success && index.packs[0].path == path,
+            "A valid Unicode pack path did not round-trip");
+        const auto resolved = bake::ResolveAssetPackSetPath("Game.kbpackset", path).generic_u8string();
+        Require(std::string_view{reinterpret_cast<const char*>(resolved.data()), resolved.size()} == path,
+            "A valid Unicode pack path changed during resolution");
+    }
+    Purge(root);
+}
+
 void RunContentStreamingTests() {
+    PackSetPathsRequireValidUtf8();
     CompressedBlocksRoundTripWithRandomAccess();
     TamperedCompressedBlocksAreRefused();
     PreviousFormatStillMountsAndRolesAreChecked();

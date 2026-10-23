@@ -83,7 +83,7 @@ enum class AssetPackSetStatus : std::uint8_t {
 
 [[nodiscard]] std::string_view ToString(AssetPackSetStatus status) noexcept;
 
-// True for a relative, '/'-separated path of a .kbpack without empty, "." or ".." components,
+// True for a valid UTF-8, relative, '/'-separated path of a .kbpack without empty, "." or ".." components,
 // backslashes or control characters.
 [[nodiscard]] bool IsValidAssetPackSetPath(std::string_view path) noexcept;
 
@@ -99,7 +99,7 @@ enum class AssetPackSetStatus : std::uint8_t {
 // Reads and parses the file.
 [[nodiscard]] AssetPackSetStatus ReadAssetPackSetIndex(const std::filesystem::path& path, AssetPackSetIndex& out);
 
-// Where a pack named by an index entry lies, given the index file's path.
+// Where a pack named by an index entry lies, given the index file's path. Empty for an invalid entry path.
 [[nodiscard]] std::filesystem::path ResolveAssetPackSetPath(
     const std::filesystem::path& indexPath,
     std::string_view entryPath);
