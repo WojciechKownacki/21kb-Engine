@@ -4583,6 +4583,41 @@ ReadScriptValue(
             std::to_string(*frames) + " editor particle frame(s)" };
     }
 
+    if (*operation == "verify_particle_emitter_material") {
+        const auto* original = state.context.ParticleEditorWorkingAsset();
+        const auto* shared = state.context.Scene().Assets().Manager().Registry().FindByPath(
+            "/21kbParticle/Materials/DefaultParticle.kbmat");
+        if (original == nullptr || original->emitters.size() != 1U || shared == nullptr)
+            return {false, "expected a new project effect and shared material"};
+        const auto local = original->emitters.front().output.material;
+        const auto selectedMaterial = [&] {
+            const auto* asset = state.context.ParticleEditorWorkingAsset();
+            const auto selected = state.context.ParticleEditorWorkspace().SelectedEmitterId();
+            const auto found = std::find_if(asset->emitters.begin(), asset->emitters.end(),
+                [selected](const auto& emitter) { return emitter.emitterId == selected; });
+            return found == asset->emitters.end() ? kb::scene::ParticleAssetReference{} : found->output.material;
+        };
+        if (!state.context.AddParticleEditorEmitter(shared->id)) return {false, "explicit emitter material failed"};
+        const auto explicitId = state.context.ParticleEditorWorkspace().SelectedEmitterId();
+        const auto explicitMaterial = selectedMaterial();
+        const bool explicitMatches = explicitMaterial.assetId == shared->id.value &&
+            explicitMaterial.virtualPath == shared->virtualPath.generic_string();
+        if (!state.context.AddParticleEditorEmitter({})) return {false, "selected emitter material failed"};
+        const auto inherited = selectedMaterial();
+        const bool selectedMatches = inherited.assetId == explicitMaterial.assetId &&
+            inherited.virtualPath == explicitMaterial.virtualPath;
+        if (!state.context.RemoveParticleEditorEmitter(state.context.ParticleEditorWorkspace().SelectedEmitterId()) ||
+            !state.context.RemoveParticleEditorEmitter(explicitId) || !state.context.AddParticleEditorEmitter({}))
+            return {false, "local material fixture could not be restored"};
+        const auto projectMaterial = selectedMaterial();
+        const bool projectMatches = projectMaterial.assetId == local.assetId && projectMaterial.virtualPath == local.virtualPath &&
+            projectMaterial.virtualPath.starts_with("/Game/");
+        const bool saved = state.context.SaveParticleEditorAsset();
+        return {explicitMatches && selectedMatches && projectMatches && saved,
+            "emitter materials: explicit=" + std::to_string(explicitMatches) + " selected=" +
+                std::to_string(selectedMatches) + " project=" + std::to_string(projectMatches) + " saved=" + std::to_string(saved)};
+    }
+
     if (*operation == "verify_particle_execution") {
         const auto* current = state.context.ParticleEditorWorkingAsset();
         if (current == nullptr || current->emitters.empty()) return {false, "particle document is not open"};

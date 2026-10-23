@@ -226,6 +226,10 @@ edits. It captures the Diagnostics section at each screenshot profile and
 restores the working asset and expanded sections. This checks routing and
 displayed render payloads; it does not measure per-emitter CPU/GPU timings.
 
+`verify_particle_emitter_material` checks explicit material selection, inheritance
+from the selected emitter, and preservation of a new effect's project material.
+It saves the resulting two-emitter document for dependency/cook verification.
+
 ## Honest boundary
 
 The runner can verify engine state, editor documents, imported binary fixtures,

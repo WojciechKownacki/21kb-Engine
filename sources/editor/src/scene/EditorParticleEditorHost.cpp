@@ -484,6 +484,15 @@ bool EditorSceneContext::FinalizeParticleEditorCommand(kb::particle_editor::Part
 bool EditorSceneContext::AddParticleEditorEmitter(kb::assets::AssetId materialId) {
     if (!HasParticleEditorAsset())
         return false;
+    const auto* asset = ParticleEditorWorkingAsset();
+    if (!materialId.IsValid() && asset != nullptr && !asset->emitters.empty()) {
+        const auto selected = std::find_if(asset->emitters.begin(), asset->emitters.end(), [this](const auto& emitter) {
+            return emitter.emitterId == particleEditorWorkspace_.SelectedEmitterId();
+        });
+        return FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorCommands::AddEmitter(
+            particleEditorDocument_, particleEditorWorkspace_,
+            (selected == asset->emitters.end() ? asset->emitters.front() : *selected).output.material));
+    }
     const kb::assets::AssetManager& manager = scene_->Assets().Manager();
     const kb::assets::AssetMetadata* metadata = materialId.IsValid() ? manager.Registry().Find(materialId) :
         manager.Registry().FindByPath("/21kbParticle/Materials/DefaultParticle.kbmat");

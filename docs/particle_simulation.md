@@ -15,6 +15,9 @@ material beside the effect under a unique name. The effect references that
 project asset, so the material joins the normal cook dependency closure and
 the cooked runtime can load it. Existing material files are never overwritten;
 an explicitly assigned material keeps its authored reference.
+Adding an emitter in the editor inherits the selected emitter's material unless
+a material is explicitly chosen. This preserves project material dependencies
+as an effect grows.
 
 Collision planes with `killOnContact` use CPU simulation: particles end their
 lifetime at contact and disappear from subsequent render snapshots. Bouncing
