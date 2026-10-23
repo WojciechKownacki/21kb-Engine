@@ -37,9 +37,9 @@ jobs:
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "ON"
-            targets: "kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests"
+            targets: "kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests;kb_ecs_query_shutdown_tests"
             api_compat_check: "OFF"
-            test_regex: "^(kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests)$"
+            test_regex: "^(kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests|kb_ecs_query_shutdown_tests)$"
           - name: Linux GCC ASan UBSan
             os: ubuntu-24.04
             generator: "Unix Makefiles"

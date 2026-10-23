@@ -2039,6 +2039,9 @@ if(BUILD_TESTING)
     set_tests_properties(kb_ecs_api_tests PROPERTIES LABELS "ecs;api;debug")
     target_include_directories(kb_ecs_api_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
 
+    kb_add_ecs_test_target(kb_ecs_query_shutdown_tests tests/EcsQueryShutdownTests.cpp)
+    set_tests_properties(kb_ecs_query_shutdown_tests PROPERTIES LABELS "ecs;lifetime;asan")
+
     kb_add_ecs_test_target(kb_ecs_observer_identity_tests tests/EcsObserverIdentityTests.cpp)
     kb_add_ecs_test_target(kb_ecs_cascade_owner_tests tests/EcsCascadeOwnerTests.cpp)
     kb_add_ecs_test_target(kb_ecs_native_allocation_policy_tests tests/EcsNativeAllocationPolicyTests.cpp)

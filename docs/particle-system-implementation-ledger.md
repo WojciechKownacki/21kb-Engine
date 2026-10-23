@@ -17,6 +17,12 @@
 - Next gate: release conformance, outside this implementation plan. The post-Stage 11 Particle Editor authoring UX pass is closed (see its entry below).
 - Rendering direction unchanged: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
+### Provider query cache lifetime
+
+- The query-state reuse cache keeps at most 256 blocks while its library is active and releases cached storage when that library unloads. Late static query destruction uses the global allocator after cache teardown.
+- `kb_ecs_query_shutdown_tests` retains one query beyond cache teardown and releases another into the cache before shutdown. The test verifies actual process shutdown alongside the existing 100-reload provider regression with and without scripts.
+- Windows x64 Release verification passed the shutdown case, all 12 ECS API groups, provider lifecycle, CPU particles, source GPU motion/readback, CLI/profile and renderer regressions. The shutdown case joins the Windows ASan gate and the Linux sanitizer test graph; clean sanitizer results remain pending.
+
 ### Post-Stage 11 follow-up: Particle Editor UX package 1 (`accepted`)
 
 - The asset controls now share one compact row, the eight output types use a two-column grid, and properties have an explicit section header. This removes five full-width rows from the common viewport while preserving every existing hit target and command route.
