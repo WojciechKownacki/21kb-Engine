@@ -1347,6 +1347,48 @@ void RunSceneHistorySuspendAndResumeTest() {
     kb::tests::Require(!scene.History().Resume(history), "Detached history could be resumed twice");
 }
 
+void RunSceneHistoryResumePrefabBindingsTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const auto rootNode = prefab.AddNode({.name = "HistoryRoot"});
+    static_cast<void>(prefab.AddNode({.name = "HistoryChild", .parentNode = rootNode}));
+    const auto source = scene.Prefabs().Register("HistoryPrefab", std::move(prefab));
+    const auto first = scene.Prefabs().Instantiate(source);
+    kb::tests::Require(scene.History().Record("Create instance"), "Could not record prefab creation");
+    const auto second = scene.Prefabs().Instantiate(source);
+    scene.History().Commit();
+    kb::tests::Require(scene.History().Record("Unpack instance") &&
+        scene.Prefabs().Unpack(second.Handle(), kb::scene::ScenePrefabUnpackMode::RootOnly),
+        "Could not record prefab unpacking");
+    kb::tests::Require(scene.History().Undo(), "Could not prepare prefab Redo");
+    const auto rootsBefore = scene.Hierarchy().RootEntities();
+    const auto document = kb::scene::SceneDocumentService::Capture(scene, "PrefabHistory");
+    auto history = scene.History().Suspend();
+    kb::tests::Require(scene.Prefabs().IsInstance(first.Handle()), "Unrelated prefab was lost before reload");
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, document), "Prefab history reload failed");
+    const auto rootsAfter = scene.Hierarchy().RootEntities();
+    kb::tests::Require(rootsBefore.size() == 2U && rootsAfter.size() == 2U, "Prefab reload changed root count");
+    std::vector<kb::scene::SceneEntityRemap> remap;
+    for (std::size_t index = 0U; index < rootsBefore.size(); ++index) {
+        remap.push_back({rootsBefore[index], rootsAfter[index]});
+        const auto oldChildren = index == 0U ? first.Objects() : second.Objects();
+        const auto children = scene.Hierarchy().Children(scene.Entities().Object(rootsAfter[index]));
+        kb::tests::Require(children.size() == 1U, "Prefab reload lost its child");
+        remap.push_back({oldChildren[1].Entity(), children.front().Entity()});
+    }
+    kb::tests::Require(scene.History().Resume(history, remap), "Prefab history resume failed");
+    kb::tests::Require(scene.Prefabs().RefreshInstances(source) == 2U, "Reload duplicated prefab records");
+    kb::tests::Require(scene.History().Redo() && !scene.Prefabs().RootInstance(rootsAfter[1]).IsValid(),
+        "Resumed Redo did not unpack the restored instance");
+    kb::tests::Require(scene.History().Undo() && scene.Prefabs().RootInstance(rootsAfter[1]).IsValid(),
+        "Resumed Undo did not restore the prefab binding");
+    kb::tests::Require(scene.Prefabs().RefreshInstances(source) == 2U, "Resumed history duplicated prefab records");
+    kb::tests::Require(scene.History().Undo() && scene.Entities().Count() == 2U &&
+        scene.Prefabs().RefreshInstances(source) == 1U, "Resumed creation Undo retained a prefab record");
+    kb::tests::Require(scene.History().Redo() && scene.Entities().Count() == 4U &&
+        scene.Prefabs().RefreshInstances(source) == 2U, "Resumed creation Redo lost prefab bindings");
+}
+
 void RunSceneHistoryUndoRedoTest() {
     kb::scene::Scene scene;
     kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Initial" });
@@ -1953,6 +1995,7 @@ void RunSceneHierarchyTests() {
     RunSceneBehaviourIterationUsesUnsafeHotQueryTest();
     RunSceneBatchDuplicateTest();
     RunSceneHistorySuspendAndResumeTest();
+    RunSceneHistoryResumePrefabBindingsTest();
     RunSceneHistoryUndoRedoTest();
     RunSceneHistoryRecordsOnlyEditedObjectsTest();
     RunSceneHistoryUndoRedoEachEditKindTest();

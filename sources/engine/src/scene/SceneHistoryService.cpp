@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <span>
 #include <thread>
@@ -598,6 +599,7 @@ struct SceneHistorySnapshot::State {
     const SceneState* owner = nullptr;
     SceneHistoryStack undo;
     SceneHistoryStack redo;
+    std::vector<std::pair<ScenePrefabInstanceHandle, SceneEntity>> prefabRoots;
 };
 
 SceneHistorySnapshot::SceneHistorySnapshot() = default;
@@ -611,6 +613,12 @@ SceneHistorySnapshot SceneHistoryService::Suspend(Scene& scene) {
     Commit(scene);
     SceneState& state = SceneAccess::State(scene);
     snapshot.state_->owner = &state;
+    for (const auto handle : state.prefabInstances.Handles()) {
+        const auto* instance = state.prefabInstances.Find(handle);
+        if (instance != nullptr && !instance->Objects().empty()) {
+            snapshot.state_->prefabRoots.emplace_back(handle, instance->Objects().front().Entity());
+        }
+    }
     snapshot.state_->undo = std::move(state.undoHistory);
     snapshot.state_->redo = std::move(state.redoHistory);
     state.undoHistory.Clear();
@@ -622,6 +630,19 @@ SceneHistorySnapshot SceneHistoryService::Suspend(Scene& scene) {
 bool SceneHistoryService::Resume(Scene& scene, SceneHistorySnapshot& snapshot, std::span<const SceneEntityRemap> remap) {
     SceneState& state = SceneAccess::State(scene);
     if (snapshot.state_ == nullptr || snapshot.state_->owner != &state) return false;
+    // Document reloads recreate instance records as well as entities. Rebind both
+    // history directions before an Undo can remove or restore an instance record.
+    std::map<ScenePrefabInstanceHandle, ScenePrefabInstanceHandle> prefabRemap;
+    std::unordered_map<EntityId, SceneEntity> entities;
+    for (const auto& replacement : remap) entities.emplace(replacement.from.Id(), replacement.to);
+    for (const auto& [handle, root] : snapshot.state_->prefabRoots) {
+        const auto replacement = entities.find(root.Id());
+        const auto restored = replacement == entities.end() ? root : replacement->second;
+        const auto current = state.prefabInstances.FindRootInstance(SceneAccess::MakeObject(scene, restored));
+        if (current.IsValid() && current != handle) prefabRemap.emplace(handle, current);
+    }
+    snapshot.state_->undo.RemapPrefabHandles(prefabRemap);
+    snapshot.state_->redo.RemapPrefabHandles(prefabRemap);
     Clear(scene);
     state.undoHistory = std::move(snapshot.state_->undo);
     state.redoHistory = std::move(snapshot.state_->redo);

@@ -144,6 +144,16 @@ void SceneHistoryStack::RemapEntities(std::span<const SceneEntityRemap> remap) n
     }
 }
 
+void SceneHistoryStack::RemapPrefabHandles(const std::map<ScenePrefabInstanceHandle, ScenePrefabInstanceHandle>& remap) noexcept {
+    for (SceneHistoryEntry& entry : entries_) {
+        for (SceneHistoryPrefabInstanceChange& change : entry.prefabInstances) {
+            if (const auto found = remap.find(change.handle); found != remap.end()) {
+                change.handle = found->second;
+            }
+        }
+    }
+}
+
 std::size_t SceneHistoryStack::Bytes() const noexcept {
     std::size_t bytes = entries_.capacity() * sizeof(SceneHistoryEntry);
     for (const SceneHistoryEntry& entry : entries_) {
