@@ -594,6 +594,43 @@ bool SceneHistoryService::Record(Scene& scene, std::string label) {
     return true;
 }
 
+struct SceneHistorySnapshot::State {
+    const SceneState* owner = nullptr;
+    SceneHistoryStack undo;
+    SceneHistoryStack redo;
+};
+
+SceneHistorySnapshot::SceneHistorySnapshot() = default;
+SceneHistorySnapshot::~SceneHistorySnapshot() = default;
+SceneHistorySnapshot::SceneHistorySnapshot(SceneHistorySnapshot&&) noexcept = default;
+SceneHistorySnapshot& SceneHistorySnapshot::operator=(SceneHistorySnapshot&&) noexcept = default;
+
+SceneHistorySnapshot SceneHistoryService::Suspend(Scene& scene) {
+    SceneHistorySnapshot snapshot;
+    snapshot.state_ = std::make_unique<SceneHistorySnapshot::State>();
+    Commit(scene);
+    SceneState& state = SceneAccess::State(scene);
+    snapshot.state_->owner = &state;
+    snapshot.state_->undo = std::move(state.undoHistory);
+    snapshot.state_->redo = std::move(state.redoHistory);
+    state.undoHistory.Clear();
+    state.redoHistory.Clear();
+    state.recreatedEntities.clear();
+    return snapshot;
+}
+
+bool SceneHistoryService::Resume(Scene& scene, SceneHistorySnapshot& snapshot, std::span<const SceneEntityRemap> remap) {
+    SceneState& state = SceneAccess::State(scene);
+    if (snapshot.state_ == nullptr || snapshot.state_->owner != &state) return false;
+    Clear(scene);
+    state.undoHistory = std::move(snapshot.state_->undo);
+    state.redoHistory = std::move(snapshot.state_->redo);
+    state.recreatedEntities.clear();
+    snapshot.state_.reset();
+    RemapRecordedEntities(state, remap);
+    return true;
+}
+
 void SceneHistoryService::Commit(Scene& scene) {
     Seal(scene, SceneAccess::State(scene));
 }

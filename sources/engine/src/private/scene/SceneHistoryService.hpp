@@ -27,6 +27,8 @@ public:
     [[nodiscard]] static std::size_t RecordedBytes(const Scene& scene) noexcept;
     [[nodiscard]] static std::vector<SceneEntityRemap> TakeRecreatedEntities(Scene& scene) noexcept;
     static void RemapEntities(Scene& scene, std::span<const SceneEntityRemap> remap);
+    [[nodiscard]] static SceneHistorySnapshot Suspend(Scene& scene);
+    [[nodiscard]] static bool Resume(Scene& scene, SceneHistorySnapshot& snapshot, std::span<const SceneEntityRemap> remap);
 
     // Called by the scene API right before it writes an object's name, flags, transform, visibility or components
     // (or hands out a pointer to write through). While a command records, the object's state is kept once.

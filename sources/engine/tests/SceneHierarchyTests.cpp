@@ -1311,6 +1311,42 @@ void RunSceneBatchDuplicateTest() {
     kb::tests::Require(!scene.Entities().IsAlive(child), "Batch destroy did not destroy child hierarchy");
 }
 
+void RunSceneHistorySuspendAndResumeTest() {
+    kb::scene::Scene scene;
+    const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{.name = "Before"});
+    kb::tests::Require(scene.History().Record("Rename"), "History suspension could not record rename");
+    scene.Entities().SetName(object, "After");
+    scene.History().Commit();
+    kb::tests::Require(scene.History().Record("Move"), "History suspension could not record move");
+    auto transform = scene.Transforms().Get(object);
+    transform.localPosition.x = 2.0F;
+    scene.Transforms().Set(object, transform);
+    kb::tests::Require(scene.History().Undo(), "History suspension could not prepare Redo");
+    const auto document = kb::scene::SceneDocumentService::Capture(scene, "HistorySnapshot");
+    auto history = scene.History().Suspend();
+    kb::tests::Require(!scene.History().CanUndo() && !scene.History().CanRedo(),
+        "Suspended history remained reachable during temporary edits");
+    kb::tests::Require(scene.History().Record("Temporary rename"), "Temporary scene history could not record");
+    scene.Entities().SetName(object, "Temporary");
+    scene.History().Commit();
+    kb::scene::Scene other;
+    kb::tests::Require(!other.History().Resume(history), "Detached history was accepted by another scene");
+    kb::tests::Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, document),
+        "History suspension could not restore the document");
+    const auto restored = scene.Hierarchy().RootEntities().front();
+    const std::array remap{kb::scene::SceneEntityRemap{object.Entity(), restored}};
+    kb::tests::Require(scene.History().Resume(history, remap) &&
+            scene.History().UndoCount() == 1U && scene.History().RedoCount() == 1U,
+        "Resuming history did not replace temporary commands with both authored directions");
+    kb::tests::Require(scene.History().Redo() && scene.Transforms().Get(restored).localPosition.x == 2.0F,
+        "Resumed Redo did not target the restored entity");
+    kb::tests::Require(scene.History().Undo() && scene.Transforms().Get(restored).localPosition.x == 0.0F &&
+            scene.History().Undo() && scene.Entities().Name(restored) == "Before" &&
+            scene.History().Redo() && scene.Entities().Name(restored) == "After",
+        "Resumed Undo/Redo lost document edits or leaked temporary changes");
+    kb::tests::Require(!scene.History().Resume(history), "Detached history could be resumed twice");
+}
+
 void RunSceneHistoryUndoRedoTest() {
     kb::scene::Scene scene;
     kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Initial" });
@@ -1916,6 +1952,7 @@ void RunSceneHierarchyTests() {
     RunSceneHierarchyRootCollectorUsesUnsafeHotQueryTest();
     RunSceneBehaviourIterationUsesUnsafeHotQueryTest();
     RunSceneBatchDuplicateTest();
+    RunSceneHistorySuspendAndResumeTest();
     RunSceneHistoryUndoRedoTest();
     RunSceneHistoryRecordsOnlyEditedObjectsTest();
     RunSceneHistoryUndoRedoEachEditKindTest();
