@@ -107,6 +107,7 @@ def create_throwaway_certificate(directory: Path, password: str) -> tuple[Path, 
     result = subprocess.run(
         [str(powershell), "-NoProfile", "-NonInteractive", "-Command", script],
         input=password + "\n", capture_output=True, text=True, timeout=120, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return pfx, result.stdout.strip().splitlines()[-1]
 
@@ -197,17 +198,19 @@ class PackageGameTests(unittest.TestCase):
 
     def test_snapshot_is_frozen_and_excludes_transient_roots(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
-            root = Path(temporary_text) / "project"
+            root = Path(temporary_text) / "Saved" / "project"
             (root / "Assets").mkdir(parents=True)
+            (root / "Assets" / "Saved").mkdir()
             (root / "Saved").mkdir()
             descriptor = root / "Project.21kbproject"
             descriptor.write_bytes(b"descriptor")
             (root / "Assets" / "scene.bin").write_bytes(b"scene")
+            (root / "Assets" / "Saved" / "keep.bin").write_bytes(b"asset")
             (root / "Saved" / "editor.log").write_bytes(b"log")
             destination = Path(temporary_text) / "snapshot"
 
             def reject_saved_visit(path: Path) -> bool:
-                if "Saved" in path.parts:
+                if path.is_relative_to(root / "Saved"):
                     raise AssertionError("excluded directory was visited")
                 return False
 
@@ -217,6 +220,7 @@ class PackageGameTests(unittest.TestCase):
 
             self.assertEqual(b"descriptor", copied.read_bytes())
             self.assertEqual(b"scene", (destination / "Assets/scene.bin").read_bytes())
+            self.assertEqual(b"asset", (destination / "Assets/Saved/keep.bin").read_bytes())
             self.assertFalse((destination / "Saved").exists())
             self.assertEqual(64, len(fingerprint))
 
