@@ -542,11 +542,12 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
             SortInstances(viewId, emitter, collision, static_cast<float>(clock.now));
             drawn = emitter.sortedInstances;
         }
-        clock.draws.push_back(Draw{ &emitter.params, drawn, emitter.capacity * emitter.perSlot, emitter.origin });
+        clock.draws.push_back(Draw{ &emitter.params, drawn, emitter.capacity * emitter.perSlot, emitter.origin,
+            {key.instanceId, key.emitterId}, emitter.bytes });
     }
 }
 
-std::span<const ParticleGpuEmitterSimulation::Draw> ParticleGpuEmitterSimulation::Draws(std::uint64_t sceneId) noexcept {
+std::span<const ParticleGpuEmitterSimulation::Draw> ParticleGpuEmitterSimulation::Draws(std::uint64_t sceneId) const noexcept {
     const auto found = scenes_.find(sceneId);
     return found == scenes_.end() ? std::span<const Draw>{} : std::span<const Draw>{ found->second.draws };
 }

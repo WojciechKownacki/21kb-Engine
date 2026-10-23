@@ -117,6 +117,7 @@ add_library(kb_renderer STATIC
     include/kb/render/gi/SceneGiUniforms.hpp
     include/kb/render/gi/SceneGiVoxelGrid.hpp
     include/kb/render/particles/ParticleGpuEmitterSimulation.hpp
+    include/kb/render/particles/ParticleGpuReadback.hpp
     include/kb/render/ViewIdPolicy.hpp
     src/BgfxContext.cpp
     src/bake/MeshBaker.cpp
@@ -375,6 +376,7 @@ add_library(kb_renderer STATIC
     src/gi/SceneGiUniforms.cpp
     src/gi/SceneGiVoxelGrid.cpp
     src/particles/ParticleGpuEmitterSimulation.cpp
+    src/particles/ParticleGpuReadback.cpp
     src/shadow/PointShadowPassPlanner.hpp
     src/private/ui/ScreenUIBackgroundBlur.hpp
     src/private/ui/ScreenUIComposite.hpp

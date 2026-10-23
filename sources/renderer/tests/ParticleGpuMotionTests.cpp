@@ -14,6 +14,7 @@
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/ShaderLoader.hpp"
 #include "kb/render/particles/ParticleGpuEmitterSimulation.hpp"
+#include "kb/render/particles/ParticleGpuReadback.hpp"
 
 #include <algorithm>
 #include <array>
@@ -21,6 +22,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <limits>
 #include <vector>
 
 #if defined(_WIN32)
@@ -65,9 +67,9 @@ public:
     }
     MotionReadback(const MotionReadback&) = delete;
     MotionReadback& operator=(const MotionReadback&) = delete;
-    std::array<float, 32> Read(bgfx::DynamicVertexBufferHandle instances) const {
+    std::array<float, 32> Read(const ParticleGpuEmitterSimulation::Draw& draw) {
         const std::array<float, 4> count{1.0F, 0.0F, 0.0F, 0.0F};
-        bgfx::setBuffer(0U, instances, bgfx::Access::Read);
+        bgfx::setBuffer(0U, draw.instances, bgfx::Access::Read);
         bgfx::setImage(1U, output_, 0U, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
         bgfx::setUniform(uniform_, count.data());
         bgfx::dispatch(10U, program_, 1U, 1U, 1U);
@@ -78,9 +80,13 @@ public:
         auto frame = bgfx::frame();
         for (auto guard = 0U; frame < ready && guard < 8U; ++guard) frame = bgfx::frame();
         Require(frame >= ready, "Particle motion GPU readback timed out");
+        Require(native_.Read(draw, 1U) && native_.Records().size() == 1U, "Native bgfx particle buffer readback failed");
+        for (std::size_t lane = 0U; lane < 20U; ++lane)
+            Require(result[lane] == native_.Records()[0][lane], "Native buffer readback disagrees with independent compute/texture readback");
         return result;
     }
 private:
+    ParticleGpuReadback native_;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uniform_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle output_ = BGFX_INVALID_HANDLE, readback_ = BGFX_INVALID_HANDLE;
@@ -224,7 +230,7 @@ std::array<float, 20> RunAuthoredMotion(kb::scene::ParticleEffectAsset effect, b
                 "GPU motion test fell back to CPU");
             const auto draws = simulation.Draws(1U);
             Require(draws.size() == 1U, "GPU motion dispatch did not produce its instance buffer");
-            const auto pixels = readback.Read(draws[0].instances);
+            const auto pixels = readback.Read(draws[0]);
             std::copy_n(pixels.begin(), result.size(), result.begin());
             Require(simulation.AllocatedBytes() == 8U * 144U, "GPU motion resource bytes changed unexpectedly");
             simulation.Shutdown();
@@ -268,11 +274,55 @@ std::array<float, 20> RunMotionKernel(const MotionCase& test, MotionReadback& re
         static_cast<void>(bgfx::frame());
     }
     Require(simulation.Draws(1U).size() == 1U, "GPU kernel did not produce instances");
-    const auto pixels = readback.Read(simulation.Draws(1U)[0].instances);
+    const auto pixels = readback.Read(simulation.Draws(1U)[0]);
     std::array<float, 20> result;
     std::copy_n(pixels.begin(), result.size(), result.begin());
     simulation.Shutdown();
     return result;
+}
+
+void VerifyNativeReadbackBounds() {
+    ParticleGpuEmitterSimulation simulation;
+    Require(simulation.Initialize(), "Native readback GPU kernel unavailable");
+    kb::particles::ParticleGpuEmitterCommand command;
+    command.key = {11U, 22U};
+    command.hasParams = true;
+    command.params.capacity = 3U;
+    command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+    command.params.size.fill(1.0F);
+    command.params.color.fill({1.0F, 1.0F, 1.0F, 1.0F});
+    for (int index = 1; index <= 3; ++index)
+        command.spawns.push_back({.position = {static_cast<float>(index), 0.0F, 0.0F}, .lifetime = 8.0F});
+    const auto dispatch = [&] {
+        simulation.Apply(1U, {&command, 1U});
+        simulation.Dispatch(0U, 1U, {});
+        static_cast<void>(bgfx::frame());
+        Require(simulation.Draws(1U).size() == 1U, "Native readback lost its actual GPU draw");
+    };
+    dispatch();
+    auto draw = simulation.Draws(1U)[0];
+    Require(draw.key == command.key && draw.capacity == 3U && draw.requestedBufferBytes == 3U * 112U,
+        "GPU draw identity or requested buffer accounting changed");
+    ParticleGpuReadback capture;
+    Require(capture.Read(draw, 3U) && capture.Records().size() == 3U, "Native readback could not read multiple rows");
+    for (std::size_t index = 0; index < 3U; ++index)
+        Require(capture.Records()[index][0] == static_cast<float>(index + 1U) && capture.Records()[index][3] == 1.0F,
+            "Native readback changed GPU buffer offsets or record stride");
+    Require(!capture.Read(draw, 0U) && !capture.Read(draw, 4U) && capture.Records().size() == 3U &&
+        capture.Status() == ParticleGpuReadbackStatus::InvalidRequest, "Invalid readback count destroyed a completed capture");
+    draw.capacity = kParticleGpuReadbackMaxInstances + 1U;
+    Require(!capture.Read(draw, draw.capacity), "Native readback admitted an oversized capture");
+    draw.instances = BGFX_INVALID_HANDLE;
+    Require(!capture.Read(draw, 1U), "Native readback admitted an invalid GPU buffer");
+    command.spawns = {{.position = {std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F}, .lifetime = 8.0F}};
+    dispatch();
+    Require(!capture.Read(simulation.Draws(1U)[0], 1U) && capture.Status() == ParticleGpuReadbackStatus::InvalidData &&
+        capture.Records().size() == 3U && capture.Records()[0][0] == 1.0F,
+        "Nonfinite GPU data replaced a completed capture or became a fabricated dead result");
+    simulation.ReleaseScene(1U);
+    Require(simulation.AllocatedBytes() == 0U && simulation.Draws(1U).empty(), "Released GPU inspection retained emitter buffers");
+    simulation.Shutdown();
+    std::fprintf(stderr, "particle_native_readback rows=3 bounds=checked invalid_data=rejected previous_capture=retained release_bytes=0\n");
 }
 
 void VerifyContactReadback(MotionReadback& readback) {
@@ -293,7 +343,7 @@ void VerifyContactReadback(MotionReadback& readback) {
         simulation.Dispatch(0U, 1U, {});
         static_cast<void>(bgfx::frame());
         Require(simulation.Draws(1U).size() == 1U, "Contact GPU dispatch missing");
-        return readback.Read(simulation.Draws(1U)[0].instances);
+        return readback.Read(simulation.Draws(1U)[0]);
     };
     const auto born = capture();
     Require(born[3] == 1.0F && born[1] == 0.2F && born[9] == -12.0F, "Contact GPU birth record changed");
@@ -326,6 +376,7 @@ void RunParticleGpuMotionTests(bool kernelOnly) {
     Require(bgfx::getRendererType() == bgfx::RendererType::Direct3D11, "Particle GPU motion used an unexpected backend");
     {
         MotionReadback readback;
+        VerifyNativeReadbackBounds();
         VerifyContactReadback(readback);
         for (int kind = 0; kind < 5; ++kind) {
             std::array<float, 20> baseline{};

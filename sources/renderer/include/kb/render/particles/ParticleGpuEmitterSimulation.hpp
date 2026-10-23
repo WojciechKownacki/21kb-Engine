@@ -30,7 +30,7 @@ struct ParticleGpuMeshDraw {
 };
 
 // Renderer side of GPU-simulated particle emitters. Owns, per emitter, a ring buffer of birth records
-// and the instance buffer a compute pass rebuilds every frame from them; nothing is read back.
+// and the instance buffer a compute pass rebuilds every frame. Normal simulation performs no readback.
 class ParticleGpuEmitterSimulation final {
 public:
     struct Draw {
@@ -39,6 +39,9 @@ public:
         // Instances in the buffer: the slot count, times the segments per slot of a trail emitter.
         std::uint32_t capacity = 0U;
         std::array<float, 3> origin{};
+        kb::particles::ParticleGpuEmitterKey key{};
+        // Requested buffer bytes, including birth/state/instance and optional sort storage; not physical residency.
+        std::uint64_t requestedBufferBytes = 0U;
     };
 
     [[nodiscard]] bool Initialize();
@@ -74,7 +77,7 @@ public:
     // Rebuilds the instance buffers of the scene emitters; call once per rendered frame.
     void Dispatch(bgfx::ViewId viewId, std::uint64_t sceneId, const FrameContext& frame) noexcept;
     // Emitters of the scene that were dispatched this frame.
-    [[nodiscard]] std::span<const Draw> Draws(std::uint64_t sceneId) noexcept;
+    [[nodiscard]] std::span<const Draw> Draws(std::uint64_t sceneId) const noexcept;
     [[nodiscard]] bool HasEmitters(std::uint64_t sceneId) const noexcept;
 
     void ReleaseScene(std::uint64_t sceneId) noexcept;

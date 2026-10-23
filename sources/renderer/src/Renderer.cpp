@@ -2446,6 +2446,14 @@ void Renderer::PrepareParticleScene(kb::scene::Scene& scene) noexcept {
     if (sceneRenderer_ != nullptr) sceneRenderer_->PrepareGpuParticleConsumer(scene);
 }
 
+std::span<const ParticleGpuEmitterSimulation::Draw> Renderer::GpuParticleDraws(const kb::scene::Scene& scene) const noexcept {
+    return sceneRenderer_ == nullptr ? std::span<const ParticleGpuEmitterSimulation::Draw>{} : sceneRenderer_->GpuParticleDraws(scene.Id());
+}
+
+std::uint64_t Renderer::GpuEmitterAllocatedBytes() const noexcept {
+    return sceneRenderer_ == nullptr ? 0U : sceneRenderer_->GpuEmitterAllocatedBytes();
+}
+
 void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
     kb::scene::Scene& mutableScene = const_cast<kb::scene::Scene&>(scene);
     if (auxFrameRenderer_ != nullptr) {

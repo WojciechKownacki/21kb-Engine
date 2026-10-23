@@ -121,6 +121,8 @@ public:
     [[nodiscard]] SceneRenderDiagnostics ValidateSceneDiagnostics(const RenderScene& renderScene, MeshPassType pass) const;
     [[nodiscard]] SceneRenderSubmitStats LastSubmitStats() const noexcept;
     [[nodiscard]] kb::particles::ParticleGpuVisualAvailability ParticleGpuVisualAvailability() const noexcept;
+    [[nodiscard]] std::span<const ParticleGpuEmitterSimulation::Draw> GpuParticleDraws(std::uint64_t sceneId) const noexcept;
+    [[nodiscard]] std::uint64_t GpuEmitterAllocatedBytes() const noexcept;
     void SetParticleVolumetricLowQuality(bool lowQuality) noexcept;
     [[nodiscard]] bool ParticleVolumetricLowQuality() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastDiagnostics() const noexcept;

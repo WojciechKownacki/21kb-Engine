@@ -442,6 +442,12 @@ void ParticleGpuRenderer::CollectGpuMeshDraws(std::uint64_t sceneId, std::vector
     }
 }
 
+std::span<const ParticleGpuEmitterSimulation::Draw> ParticleGpuRenderer::GpuEmitterDraws(std::uint64_t sceneId) const noexcept {
+    return gpuEmitters_.Draws(sceneId);
+}
+
+std::uint64_t ParticleGpuRenderer::GpuEmitterAllocatedBytes() const noexcept { return gpuEmitters_.AllocatedBytes(); }
+
 ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
     bgfx::ViewId viewId,
     std::uint64_t sceneId,

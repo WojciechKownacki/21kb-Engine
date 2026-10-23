@@ -115,6 +115,24 @@ commands, independently of provider routing. Both require a real GPU host;
 unavailable support fails rather than passing as skipped. D3D11 is the verified
 backend; compiled variants alone do not establish other backend results.
 
+`Renderer::GpuParticleDraws(scene)` exposes the last dispatched GPU instance
+buffers with their instance/emitter keys and requested buffer bytes. Instance
+counts are capacities, including empty slots; byte counts include birth,
+state, instance and sort buffers rather than physical GPU residency.
+`GpuEmitterAllocatedBytes()` totals those allocations across this renderer's
+scenes. Neither query copies particle data to the CPU during normal frames.
+
+`ParticleGpuReadback` provides an explicit terminal diagnostic capture after
+ending the last frame and before renderer shutdown. It uses bgfx buffer
+readback and advances bgfx frames to finish the transfer, without advancing
+simulation. Keep it outside measurement windows. Captures are bounded to
+4096 instances of 80 bytes each. The raw record layout depends on the authored
+output type. Invalid requests and nonfinite or unwritten GPU data fail while
+preserving the previous completed capture. Tests compare this native buffer
+readback with the independent compute/texture readback above and exercise
+normal renderer buffers, emitter identities, allocation totals and invalid
+capture boundaries on D3D11.
+
 The authored sort mode reaches GPU emitters as well as CPU render snapshots:
 
 | Mode | Order |

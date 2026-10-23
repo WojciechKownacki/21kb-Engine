@@ -36,6 +36,7 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/shadow/ShadowMapResource.hpp"
 #include "kb/render/Renderer.hpp"
+#include "kb/render/particles/ParticleGpuReadback.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
@@ -8074,6 +8075,17 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
         for (const std::uint64_t instance : ids) {
             cpuParticles += kb::particles::ParticlePlayback::Query(scene, instance).liveParticleCount;
         }
+        if (gpuPreferred) {
+            const auto draws = renderer.GpuParticleDraws(scene);
+            Require(draws.size() == 1U && draws[0].key.instanceId == ids[0] && draws[0].key.emitterId == 1U,
+                "Renderer inspection lost the actual particle emitter identity");
+            const auto expectedBytes = 4096U * (112U + (draws[0].params->NeedsState() ? 32U : 0U));
+            Require(draws[0].requestedBufferBytes == expectedBytes && renderer.GpuEmitterAllocatedBytes() == expectedBytes,
+                "Renderer inspection changed particle requested buffer accounting");
+            ParticleGpuReadback capture;
+            Require(capture.Read(draws[0], 64U) && capture.Records().size() == 64U,
+                "Renderer inspection could not read actual GPU particle records");
+        } else Require(renderer.GpuParticleDraws(scene).empty(), "Explicit CPU particles appeared in GPU inspection");
     }
     renderer.ReleaseScene(scene);
     renderer.Shutdown();
