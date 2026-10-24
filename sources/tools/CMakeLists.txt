@@ -71,6 +71,8 @@ if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
         VERBATIM
     )
     add_dependencies(kb_cli_stage_particle_plugin kb_21kb_particle_plugin)
+    include("${CMAKE_SOURCE_DIR}/CMake/SerializeParticleRuntimeStaging.cmake")
+    kb_serialize_particle_runtime_staging(kb_cli_stage_particle_plugin)
     add_dependencies(kb_cli kb_cli_stage_particle_plugin)
 endif()
 if(WIN32)

@@ -1196,6 +1196,8 @@ if(TARGET kb_21kb_particle_plugin)
             VERBATIM
         )
         add_dependencies(kb_editor_stage_particle_plugin kb_21kb_particle_plugin)
+        include("${CMAKE_SOURCE_DIR}/CMake/SerializeParticleRuntimeStaging.cmake")
+        kb_serialize_particle_runtime_staging(kb_editor_stage_particle_plugin)
         add_dependencies(kb_editor kb_editor_stage_particle_plugin)
     else()
         set(KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH "")
