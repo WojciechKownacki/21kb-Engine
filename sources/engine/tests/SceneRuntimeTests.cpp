@@ -13,6 +13,7 @@
 #include <string_view>
 
 namespace kb::tests {
+void RunEcsHierarchyDepthTests();
 void RunScriptNativeHeaderReloadTest();
 void RunPhysicsReplayOnlyTest();
 void RunPhysicsStepSpikeBenchmark();
@@ -65,6 +66,8 @@ bool RunSuite(std::string_view suite) {
     } else if (suite == "ecs-relations") {
         kb::tests::RunEcsRelationTests();
         RunDeepParentCycleAllocationTest();
+    } else if (suite == "ecs-hierarchy-depth") {
+        kb::tests::RunEcsHierarchyDepthTests();
     } else if (suite == "ecs-native") {
         kb::tests::RunEcsNativeArchetypeStorageTests();
     } else if (suite == "scene-hierarchy") {
@@ -162,6 +165,7 @@ void RunAllSuites() {
     kb::tests::RunSecurityTests();
     kb::tests::RunEcsRuntimeTests();
     RunDeepParentCycleAllocationTest();
+    kb::tests::RunEcsHierarchyDepthTests();
     kb::tests::RunSceneHierarchyTests();
     kb::tests::RunSceneUITests();
     kb::tests::RunSceneSystemTests();

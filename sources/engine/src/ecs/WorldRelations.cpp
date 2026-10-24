@@ -1,6 +1,7 @@
 #include "engine/ecs/World.hpp"
 
 #include "ecs/FlecsEntityIds.hpp"
+#include "ecs/relation/HierarchyDepthGuard.hpp"
 #include "ecs/relation/HierarchyRelationService.hpp"
 #include "ecs/relation/RelationStorage.hpp"
 #include "ecs/type/RelationTypeRegistry.hpp"
@@ -82,7 +83,7 @@ Entity World::RelationTarget(Entity entity, RelationId relation, int index) cons
 void World::SetParent(Entity child, Entity parent) {
     ValidateEntityHandle(child, "SetParent");
     ValidateOptionalEntityHandle(parent, "SetParent");
-    if (WouldCreateParentCycle(world_, child, parent)) {
+    if (WouldCreateParentCycle(world_, child, parent) || !FitsHierarchyDepth(world_, child, parent)) {
         return;
     }
     ValidateStructuralChangeAllowed("SetParent");
@@ -115,7 +116,7 @@ void World::SetParents(std::span<const Entity> children, std::span<const Entity>
     for (std::size_t index = 0; index < children.size(); ++index) {
         const Entity child = children[index];
         const Entity parent = parents[index];
-        if (child == parent || WouldCreateParentCycle(world_, child, parent)) {
+        if (child == parent || WouldCreateParentCycle(world_, child, parent) || !FitsHierarchyDepth(world_, child, parent)) {
             continue;
         }
 

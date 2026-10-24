@@ -684,6 +684,7 @@ add_library(kb_engine STATIC
     src/ecs/WorldReflection.cpp
     src/ecs/WorldRegistrySet.cpp
     src/ecs/WorldRelations.cpp
+    src/ecs/HierarchyDepthGuard.cpp
     src/ecs/WorldRuntime.cpp
     src/ecs/WorldTelemetryExport.cpp
     src/ecs/WorldSerialized.cpp
@@ -1706,6 +1707,9 @@ if(KB_ENGINE_ENABLE_NATIVE_AVX2)
     target_compile_definitions(kb_engine PUBLIC KB_ENGINE_NATIVE_AVX2=1)
 endif()
 
+set_source_files_properties(src/ecs/HierarchyDepthGuard.cpp PROPERTIES
+    COMPILE_DEFINITIONS "KB_ECS_HIERARCHY_DEPTH_LIMIT=${KB_ECS_HIERARCHY_DEPTH_LIMIT}"
+)
 kb_apply_quality_gates(kb_engine)
 
 if(MSVC)
@@ -1848,6 +1852,7 @@ if(BUILD_TESTING)
         tests/EcsReflectionTests.cpp
         tests/EcsRelationTests.cpp
         tests/EcsRuntimeTests.cpp
+        tests/EcsHierarchyDepthTests.cpp
         tests/EcsSeededStressTests.cpp
         tests/EcsSnapshotTests.cpp
         tests/EcsSystemSchedulerTests.cpp
@@ -1913,6 +1918,8 @@ if(BUILD_TESTING)
     set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 1500)
     add_test(NAME kb_engine_scene_parenting COMMAND $<TARGET_FILE:kb_engine_tests> scene-parenting)
     set_tests_properties(kb_engine_scene_parenting PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 30)
+    add_test(NAME kb_engine_hierarchy_depth COMMAND $<TARGET_FILE:kb_engine_tests> ecs-hierarchy-depth)
+    set_tests_properties(kb_engine_hierarchy_depth PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120 LABELS "ecs;hierarchy;correctness")
 
     # Machine-independent performance gates: each compares two measurements taken in the same run. They
     # run alone, as other tests competing for the CPU in between would skew one measurement and not the other.
