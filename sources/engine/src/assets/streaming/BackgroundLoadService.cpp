@@ -38,6 +38,7 @@ namespace kb::assets::streaming {
 struct BackgroundCooperativeDispatch {
     BackgroundLoadService* service = nullptr;
     bool scheduled = false;
+    std::uint32_t normalDispatches = 0U;
 };
 #endif
 namespace {
@@ -326,18 +327,33 @@ void BackgroundLoadService::ScheduleCooperative() {
 void BackgroundLoadService::PumpCooperative() {
     // A job may release the last external shared owner while this dispatch is running.
     const auto keepAlive = weak_from_this().lock();
-    std::vector<BackgroundRequestHandle> batch = TakeBatch(1U, false);
-    if (batch.empty()) {
+    const auto takeLongJob = [this]() -> BackgroundRequestHandle {
         std::scoped_lock lock{ mutex_ };
         if (!stopping_) {
             if (auto job = TakeJob(longJobs_)) {
                 ++longJobsRunning_;
                 stats_.peakLongJobsRunning = std::max(stats_.peakLongJobsRunning, longJobsRunning_);
-                batch.push_back(std::move(job));
+                return job;
             }
         }
+        return nullptr;
+    };
+    std::vector<BackgroundRequestHandle> batch;
+    // Give long work a turn even while streaming keeps the normal queues populated.
+    constexpr std::uint32_t kNormalDispatchQuota = 8U;
+    if (cooperative_->normalDispatches >= kNormalDispatchQuota) {
+        if (auto job = takeLongJob()) batch.push_back(std::move(job));
+    }
+    if (batch.empty()) batch = TakeBatch(1U, false);
+    if (batch.empty()) {
+        if (auto job = takeLongJob()) batch.push_back(std::move(job));
     }
     if (!batch.empty()) {
+        if (batch.front()->isJob_ && batch.front()->jobClass_ == BackgroundJobClass::Long) {
+            cooperative_->normalDispatches = 0U;
+        } else {
+            cooperative_->normalDispatches = std::min(cooperative_->normalDispatches + 1U, kNormalDispatchQuota);
+        }
         if (batch.front()->isJob_) {
             RunJob(batch.front());
         } else {

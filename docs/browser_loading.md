@@ -52,9 +52,16 @@ asynchronous file-read counters exclude the cooperative memory reads.
 Blocking service waits explicitly pump queued work. A job or block transform
 cannot be interrupted mid-call, so callers must bound their work. Threaded
 builds use the normal workers.
+When both classes remain queued, long work gets a turn after at most eight
+normal job or read dispatches. Priorities still order requests within each
+class. This lets queued saves and other long work progress during a sustained
+streaming backlog.
 
 The sanitized `kb_web_background_tests` target runs in Node and checks actual
 production reads, transforms, priorities, cancellation, lane draining, waits,
 event-loop yielding and service lifetimes. The CI Web job runs that target as
 well as its trusted browser input tests. Node verifies the queue contract;
 the cooked browser workload separately verifies real GPU rendering.
+The queue regression also schedules long work alongside 32 memory reads. The
+long request must run before the read backlog empties, and every read must
+still complete with its expected bytes.

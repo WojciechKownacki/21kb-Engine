@@ -21,6 +21,10 @@ std::vector<int> order;
 std::array<std::uint8_t, 5> bytes{1, 2, 3, 4, 5};
 bool ownerJobRan = false;
 std::chrono::steady_clock::time_point deadline;
+std::vector<BackgroundRequestHandle> fairnessReads;
+BackgroundRequestHandle fairnessJob;
+unsigned readsFinished = 0;
+unsigned readsAtLongJob = 0;
 
 void Require(bool condition, const char* message) {
     if (!condition) {
@@ -36,6 +40,22 @@ void Finish(void*) {
         "Dispatch did not retain its service until a job released the last external owner");
     std::puts("Web cooperative reads/jobs/priority/cancel/drain/wait/lifetime passed");
     emscripten_force_exit(EXIT_SUCCESS);
+}
+
+void CheckFairness(void*) {
+    Require(std::chrono::steady_clock::now() < deadline, "Queued work did not make progress");
+    if (!fairnessJob->IsDone() || readsFinished != fairnessReads.size()) {
+        emscripten_async_call(CheckFairness, nullptr, 0);
+        return;
+    }
+    for (const auto& read : fairnessReads) {
+        Require(read->State() == BackgroundRequestState::Completed && read->Bytes() == std::vector<std::uint8_t>({1}),
+            "Fair dispatch lost or changed a queued read");
+    }
+    std::printf("Long work dispatched after %u of %zu queued reads\n", readsAtLongJob, fairnessReads.size());
+    Require(readsAtLongJob < fairnessReads.size(), "Long work waited for the entire read backlog");
+    service.reset();
+    emscripten_async_call(Finish, nullptr, 1);
 }
 
 void CheckComplete(void*) {
@@ -67,8 +87,15 @@ void CheckComplete(void*) {
     Require(service->WorkerCount() == 0 && service->LongWorkerCount() == 0 &&
         stats.peakInFlight == 1 && stats.asynchronousReads == 0 && stats.longJobsRun == 1,
         "Cooperative diagnostics claimed worker threads or native asynchronous file reads");
-    service.reset();
-    emscripten_async_call(Finish, nullptr, 1);
+    fairnessJob = service->Run([](std::string&) {
+        readsAtLongJob = readsFinished;
+        return true;
+    }, 0, BackgroundJobClass::Long);
+    for (unsigned index = 0; index < 32; ++index) {
+        fairnessReads.push_back(service->ReadMemory(bytes, 0, 1, 0,
+            [](std::vector<std::uint8_t>&, std::string&) { ++readsFinished; return true; }));
+    }
+    emscripten_async_call(CheckFairness, nullptr, 0);
 }
 
 void CheckYield(void*) {
