@@ -31,10 +31,12 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <typeindex>
 #include <vector>
@@ -711,36 +713,79 @@ void RunBudgetTests() {
     std::filesystem::remove_all(fixture.root);
 }
 
-[[nodiscard]] std::vector<std::string> RunScriptedPath(const WorldFixture& fixture) {
+struct WorldReplayTrace {
+    std::vector<std::string> raw;
+    std::vector<std::string> decisions;
+    std::map<std::string, std::vector<WorldStreamingEventKind>> lifecycles;
+    std::vector<std::string> snapshots;
+};
+
+[[nodiscard]] WorldReplayTrace RunScriptedPath(const WorldFixture& fixture) {
     StreamingHarness harness = MountWorld(fixture, true);
     WorldPartitionRuntime runtime = harness.Runtime();
     harness.scene->LoadedContent().ConfigureStreaming({ .maxPendingLoads = 8U, .maxOperationsPerFrame = 4096U, .maxMillisecondsPerFrame = 1000.0F });
     runtime.ConfigureBudget({ .maxLoadRequestsPerFrame = 2U, .maxPendingLoads = 1U, .maxResidentBytes = 1ULL << 30U, .maxMillisecondsPerFrame = 1000.0 });
     const std::uint64_t source = runtime.AddSource({ .position = { -150.0, 0.0, -150.0 }, .loadRadius = 90.0, .unloadRadius = 130.0, .priority = 0 });
-    std::vector<std::string> log;
+    WorldReplayTrace trace;
+    std::size_t stage = 0U;
     const auto drain = [&] {
         for (const WorldStreamingEvent& event : runtime.DrainEvents()) {
-            log.push_back(std::to_string(static_cast<int>(event.kind)) + ":" + std::to_string(event.coord.x) + "," + std::to_string(event.coord.z) +
-                ":" + event.dataLayer + (event.persistent ? ":p" : ""));
+            Check(event.kind != WorldStreamingEventKind::LoadFailed, "the replay must not contain a failed cell load");
+            const std::string unit = std::to_string(event.coord.x) + "," + std::to_string(event.coord.z) +
+                ":" + event.dataLayer + (event.persistent ? ":p" : "");
+            const std::string row = std::to_string(static_cast<int>(event.kind)) + ":" + unit;
+            trace.raw.push_back(row);
+            trace.lifecycles[std::to_string(stage) + ":" + unit].push_back(event.kind);
+            // Completion of independent loads and unloads can interleave.
+            // Keep every event in its cell's ordered lifecycle while comparing
+            // requests and proxy decisions in their original global order.
+            if (event.kind != WorldStreamingEventKind::Loaded && event.kind != WorldStreamingEventKind::Unloaded) {
+                trace.decisions.push_back(row);
+            }
         }
     };
     const std::array<WorldPoint, 5U> path{ { { -150.0, 0.0, -150.0 }, { -40.0, 0.0, -80.0 }, { 60.0, 0.0, 10.0 }, { 170.0, 0.0, 130.0 }, { -20.0, 0.0, 240.0 } } };
     for (const WorldPoint& point : path) {
         Check(runtime.UpdateSource(source, { .position = point, .loadRadius = 90.0, .unloadRadius = 130.0, .priority = 0 }), "scripted move");
         Settle(harness, drain);
-        log.push_back("|");
+        const WorldStreamingStats stats = runtime.Stats();
+        const std::vector<WorldInstanceInfo> worlds = runtime.Worlds();
+        Check(worlds.size() == 1U && worlds[0].ready && worlds[0].error.empty() && worlds[0].lastFailure.empty(),
+            "the replay world must resolve without errors before advancing the source");
+        Check(stats.loadingUnits == 0U && stats.unloadingUnits == 0U && stats.failedUnits == 0U,
+            "the replay must settle every cell before advancing the source");
+        std::string snapshot = std::to_string(stats.loadedUnits) + ":" + std::to_string(stats.visibleHlods) + ":" +
+            std::to_string(stats.loadedNavMeshes) + ":" + std::to_string(stats.residentBytes) + ":" +
+            std::to_string(harness.scene->Entities().Count());
+        for (const WorldCellCoord coord : runtime.LoadedCells(harness.world)) {
+            snapshot += ":" + std::to_string(coord.x) + "," + std::to_string(coord.z);
+        }
+        trace.snapshots.push_back(std::move(snapshot));
+        trace.raw.push_back("|");
+        trace.decisions.push_back("|");
+        ++stage;
     }
-    return log;
+    return trace;
 }
 
 void RunDeterminismTests() {
     WorldFixture fixture = BuildFixtureWorld("determinism", true);
     RecordingHlodBaker baker;
     Check(WorldCellBuilder::Build(fixture.descriptor, &baker).succeeded, "determinism world must build");
-    const std::vector<std::string> first = RunScriptedPath(fixture);
-    const std::vector<std::string> second = RunScriptedPath(fixture);
-    Check(first.size() > 40U, "the scripted path streams many cells");
-    Check(first == second, "identical source paths produce identical streaming decisions");
+    const WorldReplayTrace first = RunScriptedPath(fixture);
+    const WorldReplayTrace second = RunScriptedPath(fixture);
+    Check(first.raw.size() > 40U, "the scripted path streams many cells");
+    if (first.decisions != second.decisions || first.lifecycles != second.lifecycles || first.snapshots != second.snapshots) {
+        const std::size_t count = (std::max)(first.raw.size(), second.raw.size());
+        for (std::size_t index = 0U; index < count; ++index) {
+            const std::string_view left = index < first.raw.size() ? std::string_view{first.raw[index]} : std::string_view{"<end>"};
+            const std::string_view right = index < second.raw.size() ? std::string_view{second.raw[index]} : std::string_view{"<end>"};
+            std::cerr << "world_streaming_replay index=" << index << " first=" << left << " second=" << right << '\n';
+        }
+    }
+    Check(first.decisions == second.decisions, "identical source paths produce identical streaming decisions");
+    Check(first.lifecycles == second.lifecycles, "identical source paths preserve every cell's ordered lifecycle events");
+    Check(first.snapshots == second.snapshots, "identical source paths produce identical settled cells, entities and resource accounting");
     std::filesystem::remove_all(fixture.root);
 }
 
