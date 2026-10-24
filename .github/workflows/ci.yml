@@ -30,6 +30,8 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
             -DCMAKE_BUILD_TYPE=Debug
           cmake --build build/web-input --parallel 2
+      - name: Verify cooperative browser work lifetimes
+        run: node build/web-input/BackgroundLoadTests.js
       - name: Verify trusted browser touches and native readback
         run: |
           python3 -m venv build/web-input-tools

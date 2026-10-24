@@ -193,3 +193,17 @@ and rendering after a moderate browser memory-pressure notification. Four
 separate local package URLs check actual missing, empty, truncated and corrupt
 files, explicit native errors and the visible reload message. See
 [browser loading](../../../../docs/browser_loading.md) for measurement limits.
+
+`run_game_content_loading_tests.py` authors a deterministic 2048 by 2048 texture
+with four known corner colors, imports it and references it from a native UI
+Image before cooking. The resulting package must exceed 4 MiB. Cold and
+subsequent loads must render the actual texture colors and native button on a
+hardware GPU. The report uses `21kb.web-game-content-loading/v1` and retains
+startup/resource timings and memory observations. Pass `--cook-cache` to reuse
+an existing owned cook cache across these storage and loading scenarios.
+
+Build `kb_web_background_tests` in the standalone Web test project and run
+`node BackgroundLoadTests.js` to check the production cooperative load service
+with ASan and UBSan. It verifies queued execution, priorities, cancellation,
+real memory/file reads, transforms, lane draining, explicit waits and safe
+dispatch lifetimes. The CI Web job runs it automatically.

@@ -8,6 +8,10 @@
 #include <limits>
 #include <utility>
 
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    #include <emscripten/emscripten.h>
+#endif
+
 #if defined(_WIN32)
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
@@ -30,6 +34,12 @@
 #endif
 
 namespace kb::assets::streaming {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+struct BackgroundCooperativeDispatch {
+    BackgroundLoadService* service = nullptr;
+    bool scheduled = false;
+};
+#endif
 namespace {
 
 // One request reads at most this much. Content streaming reads one pack block at a time, and a
@@ -129,13 +139,21 @@ BackgroundLoadService::BackgroundLoadService(BackgroundLoadServiceOptions option
 #if !defined(_WIN32) && !defined(KB_BACKGROUND_POSIX_AIO)
     options_.requestsInFlightPerWorker = 1U;
 #endif
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    cooperative_ = std::make_shared<BackgroundCooperativeDispatch>();
+    cooperative_->service = this;
+#else
     workers_.reserve(options_.workerCount);
     for (std::uint32_t index = 0U; index < options_.workerCount; ++index) {
         workers_.emplace_back([this] { WorkerLoop(); });
     }
+#endif
 }
 
 BackgroundLoadService::~BackgroundLoadService() {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    cooperative_->service = nullptr;
+#endif
     std::vector<QueueEntry> abandoned;
     {
         std::scoped_lock lock{ mutex_ };
@@ -236,6 +254,9 @@ BackgroundRequestHandle BackgroundLoadService::Run(BackgroundJob job, Background
 }
 
 BackgroundRequestHandle BackgroundLoadService::Submit(BackgroundRequestHandle request, BackgroundPriority priority) {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    request->cooperative_ = cooperative_;
+#endif
     request->priority_.store(priority, std::memory_order_relaxed);
     request->submittedAt_ = std::chrono::steady_clock::now();
     {
@@ -255,6 +276,7 @@ BackgroundRequestHandle BackgroundLoadService::Submit(BackgroundRequestHandle re
             request->jobClass_ = lane->second.jobClass;
         }
         const bool longJob = request->isJob_ && request->jobClass_ == BackgroundJobClass::Long;
+#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
         if (longJob) {
             // One long worker for every long job that could run now, up to the limit. A thread
             // that cannot start throws before anything is queued.
@@ -264,18 +286,74 @@ BackgroundRequestHandle BackgroundLoadService::Submit(BackgroundRequestHandle re
                 longWorkers_.emplace_back([this] { LongWorkerLoop(); });
             }
         }
+#endif
         request->sequence_ = nextSequence_++;
         std::vector<QueueEntry>& queue = request->isJob_ ? JobQueue(request->jobClass_) : reads_;
         queue.push_back(QueueEntry{ priority, request->sequence_, 0U, request });
         std::push_heap(queue.begin(), queue.end(), QueueOrder{});
         if (longJob) {
             longWake_.notify_all();
+#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
             return request;
+#endif
         }
     }
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    ScheduleCooperative();
+#else
     wake_.notify_one();
+#endif
     return request;
 }
+
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+void BackgroundLoadService::ScheduleCooperative() {
+    {
+        std::scoped_lock lock{ mutex_ };
+        if (stopping_ || cooperative_->scheduled || (reads_.empty() && jobs_.empty() && longJobs_.empty())) return;
+        cooperative_->scheduled = true;
+    }
+    auto* ticket = new std::shared_ptr<BackgroundCooperativeDispatch>{ cooperative_ };
+    emscripten_async_call([](void* pointer) {
+        const std::unique_ptr<std::shared_ptr<BackgroundCooperativeDispatch>> owned{
+            static_cast<std::shared_ptr<BackgroundCooperativeDispatch>*>(pointer) };
+        const auto state = *owned;
+        state->scheduled = false;
+        if (state->service != nullptr) state->service->PumpCooperative();
+    }, ticket, 0);
+}
+
+void BackgroundLoadService::PumpCooperative() {
+    // A job may release the last external shared owner while this dispatch is running.
+    const auto keepAlive = weak_from_this().lock();
+    std::vector<BackgroundRequestHandle> batch = TakeBatch(1U, false);
+    if (batch.empty()) {
+        std::scoped_lock lock{ mutex_ };
+        if (!stopping_) {
+            if (auto job = TakeJob(longJobs_)) {
+                ++longJobsRunning_;
+                stats_.peakLongJobsRunning = std::max(stats_.peakLongJobsRunning, longJobsRunning_);
+                batch.push_back(std::move(job));
+            }
+        }
+    }
+    if (!batch.empty()) {
+        if (batch.front()->isJob_) {
+            RunJob(batch.front());
+        } else {
+            const auto count = inFlight_.fetch_add(1U, std::memory_order_acq_rel) + 1U;
+            {
+                std::scoped_lock lock{ mutex_ };
+                stats_.peakInFlight = std::max(stats_.peakInFlight, count);
+            }
+            ServeBatch(batch);
+            inFlight_.fetch_sub(1U, std::memory_order_acq_rel);
+        }
+    }
+    // Yield after one job or read so input and rendering can run between requests.
+    ScheduleCooperative();
+}
+#endif
 
 bool BackgroundLoadService::Reprioritize(const BackgroundRequestHandle& request, BackgroundPriority priority) {
     if (request == nullptr) {
@@ -373,10 +451,19 @@ void BackgroundLoadService::WaitForLane(BackgroundLaneId lane) noexcept {
         return;
     }
     std::unique_lock lock{ mutex_ };
-    laneIdle_.wait(lock, [this, lane] {
+    const auto idle = [this, lane] {
         const auto found = lanes_.find(lane);
         return found == lanes_.end() || found->second.running == 0U;
-    });
+    };
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    while (!idle()) {
+        lock.unlock();
+        PumpCooperative();
+        lock.lock();
+    }
+#else
+    laneIdle_.wait(lock, idle);
+#endif
 }
 
 void BackgroundLoadService::DrainLane(BackgroundLaneId lane) noexcept {
@@ -387,7 +474,7 @@ void BackgroundLoadService::DrainLane(BackgroundLaneId lane) noexcept {
         return entry.request->lane_ == lane && IsLive(entry);
     };
     std::unique_lock lock{ mutex_ };
-    laneIdle_.wait(lock, [&] {
+    const auto idle = [&] {
         const auto found = lanes_.find(lane);
         if (found == lanes_.end()) {
             return true;
@@ -395,7 +482,16 @@ void BackgroundLoadService::DrainLane(BackgroundLaneId lane) noexcept {
         const std::vector<QueueEntry>& queue = JobQueue(found->second.jobClass);
         return found->second.running == 0U && std::ranges::none_of(queue, queuedOfLane) &&
             std::ranges::none_of(found->second.parked, queuedOfLane);
-    });
+    };
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    while (!idle()) {
+        lock.unlock();
+        PumpCooperative();
+        lock.lock();
+    }
+#else
+    laneIdle_.wait(lock, idle);
+#endif
 }
 
 void BackgroundLoadService::Forget(const std::filesystem::path& path) {
@@ -435,12 +531,18 @@ bool BackgroundLoadService::WaitUntilDone(const BackgroundRequestHandle& request
         if (std::chrono::steady_clock::now() >= deadline) {
             return false;
         }
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+        const auto state = request->cooperative_.lock();
+        if (state == nullptr || state->service == nullptr) return false;
+        state->service->PumpCooperative();
+#else
         std::this_thread::sleep_for(std::chrono::microseconds{ 100 });
+#endif
     }
     return request != nullptr;
 }
 
-std::vector<BackgroundRequestHandle> BackgroundLoadService::TakeBatch(std::size_t count) {
+std::vector<BackgroundRequestHandle> BackgroundLoadService::TakeBatch(std::size_t count, bool wait) {
     std::vector<BackgroundRequestHandle> batch;
     std::unique_lock lock{ mutex_ };
     for (;;) {
@@ -472,6 +574,7 @@ std::vector<BackgroundRequestHandle> BackgroundLoadService::TakeBatch(std::size_
         if (!batch.empty()) {
             return batch;
         }
+        if (!wait) return batch;
         wake_.wait(lock, [this] {
             return stopping_ || !reads_.empty() || (!jobs_.empty() && jobsRunning_ < options_.jobWorkers);
         });

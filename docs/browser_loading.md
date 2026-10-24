@@ -33,3 +33,28 @@ GPU residency or every transient allocation. This small native UI fixture
 does not establish large-package, decompression or physical mobile memory
 limits. The truncated-file case is a complete HTTP response carrying a partial
 container; it does not simulate a connection interrupted mid-response.
+
+`run_game_content_loading_tests.py` uses the same arguments to author a larger
+texture workload. It generates its own deterministic 2048 by 2048 RGB image,
+imports it with the CLI, references it from a native UI Image and cooks the
+normal runtime dependency closure. The actual package must exceed 4 MiB.
+Both cold and subsequent loads must render four known corner colors in the
+correct orientation and the native button. The report retains the resulting
+package size, startup/resource timings, WASM capacity and JavaScript heap
+observations. This verifies an actual cooked texture workload rather than
+padding a small package with unused bytes.
+
+For single-threaded Web builds, the shared load service dispatches one queued
+job or read through each browser event-loop callback. Texture mip streaming
+uses that service and continues uploading through bgfx. Priorities,
+cancellation and lane limits still apply. Worker counts report zero; native
+asynchronous file-read counters exclude the cooperative memory reads.
+Blocking service waits explicitly pump queued work. A job or block transform
+cannot be interrupted mid-call, so callers must bound their work. Threaded
+builds use the normal workers.
+
+The sanitized `kb_web_background_tests` target runs in Node and checks actual
+production reads, transforms, priorities, cancellation, lane draining, waits,
+event-loop yielding and service lifetimes. The CI Web job runs that target as
+well as its trusted browser input tests. Node verifies the queue contract;
+the cooked browser workload separately verifies real GPU rendering.

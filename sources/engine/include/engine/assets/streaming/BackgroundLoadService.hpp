@@ -25,6 +25,9 @@
 // BackgroundLoadService::Shared() hands out; the threads start with the first user and are
 // joined when the last one lets go. Frame compute stays on the ECS worker pool; nothing here
 // blocks it.
+// Single-threaded Web builds dispatch one queued job or read per browser event-loop callback.
+// Worker counts remain zero there; a request's work runs on the browser thread, so callbacks
+// must stay bounded. Explicit blocking waits pump queued requests. Threaded builds use workers.
 //
 // The service runs two kinds of request:
 //
@@ -87,6 +90,9 @@ enum class BackgroundJobClass : std::uint8_t {
 };
 
 class BackgroundLoadService;
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+struct BackgroundCooperativeDispatch;
+#endif
 
 // The shared state of one request. Owned jointly by the caller's handle and the service.
 class BackgroundRequest {
@@ -119,6 +125,9 @@ public:
 
 private:
     friend class BackgroundLoadService;
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    std::weak_ptr<BackgroundCooperativeDispatch> cooperative_;
+#endif
 
     std::filesystem::path path_;
     std::span<const std::uint8_t> memory_{};
@@ -182,7 +191,11 @@ struct BackgroundLoadServiceStats {
     std::uint32_t peakLongJobsRunning = 0U;
 };
 
-class BackgroundLoadService {
+class BackgroundLoadService
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    : public std::enable_shared_from_this<BackgroundLoadService>
+#endif
+{
 public:
     explicit BackgroundLoadService(BackgroundLoadServiceOptions options = {});
     BackgroundLoadService(const BackgroundLoadService&) = delete;
@@ -292,7 +305,7 @@ private:
     void WorkerLoop();
     void LongWorkerLoop();
     // Takes one job, or up to `count` startable reads, best first. Empty when stopping.
-    [[nodiscard]] std::vector<BackgroundRequestHandle> TakeBatch(std::size_t count);
+    [[nodiscard]] std::vector<BackgroundRequestHandle> TakeBatch(std::size_t count, bool wait = true);
     // Pops the best startable job of `queue`, parking jobs whose lane is full; null when none.
     // Needs mutex_.
     [[nodiscard]] BackgroundRequestHandle TakeJob(std::vector<QueueEntry>& queue);
@@ -304,6 +317,11 @@ private:
     void ServeBatch(std::vector<BackgroundRequestHandle>& batch);
     void RunJob(const BackgroundRequestHandle& request);
     void Finish(const BackgroundRequestHandle& request, bool succeeded);
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    void ScheduleCooperative();
+    void PumpCooperative();
+    std::shared_ptr<BackgroundCooperativeDispatch> cooperative_;
+#endif
 
     BackgroundLoadServiceOptions options_;
     mutable std::mutex mutex_;

@@ -23,7 +23,7 @@ import urllib.request
 from run_game_touch_tests import OBSERVER, RuntimeClient, TouchScenario, require
 
 
-def author_fixture(args, root, *, script_name="StorageFlow", script_source=None):
+def author_fixture(args, root, *, script_name="StorageFlow", script_source=None, configure=None):
     project, web = root / "Sample", root / "Web"
     web.mkdir()
     commands = []
@@ -61,9 +61,11 @@ def author_fixture(args, root, *, script_name="StorageFlow", script_source=None)
         project / "Assets/Scripts" / (script_name + ".lua"))
     run(args.cli, "scene-attach", "--project", project, "--scene", "Assets/Scenes/Main.21kbscene",
         "--node", "SaveButton", "--script", "/Game/Scripts/" + script_name + ".lua")
+    if configure is not None:
+        configure(run, component, project)
     run(args.cooker, "--project", project, "--target", "WebGL.wasm32",
         "--output", web / "Game.kbpack", "--engine-root", args.engine_root,
-        "--shaderc", args.shaderc, "--cache", root / "CookCache")
+        "--shaderc", args.shaderc, "--cache", args.cook_cache or root / "CookCache")
     for name in ["Game.html", "Game.js", "Game.wasm"]:
         shutil.copy2(args.directory / name, web / name)
     return web
@@ -352,6 +354,7 @@ def main(*, fixture=author_fixture, scenario=run_cases,
     for name in ["cli", "cooker", "engine-root", "shaderc", "directory", "browser", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--browser-arg", action="append", default=[])
+    parser.add_argument("--cook-cache", type=Path)
     args = parser.parse_args()
     if hasattr(ctypes, "windll"):
         ctypes.windll.kernel32.SetErrorMode(32771)
