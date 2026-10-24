@@ -27,10 +27,11 @@ void WriteTouchPoint(std::vector<std::uint8_t>& output, const InputTouchPoint& p
     io::WriteUInt8(output, static_cast<std::uint8_t>(point.phase));
 }
 
-[[nodiscard]] bool ReadTouchPoint(io::ByteReader& reader, InputTouchPoint& point) {
+[[nodiscard]] bool ReadTouchPoint(io::ByteReader& reader, InputTouchPoint& point, bool hasCancellation) {
     std::uint8_t phase = 0U;
     if (!reader.ReadUInt32(point.id) || !reader.ReadFloat(point.x) || !reader.ReadFloat(point.y) ||
-        !reader.ReadUInt8(phase) || phase > static_cast<std::uint8_t>(InputTouchPhase::Ended)) {
+        !reader.ReadUInt8(phase) || phase > static_cast<std::uint8_t>(
+            hasCancellation ? InputTouchPhase::Cancelled : InputTouchPhase::Ended)) {
         return false;
     }
     point.phase = static_cast<InputTouchPhase>(phase);
@@ -76,7 +77,7 @@ void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& fra
 [[nodiscard]] bool ReadFrame(
     io::ByteReader& reader,
     InputFrameSnapshot& frame,
-    bool hasTextInput) {
+    std::uint32_t version) {
     if (!reader.ReadFloat(frame.deltaSeconds)) {
         return false;
     }
@@ -113,7 +114,7 @@ void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& fra
     }
     frame.touchPoints.resize(touchCount);
     for (InputTouchPoint& point : frame.touchPoints) {
-        if (!ReadTouchPoint(reader, point)) {
+        if (!ReadTouchPoint(reader, point, version >= InputAssetFormat::RecordingBinaryVersion)) {
             return false;
         }
     }
@@ -126,7 +127,7 @@ void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& fra
             return false;
         }
     }
-    if (!hasTextInput) return true;
+    if (version < InputAssetFormat::RecordingTextInputBinaryVersion) return true;
 
     std::uint32_t textCount = 0U;
     if (!reader.ReadUInt32(textCount) ||
@@ -232,6 +233,7 @@ InputAssetLoadResult<InputRecording> DecodeInputRecording(std::span<const std::u
     std::uint32_t version = 0U;
     if (!reader.ReadUInt32(version) ||
         (version != InputAssetFormat::BinaryVersion &&
+            version != InputAssetFormat::RecordingTextInputBinaryVersion &&
             version != InputAssetFormat::RecordingBinaryVersion)) {
         return InputAssetLoadResult<InputRecording>{.succeeded = false, .asset = {}, .error = "Unsupported input recording version"};
     }
@@ -254,7 +256,7 @@ InputAssetLoadResult<InputRecording> DecodeInputRecording(std::span<const std::u
         if (!ReadFrame(
                 reader,
                 frame,
-                version >= InputAssetFormat::RecordingBinaryVersion)) {
+                version)) {
             return InputAssetLoadResult<InputRecording>{.succeeded = false, .asset = {}, .error = "Corrupt input recording frame"};
         }
     }

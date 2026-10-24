@@ -2381,6 +2381,10 @@ bool EditorHeadlessAutomation::SetGameplayTouches(
             Trace("gameplay_touches", false, "invalid-position");
             return false;
         }
+        if (point.phase > kb::input::InputTouchPhase::Cancelled) {
+            Trace("gameplay_touches", false, "invalid-phase");
+            return false;
+        }
     }
     context_.Scene().Input().MutableDeviceState().SetTouchPoints(
         points);

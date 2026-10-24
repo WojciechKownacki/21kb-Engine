@@ -14,8 +14,8 @@
 
 namespace kb::modules {
 
-// Scene UI input carries independent touch contacts.
-inline constexpr std::uint32_t kEngineModuleAbiVersion = 10U;
+// Touch cancellation is distinct from a normal contact release.
+inline constexpr std::uint32_t kEngineModuleAbiVersion = 11U;
 inline constexpr const char* kEngineModuleCreateSymbol = "kb_create_engine_module";
 inline constexpr const char* kEngineModuleDestroySymbol = "kb_destroy_engine_module";
 inline constexpr const char* kEngineModuleAbiVersionSymbol = "kb_engine_module_abi_version";

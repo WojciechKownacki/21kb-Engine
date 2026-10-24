@@ -16,7 +16,7 @@ terminal samples clear after the runtime consumes a frame. Ten active or pending
 samples fit without allocating contact storage. Extra new contacts do not replace
 earlier IDs.
 
-Window blur resets buttons and axes, ends contacts and closes active text input.
+Window blur resets buttons and axes, cancels contacts and closes active text input.
 Moving focus between elements inside the page does not count as losing window
 focus. A cancelled contact cannot return through an unpaired move; it needs a new
 start event. Touching a scene input field activates the browser text input bridge.
@@ -33,12 +33,16 @@ finger from pressing a button. The captured ID survives contact reordering and i
 release uses its own position while other fingers remain down. Focus loss ends the
 UI press without activation; later moves do not revive it. Native callers can pass
 the same contact list through `SceneUIInput::touchPoints`.
-This changes the public input structure and advances the engine module ABI to 10.
+The input structure and cancellation protocol use engine module ABI 11.
 Rebuild native engine modules; the module host rejects the previous ABI before
 calling a module's creation function.
 
+`InputTouchPhase::Cancelled` distinguishes interrupted contacts from normal
+`Ended` releases. Cancel, focus loss, resize and detachment clear `TouchDown` for
+those contacts. A cancelled UI contact releases its press without clicking. Input
+recordings use version 5 to preserve that distinction; versions 3 and 4 remain
+readable, including version 4's text and viewport fields.
+
 Multiple simultaneous UI captures, a complete virtual joystick and button flow,
 packaged-game behavior, WebGPU execution and other browser implementations require
-further integration coverage. The platform contact phases currently represent
-cancellation as an end; distinguishing cancellation from a normal release in UI
-requires a further input protocol change.
+further integration coverage.

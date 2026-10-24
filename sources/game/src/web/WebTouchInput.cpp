@@ -101,7 +101,8 @@ bool WebTouchInput::Process(int type, const EmscriptenTouchEvent& event, input::
         if (!touch.onTarget && !frame_.Contains(id)) continue;
         auto phase = input::InputTouchPhase::Moved;
         if (touch.isChanged && type == EMSCRIPTEN_EVENT_TOUCHSTART) phase = input::InputTouchPhase::Began;
-        else if (touch.isChanged && (type == EMSCRIPTEN_EVENT_TOUCHEND || type == EMSCRIPTEN_EVENT_TOUCHCANCEL)) phase = input::InputTouchPhase::Ended;
+        else if (touch.isChanged && type == EMSCRIPTEN_EVENT_TOUCHEND) phase = input::InputTouchPhase::Ended;
+        else if (touch.isChanged && type == EMSCRIPTEN_EVENT_TOUCHCANCEL) phase = input::InputTouchPhase::Cancelled;
         const auto& position = positions[static_cast<std::size_t>(index)];
         frame_.Update(id, position[0], position[1], phase);
         if (phase == input::InputTouchPhase::Began && begin_ != nullptr && frame_.Contains(id)) begin_(owner_, position[0], position[1]);

@@ -13,7 +13,7 @@ class TouchContactFrame {
 public:
     [[nodiscard]] bool Contains(std::uint32_t id) const noexcept {
         for (std::size_t index = 0U; index < count_; ++index) {
-            if (points_[index].id == id && points_[index].phase != input::InputTouchPhase::Ended) return true;
+            if (points_[index].id == id && input::IsTouchActive(points_[index].phase)) return true;
         }
         return false;
     }
@@ -21,7 +21,7 @@ public:
     void Update(std::uint32_t id, float x, float y, input::InputTouchPhase phase) noexcept {
         for (std::size_t index = count_; index > 0U; --index) {
             auto& point = points_[index - 1U];
-            if (point.id != id || point.phase == input::InputTouchPhase::Ended) continue;
+            if (point.id != id || input::IsTouchTerminal(point.phase)) continue;
             point.x = x;
             point.y = y;
             if (phase != input::InputTouchPhase::Moved || point.phase != input::InputTouchPhase::Began) point.phase = phase;
@@ -41,7 +41,9 @@ public:
     }
 
     void Cancel() noexcept {
-        for (std::size_t index = 0U; index < count_; ++index) points_[index].phase = input::InputTouchPhase::Ended;
+        for (std::size_t index = 0U; index < count_; ++index) {
+            if (input::IsTouchActive(points_[index].phase)) points_[index].phase = input::InputTouchPhase::Cancelled;
+        }
     }
 
     void Publish(input::InputDeviceState& state) const noexcept {
@@ -50,7 +52,7 @@ public:
         if (count_ == 0U) return;
         const input::InputTouchPoint* pointer = &points_[0];
         for (std::size_t index = 0U; index < count_; ++index) {
-            if (points_[index].phase != input::InputTouchPhase::Ended) {
+            if (input::IsTouchActive(points_[index].phase)) {
                 pointer = &points_[index];
                 break;
             }
@@ -62,7 +64,7 @@ public:
         std::size_t remaining = 0U;
         for (std::size_t index = 0U; index < count_; ++index) {
             auto point = points_[index];
-            if (point.phase == input::InputTouchPhase::Ended) continue;
+            if (input::IsTouchTerminal(point.phase)) continue;
             point.phase = input::InputTouchPhase::Moved;
             points_[remaining++] = point;
         }

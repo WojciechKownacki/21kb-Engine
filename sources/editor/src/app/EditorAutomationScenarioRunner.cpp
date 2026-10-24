@@ -4494,6 +4494,8 @@ ReadScriptValue(
                 parsedPhase = kb::input::InputTouchPhase::Moved;
             } else if (*phase == "ended") {
                 parsedPhase = kb::input::InputTouchPhase::Ended;
+            } else if (*phase == "cancelled") {
+                parsedPhase = kb::input::InputTouchPhase::Cancelled;
             } else {
                 return { false, "invalid touch phase" };
             }

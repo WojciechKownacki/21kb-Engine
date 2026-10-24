@@ -179,7 +179,7 @@ scenario-local aliases.
 | `key` | `key`, `down`; optional `gamepad` |
 | `analog` | `key`, `value`; optional `gamepad` |
 | `pointer` | `x`, `y`; optional positive `width`, `height` sets the input viewport extent |
-| `touch` | `points` array of `{id,x,y,phase}` where phase is `began`, `moved`, or `ended` |
+| `touch` | `points` array of `{id,x,y,phase}` where phase is `began`, `moved`, `ended`, or `cancelled` |
 | `focus` | `focused` |
 | `gamepad_connected` | `index`, `connected` |
 | `step` | `frames`; optional `dt` |

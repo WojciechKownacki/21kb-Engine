@@ -826,6 +826,16 @@ void TestIndependentTouchCapture() {
     device.SetHasFocus(true);
     frame(points);
     kb::tests::Require(!scene.UI().Pressed().IsValid(), "A move after focus restoration must not revive a UI press");
+    points[0].phase = Phase::Began;
+    frame(points);
+    kb::tests::Require(scene.UI().Pressed() == button.Entity(), "Cancellation fixture must capture the button");
+    static_cast<void>(scene.UI().DrainEvents());
+    points[0].phase = Phase::Cancelled;
+    frame(points);
+    kb::tests::Require(!scene.UI().Pressed().IsValid() &&
+        HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Canceled, button.Entity()) &&
+        !HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Clicked, button.Entity()),
+        "Explicit touch cancellation must release and cancel the button without activation");
 }
 
 void TestAuthoredDimensionsAndVisibility() {

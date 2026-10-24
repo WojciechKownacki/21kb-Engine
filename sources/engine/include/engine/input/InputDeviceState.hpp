@@ -218,7 +218,7 @@ public:
 private:
     [[nodiscard]] bool HasActiveTouch() const noexcept {
         for (std::size_t index = 0U; index < touchPointCount_; ++index) {
-            if (touchPoints_[index].phase != InputTouchPhase::Ended) {
+            if (IsTouchActive(touchPoints_[index].phase)) {
                 return true;
             }
         }

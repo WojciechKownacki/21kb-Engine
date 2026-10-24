@@ -91,7 +91,7 @@ def main():
             if (value["points"] == points and value["focus"] == focus and
                     (viewport is None or value["viewport"] == viewport) and
                     (pointer is None or value["pointer"] == pointer)):
-                assert value["touchDown"] == any(point[1] != 2 for point in points), value
+                assert value["touchDown"] == any(point[1] in (0, 1) for point in points), value
                 observations.append(dict(check=label, state=value))
                 return value
             if time.monotonic() >= until:
@@ -156,7 +156,7 @@ def main():
             client.evaluate("Module._kb_input_finish()")
             expect("consumed release", [[23, 1, 620, 300]])
             touch("touchCancel", [])
-            expect("browser cancel", [[23, 2, 620, 300]])
+            expect("browser cancel", [[23, 3, 620, 300]])
             client.evaluate("Module._kb_input_finish()")
             expect("consumed cancellation", [])
             assert snapshot()["mouseEvents"] == 2 and snapshot()["mouseLeft"] == 0, "Touch became emulated mouse input"
@@ -165,7 +165,7 @@ def main():
             second_id = client.call("Target.createTarget", url="about:blank", background=False)["targetId"]
             other = DevTools(endpoint(second_id)["webSocketDebuggerUrl"])
             other.call("Page.bringToFront")
-            expect("actual tab focus loss", [[7, 2, 200, 200]], focus=0)
+            expect("actual tab focus loss", [[7, 3, 200, 200]], focus=0)
             client.evaluate("Module._kb_input_finish()")
             expect("unfocused release consumed", [], focus=0)
             client.call("Page.bringToFront")
@@ -177,17 +177,25 @@ def main():
             touch("touchStart", [(7, 140, 150)])
             expect("resize fixture down", [[7, 0, 200, 200]])
             client.evaluate("document.getElementById('canvas').width=1200; Module._kb_input_resize()")
-            expect("resized viewport cancels old contact", [[7, 2, 200, 200]], viewport=[1200, 600])
+            expect("resized viewport cancels old contact", [[7, 3, 200, 200]], viewport=[1200, 600])
             client.evaluate("Module._kb_input_finish()")
             touch("touchCancel", [])
             touch("touchStart", [(7, 140, 150)])
-            before = expect("independent CSS/backbuffer scales", [[7, 0, 300, 200]], viewport=[1200, 600])
+            expect("independent CSS/backbuffer scales", [[7, 0, 300, 200]], viewport=[1200, 600])
+            touch("touchStart", [(7, 140, 150), (23, 340, 150)])
+            expect("two contacts before cancellation", [[7, 0, 300, 200], [23, 0, 900, 200]])
+            touch("touchCancel", [])
+            expect("browser cancels both contacts", [[7, 3, 300, 200], [23, 3, 900, 200]])
+            client.evaluate("Module._kb_input_finish()")
+            expect("both cancellations consumed", [])
+            touch("touchStart", [(7, 140, 150)])
+            before = expect("fresh contact after cancellation", [[7, 0, 300, 200]])
             client.evaluate("document.getElementById('text').focus(); document.getElementById('text').blur()")
             after = expect("child text focus is not window blur", [[7, 0, 300, 200]])
             assert before["focusChanges"] == after["focusChanges"], "Child focus reached window focus handler"
             assert after["mouseEvents"] == 2 and after["mouseLeft"] == 0
             client.evaluate("Module._kb_input_detach()")
-            detached = expect("handler detachment ends contacts", [[7, 2, 300, 200]])
+            detached = expect("handler detachment cancels contacts", [[7, 3, 300, 200]])
             assert detached["attached"] == 0
             assert client.evaluate("document.getElementById('canvas').style.touchAction") == "pan-x"
             touch("touchCancel", [])
@@ -200,6 +208,7 @@ def main():
             assert dom_events and all(event["trusted"] for event in dom_events), dom_events
             assert any(event["type"] == "touchend" and event["changed"] == [7] for event in dom_events), dom_events
             report.update(result="PASS", trustedTouchEvents=True, sanitizedWebAssembly=True,
+                          touchPhases=dict(began=0, moved=1, ended=2, cancelled=3),
                           mousePositiveControl=True, emulatedMouseEvents=0, observations=observations, domTouchEvents=dom_events)
     except Exception as error:
         report.update(error=str(error), observations=observations)

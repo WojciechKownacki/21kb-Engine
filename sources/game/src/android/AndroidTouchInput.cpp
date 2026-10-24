@@ -31,8 +31,10 @@ bool AndroidTouchInput::Process(const GameActivityMotionEvent& event) noexcept {
         if (index == actionIndex &&
             (action == AMOTION_EVENT_ACTION_DOWN || action == AMOTION_EVENT_ACTION_POINTER_DOWN)) {
             phase = input::InputTouchPhase::Began;
-        } else if (action == AMOTION_EVENT_ACTION_CANCEL || (index == actionIndex &&
-            (action == AMOTION_EVENT_ACTION_UP || action == AMOTION_EVENT_ACTION_POINTER_UP))) {
+        } else if (action == AMOTION_EVENT_ACTION_CANCEL) {
+            phase = input::InputTouchPhase::Cancelled;
+        } else if (index == actionIndex &&
+            (action == AMOTION_EVENT_ACTION_UP || action == AMOTION_EVENT_ACTION_POINTER_UP)) {
             phase = input::InputTouchPhase::Ended;
         }
         const auto& point = event.pointers[index];

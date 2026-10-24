@@ -143,11 +143,11 @@ public final class ControllerInstrumentation extends Instrumentation {
         awaitTouches(new int[]{7, 23}, new int[]{2, 1}, 35, 45, 90, 100);
         consumeTouchFrame(); awaitTouches(new int[]{23}, new int[]{1}, 90, 100);
         runOnMainSync(() -> touch(MotionEvent.ACTION_CANCEL, new int[]{23}, 90, 100));
-        awaitTouches(new int[]{23}, new int[]{2}, 90, 100);
+        awaitTouches(new int[]{23}, new int[]{3}, 90, 100);
         consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});
         runOnMainSync(() -> touch(MotionEvent.ACTION_DOWN, new int[]{7}, 30, 40));
         awaitTouches(new int[]{7}, new int[]{0}, 30, 40);
-        setFocused(false); awaitTouches(new int[]{7}, new int[]{2}, 30, 40);
+        setFocused(false); awaitTouches(new int[]{7}, new int[]{3}, 30, 40);
         consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{}); setFocused(true);
         runOnMainSync(() -> touch(MotionEvent.ACTION_MOVE, new int[]{7}, 50, 60));
         awaitTouches(new int[]{}, new int[]{});
@@ -163,13 +163,13 @@ public final class ControllerInstrumentation extends Instrumentation {
         while (SystemClock.uptimeMillis() < until);
         if (size[0] <= 0 || size[1] <= 0 || (size[0] > size[1]) != landscape)
             throw new AssertionError("Actual orientation and surface resize required");
-        awaitTouches(new int[]{7}, new int[]{2}, new float[]{30, 40}, size[0], size[1]);
+        awaitTouches(new int[]{7}, new int[]{3}, new float[]{30, 40}, size[0], size[1]);
         consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});
         float x = size[0] * 0.6f, y = size[1] * 0.4f;
         runOnMainSync(() -> touch(MotionEvent.ACTION_DOWN, new int[]{7}, x, y));
         awaitTouches(new int[]{7}, new int[]{0}, new float[]{x, y}, size[0], size[1]);
         runOnMainSync(() -> activity.detachTestSurface()); awaitSurface(2);
-        awaitTouches(new int[]{7}, new int[]{2}, x, y);
+        awaitTouches(new int[]{7}, new int[]{3}, x, y);
         consumeTouchFrame(); awaitTouches(new int[]{}, new int[]{});
         runOnMainSync(() -> activity.attachTestSurface()); awaitSurface(3);
         size = extent();

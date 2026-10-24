@@ -63,7 +63,7 @@ void VerifyAndroidTouchInput() {
              APP_CMD_WINDOW_RESIZED, APP_CMD_CONFIG_CHANGED}) {
         input.FinishFrame(); event = Down(); Require(input.Process(event), "Lifecycle fixture down");
         input.HandleAppCommand(command); input.Publish(state);
-        Require(state.TouchPoints().size() == 1U && state.TouchPoints()[0].phase == InputTouchPhase::Ended &&
+        Require(state.TouchPoints().size() == 1U && state.TouchPoints()[0].phase == InputTouchPhase::Cancelled &&
             !state.IsKeyDown(kb::input::InputKey::TouchDown), "Lifecycle cancellation must expose a terminal contact");
         input.Publish(state);
         Require(state.TouchPoints().size() == 1U, "Cancellation must remain until a frame consumes it");
@@ -75,11 +75,11 @@ void VerifyAndroidTouchInput() {
     event = Down(); Require(input.Process(event), "Viewport fixture down");
     input.SetViewport(360U, 640U); input.Publish(state);
     Require(state.PointerViewportWidth() == 360U && state.PointerViewportHeight() == 640U &&
-        state.TouchPoints()[0].phase == InputTouchPhase::Ended, "Resize must publish the new viewport and cancel old contacts");
+        state.TouchPoints()[0].phase == InputTouchPhase::Cancelled, "Resize must publish the new viewport and cancel old contacts");
     input.FinishFrame(); event = Down(); Require(input.Process(event), "Cancel fixture down");
     event.pointerCount = 0U; event.action = AMOTION_EVENT_ACTION_CANCEL;
     Require(input.Process(event), "Empty system cancel must be accepted"); input.Publish(state);
-    Require(state.TouchPoints()[0].phase == InputTouchPhase::Ended, "Empty system cancel must end known contacts");
+    Require(state.TouchPoints()[0].phase == InputTouchPhase::Cancelled, "Empty system cancel must cancel known contacts");
     input.FinishFrame();
     event = Down(); Require(input.Process(event), "Reused ID fixture down");
     event.action = AMOTION_EVENT_ACTION_UP; Require(input.Process(event), "Reused ID fixture up");

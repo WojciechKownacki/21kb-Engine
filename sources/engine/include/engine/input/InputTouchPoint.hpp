@@ -10,11 +10,20 @@ enum class InputTouchPhase : std::uint8_t {
     Began,
     Moved,
     Ended,
+    Cancelled,
 };
+
+[[nodiscard]] constexpr bool IsTouchActive(InputTouchPhase phase) noexcept {
+    return phase == InputTouchPhase::Began || phase == InputTouchPhase::Moved;
+}
+
+[[nodiscard]] constexpr bool IsTouchTerminal(InputTouchPhase phase) noexcept {
+    return phase == InputTouchPhase::Ended || phase == InputTouchPhase::Cancelled;
+}
 
 // One active touch contact. `id` is stable across frames for the same finger
 // (as long as it stays down) so callers can track a specific contact through
-// Began -> Moved* -> Ended, e.g. to drive a drag gesture.
+// Began -> Moved* -> Ended or Cancelled, e.g. to drive a drag gesture.
 struct InputTouchPoint {
     std::uint32_t id = 0U;
     float x = 0.0F;

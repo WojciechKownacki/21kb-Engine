@@ -2613,6 +2613,7 @@ void SceneUIAccess::ClearFocus() noexcept {
 
 bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const SceneUIInput& sourceInput, float deltaSeconds) {
     SceneUIInput input = sourceInput;
+    bool pointerCancelled = false;
     if (!std::isfinite(viewportWidth) || !std::isfinite(viewportHeight) || viewportWidth <= 0.0F ||
         viewportHeight <= 0.0F || !std::isfinite(deltaSeconds) || deltaSeconds < 0.0F ||
         !std::isfinite(input.scrollDelta) ||
@@ -2624,7 +2625,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
             return false;
     if (input.touchPoints.size() > kb::input::InputDeviceState::kMaxTouchPoints) return false;
     for (const auto& touch : input.touchPoints) {
-        if (!std::isfinite(touch.x) || !std::isfinite(touch.y) || touch.phase > kb::input::InputTouchPhase::Ended) return false;
+        if (!std::isfinite(touch.x) || !std::isfinite(touch.y) || touch.phase > kb::input::InputTouchPhase::Cancelled) return false;
     }
     SceneUIFrame frame;
     if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame)) {
@@ -2667,6 +2668,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         input.pointerAvailable = false;
         input.primaryDown = false;
         if (!focused) {
+            pointerCancelled = state.uiTouchCapture.has_value();
             state.uiTouchCapture.reset();
         } else if (state.uiTouchCapture.has_value()) {
             // Keep a terminal sample's own position even while other fingers move.
@@ -2674,9 +2676,10 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
                 &kb::input::InputTouchPoint::id);
             if (contact != input.touchPoints.end()) {
                 input.pointerPosition = {contact->x, contact->y};
-                input.pointerAvailable = true;
-                input.primaryDown = contact->phase != kb::input::InputTouchPhase::Ended;
-            }
+                pointerCancelled = contact->phase == kb::input::InputTouchPhase::Cancelled;
+                input.pointerAvailable = !pointerCancelled;
+                input.primaryDown = kb::input::IsTouchActive(contact->phase);
+            } else pointerCancelled = true;
             if (!input.primaryDown) state.uiTouchCapture.reset();
         } else {
             for (const auto& contact : input.touchPoints) {
@@ -2761,6 +2764,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     presentationDirty = UpdateScrollView(scene_, state, hovered, input, pressStarted, deltaSeconds) || presentationDirty;
     if (pressReleased && state.uiPressed.IsValid()) {
         const SceneEntity pressed = state.uiPressed;
+        if (pointerCancelled) Queue(state, scene_, SceneUIEventType::Canceled, pressed, &input);
         Queue(state, scene_, SceneUIEventType::Released, pressed, &input);
         const UIButton* button = scene_.Components().UI().TryGet<UIButton>(pressed);
         if (!dropped && pressed == hovered && (button == nullptr || button->submitOnRelease)) {

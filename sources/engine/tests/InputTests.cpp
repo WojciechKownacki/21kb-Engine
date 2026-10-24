@@ -463,6 +463,34 @@ void TestTouchPoints() {
     device.SetTouchPoints({});
     Require(!device.IsKeyDown(InputKey::TouchDown), "TouchDown should go false once every contact ends");
     Require(device.TouchPoints().empty(), "Clearing touch points should empty the list");
+    const std::array cancelled{InputTouchPoint{.id = 23U, .x = 50.0F, .y = 60.0F,
+        .phase = InputTouchPhase::Cancelled}};
+    device.SetTouchPoints(cancelled);
+    Require(!device.IsKeyDown(InputKey::TouchDown) && IsTouchTerminal(cancelled[0].phase),
+        "A cancelled contact must remain observable without holding TouchDown");
+    device.SetPointerViewportExtent(800U, 600U);
+    Require(device.AddTextInput(U'A'), "Cancellation recording text fixture failed");
+    const auto snapshot = CaptureInputFrame(device, 0.016F);
+    auto bytes = EncodeInputRecording(InputRecording{snapshot});
+    const auto restored = DecodeInputRecording(bytes);
+    Require(restored.succeeded && restored.asset.size() == 1U &&
+        restored.asset[0].touchPoints[0].phase == InputTouchPhase::Cancelled &&
+        restored.asset[0].textInput == snapshot.textInput && restored.asset[0].pointerViewportWidth == 800U,
+        "Current recordings must preserve cancellation, text and viewport state");
+    InputDeviceState replay;
+    ApplyInputFrame(replay, restored.asset[0]);
+    Require(!replay.IsKeyDown(InputKey::TouchDown) && replay.TouchPoints()[0].phase == InputTouchPhase::Cancelled,
+        "Replayed cancellation must not become an active contact");
+    const std::size_t versionOffset = InputAssetFormat::RecordingMagic.size();
+    bytes[versionOffset] = static_cast<std::uint8_t>(InputAssetFormat::RecordingTextInputBinaryVersion);
+    Require(!DecodeInputRecording(bytes).succeeded, "Legacy recording versions must reject unknown cancellation phases");
+    device.SetTouchPoints(ended);
+    auto legacyBytes = EncodeInputRecording(InputRecording{CaptureInputFrame(device, 0.016F)});
+    legacyBytes[versionOffset] = static_cast<std::uint8_t>(InputAssetFormat::RecordingTextInputBinaryVersion);
+    const auto legacy = DecodeInputRecording(legacyBytes);
+    Require(legacy.succeeded && legacy.asset[0].touchPoints[0].phase == InputTouchPhase::Ended &&
+        legacy.asset[0].textInput == snapshot.textInput && legacy.asset[0].pointerViewportWidth == 800U,
+        "Version-four recordings must retain normal release, text and viewport fields");
 }
 
 void TestTextInputDeviceStateAndEncoding() {

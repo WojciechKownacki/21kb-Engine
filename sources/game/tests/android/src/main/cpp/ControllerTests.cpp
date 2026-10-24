@@ -181,7 +181,7 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_touchMatches(
             static_cast<int>(points[index].phase) != expectedPhases[index] ||
             !Near(points[index].x, expectedCoordinates[index * 2U]) ||
             !Near(points[index].y, expectedCoordinates[index * 2U + 1U])) return false;
-        if (!active && points[index].phase != kb::input::InputTouchPhase::Ended) { primary = index; active = true; }
+        if (!active && kb::input::IsTouchActive(points[index].phase)) { primary = index; active = true; }
     }
     return observation.state.IsKeyDown(InputKey::TouchDown) == active &&
         (points.empty() || (Near(observation.state.PointerX(), points[primary].x) &&
@@ -296,8 +296,20 @@ extern "C" void android_main(android_app* app) {
         Require(!Paddleboat_isInitialized(), "Controller library shutdown failed");
         observation.stopped = true;
     } catch (const std::exception& error) {
-        const std::lock_guard lock{observationMutex};
-        observation.error = error.what();
-        observation.stopped = true;
+        {
+            const std::lock_guard lock{observationMutex};
+            observation.error = error.what();
+            observation.stopped = true;
+        }
+        // Complete native lifecycle handshakes so instrumentation can report the
+        // failed assertion instead of waiting forever for activity startup.
+        if (app == nullptr) return;
+        app->onAppCmd = nullptr;
+        app->userData = nullptr;
+        while (app->destroyRequested == 0) {
+            android_poll_source* source = nullptr;
+            static_cast<void>(ALooper_pollOnce(10, nullptr, nullptr, reinterpret_cast<void**>(&source)));
+            if (source != nullptr) source->process(app, source);
+        }
     }
 }
