@@ -103,11 +103,13 @@ template <typename Fn>
 void RunComponentMirrorNotificationTest() {
     kb::ecs::WorldConfig config;
     config.mirrorValueWritesOnlyForObservedComponents = false; // the observer below is a raw backend one
+    std::vector<float> notifications;
     kb::ecs::World world{ config };
     const auto component = world.RegisterComponent<EcsPosition>("test.MirrorPosition");
+    // Configure inheritance before an observer locks the component traits.
+    ecs_add_pair(world.NativeHandle(), component, EcsOnInstantiate, EcsInherit);
     const auto entity = world.CreateEntity();
     world.Set(entity, EcsPosition{});
-    std::vector<float> notifications;
     ecs_observer_desc_t observer{};
     observer.query.terms[0].id = component;
     observer.events[0] = EcsOnSet;
@@ -134,7 +136,6 @@ void RunComponentMirrorNotificationTest() {
     ecs_remove_id(world.NativeHandle(), ecs_strip_generation(entity.Id()), component);
     world.MarkModified<EcsPosition>(entity);
     kb::tests::Require(!ecs_has_id(world.NativeHandle(), ecs_strip_generation(entity.Id()), component), "MarkModified recreated a removed backend component");
-    ecs_add_pair(world.NativeHandle(), component, EcsOnInstantiate, EcsInherit);
     const auto base = ecs_new(world.NativeHandle());
     const EcsPosition basePosition{.x = 99.0F};
     ecs_set_id(world.NativeHandle(), base, component, sizeof(basePosition), &basePosition);
