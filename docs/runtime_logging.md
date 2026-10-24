@@ -58,9 +58,15 @@ The error clears after rebuilding; the ready fragment returns after scene
 submission. The first-frame flag records historical submission, so the error
 dataset and fragment take precedence while graphics are unavailable.
 
-If restoration does not arrive within 30 seconds, or rebuilding fails, the host
-reports `graphics-restore-timeout` or `graphics-restore` with a reload instruction,
-stops the loop, and shuts down the running scene once. This recovery path covers
+If restoration does not arrive within two seconds, the host replaces the canvas
+and asks bgfx to create a new GPU context. The replacement preserves canvas
+attributes, layout and the original touch policy, and updates `Module.canvas`.
+The old context's handlers are removed. At most three replacements are allowed
+until 300 consecutive submitted frames reset the retry budget.
+Failed surface creation, failed renderer rebuilding or exhausted retries report
+`graphics-surface`, `graphics-restore` or `graphics-restore-limit` with a reload
+instruction, stop the loop, and shut down the running scene once. A browser
+refusal to create a context remains a terminal error. This recovery path covers
 WebGL context events; WebGPU device-loss recovery is a separate requirement.
 
 The packaged browser regression runner uses the production host and normal
@@ -89,8 +95,11 @@ rendered frame, shader results and gravity, then uses the real
 new shader uploads, a continuous script counter and physics velocity, cancelled
 held contacts, and actual panel pixels after each restoration. Missing fault
 injection support or a software renderer fails the graphics recovery test.
-A separate loss without restoration must time out and shut down once.
-All five scenarios passed with hardware WebGL2 in
+The recreation case withholds restoration twice and requires two new canvases
+and actual hardware contexts, while the original contexts remain lost.
+The exhaustion case requires three successful recreations followed by an error,
+one script shutdown and a stopped simulation on the fourth loss.
+All six scenarios passed with hardware WebGL2 in
 headless Chrome using `--browser-arg=--use-angle=gl` (ANGLE/OpenGL). ANGLE/D3D11
 reached eight script ticks after the physics fix, but its context checks timed
 out or reported context loss; that configuration is not a passing graphics run.
@@ -99,6 +108,8 @@ long-running graphics and browser lifecycle acceptance. Linux execution and
 Android device delivery remain separate verification requirements.
 A full joystick/UI run still fails graphics checks after a tab focus change;
 input checks alone do not establish recovery of the rendered scene.
+That run reports a browser context-creation refusal after the GPU process exits;
+the controlled loss/recreation tests do not establish recovery from that fault.
 
 The positive package also resizes an authored UI panel and reads its actual
 pixels. The browser test observes the framebuffer status of each real texture

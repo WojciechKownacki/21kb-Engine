@@ -78,7 +78,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["cli", "cooker", "engine-root", "shaderc", "directory", "browser", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--case", choices=["positive", "ready", "tick", "graphics-loss", "graphics-timeout"], action="append")
+    parser.add_argument("--case", choices=["positive", "ready", "tick", "graphics-loss", "graphics-recreate", "graphics-exhaustion"], action="append")
     parser.add_argument("--browser-arg", action="append", default=[])
     args = parser.parse_args()
     for name in ["cli", "cooker", "engine_root", "shaderc", "directory", "browser", "output"]:
@@ -125,7 +125,7 @@ def main():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        for case in args.case or ["positive", "ready", "tick", "graphics-loss", "graphics-timeout"]:
+        for case in args.case or ["positive", "ready", "tick", "graphics-loss", "graphics-recreate", "graphics-exhaustion"]:
             marker = "packaged-runtime-" + case
             ready = 'error("' + marker + '")' if case == "ready" else 'Log("' + marker + '-ready")'
             tick = ('error("' + marker + '")' if case == "tick" else
@@ -213,14 +213,14 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                             if event.get("method") == "Runtime.exceptionThrown"]
                         require(not exceptions, "Unhandled browser/runtime exception: " + str(exceptions))
                         if state["data"].get("kbError"):
-                            require(case not in ("positive", "graphics-loss", "graphics-timeout"), "Positive runtime failed: " + str(state))
+                            require(case != "positive" and not case.startswith("graphics-"), "Positive runtime failed: " + str(state))
                             break
-                        if case in ("positive", "graphics-loss", "graphics-timeout") and marker + "-ticks" in (state.get("output") or ""):
+                        if (case == "positive" or case.startswith("graphics-")) and marker + "-ticks" in (state.get("output") or ""):
                             break
                         if time.monotonic() >= until:
                             raise TimeoutError("Packaged lifecycle result missing: " + str(state))
                         time.sleep(0.05)
-                    if case in ("positive", "graphics-loss", "graphics-timeout"):
+                    if case == "positive" or case.startswith("graphics-"):
                         require(state["data"].get("kbFirstFrame") == "true" and
                             state["data"].get("kbBackend") == "webgl", "Actual WebGL frame missing")
                         require(marker + "-ready" in state["output"], "Actual Lua ready Log missing")
@@ -249,7 +249,7 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                             state["initialPixel"] = capture_panel(client, directory, "before-loss")
                             state["recoveryCycles"] = []
                             client.call("Emulation.setTouchEmulationEnabled", enabled=True, maxTouchPoints=10)
-                            for cycle in range(2):
+                            for cycle in range(4 if case == "graphics-exhaustion" else 2):
                                 shader_count = client.evaluate("window.kbRuntimeGraphics.shaders.length")
                                 position = client.evaluate("(() => {const r = document.querySelector('#canvas')."
                                     "getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()")
@@ -264,7 +264,9 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                                     require(time.monotonic() < until, "Actual contact did not reach the running script")
                                     time.sleep(0.05)
                                 injected = client.evaluate("(() => {const ext = window.kbRuntimeGraphics.context.getExtension('WEBGL_lose_context');"
-                                    "if (!ext) return false; window.kbGraphicsLossExtension = ext; ext.loseContext(); return true;})()")
+                                    "if (!ext) return false; window.kbGraphicsLossExtension = ext;"
+                                    "window.kbLostGraphics = window.kbRuntimeGraphics.context;window.kbLostCanvas = window.kbLostGraphics.canvas;"
+                                    "ext.loseContext(); return true;})()")
                                 require(injected, "Actual WebGL context loss injection is unavailable")
                                 until = time.monotonic() + 10
                                 while True:
@@ -291,30 +293,33 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                                 after = client.evaluate("document.querySelector('#output')?.value") or ""
                                 require(re.findall(re.escape(marker) + r"-frame=(\d+)", after) == frames,
                                     "Game simulation continued after graphics loss")
-                                if case == "graphics-timeout":
-                                    until = time.monotonic() + 40
+                                if case == "graphics-exhaustion" and cycle == 3:
+                                    until = time.monotonic() + 15
                                     while True:
                                         expired = client.evaluate("({hash:location.hash,data:{...document.documentElement.dataset},"
                                             "output:document.querySelector('#output')?.value})")
                                         observations.append(expired)
-                                        if expired["data"].get("kbError") == "graphics-restore-timeout" and marker + "-destroyed" in (expired.get("output") or ""):
+                                        if expired["data"].get("kbError") == "graphics-restore-limit" and marker + "-destroyed" in (expired.get("output") or ""):
                                             break
                                         require(time.monotonic() < until, "Unrecoverable graphics loss did not stop cleanly")
                                         time.sleep(0.1)
-                                    require(expired["hash"] == "#kb-error-graphics-restore-timeout" and
+                                    require(expired["hash"] == "#kb-error-graphics-restore-limit" and
                                         expired["output"].count(marker + "-destroyed") == 1 and
                                         re.findall(re.escape(marker) + r"-frame=(\d+)", expired["output"]) == frames,
                                         "Failed recovery restarted simulation or repeated shutdown")
-                                    state["recoveryTimeout"] = expired
+                                    state["recoveryLimit"] = expired
                                     break
-                                require(client.evaluate("(() => {const ext = window.kbGraphicsLossExtension;"
-                                    "if (!ext) return false;ext.restoreContext();return true;})()"),
-                                    "Actual WebGL restoration injection is unavailable")
+                                if case == "graphics-loss":
+                                    require(client.evaluate("(() => {const ext = window.kbGraphicsLossExtension;"
+                                        "if (!ext) return false;ext.restoreContext();return true;})()"),
+                                        "Actual WebGL restoration injection is unavailable")
                                 until = time.monotonic() + 20
                                 while True:
                                     restored = client.evaluate("({hash:location.hash,data:{...document.documentElement.dataset},"
                                         "output:document.querySelector('#output')?.value,"
                                         "lost:window.kbRuntimeGraphics.context.isContextLost(),"
+                                        "newCanvas:window.kbRuntimeGraphics.context.canvas !== window.kbLostCanvas,"
+                                        "oldLost:window.kbLostGraphics.isContextLost(),renderer:window.kbRuntimeGraphics.renderer,"
                                         "shaders:window.kbRuntimeGraphics.shaders})")
                                     observations.append(restored)
                                     if not restored["lost"] and not restored["data"].get("kbError") and restored["hash"] == "#kb-ready-webgl":
@@ -327,9 +332,13 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                                     "Restoration reset or failed to resume the real script state")
                                 require(restored["output"].count(marker + "-ready") == 1 and
                                     marker + "-destroyed" not in restored["output"], "Restoration restarted the scene lifecycle")
-                                require(len(restored["shaders"]) > shader_count and
+                                require((len(restored["shaders"]) > shader_count if case == "graphics-loss" else
+                                    restored["newCanvas"] and restored["oldLost"] and bool(restored["shaders"])) and
                                     all(shader["compiled"] for shader in restored["shaders"]),
                                     "Real bgfx shader resources were not rebuilt")
+                                require(not any(word in restored["renderer"].lower() for word in
+                                    ["swiftshader", "llvmpipe", "softpipe", "microsoft basic", "warp", "software"]),
+                                    "Restoration switched to a software GPU")
                                 before_velocity = re.findall(re.escape(marker) + r"-state-y=([-+\d.eE]+)", output)
                                 resumed_velocity = re.findall(re.escape(marker) + r"-state-y=([-+\d.eE]+)", restored["output"][len(output):])
                                 require(before_velocity and resumed_velocity and

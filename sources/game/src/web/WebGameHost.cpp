@@ -131,6 +131,18 @@ EM_JS(void, DestroyBrowserTextInput, (), {
     state.control.remove();
     delete Module['kbTextInput'];
 });
+
+EM_JS(int, RecreateBrowserCanvas, (), {
+    const previous = document.querySelector('#canvas');
+    if (!previous || !previous.parentNode) return 0;
+    const canvas = previous.cloneNode(false);
+    if (Object.prototype.hasOwnProperty.call(previous, 'kbOriginalTouchAction')) {
+        canvas.kbOriginalTouchAction = previous.kbOriginalTouchAction;
+    }
+    previous.replaceWith(canvas);
+    Module['canvas'] = canvas;
+    return 1;
+});
 // clang-format on
 
 namespace {
@@ -347,6 +359,13 @@ private:
         return lost == EMSCRIPTEN_RESULT_SUCCESS && restored == EMSCRIPTEN_RESULT_SUCCESS;
     }
 
+    void UnregisterGraphicsEvents() noexcept {
+        if (!graphicsEventsRegistered_) return;
+        static_cast<void>(emscripten_set_webglcontextlost_callback(kCanvas, nullptr, true, nullptr));
+        static_cast<void>(emscripten_set_webglcontextrestored_callback(kCanvas, nullptr, true, nullptr));
+        graphicsEventsRegistered_ = false;
+    }
+
     bool RegisterInput(bool restore = false) noexcept {
         static_cast<void>(emscripten_set_keydown_callback(
             EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebGameHost::OnKey));
@@ -398,6 +417,9 @@ private:
             host->firstFrameReported_ = true;
             SetBrowserFirstFrameReady();
         }
+        if (frameSubmitted && host->healthyGraphicsFrames_ < 300U && ++host->healthyGraphicsFrames_ == 300U) {
+            host->graphicsRecreationAttempts_ = 0U;
+        }
         if (kb::scene::Scene* scene = host->runtime_.Scene(); scene != nullptr) {
             host->SetTextInputActive(scene->UI().HasFocusedTextInput());
             auto& state = scene->Input().MutableDeviceState();
@@ -420,6 +442,7 @@ private:
             host->graphicsContextLost_ = true;
             host->graphicsContextRestored_ = false;
             host->graphicsResourcesReleased_ = false;
+            host->healthyGraphicsFrames_ = 0U;
             host->graphicsLossTime_ = std::chrono::steady_clock::now();
             host->touches_.Suspend();
             host->SetTextInputActive(false);
@@ -448,10 +471,20 @@ private:
             }
         }
         if (!graphicsContextRestored_) {
-            if (std::chrono::steady_clock::now() - graphicsLossTime_ > std::chrono::seconds{30}) {
-                Fail("graphics-restore-timeout", "browser graphics did not recover; reload the game");
+            if (std::chrono::steady_clock::now() - graphicsLossTime_ < std::chrono::seconds{2}) {
+                return false;
             }
-            return false;
+            if (graphicsRecreationAttempts_ >= 3U) {
+                Fail("graphics-restore-limit", "browser graphics repeatedly failed; reload the game");
+                return false;
+            }
+            ++graphicsRecreationAttempts_;
+            UnregisterGraphicsEvents();
+            if (RecreateBrowserCanvas() == 0) {
+                Fail("graphics-surface", "browser graphics surface could not be recreated; reload the game");
+                return false;
+            }
+            std::fputs("kb_game_web: replacing unrestored graphics surface\n", stderr);
         }
         static_cast<void>(surface_.RefreshSize());
         if (!InitializeRenderer() || !RegisterGraphicsEvents() || !RegisterInput(true)) {
@@ -564,11 +597,7 @@ private:
     void Shutdown() noexcept {
         shuttingDown_ = true;
         emscripten_cancel_main_loop();
-        if (graphicsEventsRegistered_) {
-            static_cast<void>(emscripten_set_webglcontextlost_callback(kCanvas, nullptr, true, nullptr));
-            static_cast<void>(emscripten_set_webglcontextrestored_callback(kCanvas, nullptr, true, nullptr));
-            graphicsEventsRegistered_ = false;
-        }
+        UnregisterGraphicsEvents();
         touches_.Detach();
         SetTextInputActive(false);
         DestroyBrowserTextInput();
@@ -601,6 +630,8 @@ private:
     bool graphicsResourcesReleased_ = false;
     bool inputResumePending_ = false;
     bool shuttingDown_ = false;
+    std::uint32_t graphicsRecreationAttempts_ = 0U;
+    std::uint32_t healthyGraphicsFrames_ = 0U;
 
     friend int ::kb_web_append_committed_text(void* host, std::uint32_t codePoint) noexcept;
 };
