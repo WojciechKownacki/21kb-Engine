@@ -26,7 +26,10 @@ with ordered scalar writes, bit for bit, including versions, interpolation and
 render-proxy updates before and after each frame. It also checks the recorded
 golden hashes and compares transform-pass writes with batch writes. Input and
 state hashes are logged separately to diagnose fixture math differences between
-toolchains; a changed input hash does not turn a failed golden check into a pass.
+toolchains. Each recorded state corpus is keyed by its exact mover-input hash: the
+verified MSVC and GNU system math inputs have separate records. Unknown input
+hashes fail, as does any state difference from its matching record. The scalar
+and transform-pass comparisons remain bit-exact on every toolchain.
 
 ## Other jobs
 

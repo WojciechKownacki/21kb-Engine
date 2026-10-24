@@ -1913,7 +1913,8 @@ void RunTransformTableDirtyCountTest() {
 
 // Golden transform state of a fixed-dt run: FNV-1a over local and world TRS, versions and the dirty flag of every
 // object (in creation order), its interpolated pose and the runtime's render-proxy transform list, after every
-// write and every Update. The expected values were recorded from the transform path before the per-row lanes.
+// write and every Update. The original corpus predates the per-row lanes; additional math input corpora must
+// match ordered scalar writes before their full-state records are accepted.
 struct TransformGoldenHash {
     std::uint64_t value = 1469598103934665603ULL;
 
@@ -1946,7 +1947,13 @@ public:
 // hash), SetMany or a transform pass with the state hashed after every Update only.
 enum class TransformGoldenWrites { SetMany, Single, SetManyAfterUpdate, Pass };
 
-std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind, TransformGoldenWrites writes = TransformGoldenWrites::SetMany) {
+struct TransformGoldenResult {
+    std::uint64_t inputHash = 0U;
+    std::uint64_t stateHash = 0U;
+    [[nodiscard]] bool operator==(const TransformGoldenResult&) const noexcept = default;
+};
+
+TransformGoldenResult RunTransformGoldenScenario(TransformGoldenScene kind, TransformGoldenWrites writes = TransformGoldenWrites::SetMany) {
     kb::ecs::WorldConfig config{};
     config.mirrorValueWritesOnlyForObservedComponents = kind != TransformGoldenScene::Observed;
     kb::scene::Scene scene{ config };
@@ -2115,26 +2122,35 @@ std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind, TransformGol
     }
     std::cout << "transform_golden scene=" << static_cast<int>(kind) << " writes=" << static_cast<int>(writes)
               << " input_hash=0x" << std::hex << inputHash.value << " state_hash=0x" << hash.value << std::dec << '\n';
-    return hash.value;
+    return {.inputHash = inputHash.value, .stateHash = hash.value};
 }
 
 void RunTransformGoldenHashTest() {
     // A plain entity's write composes its world transform at once: the state before each Update shows it.
-    constexpr std::array<std::pair<TransformGoldenScene, std::uint64_t>, 4U> expected{ {
-        { TransformGoldenScene::Flat, 0x81ebf71ba3a68884ULL },
-        { TransformGoldenScene::Overlay, 0x3d4bc58dbb7dda50ULL },
-        { TransformGoldenScene::Observed, 0x7e94174614290a5fULL },
-        // the scene runs fixed steps; its plain entities, not interpolated, report their current transform
-        { TransformGoldenScene::Hierarchy, 0x06e0adb696b5e531ULL },
+    // System math libraries can produce different sin/cos mover input bits. Record each verified input corpus
+    // explicitly: an unknown corpus or a changed state still fails, without tolerances or OS-specific skips.
+    struct RecordedFixture {
+        std::uint64_t inputHash;
+        std::array<std::uint64_t, 4U> states;
+    };
+    constexpr std::array<RecordedFixture, 2U> fixtures{ {
+        {0xd8955481078a0ce2ULL, {0x81ebf71ba3a68884ULL, 0x3d4bc58dbb7dda50ULL,
+                                0x7e94174614290a5fULL, 0x06e0adb696b5e531ULL}},
+        {0x942b0ca16811503cULL, {0x9d43b2e4bd1095b1ULL, 0x6b7878c53fd0483eULL,
+                                0xa37c682dc6f68ccfULL, 0xca82c5c9e1fdefb0ULL}},
     } };
     bool matches = true;
-    for (const auto& [kind, value] : expected) {
-        const std::uint64_t scalar = RunTransformGoldenScenario(kind, TransformGoldenWrites::Single);
-        const std::uint64_t actual = RunTransformGoldenScenario(kind);
+    for (const auto kind : {TransformGoldenScene::Flat, TransformGoldenScene::Overlay,
+             TransformGoldenScene::Observed, TransformGoldenScene::Hierarchy}) {
+        const auto scalar = RunTransformGoldenScenario(kind, TransformGoldenWrites::Single);
+        const auto actual = RunTransformGoldenScenario(kind);
         kb::tests::Require(scalar == actual,
             "Batch transform state must match ordered scalar writes before and after every update");
-        if (actual != value) {
-            std::cerr << "transform golden scene " << static_cast<int>(kind) << " hash 0x" << std::hex << actual << std::dec << '\n';
+        const auto fixture = std::ranges::find(fixtures, actual.inputHash, &RecordedFixture::inputHash);
+        kb::tests::Require(fixture != fixtures.end(),
+            "Unrecorded transform mover input bits: verify the scalar reference and math corpus before recording a new golden");
+        if (actual.stateHash != fixture->states[static_cast<std::size_t>(kind)]) {
+            std::cerr << "transform golden scene " << static_cast<int>(kind) << " hash 0x" << std::hex << actual.stateHash << std::dec << '\n';
             matches = false;
         }
     }
@@ -2146,8 +2162,8 @@ void RunTransformGoldenHashTest() {
 // TRS, versions, interpolated poses and the render-proxy updates after each Update.
 void RunTransformPassMatchesSetManyTest() {
     for (const TransformGoldenScene kind : { TransformGoldenScene::Flat, TransformGoldenScene::Overlay, TransformGoldenScene::Observed, TransformGoldenScene::Hierarchy }) {
-        const std::uint64_t setMany = RunTransformGoldenScenario(kind, TransformGoldenWrites::SetManyAfterUpdate);
-        const std::uint64_t pass = RunTransformGoldenScenario(kind, TransformGoldenWrites::Pass);
+        const auto setMany = RunTransformGoldenScenario(kind, TransformGoldenWrites::SetManyAfterUpdate);
+        const auto pass = RunTransformGoldenScenario(kind, TransformGoldenWrites::Pass);
         if (setMany != pass) std::cerr << "transform pass scene " << static_cast<int>(kind) << " differs\n";
         kb::tests::Require(setMany == pass, "A transform pass left a different state than SetMany and Update");
     }
