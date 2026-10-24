@@ -10,7 +10,6 @@
 
 #include <cstddef>
 #include <stdexcept>
-#include <unordered_set>
 
 namespace kb::ecs {
 namespace {
@@ -18,15 +17,18 @@ namespace {
 [[nodiscard]] bool WouldCreateParentCycle(
     const ecs_world_t* world,
     Entity child,
-    Entity parent,
-    std::unordered_set<ecs_entity_t>& visitedAncestors) noexcept {
-    visitedAncestors.clear();
+    Entity parent) noexcept {
     const ecs_entity_t childId = FlecsEntityId(child);
-    for (ecs_entity_t ancestor = FlecsEntityId(parent); ancestor != 0; ancestor = ecs_get_parent(world, ancestor)) {
+    ecs_entity_t ancestor = FlecsEntityId(parent);
+    ecs_entity_t fastAncestor = ancestor;
+    while (ancestor != 0) {
         if (ancestor == childId) {
             return true;
         }
-        if (!visitedAncestors.insert(ancestor).second) {
+        ancestor = ecs_get_parent(world, ancestor);
+        if (fastAncestor != 0) fastAncestor = ecs_get_parent(world, fastAncestor);
+        if (fastAncestor != 0) fastAncestor = ecs_get_parent(world, fastAncestor);
+        if (ancestor != 0 && ancestor == fastAncestor) {
             return true;
         }
     }
@@ -80,8 +82,7 @@ Entity World::RelationTarget(Entity entity, RelationId relation, int index) cons
 void World::SetParent(Entity child, Entity parent) {
     ValidateEntityHandle(child, "SetParent");
     ValidateOptionalEntityHandle(parent, "SetParent");
-    std::unordered_set<ecs_entity_t> visitedAncestors;
-    if (WouldCreateParentCycle(world_, child, parent, visitedAncestors)) {
+    if (WouldCreateParentCycle(world_, child, parent)) {
         return;
     }
     ValidateStructuralChangeAllowed("SetParent");
@@ -110,12 +111,11 @@ void World::SetParents(std::span<const Entity> children, std::span<const Entity>
     }
 
     ValidateStructuralChangeAllowed("SetParents");
-    std::unordered_set<ecs_entity_t> visitedAncestors;
     bool changed = false;
     for (std::size_t index = 0; index < children.size(); ++index) {
         const Entity child = children[index];
         const Entity parent = parents[index];
-        if (child == parent || WouldCreateParentCycle(world_, child, parent, visitedAncestors)) {
+        if (child == parent || WouldCreateParentCycle(world_, child, parent)) {
             continue;
         }
 

@@ -3,8 +3,11 @@
 #include "SceneSystemTestSuites.hpp"
 #include "TestSuites.hpp"
 #include "TestSupport.hpp"
+#include "engine/ecs/World.hpp"
 
+#include <array>
 #include <atomic>
+#include <iostream>
 #include <cstdlib>
 #include <new>
 #include <string_view>
@@ -17,6 +20,32 @@ void RunAgentsFrameBenchmark();
 }
 
 namespace {
+
+void RunDeepParentCycleAllocationTest() {
+    kb::ecs::World world;
+    const auto root = world.CreateEntity();
+    auto leaf = root;
+    constexpr std::size_t depth = 256U;
+    for (std::size_t index = 0U; index < depth; ++index) {
+        const auto child = world.CreateEntity();
+        world.SetParent(child, leaf);
+        leaf = child;
+    }
+    kb::tests::BeginAllocationTally();
+    world.SetParent(root, leaf);
+    const auto single = kb::tests::EndAllocationTally();
+    const std::array children{root};
+    const std::array parents{leaf};
+    kb::tests::BeginAllocationTally();
+    world.SetParents(children, parents);
+    const auto batch = kb::tests::EndAllocationTally();
+    std::cout << "ecs_parent_cycle depth=" << depth << " single_allocations=" << single.count
+              << " batch_allocations=" << batch.count << '\n';
+    kb::tests::Require(!world.Parent(root).IsValid() && world.Parent(leaf).IsValid(),
+        "Deep ECS cycle rejection must preserve the original hierarchy");
+    kb::tests::Require(single.count == 0U && batch.count == 0U,
+        "Rejecting a deep parent cycle must not allocate ancestor storage");
+}
 
 bool RunSuite(std::string_view suite) {
     if (suite == "assets") {
@@ -33,6 +62,9 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSecurityTests();
     } else if (suite == "ecs") {
         kb::tests::RunEcsRuntimeTests();
+    } else if (suite == "ecs-relations") {
+        kb::tests::RunEcsRelationTests();
+        RunDeepParentCycleAllocationTest();
     } else if (suite == "ecs-native") {
         kb::tests::RunEcsNativeArchetypeStorageTests();
     } else if (suite == "scene-hierarchy") {
@@ -129,6 +161,7 @@ void RunAllSuites() {
     kb::tests::RunSaveGameTests();
     kb::tests::RunSecurityTests();
     kb::tests::RunEcsRuntimeTests();
+    RunDeepParentCycleAllocationTest();
     kb::tests::RunSceneHierarchyTests();
     kb::tests::RunSceneUITests();
     kb::tests::RunSceneSystemTests();
