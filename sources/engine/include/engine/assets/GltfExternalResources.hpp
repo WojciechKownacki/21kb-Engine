@@ -37,6 +37,8 @@ namespace kb::assets {
 // read from `sourceDirectory`; with an empty `sourceDirectory` only embedded buffers resolve.
 // A file that resolves outside `sourceDirectory` (through a link, for instance) is refused.
 // GLB binary chunks and base64 data URIs load as cgltf loads them.
+// Accessor offsets and strides, including sparse indices and values, must be aligned to their
+// component size. Misaligned documents fail with the accessor index before typed buffer reads.
 [[nodiscard]] bool LoadGltfBuffers(
     const cgltf_options& options,
     cgltf_data& data,

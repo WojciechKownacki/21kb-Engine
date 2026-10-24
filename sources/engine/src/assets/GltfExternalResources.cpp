@@ -110,6 +110,31 @@ struct ParsedGltfDeleter {
     void operator()(cgltf_data* data) const noexcept { cgltf_free(data); }
 };
 
+[[nodiscard]] bool ValidateAccessorAlignment(const cgltf_data& data, std::string* error) {
+    const auto aligned = [](const cgltf_buffer_view* view, cgltf_size offset, cgltf_size size) {
+        return size != 0U && offset % size == 0U && (view == nullptr || view->offset % size == 0U);
+    };
+    for (cgltf_size index = 0U; index < data.accessors_count; ++index) {
+        const cgltf_accessor& accessor = data.accessors[index];
+        const cgltf_size size = cgltf_component_size(accessor.component_type);
+        const char* part = nullptr;
+        if (!aligned(accessor.buffer_view, accessor.offset, size) || accessor.stride % size != 0U) {
+            part = "buffer offsets or stride";
+        } else if (accessor.is_sparse && !aligned(accessor.sparse.indices_buffer_view,
+                accessor.sparse.indices_byte_offset, cgltf_component_size(accessor.sparse.indices_component_type))) {
+            part = "sparse index offsets";
+        } else if (accessor.is_sparse && !aligned(accessor.sparse.values_buffer_view,
+                accessor.sparse.values_byte_offset, size)) {
+            part = "sparse value offsets";
+        }
+        if (part != nullptr) {
+            return Fail(error, "glTF accessor " + std::to_string(index) + " has misaligned " + part +
+                "; align each byte offset and stride to its component size.");
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 std::optional<std::filesystem::path> GltfRelativeResourcePath(std::string_view uri) {
@@ -162,6 +187,8 @@ bool LoadGltfBuffers(
     const std::filesystem::path& sourceDirectory,
     std::span<const ImportedAssetResource> embedded,
     std::string* error) {
+    // Accessor readers use typed loads, including for sparse indices and values.
+    if (!ValidateAccessorAlignment(data, error)) return false;
     for (cgltf_size index = 0U; index < data.buffers_count; ++index) {
         cgltf_buffer& buffer = data.buffers[index];
         if (buffer.data != nullptr || buffer.uri == nullptr || IsDataUri(buffer.uri)) continue;

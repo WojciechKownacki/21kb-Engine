@@ -71,9 +71,11 @@ void WriteSkeletalGltfFixture(const std::filesystem::path& folder) {
     binary.write(reinterpret_cast<const char*>(joints.data()), sizeof(joints));
     binary.write(reinterpret_cast<const char*>(weights.data()), sizeof(weights));
     binary.write(reinterpret_cast<const char*>(indices.data()), sizeof(indices));
+    const std::array<char, 2U> padding{};
+    binary.write(padding.data(), static_cast<std::streamsize>(padding.size()));
     binary.write(reinterpret_cast<const char*>(inverseBinds.data()), sizeof(inverseBinds));
     binary.close();
-    WriteTextFile(folder / "Hero.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Hero.bin","byteLength":242}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
+    WriteTextFile(folder / "Hero.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Hero.bin","byteLength":244}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":116,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
 }
 
 std::uint64_t ResolveFixtureMaterial(std::string_view name, void*) {
@@ -99,13 +101,15 @@ void WriteExtendedSkeletalGltfFixture(const std::filesystem::path& folder) {
     binary.write(reinterpret_cast<const char*>(joints.data()), sizeof(joints));
     binary.write(reinterpret_cast<const char*>(weights.data()), sizeof(weights));
     binary.write(reinterpret_cast<const char*>(indices.data()), sizeof(indices));
+    const std::array<char, 2U> padding{};
+    binary.write(padding.data(), static_cast<std::streamsize>(padding.size()));
     binary.write(reinterpret_cast<const char*>(inverseBinds.data()), sizeof(inverseBinds));
     binary.write(reinterpret_cast<const char*>(morphPositionDeltas.data()), sizeof(morphPositionDeltas));
     binary.write(reinterpret_cast<const char*>(times.data()), sizeof(times));
     binary.write(reinterpret_cast<const char*>(spineTranslations.data()), sizeof(spineTranslations));
     binary.write(reinterpret_cast<const char*>(morphWeights.data()), sizeof(morphWeights));
     binary.close();
-    WriteTextFile(folder / "HeroExtended.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"HeroExtended.bin","byteLength":318}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128},{"buffer":0,"byteOffset":242,"byteLength":36},{"buffer":0,"byteOffset":278,"byteLength":8},{"buffer":0,"byteOffset":286,"byteLength":24},{"buffer":0,"byteOffset":310,"byteLength":8}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"},{"bufferView":5,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":6,"componentType":5126,"count":2,"type":"SCALAR"},{"bufferView":7,"componentType":5126,"count":2,"type":"VEC3"},{"bufferView":8,"componentType":5126,"count":2,"type":"SCALAR"}],"materials":[{"name":"Skin"}],"meshes":[{"extras":{"targetNames":["Smile"]},"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0,"targets":[{"POSITION":5}]}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}],"animations":[{"samplers":[{"input":6,"output":7,"interpolation":"LINEAR"},{"input":6,"output":8,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":1,"path":"translation"}},{"sampler":1,"target":{"node":2,"path":"weights"}}]}]})");
+    WriteTextFile(folder / "HeroExtended.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"HeroExtended.bin","byteLength":320}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":116,"byteLength":128},{"buffer":0,"byteOffset":244,"byteLength":36},{"buffer":0,"byteOffset":280,"byteLength":8},{"buffer":0,"byteOffset":288,"byteLength":24},{"buffer":0,"byteOffset":312,"byteLength":8}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"},{"bufferView":5,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":6,"componentType":5126,"count":2,"type":"SCALAR"},{"bufferView":7,"componentType":5126,"count":2,"type":"VEC3"},{"bufferView":8,"componentType":5126,"count":2,"type":"SCALAR"}],"materials":[{"name":"Skin"}],"meshes":[{"extras":{"targetNames":["Smile"]},"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0,"targets":[{"POSITION":5}]}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}],"animations":[{"samplers":[{"input":6,"output":7,"interpolation":"LINEAR"},{"input":6,"output":8,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":1,"path":"translation"}},{"sampler":1,"target":{"node":2,"path":"weights"}}]}]})");
 }
 
 void RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest() {
@@ -433,6 +437,52 @@ void RunBlenderStyleGltfImportTest(const std::filesystem::path& root) {
 
 void RunSkeletalMeshAssetTests() {
     RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest();
+    {
+        const auto alignmentRoot = std::filesystem::temp_directory_path() / "21kb-gltf-alignment-tests";
+        std::filesystem::remove_all(alignmentRoot);
+        WriteSkeletalGltfFixture(alignmentRoot);
+        const auto source = alignmentRoot / "Hero.gltf";
+        const std::string valid = ReadTextFile(source);
+        const auto reject = [&](std::string_view needle, std::string_view replacement,
+                                std::string_view accessor) {
+            std::string document = valid;
+            ReplaceOnce(document, needle, replacement);
+            WriteTextFile(source, document);
+            std::string error;
+            kb::scene::SkeletalMeshGltfImportReport report;
+            Require(!kb::scene::SkeletalMeshGltfImporter::Import(source, 777U, &error, &report) &&
+                    error.find(accessor) != std::string::npos && error.find("align") != std::string::npos &&
+                    report.HasErrors(),
+                "Skeletal glTF import did not reject misaligned data with an accessor diagnostic");
+        };
+        reject(R"("byteOffset":116)", R"("byteOffset":114)", "accessor 4");
+        reject(R"("bufferView":2,"componentType":5126)",
+            R"("bufferView":2,"byteOffset":2,"componentType":5126)", "accessor 2");
+        reject(R"("byteOffset":60,"byteLength":48)",
+            R"("byteOffset":60,"byteLength":48,"byteStride":18)", "accessor 2");
+        reject(R"("bufferView":3,"componentType":5123)",
+            R"("bufferView":3,"byteOffset":1,"componentType":5123)", "accessor 3");
+        const std::string_view weights = R"({"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"})";
+        reject(weights, R"({"bufferView":2,"componentType":5126,"count":3,"type":"VEC4","sparse":{"count":1,"indices":{"bufferView":3,"byteOffset":1,"componentType":5123},"values":{"bufferView":2}}})", "accessor 2");
+        reject(weights, R"({"bufferView":2,"componentType":5126,"count":3,"type":"VEC4","sparse":{"count":1,"indices":{"bufferView":3,"byteOffset":2,"componentType":5125},"values":{"bufferView":2}}})", "accessor 2");
+        reject(weights, R"({"bufferView":2,"componentType":5126,"count":3,"type":"VEC4","sparse":{"count":1,"indices":{"bufferView":3,"componentType":5123},"values":{"bufferView":2,"byteOffset":2}}})", "accessor 2");
+        std::string error;
+        std::string sparse = valid;
+        ReplaceOnce(sparse, weights, R"({"bufferView":2,"componentType":5126,"count":3,"type":"VEC4","sparse":{"count":1,"indices":{"bufferView":3,"componentType":5123},"values":{"bufferView":2}}})");
+        WriteTextFile(source, sparse);
+        Require(kb::scene::SkeletalMeshGltfImporter::Import(source, 777U, &error).has_value(),
+            "Aligned sparse glTF no longer imports");
+        std::string strided = valid;
+        ReplaceOnce(strided, R"("byteOffset":60,"byteLength":48)",
+            R"("byteOffset":60,"byteLength":48,"byteStride":16)");
+        WriteTextFile(source, strided);
+        Require(kb::scene::SkeletalMeshGltfImporter::Import(source, 777U, &error).has_value(),
+            "Aligned strided glTF no longer imports");
+        WriteTextFile(source, valid);
+        Require(kb::scene::SkeletalMeshGltfImporter::Import(source, 777U, &error).has_value(),
+            "Aligned glTF fixture no longer imports after rejected variants");
+        std::filesystem::remove_all(alignmentRoot);
+    }
     {
         const auto blenderRoot = std::filesystem::temp_directory_path() / "21kb-skeletal-blender-style-import";
         std::filesystem::remove_all(blenderRoot);
@@ -769,7 +819,7 @@ void RunSkeletalMeshAssetTests() {
     WriteSkeletalGltfFixture(invalidMatrixRoot);
     std::fstream invalidMatrixBuffer{ invalidMatrixRoot / "Hero.bin", std::ios::in | std::ios::out | std::ios::binary };
     const float nan = std::numeric_limits<float>::quiet_NaN();
-    invalidMatrixBuffer.seekp(114, std::ios::beg);
+    invalidMatrixBuffer.seekp(116, std::ios::beg);
     invalidMatrixBuffer.write(reinterpret_cast<const char*>(&nan), sizeof(nan));
     invalidMatrixBuffer.close();
     Require(!kb::scene::SkeletalMeshGltfImporter::Import(
