@@ -78,7 +78,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["cli", "cooker", "engine-root", "shaderc", "directory", "browser", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--case", choices=["positive", "ready", "tick", "graphics-loss", "graphics-recreate", "graphics-exhaustion"], action="append")
+    parser.add_argument("--case", choices=["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion"], action="append")
     parser.add_argument("--browser-arg", action="append", default=[])
     args = parser.parse_args()
     for name in ["cli", "cooker", "engine_root", "shaderc", "directory", "browser", "output"]:
@@ -125,7 +125,7 @@ def main():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        for case in args.case or ["positive", "ready", "tick", "graphics-loss", "graphics-recreate", "graphics-exhaustion"]:
+        for case in args.case or ["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion"]:
             marker = "packaged-runtime-" + case
             ready = 'error("' + marker + '")' if case == "ready" else 'Log("' + marker + '-ready")'
             tick = ('error("' + marker + '")' if case == "tick" else
@@ -151,6 +151,8 @@ def main():
             directory.mkdir()
             for name in ["Game.html", "Game.js", "Game.wasm"]:
                 shutil.copy2(args.directory / name, directory / name)
+            if case == "loader":
+                (directory / "Game.wasm").unlink()
             run(args.cooker, "--project", project, "--target", "WebGL.wasm32",
                 "--output", directory / "Game.kbpack", "--engine-root", args.engine_root,
                 "--shaderc", args.shaderc, "--cache", root / "CookCache")
@@ -181,6 +183,8 @@ def main():
                     client = RuntimeClient(target["webSocketDebuggerUrl"])
                     client.call("Runtime.enable")
                     client.call("Page.enable")
+                    if case == "loader":
+                        client.call("Network.enable")
                     client.call("Page.bringToFront")
                     # Observe the context actually used by the host; do not create a test context.
                     client.call("Page.addScriptToEvaluateOnNewDocument", source="""
@@ -211,7 +215,7 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                         observations.append(state)
                         exceptions = [event["params"]["exceptionDetails"] for event in client.events
                             if event.get("method") == "Runtime.exceptionThrown"]
-                        require(not exceptions, "Unhandled browser/runtime exception: " + str(exceptions))
+                        require(case == "loader" or not exceptions, "Unhandled browser/runtime exception: " + str(exceptions))
                         if state["data"].get("kbError"):
                             require(case != "positive" and not case.startswith("graphics-"), "Positive runtime failed: " + str(state))
                             break
@@ -220,7 +224,17 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                         if time.monotonic() >= until:
                             raise TimeoutError("Packaged lifecycle result missing: " + str(state))
                         time.sleep(0.05)
-                    if case == "positive" or case.startswith("graphics-"):
+                    if case == "loader":
+                        require(state["data"].get("kbError") == "runtime-aborted" and state["hash"] == "#kb-error-runtime-aborted" and
+                            not state["data"].get("kbFirstFrame") and marker not in (state.get("output") or ""),
+                            "The missing WASM file did not produce a startup failure")
+                        require(any(event.get("method") == "Network.responseReceived" and
+                            event["params"]["response"]["url"].endswith("/Game.wasm") and
+                            event["params"]["response"]["status"] == 404 for event in client.events),
+                            "The loader test did not observe the actual missing WASM response")
+                        require(exceptions and all("Aborted(" in json.dumps(error) for error in exceptions),
+                            "The startup exception did not come from the actual WASM loader")
+                    elif case == "positive" or case.startswith("graphics-"):
                         require(state["data"].get("kbFirstFrame") == "true" and
                             state["data"].get("kbBackend") == "webgl", "Actual WebGL frame missing")
                         require(marker + "-ready" in state["output"], "Actual Lua ready Log missing")
@@ -236,16 +250,45 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                             "Rendered package has no live WebGL2 context: " + str(state["gl"]))
                         require(state["gl"]["shaders"] and all(shader["compiled"] for shader in state["gl"]["shaders"]),
                             "Actual host shader compilation failed")
+                        require(not any(word in state["gl"]["renderer"].lower() for word in
+                            ["swiftshader", "llvmpipe", "softpipe", "microsoft basic", "warp", "software"]),
+                            "Packaged graphics checks require a hardware GPU: " + str(state["gl"]))
                         if case == "positive":
+                            require(client.evaluate("typeof Module.requestFullscreen === 'function'"),
+                                "The existing browser fullscreen entry point was removed")
                             client.evaluate("Object.assign(document.querySelector('#canvas').style,{width:'800px',height:'600px'})")
                             state["panelPixel"] = capture_panel(client, directory, "resized-panel")
+                            target_id = client.call("Target.createTarget", url="about:blank", background=False)["targetId"]
+                            other = None
+                            try:
+                                with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2) as response:
+                                    target = next(t for t in json.load(response) if t["id"] == target_id)
+                                other = RuntimeClient(target["webSocketDebuggerUrl"])
+                                other.call("Page.enable")
+                                other.call("Page.bringToFront")
+                                require(client.evaluate("!document.hasFocus() && document.visibilityState === 'hidden'"),
+                                    "The own second tab did not cause actual focus loss")
+                                client.call("Page.bringToFront")
+                            finally:
+                                client.call("Target.closeTarget", targetId=target_id)
+                                if other is not None:
+                                    other.close()
+                            state["focusRestoredPixel"] = capture_panel(client, directory, "focus-restored-panel")
+                            state["focusRestored"] = client.evaluate("({data:{...document.documentElement.dataset},"
+                                "focused:document.hasFocus(),lost:window.kbRuntimeGraphics.context.isContextLost(),"
+                                "renderer:window.kbRuntimeGraphics.renderer,shaders:window.kbRuntimeGraphics.shaders,"
+                                "statusHidden:document.querySelector('#status')?.hidden})")
+                            require(state["focusRestored"]["focused"] and not state["focusRestored"]["lost"] and
+                                not state["focusRestored"]["data"].get("kbError") and state["focusRestored"]["statusHidden"],
+                                "The rendered package did not survive an actual tab focus change")
+                            require(not any(word in state["focusRestored"]["renderer"].lower() for word in
+                                ["swiftshader", "llvmpipe", "softpipe", "microsoft basic", "warp", "software"]) and
+                                all(shader["compiled"] for shader in state["focusRestored"]["shaders"]),
+                                "Focus recovery did not retain actual hardware rendering")
                             state["textureCopies"] = client.evaluate("window.kbRuntimeGraphics.copies")
                             require(state["textureCopies"] and all(item["complete"] for item in state["textureCopies"]),
                                 "UI-only rendering attempted a copy from an incomplete framebuffer")
                         if case.startswith("graphics-"):
-                            require(not any(word in state["gl"]["renderer"].lower() for word in
-                                ["swiftshader", "llvmpipe", "softpipe", "microsoft basic", "warp", "software"]),
-                                "Graphics recovery requires a hardware GPU: " + str(state["gl"]))
                             state["initialPixel"] = capture_panel(client, directory, "before-loss")
                             state["recoveryCycles"] = []
                             client.call("Emulation.setTouchEmulationEnabled", enabled=True, maxTouchPoints=10)
@@ -362,7 +405,15 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                             "Actual cooked Lua fault diagnostic missing")
                         require((state["data"].get("kbFirstFrame") == "true") == (case == "tick"),
                             "Failure occurred at the wrong lifecycle phase")
-                    require(not any(event.get("method") == "Runtime.exceptionThrown" for event in client.events),
+                    if case in ("ready", "tick", "loader"):
+                        state["failureMessage"] = client.evaluate("({hidden:document.querySelector('#status')?.hidden,"
+                            "text:document.querySelector('#status')?.textContent})")
+                        require(state["failureMessage"]["hidden"] is False and
+                            "Reload" in state["failureMessage"]["text"], "The player did not show an actionable failure")
+                    final_exceptions = [event["params"]["exceptionDetails"] for event in client.events
+                        if event.get("method") == "Runtime.exceptionThrown"]
+                    require((case == "loader" and final_exceptions and all("Aborted(" in json.dumps(error) for error in final_exceptions)) or
+                        (case != "loader" and not final_exceptions),
                         "Packaged runtime caused an unhandled browser/WASM exception")
                     report["cases"].append(dict(case=case, result="PASS", state=state))
             finally:

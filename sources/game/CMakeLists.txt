@@ -192,12 +192,16 @@ if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
     add_executable(${KB_GAME_WEB_TARGET} src/web/WebGameHost.cpp src/web/WebTouchInput.cpp)
     target_link_libraries(${KB_GAME_WEB_TARGET} PRIVATE kb_packaged_game_host_core)
     target_link_options(${KB_GAME_WEB_TARGET} PRIVATE
+        "--shell-file" "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGameShell.html"
+        "-sEXPORTED_RUNTIME_METHODS=requestFullscreen"
         "-sFETCH=1"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sMAXIMUM_MEMORY=2147483648"
         "-sSTACK_SIZE=1048576"
         "-sASSERTIONS=0"
     )
+    set_property(TARGET ${KB_GAME_WEB_TARGET} APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebGameShell.html")
     if(KB_WEB_RENDERER STREQUAL "WEBGPU")
         target_compile_definitions(${KB_GAME_WEB_TARGET} PRIVATE KB_WEB_RENDERER_WEBGPU=1)
         target_compile_options(${KB_GAME_WEB_TARGET} PRIVATE "--use-port=emdawnwebgpu")

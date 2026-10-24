@@ -99,17 +99,29 @@ The recreation case withholds restoration twice and requires two new canvases
 and actual hardware contexts, while the original contexts remain lost.
 The exhaustion case requires three successful recreations followed by an error,
 one script shutdown and a stopped simulation on the fourth loss.
-All six scenarios passed with hardware WebGL2 in
-headless Chrome using `--browser-arg=--use-angle=gl` (ANGLE/OpenGL). ANGLE/D3D11
-reached eight script ticks after the physics fix, but its context checks timed
-out or reported context loss; that configuration is not a passing graphics run.
+The positive package resizes a real UI panel, changes focus to a second owned
+tab and returns, then requires live hardware graphics and the panel's pixels.
+The loader case removes the fixture's WASM file and requires its actual HTTP 404,
+the loader abort result and a visible reload instruction. Script failures also
+require an actionable player message. These startup failures do not count as
+passing rendered frames.
+All seven scenarios passed with hardware WebGL2 in
+headless Chrome using `--browser-arg=--use-angle=gl` (ANGLE/OpenGL).
+The attempted ANGLE/D3D11 and Edge/OpenGL configurations failed startup checks;
+their graphics execution remains unverified.
 These short lifecycle checks are separate from full joystick/UI, audio, storage,
 long-running graphics and browser lifecycle acceptance. Linux execution and
 Android device delivery remain separate verification requirements.
-A full joystick/UI run still fails graphics checks after a tab focus change;
-input checks alone do not establish recovery of the rendered scene.
-That run reports a browser context-creation refusal after the GPU process exits;
-the controlled loss/recreation tests do not establish recovery from that fault.
+Browser exports use `sources/game/src/web/WebGameShell.html`, with the game
+canvas, hidden diagnostics and a terminal failure message. Loading and recovery
+update the page title. The canvas follows the viewport; stdout is also retained
+in a bounded diagnostic buffer. CMake treats the page as a link dependency.
+`Module.requestFullscreen` remains exported for embedding pages.
+An authored joystick and independent native UI button passed trusted touch,
+cancellation, real tab focus changes and DPI/viewport resizing with actual GPU
+pixel checks on desktop Chrome. This uses desktop touch emulation; physical
+mobile browsers, the remaining browser/backend matrix and long-running
+acceptance remain separate requirements.
 
 The positive package also resizes an authored UI panel and reads its actual
 pixels. The browser test observes the framebuffer status of each real texture
@@ -117,5 +129,4 @@ copy without changing the copy operation. Scenes without mesh, swarm, decal,
 stroke or particle emitters skip the transparent depth copy; UI alone does not
 need it. This avoids invalid depth-to-color framebuffer copies in otherwise
 empty WebGL scenes. Depth copying for scenes with geometry remains a separate
-WebGL validation requirement. The full joystick focus/resize failure above
-remains open.
+WebGL validation requirement.

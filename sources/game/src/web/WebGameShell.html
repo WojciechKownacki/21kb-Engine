@@ -1,0 +1,41 @@
+<!doctype html><html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Game</title>
+<style>
+    html, body { margin:0; overflow:hidden; background:#000; color:#fff; font-family:system-ui,sans-serif; }
+    #canvas { display:block; width:100vw; height:100vh; outline:0; touch-action:none; }
+    #status { position:fixed; inset:0; display:grid; place-items:center; pointer-events:none; }
+    #status[hidden] { display:none; }
+  </style><body><canvas id="canvas" width="300" height="150"></canvas><textarea id="output" style="display:none"></textarea>
+<div id="status" hidden></div><script>
+    var Module = (() => {
+      const status = document.querySelector('#status');
+      const output = document.querySelector('#output');
+      function updateStatus() {
+        const state = document.documentElement.dataset;
+        const restoring = state.kbError === 'graphics-context-lost';
+        const failed = !!state.kbError && !restoring;
+        const ready = !state.kbError && state.kbFirstFrame === 'true';
+        document.title = failed ? 'Unable to continue — Game' : restoring ? 'Restoring graphics — Game' : ready ? 'Game' : 'Loading — Game';
+        document.querySelector('#canvas').setAttribute('aria-busy', ready ? 'false' : 'true');
+        status.hidden = !failed;
+        status.textContent = failed ? 'Unable to continue. Reload this page.' : '';
+      }
+      new MutationObserver(updateStatus).observe(document.documentElement, {
+        attributes:true, attributeFilter:['data-kb-error','data-kb-first-frame']
+      });
+      return {
+        canvas: document.querySelector('#canvas'),
+        print: function(...args) {
+          const text = args.join(' ');
+          console.log(text);
+          output.value = (output.value + text + '\n').slice(-1048576);
+        },
+        printErr: function(...args) { console.error(args.join(' ')); },
+        setStatus: updateStatus,
+        onAbort: function() {
+          document.documentElement.dataset.kbError = 'runtime-aborted';
+          location.hash = 'kb-error-runtime-aborted';
+          updateStatus();
+        }
+      };
+    })();
+  </script>{{{ SCRIPT }}}</body></html>
