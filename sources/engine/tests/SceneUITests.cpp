@@ -1828,10 +1828,7 @@ void TestFrameAmongManyRootsMatchesRecordedFrame() {
     kb::tests::Require(hash == expected, "UI frame among many roots differs from the recorded frame");
 }
 
-// The frame builder walks the roots above UI objects only: a small overlay next to a million plain roots must
-// build in well under a millisecond and without large allocations.
-void TestFrameNextToMillionRootsIsCheap() {
-    kb::scene::Scene scene;
+void PopulateMillionRootOverlay(kb::scene::Scene& scene) {
     const std::vector<kb::scene::SceneObjectDesc> descs(1'000'000U);
     static_cast<void>(scene.Entities().CreateObjects(descs));
     const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
@@ -1840,6 +1837,15 @@ void TestFrameNextToMillionRootsIsCheap() {
         text.rectTransform = Rect(10.0F, 10.0F + 30.0F * static_cast<float>(index), 200.0F, 24.0F);
         static_cast<void>(AddUI(scene, canvas, text));
     }
+    kb::tests::Require(scene.Entities().Count() == 1'000'009U,
+        "Overlay profiling scene must contain a million plain roots and nine UI objects");
+}
+
+// The frame builder walks the roots above UI objects only: a small overlay next to a million plain roots must
+// build in well under a millisecond and without large allocations.
+void TestFrameNextToMillionRootsIsCheap() {
+    kb::scene::Scene scene;
+    PopulateMillionRootOverlay(scene);
     const kb::scene::SceneUIQueries ui{scene};
     kb::scene::SceneUIFrame frame;
     std::array<double, 5U> samples{};
@@ -1920,6 +1926,42 @@ void RunSceneUIBuildFrameBenchmark() {
     }
     std::ranges::sort(samples);
     std::cout << "ui_buildframe_roots=" << rootCount << " median_ms=" << samples[2] << '\n';
+}
+
+void RunSceneUIBuildFrameProfile() {
+    kb::scene::Scene scene;
+    PopulateMillionRootOverlay(scene);
+    const kb::scene::SceneUIQueries ui{scene};
+    kb::scene::SceneUIFrame frame;
+    for (int warmup = 0; warmup < 2; ++warmup) {
+        kb::tests::Require(ui.BuildFrame(1920.0F, 1080.0F, frame) && frame.elements.size() == 9U,
+            "UI profiling workload must build the complete overlay");
+    }
+    const auto expectedHash = HashUIFrame(frame);
+    constexpr std::size_t frameCount = 10'000U;
+    std::vector<double> samples(frameCount);
+    std::cout << "{\"schema\":\"21kb.scene-ui-profile/v1\",\"phase\":\"begin\",\"frames\":"
+              << frameCount << ",\"budgetEvaluated\":false}" << std::endl;
+    kb::tests::BeginAllocationTally();
+    for (double& sample : samples) {
+        const auto start = std::chrono::steady_clock::now();
+        const bool built = ui.BuildFrame(1920.0F, 1080.0F, frame);
+        sample = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        kb::tests::Require(built && frame.elements.size() == 9U,
+            "UI profiling workload must build the complete overlay on every frame");
+    }
+    const auto allocations = kb::tests::EndAllocationTally();
+    kb::tests::Require(HashUIFrame(frame) == expectedHash,
+        "UI profiling workload must preserve the complete frame contents");
+    std::ranges::sort(samples);
+    std::cout << "{\"schema\":\"21kb.scene-ui-profile/v1\",\"phase\":\"complete\",\"roots\":1000000,"
+                 "\"elements\":9,\"frames\":" << frameCount
+              << ",\"warmupFrames\":2,\"clock\":\"steady_wall_ms\",\"p50\":" << samples[(frameCount - 1U) * 50U / 100U]
+              << ",\"p95\":" << samples[(frameCount - 1U) * 95U / 100U]
+              << ",\"p99\":" << samples[(frameCount - 1U) * 99U / 100U]
+              << ",\"allocations\":" << allocations.count << ",\"allocationBytes\":" << allocations.bytes
+              << ",\"largeAllocations\":" << allocations.largeCount
+              << ",\"budgetEvaluated\":false}" << std::endl;
 }
 
 } // namespace kb::tests

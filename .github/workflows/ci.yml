@@ -125,6 +125,7 @@ jobs:
           }
 
       - name: Test
+        id: tests
         shell: pwsh
         run: |
           $testArgs = @("--test-dir", "build/ci", "-C", "${{ matrix.configuration }}", "--output-on-failure",
@@ -142,6 +143,29 @@ jobs:
             exit $LASTEXITCODE
           }
 
+      - name: Profile Linux UI after a test failure
+        if: failure() && runner.os == 'Linux' && steps.tests.outcome == 'failure'
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          if ! grep -q ':kb_engine_scene_ui$' build/ci/Testing/Temporary/LastTestsFailed.log; then
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends linux-tools-generic
+          perf_tool="$(find /usr/lib/linux-tools -type f -name perf | sort -V | tail -n 1)"
+          test -x "$perf_tool"
+          mkdir -p build/ci/ui-profile
+          # Upload aggregated symbols and call graphs only, never the raw recording.
+          trap 'sudo rm -f build/ci/ui-profile/perf.data build/ci/ui-profile/perf.data.old' EXIT
+          sudo "$perf_tool" record --event cpu-clock:u --freq 199 --call-graph fp \
+            --output build/ci/ui-profile/perf.data -- \
+            build/ci/engine/kb_engine_tests scene-ui-profile > build/ci/ui-profile/workload.log 2>&1
+          sudo "$perf_tool" report --stdio --no-children --sort symbol --percent-limit 0.5 \
+            --input build/ci/ui-profile/perf.data > build/ci/ui-profile/symbols.txt
+          sudo "$perf_tool" report --stdio --children --sort symbol --percent-limit 0.5 \
+            --input build/ci/ui-profile/perf.data > build/ci/ui-profile/call-graph.txt
+
       - name: Keep test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -150,6 +174,9 @@ jobs:
           path: |
             build/ci/TestResults.xml
             build/ci/Testing/Temporary/LastTest.log
+            build/ci/ui-profile/workload.log
+            build/ci/ui-profile/symbols.txt
+            build/ci/ui-profile/call-graph.txt
           if-no-files-found: ignore
 
       # LIB-024: fail the build on a breaking change to the script API

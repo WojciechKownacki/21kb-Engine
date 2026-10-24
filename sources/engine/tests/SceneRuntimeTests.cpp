@@ -21,6 +21,7 @@ void RunScriptNativeHeaderReloadTest();
 void RunPhysicsReplayOnlyTest();
 void RunPhysicsStepSpikeBenchmark();
 void RunAgentsFrameBenchmark();
+void RunSceneUIBuildFrameProfile();
 }
 
 namespace {
@@ -89,6 +90,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneUITests();
     } else if (suite == "scene-ui-bench") {
         kb::tests::RunSceneUIBuildFrameBenchmark();
+    } else if (suite == "scene-ui-profile") {
+        kb::tests::RunSceneUIBuildFrameProfile();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
     } else if (suite == "physics-replay") {
