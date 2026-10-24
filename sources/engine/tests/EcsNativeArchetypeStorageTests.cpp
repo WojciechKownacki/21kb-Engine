@@ -2658,10 +2658,10 @@ void RunNativeOptionalColumnReadTest() {
 
     kb::ecs::World world;
     const auto component = world.RegisterComponent<Position>("test.OptionalInheritedPosition");
+    ecs_add_pair(world.NativeHandle(), component, EcsOnInstantiate, EcsInherit);
     const auto base = world.CreateEntity();
     const auto child = world.CreateEntity();
     world.Set(base, initial);
-    ecs_add_pair(world.NativeHandle(), component, EcsOnInstantiate, EcsInherit);
     ecs_add_pair(world.NativeHandle(), ecs_strip_generation(child.Id()), EcsIsA, ecs_strip_generation(base.Id()));
     const auto* inherited = world.TryGet<Position>(child);
     Require(inherited != nullptr && inherited->x == initial.x &&
