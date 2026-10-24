@@ -16,12 +16,72 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import urllib.request
 
 from run_input_tests import DevTools
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
+from png_readback import read_png
+
+
+def author_depth_fixture(run, args, project):
+    for name, value in [("DepthOccluder", "0"), ("DepthSampler", "200")]:
+        material = "/Game/Materials/" + name + ".kbmat"
+        run(args.cli, "material-new", "--project", project, "--name", name)
+
+        def graph(*tail):
+            run(args.cli, "material-graph", tail[0], "--project", project, "--material", material, *tail[1:])
+
+        graph("setting", "--name", "Shading Model", "--value", "unlit")
+        graph("add-node", "--kind", "Constant", "--name", "Scale", "--value", value)
+        if name == "DepthSampler":
+            graph("setting", "--name", "Blend Mode", "--value", "translucent")
+            graph("add-node", "--kind", "Constant", "--name", "Opacity", "--value", "0.5")
+            graph("connect", "--from", "Opacity", "--to", "Output", "--to-pin", "alpha")
+            graph("add-node", "--kind", "SceneDepth", "--name", "Depth")
+            graph("add-node", "--kind", "Multiply", "--name", "VisibleDepth")
+            graph("connect", "--from", "Depth", "--to", "VisibleDepth", "--to-pin", "a")
+            graph("connect", "--from", "Scale", "--to", "VisibleDepth", "--to-pin", "b")
+            output = "VisibleDepth"
+        else:
+            output = "Scale"
+        graph("add-node", "--kind", "MakeVector", "--name", "Color")
+        for channel in ["x", "y", "z"]:
+            graph("connect", "--from", output, "--to", "Color", "--to-pin", channel)
+        graph("add-node", "--kind", "Constant", "--name", "One", "--value", "1")
+        graph("connect", "--from", "One", "--to", "Color", "--to-pin", "w")
+        graph("connect", "--from", "Color", "--to", "Output", "--to-pin", "baseColor")
+        graph("connect", "--from", "Color", "--to", "Output", "--to-pin", "emissive")
+        run(args.cli, "entity", "add", "--project", project, "--name", name, "--create", "Cube",
+            "--position", "0,0,2" if name == "DepthSampler" else "0,0,4")
+        run(args.cli, "component", "set", "--project", project, "--entity", name,
+            "--type", "MeshRenderer", "--set", "material=" + material)
+        if name == "DepthSampler":
+            run(args.cli, "component", "set", "--project", project, "--entity", name,
+                "--type", "Transform", "--set", "localScale.x=12", "--set", "localScale.y=12")
+    run(args.cli, "component", "set", "--project", project, "--entity", "RuntimeProbe",
+        "--type", "Border", "--set", "backgroundColor.a=0")
+
+
+def capture_depth(client, directory, label):
+    client.call("Runtime.evaluate", expression="new Promise(resolve => requestAnimationFrame("
+        "() => requestAnimationFrame(() => resolve(true))))", awaitPromise=True)
+    rect = client.evaluate("(() => {const r=document.querySelector('#canvas').getBoundingClientRect();"
+        "return {x:r.x,y:r.y,width:r.width,height:r.height};})()")
+    data = client.call("Page.captureScreenshot", format="png", clip=dict(**rect, scale=1),
+        captureBeyondViewport=True)["data"]
+    path = directory / (label + ".png")
+    path.write_bytes(base64.b64decode(data))
+    rows = read_png(path)
+    height, width = len(rows), len(rows[0])
+    pixels = [list(rows[height // 2][width // 2]), list(rows[height // 2][width // 10])]
+    require(min(pixels[0]) > max(pixels[1]) + 50,
+        "The translucent material did not sample copied opaque depth: " + str(pixels))
+    return pixels
 
 
 class RuntimeClient(DevTools):
@@ -78,7 +138,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["cli", "cooker", "engine-root", "shaderc", "directory", "browser", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--case", choices=["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion"], action="append")
+    parser.add_argument("--case", choices=["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion", "geometry-depth"], action="append")
     parser.add_argument("--browser-arg", action="append", default=[])
     args = parser.parse_args()
     for name in ["cli", "cooker", "engine_root", "shaderc", "directory", "browser", "output"]:
@@ -125,7 +185,12 @@ def main():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        for case in args.case or ["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion"]:
+        for case in args.case or ["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion", "geometry-depth"]:
+            case_project = project
+            if case == "geometry-depth":
+                case_project = root / ("DepthSample" + str(len(report["cases"])))
+                shutil.copytree(project, case_project)
+                author_depth_fixture(run, args, case_project)
             marker = "packaged-runtime-" + case
             ready = 'error("' + marker + '")' if case == "ready" else 'Log("' + marker + '-ready")'
             tick = ('error("' + marker + '")' if case == "tick" else
@@ -140,7 +205,7 @@ def main():
                 'local velocity = Physics.GetVelocity(World.FindByName("FallingBody"))\n'
                 'if velocity.found then Log("' + marker + '-state-y=" .. tostring(velocity.y)) end\n'
                 if case.startswith("graphics-") else '')
-            (project / "Assets/Scripts/RuntimeProbe.lua").write_text(
+            (case_project / "Assets/Scripts/RuntimeProbe.lua").write_text(
                 'function Ready(self, dt)\n' + ready + '\nend\n'
                 'function Tick(self, dt)\nlocal frames = (GetShared("runtime.frames") or 0) + 1\n'
                 'SetShared("runtime.frames", frames)\nif ' + ('true' if case.startswith("graphics-") else 'frames <= 8') + ' then Log("' + marker +
@@ -153,7 +218,7 @@ def main():
                 shutil.copy2(args.directory / name, directory / name)
             if case == "loader":
                 (directory / "Game.wasm").unlink()
-            run(args.cooker, "--project", project, "--target", "WebGL.wasm32",
+            run(args.cooker, "--project", case_project, "--target", "WebGL.wasm32",
                 "--output", directory / "Game.kbpack", "--engine-root", args.engine_root,
                 "--shaderc", args.shaderc, "--cache", root / "CookCache")
             with socket.socket() as reservation:
@@ -194,7 +259,7 @@ WebGL2RenderingContext.prototype.compileShader = function(shader) {
         const ext = this.getExtension('WEBGL_debug_renderer_info');
         window.kbRuntimeGraphics = {context:this, version:this.getParameter(this.VERSION),
             renderer:ext ? this.getParameter(ext.UNMASKED_RENDERER_WEBGL) : this.getParameter(this.RENDERER),
-            shaders:[], copies:[]};
+            shaders:[], copies:[], depthCopies:[]};
     }
     compile.call(this, shader);
     window.kbRuntimeGraphics.shaders.push({compiled:this.getShaderParameter(shader, this.COMPILE_STATUS),
@@ -205,6 +270,17 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
     window.kbRuntimeGraphics.copies.push({complete:
         this.checkFramebufferStatus(this.FRAMEBUFFER) === this.FRAMEBUFFER_COMPLETE});
     return copy.apply(this, args);
+};
+const blit = WebGL2RenderingContext.prototype.blitFramebuffer;
+WebGL2RenderingContext.prototype.blitFramebuffer = function(...args) {
+    if (args[8] & this.DEPTH_BUFFER_BIT) {
+        window.kbRuntimeGraphics.depthCopies.push({
+            readComplete:this.checkFramebufferStatus(this.READ_FRAMEBUFFER) === this.FRAMEBUFFER_COMPLETE,
+            drawComplete:this.checkFramebufferStatus(this.DRAW_FRAMEBUFFER) === this.FRAMEBUFFER_COMPLETE,
+            mask:args[8],filter:args[9]
+        });
+    }
+    return blit.apply(this, args);
 };
 """)
                     client.call("Page.navigate", url=f"http://127.0.0.1:{server.server_port}/{case}/Game.html")
@@ -217,9 +293,9 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                             if event.get("method") == "Runtime.exceptionThrown"]
                         require(case == "loader" or not exceptions, "Unhandled browser/runtime exception: " + str(exceptions))
                         if state["data"].get("kbError"):
-                            require(case != "positive" and not case.startswith("graphics-"), "Positive runtime failed: " + str(state))
+                            require(case not in ("positive", "geometry-depth") and not case.startswith("graphics-"), "Positive runtime failed: " + str(state))
                             break
-                        if (case == "positive" or case.startswith("graphics-")) and marker + "-ticks" in (state.get("output") or ""):
+                        if (case in ("positive", "geometry-depth") or case.startswith("graphics-")) and marker + "-ticks" in (state.get("output") or ""):
                             break
                         if time.monotonic() >= until:
                             raise TimeoutError("Packaged lifecycle result missing: " + str(state))
@@ -234,7 +310,7 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                             "The loader test did not observe the actual missing WASM response")
                         require(exceptions and all("Aborted(" in json.dumps(error) for error in exceptions),
                             "The startup exception did not come from the actual WASM loader")
-                    elif case == "positive" or case.startswith("graphics-"):
+                    elif case in ("positive", "geometry-depth") or case.startswith("graphics-"):
                         require(state["data"].get("kbFirstFrame") == "true" and
                             state["data"].get("kbBackend") == "webgl", "Actual WebGL frame missing")
                         require(marker + "-ready" in state["output"], "Actual Lua ready Log missing")
@@ -253,6 +329,13 @@ WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
                         require(not any(word in state["gl"]["renderer"].lower() for word in
                             ["swiftshader", "llvmpipe", "softpipe", "microsoft basic", "warp", "software"]),
                             "Packaged graphics checks require a hardware GPU: " + str(state["gl"]))
+                        if case == "geometry-depth":
+                            state["depthCopies"] = client.evaluate("window.kbRuntimeGraphics.depthCopies")
+                            state["depthPixels"] = capture_depth(client, directory, "copied-depth")
+                            require(state["depthCopies"] and all(item["readComplete"] and item["drawComplete"]
+                                for item in state["depthCopies"]), "Actual depth blit used an incomplete framebuffer")
+                            require(all(item["complete"] for item in client.evaluate("window.kbRuntimeGraphics.copies")),
+                                "Geometry rendering copied from an incomplete framebuffer")
                         if case == "positive":
                             require(client.evaluate("typeof Module.requestFullscreen === 'function'"),
                                 "The existing browser fullscreen entry point was removed")

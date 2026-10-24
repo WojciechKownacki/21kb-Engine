@@ -8420,6 +8420,63 @@ namespace bgfx { namespace gl
 			;
 	}
 
+	static bool blitDepthStencil(
+		  const BlitItem& _bi
+		, const TextureGL& _src
+		, const TextureGL& _dst
+		, GLuint _currentFbo
+		)
+	{
+		const bimg::TextureFormat::Enum format = bimg::TextureFormat::Enum(_src.m_textureFormat);
+		if (!bimg::isDepth(format)
+		||  _src.m_textureFormat != _dst.m_textureFormat
+		||  NULL == glBlitFramebuffer)
+		{
+			return false;
+		}
+
+		const bimg::ImageBlockInfo& info = bimg::getBlockInfo(format);
+		const GLbitfield mask = (0 == info.depthBits ? 0 : GL_DEPTH_BUFFER_BIT)
+			| (0 == info.stencilBits ? 0 : GL_STENCIL_BUFFER_BIT);
+		const GLenum attachment = attachmentFor(TextureFormat::Enum(_src.m_textureFormat) );
+		const GLenum none = GL_NONE;
+		GLuint fbo[2];
+		GL_CHECK(glGenFramebuffers(BX_COUNTOF(fbo), fbo) );
+
+		const uint32_t numSlices = bx::max<uint32_t>(_bi.m_depth, 1);
+		for (uint32_t ii = 0; ii < numSlices; ++ii)
+		{
+			GL_CHECK(glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]) );
+			framebufferAttachSlice(attachment, _src, _bi.m_srcMip, uint16_t(_bi.m_srcZ + ii) );
+			GL_CHECK(glReadBuffer(GL_NONE) );
+			GL_CHECK(glDrawBuffers(1, &none) );
+
+			GL_CHECK(glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]) );
+			framebufferAttachSlice(attachment, _dst, _bi.m_dstMip, uint16_t(_bi.m_dstZ + ii) );
+			GL_CHECK(glReadBuffer(GL_NONE) );
+			GL_CHECK(glDrawBuffers(1, &none) );
+
+			GL_CHECK(glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo[0]) );
+			GL_CHECK(glDisable(GL_SCISSOR_TEST) );
+			GL_CHECK(glBlitFramebuffer(
+				  _bi.m_srcX
+				, _bi.m_srcY
+				, _bi.m_srcX + _bi.m_width
+				, _bi.m_srcY + _bi.m_height
+				, _bi.m_dstX
+				, _bi.m_dstY
+				, _bi.m_dstX + _bi.m_width
+				, _bi.m_dstY + _bi.m_height
+				, mask
+				, GL_NEAREST
+				) );
+		}
+
+		GL_CHECK(glBindFramebuffer(GL_FRAMEBUFFER, _currentFbo) );
+		GL_CHECK(glDeleteFramebuffers(BX_COUNTOF(fbo), fbo) );
+		return true;
+	}
+
 	static bool blitMsaaResolve2D(
 		  const BlitItem& _bi
 		, const TextureGL& _src
@@ -8883,6 +8940,11 @@ namespace bgfx { namespace gl
 
 				const TextureGL& src = m_textures[bi.m_src.idx];
 				const TextureGL& dst = m_textures[bi.m_dst.idx];
+
+				if (blitDepthStencil(bi, src, dst, m_currentFbo) )
+				{
+					continue;
+				}
 
 				if (0 == bi.m_srcMip
 				&&  isPendingResolve(TextureHandle{bi.m_src.idx}) )

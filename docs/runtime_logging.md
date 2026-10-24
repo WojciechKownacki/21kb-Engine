@@ -105,7 +105,7 @@ The loader case removes the fixture's WASM file and requires its actual HTTP 404
 the loader abort result and a visible reload instruction. Script failures also
 require an actionable player message. These startup failures do not count as
 passing rendered frames.
-All seven scenarios passed with hardware WebGL2 in
+All eight scenarios passed with hardware WebGL2 in
 headless Chrome using `--browser-arg=--use-angle=gl` (ANGLE/OpenGL).
 The attempted ANGLE/D3D11 and Edge/OpenGL configurations failed startup checks;
 their graphics execution remains unverified.
@@ -133,4 +133,12 @@ copy without changing the copy operation. Scenes without mesh, swarm, decal,
 stroke or particle emitters skip the transparent depth copy; UI alone does not
 need it. This avoids invalid depth-to-color framebuffer copies in otherwise
 empty WebGL scenes. Depth copying for scenes with geometry remains a separate
-WebGL validation requirement.
+WebGL validation requirement on untested backends. The geometry-depth case
+authors an opaque black mesh and a translucent material that displays sampled
+scene depth. Its GPU capture must distinguish geometry from cleared background;
+uniform fallback depth fails. The test also observes complete read and draw
+framebuffers for the actual depth blits. The bgfx framebuffer copy path uses
+depth/stencil attachments and nearest framebuffer blits for these formats,
+instead of color texture copies. The verified case uses desktop Chrome with
+ANGLE/OpenGL. It uses partial opacity; final browser presentation of the scene's
+translucency alpha remains a separate validation requirement.

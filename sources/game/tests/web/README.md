@@ -64,3 +64,11 @@ screenshots and a `21kb.web-game-touch-tests/v1` result. The verified configurat
 is desktop headless Chrome with ANGLE/OpenGL. Desktop touch emulation does not
 establish physical mobile, WebGPU or long-running browser acceptance; other
 browser/backend configurations remain separate checks.
+
+`run_packaged_runtime_tests.py` also accepts `--case geometry-depth` with the same
+paths. It cooks a black opaque mesh and a partially transparent material that
+visualizes copied scene depth. Actual pixels must distinguish the mesh from
+cleared background, and the observed depth blits must use complete read/draw
+framebuffers. The case runs in a separate project copy so its materials and UI
+settings cannot affect other requested cases. The default runtime suite includes
+this case alongside the seven lifecycle and error scenarios.
