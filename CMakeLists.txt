@@ -349,6 +349,9 @@ set(FLECS_STATIC ON CACHE BOOL "Build Flecs as a static library" FORCE)
 set(FLECS_SHARED OFF CACHE BOOL "Do not build Flecs as a shared library" FORCE)
 set(FLECS_TESTS OFF CACHE BOOL "Do not build Flecs tests with the engine" FORCE)
 add_subdirectory(third_party/flecs third_party/flecs EXCLUDE_FROM_ALL)
+# Scene hierarchies exceed the dependency's default 128 levels. This guard is
+# internal to Flecs; keep it enabled without changing public SDK definitions.
+target_compile_definitions(flecs_static PRIVATE FLECS_DAG_DEPTH_MAX=8192)
 if(EMSCRIPTEN)
     # The browser player uses Flecs storage, systems and its pipeline. Exclude
     # editor-facing addons (HTTP, REST, JSON, script, metrics and units) so

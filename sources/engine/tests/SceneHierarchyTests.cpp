@@ -58,6 +58,10 @@ void RunDeepHierarchyDestructionTest() {
         parent = scene.Entities().CreateObject({ .parent = parent });
     }
     const auto leaf = parent;
+    kb::tests::Require(!scene.Hierarchy().SetParent(root, leaf),
+        "Deep hierarchy parenting must reject cycles before changing the backend hierarchy");
+    kb::tests::Require(scene.Hierarchy().Parent(root.Entity()) == survivor.Entity(),
+        "Rejected deep hierarchy cycle must preserve the original parent");
     const auto sibling = scene.Entities().CreateObject({ .parent = root });
     const auto retainedSibling = scene.Entities().CreateObject({ .parent = survivor });
     scene.Entities().Destroy(root);
