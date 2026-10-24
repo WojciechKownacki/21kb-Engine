@@ -237,7 +237,49 @@ template <typename T>
 // same bound themselves (STBI_MAX_DIMENSIONS in the top-level CMakeLists.txt).
 constexpr std::uint32_t kMaximumDecodedTextureExtent = 16384U;
 
+// Refuse missing bitmap rows before either the platform codec or stb allocates
+// from the header's dimensions. Decoder reads beyond a truncated row may otherwise
+// synthesize pixels while spending time proportional to an untrusted image size.
+[[nodiscard]] bool HasInvalidBitmapPayload(const void* data, std::uint32_t size) {
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    if (size < 2U || bytes[0] != 'B' || bytes[1] != 'M') return false;
+    if (size < 26U) return true;
+    const auto littleEndian = [bytes](std::size_t offset, std::size_t count = 4U) {
+        std::uint32_t value = 0U;
+        for (std::size_t index = 0U; index < count; ++index) {
+            value |= static_cast<std::uint32_t>(bytes[offset + index]) << (8U * index);
+        }
+        return value;
+    };
+    const std::uint32_t offset = littleEndian(10U);
+    const std::uint32_t headerSize = littleEndian(14U);
+    if (offset > size || headerSize > size - 14U || offset < 14U + headerSize) return true;
+    std::uint32_t width = 0U, height = 0U, bits = 0U, compression = 0U;
+    if (headerSize == 12U) {
+        width = littleEndian(18U, 2U); height = littleEndian(20U, 2U); bits = littleEndian(24U, 2U);
+    } else if (headerSize >= 40U) {
+        width = littleEndian(18U); height = littleEndian(22U); bits = littleEndian(28U, 2U);
+        compression = littleEndian(30U);
+        // Negative heights describe top-down rows. Unsigned subtraction also
+        // handles the minimum signed value without invoking signed overflow.
+        if ((height & 0x80000000U) != 0U) height = 0U - height;
+    } else {
+        return false; // Leave other header variants to the format decoder.
+    }
+    if (width == 0U || height == 0U || width > kMaximumDecodedTextureExtent || height > kMaximumDecodedTextureExtent) return true;
+    if (compression > 6U) return true;
+    if ((compression == 1U && bits != 8U) || (compression == 2U && bits != 4U) ||
+        ((compression == 3U || compression == 6U) && bits != 16U && bits != 32U)) return true;
+    // RGB and bitfield rows are padded to four bytes. Compressed payloads have
+    // different lengths and remain subject to their decoder's format validation.
+    if ((compression != 0U && compression != 3U && compression != 6U) ||
+        (bits != 1U && bits != 4U && bits != 8U && bits != 16U && bits != 24U && bits != 32U)) return false;
+    const std::uint64_t stride = ((static_cast<std::uint64_t>(width) * bits + 31U) / 32U) * 4U;
+    return stride * height > static_cast<std::uint64_t>(size - offset);
+}
+
 [[nodiscard]] bool StatesOversizedImage(const void* data, std::uint32_t size) {
+    if (data == nullptr || size == 0U) return false;
     // Container formats (DDS, KTX, PVR): bimg reads their header without allocating.
     bimg::ImageContainer header{};
     bx::Error headerError;
@@ -260,7 +302,10 @@ constexpr std::uint32_t kMaximumDecodedTextureExtent = 16384U;
 }
 
 [[nodiscard]] std::optional<RenderTextureAssetData> LoadImageBytes(const void* data, std::size_t size) {
-    if (data == nullptr || size == 0U || size > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) ||
+    if (data == nullptr || size == 0U || size > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return std::nullopt;
+    }
+    if (HasInvalidBitmapPayload(data, static_cast<std::uint32_t>(size)) ||
         StatesOversizedImage(data, static_cast<std::uint32_t>(size))) {
         return std::nullopt;
     }
