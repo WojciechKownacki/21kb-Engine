@@ -605,8 +605,11 @@ def _write_crash_report_config(stage: Path, url: str | None) -> None:
 def _copy_project_snapshot(project_file: Path, destination: Path) -> Path:
     source_root = project_file.parent.resolve(strict=True)
     destination.mkdir(parents=True)
+    sources = regular_files(source_root, excluded_top_level=_PROJECT_TRANSIENT_ROOTS)
+    # Validate the anchored tree before resolving the descriptor so file links remain rejected.
+    project_file = project_file.resolve(strict=True)
     copied_project = False
-    for relative, source in regular_files(source_root, excluded_top_level=_PROJECT_TRANSIENT_ROOTS):
+    for relative, source in sources:
         parts = PurePosixPath(relative).parts
         target = destination.joinpath(*parts)
         target.parent.mkdir(parents=True, exist_ok=True)

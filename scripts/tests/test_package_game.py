@@ -196,6 +196,28 @@ class PackageGameTests(unittest.TestCase):
         for name in ("console", "com0", "com10", "lpt0", "lpt10", "Game.exe"):
             self.assertTrue(package_game._is_safe_executable_name(name, "Windows.x64"), name)
 
+    def test_snapshot_accepts_aliased_project_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text) / "Project"
+            (root / "Alias").mkdir(parents=True)
+            (root / "Assets").mkdir()
+            (root / "Saved").mkdir()
+            descriptor = root / "Project.21kbproject"
+            descriptor.write_bytes(b"descriptor")
+            asset = root / "Assets" / "scene.bin"
+            asset.write_bytes(b"frozen scene")
+            (root / "Saved" / "editor.log").write_bytes(b"transient")
+            alias = root / "Alias" / ".." / descriptor.name
+            self.assertEqual(descriptor.resolve(strict=True), alias.resolve(strict=True))
+            destination = Path(temporary_text) / "snapshot"
+            copied = package_game._copy_project_snapshot(alias, destination)
+            self.assertEqual(destination / descriptor.name, copied)
+            self.assertEqual(b"descriptor", copied.read_bytes())
+            self.assertEqual(package_game._project_source_fingerprint(descriptor), package_game._project_source_fingerprint(alias))
+            asset.write_bytes(b"changed scene")
+            self.assertEqual(b"frozen scene", (destination / "Assets" / "scene.bin").read_bytes())
+            self.assertFalse((destination / "Saved").exists())
+
     def test_snapshot_is_frozen_and_excludes_transient_roots(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_text:
             root = Path(temporary_text) / "Saved" / "project"
@@ -696,6 +718,7 @@ class PackageGameTests(unittest.TestCase):
             key.write_bytes(b"key")
             args = self._content_args(root, signing_key=key, patch_from=previous, pack_compression_level=0)
             package_game._validate_content_packaging(args)
+            previous = previous.resolve(strict=True)
             self.assertEqual(1, args.patch_level)
 
             def run(arguments: list[object], **_kwargs: object) -> object:
@@ -753,6 +776,7 @@ class PackageGameTests(unittest.TestCase):
             key.write_bytes(b"key")
             args = self._content_args(root, signing_key=key, patch_from=previous, encrypt_pack=True)
             package_game._validate_content_packaging(args)
+            previous = previous.resolve(strict=True)
             self.assertEqual(2, args.patch_level)
             self.assertEqual(
                 [("base", "", 0, "Game.kbpack"), ("patch", "patch-0001", 1, "Game.patch-0001.kbpack")],
