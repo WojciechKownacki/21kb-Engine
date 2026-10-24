@@ -66,9 +66,9 @@ EM_JS(void, RegisterBrowserTextInput, (void* host), {
     });
     control.addEventListener('compositionend', (event) => {
         state.composing = false;
-        state.suppressedComposition = event.data || '';
+        state.suppressedComposition = event.data || "";
         append(state.suppressedComposition);
-        control.value = '';
+        control.value = "";
     });
     control.addEventListener('beforeinput', (event) => {
         if (!state.active || state.composing || event.isComposing) return;
@@ -78,19 +78,19 @@ EM_JS(void, RegisterBrowserTextInput, (void* host), {
             event.inputType.startsWith('deleteHardLineBackward')) {
             _kb_web_append_committed_text(host, 8);
             event.preventDefault();
-            control.value = '';
+            control.value = "";
         } else if (event.inputType.startsWith('deleteContentForward') ||
                    event.inputType.startsWith('deleteWordForward') ||
                    event.inputType.startsWith('deleteSoftLineForward') ||
                    event.inputType.startsWith('deleteHardLineForward')) {
             _kb_web_append_committed_text(host, 127);
             event.preventDefault();
-            control.value = '';
+            control.value = "";
         } else if (event.inputType === 'insertLineBreak' ||
                    event.inputType === 'insertParagraph') {
             _kb_web_append_committed_text(host, 10);
             event.preventDefault();
-            control.value = '';
+            control.value = "";
         }
     });
     control.addEventListener('input', (event) => {
@@ -103,7 +103,7 @@ EM_JS(void, RegisterBrowserTextInput, (void* host), {
             state.suppressedComposition = null;
             append(text);
         }
-        control.value = '';
+        control.value = "";
     });
     document.body.appendChild(control);
     Module['kbTextInput'] = state;
@@ -115,7 +115,7 @@ EM_JS(void, SetBrowserTextInputActive, (int active), {
     state.active = !!active;
     state.composing = false;
     state.suppressedComposition = null;
-    state.control.value = '';
+    state.control.value = "";
     if (state.active) {
         state.control.focus({ preventScroll: true });
     } else if (document.activeElement === state.control) {
