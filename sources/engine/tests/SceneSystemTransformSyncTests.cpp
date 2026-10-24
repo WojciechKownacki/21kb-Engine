@@ -1852,9 +1852,10 @@ void RunSceneSingleCreateObjectAllocationTest() {
     }
     std::vector<kb::scene::SceneObject> created;
     created.reserve(kObjects);
+    // Prepare the descriptor outside the measured call, as the bulk creation test does.
+    kb::scene::SceneObjectDesc desc;
     kb::tests::BeginAllocationTally();
     for (std::size_t index = 0U; index < kObjects; ++index) {
-        kb::scene::SceneObjectDesc desc;
         desc.transform.localPosition = kb::scene::Vec3{ static_cast<float>(index), 0.0F, 0.0F };
         created.push_back(scene.Entities().CreateObject(desc));
     }
@@ -1863,6 +1864,18 @@ void RunSceneSingleCreateObjectAllocationTest() {
     std::cout << "single create allocations per object: " << allocationsPerObject << " bytes per object: " << static_cast<double>(tally.bytes) / static_cast<double>(created.size()) << '\n';
     kb::tests::Require(allocationsPerObject <= 1.0, "Creating one object at a time took more than one heap allocation per object");
     kb::tests::Require(scene.Transforms().Get(created.back()).localPosition.x == static_cast<float>(kObjects - 1U), "A single created object lost its transform");
+
+    constexpr std::string_view kName = "A descriptor name with separately allocated character storage";
+    desc.name = kName;
+    desc.transform.localPosition.x = 73.0F;
+    const auto namedObject = scene.Entities().CreateObject(desc);
+    const auto namedEntity = scene.Entities().CreateEntity(desc);
+    desc.name.clear();
+    desc.transform.localPosition.x = -1.0F;
+    kb::tests::Require(scene.Entities().Name(namedObject) == kName && scene.Entities().Name(namedEntity) == kName &&
+        scene.Transforms().Get(namedObject).localPosition.x == 73.0F &&
+        scene.Transforms().Get(namedEntity).localPosition.x == 73.0F,
+        "Scene creation must own the names and transforms from a borrowed descriptor");
 }
 
 // The flagged-row count a table keeps for the transform sync matches the counts of its chunks through writes,

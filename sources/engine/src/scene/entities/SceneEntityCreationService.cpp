@@ -10,7 +10,6 @@
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
 
 #include <array>
-#include <utility>
 
 namespace kb::scene {
 namespace {
@@ -63,15 +62,15 @@ SceneObject SceneEntityCreationService::CreateObject(Scene& scene) {
     return SceneAccess::MakeObject(scene, CreateEntity(scene));
 }
 
-SceneObject SceneEntityCreationService::CreateObject(Scene& scene, SceneObjectDesc desc) {
-    return SceneAccess::MakeObject(scene, CreateEntity(scene, std::move(desc)));
+SceneObject SceneEntityCreationService::CreateObject(Scene& scene, const SceneObjectDesc& desc) {
+    return SceneAccess::MakeObject(scene, CreateEntity(scene, desc));
 }
 
 SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene) {
     return CreateEntity(scene, SceneObjectDesc{});
 }
 
-SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, SceneObjectDesc desc) {
+SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, const SceneObjectDesc& desc) {
     SceneState& state = SceneAccess::State(scene);
     const TransformComponent transform = SceneTransformComponentStore::Written(nullptr, desc.transform);
     const VisibilityComponent visibility = NormalizedVisibility(desc.visibility);

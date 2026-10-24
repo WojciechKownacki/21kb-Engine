@@ -3,16 +3,14 @@
 #include "scene/SceneEntityService.hpp"
 #include "scene/entities/SceneEntityCreationService.hpp"
 
-#include <utility>
-
 namespace kb::scene {
 
 SceneObject SceneEntities::CreateObject() {
     return SceneEntityService::CreateObject(scene_);
 }
 
-SceneObject SceneEntities::CreateObject(SceneObjectDesc desc) {
-    return SceneEntityService::CreateObject(scene_, std::move(desc));
+SceneObject SceneEntities::CreateObject(const SceneObjectDesc& desc) {
+    return SceneEntityService::CreateObject(scene_, desc);
 }
 
 std::vector<SceneObject> SceneEntities::CreateObjects(std::span<const SceneObjectDesc> descs) {
@@ -27,8 +25,8 @@ SceneEntity SceneEntities::CreateEntity() {
     return SceneEntityService::CreateEntity(scene_);
 }
 
-SceneEntity SceneEntities::CreateEntity(SceneObjectDesc desc) {
-    return SceneEntityService::CreateEntity(scene_, std::move(desc));
+SceneEntity SceneEntities::CreateEntity(const SceneObjectDesc& desc) {
+    return SceneEntityService::CreateEntity(scene_, desc);
 }
 
 SceneObject SceneEntities::Duplicate(SceneObject object) {
