@@ -23,7 +23,7 @@ import urllib.request
 from run_game_touch_tests import OBSERVER, RuntimeClient, TouchScenario, require
 
 
-def author_fixture(args, root):
+def author_fixture(args, root, *, script_name="StorageFlow", script_source=None):
     project, web = root / "Sample", root / "Web"
     web.mkdir()
     commands = []
@@ -56,11 +56,11 @@ def author_fixture(args, root):
         "backgroundColor.g=0.2", "backgroundColor.b=0.8", "backgroundColor.a=1")
     component("CanvasRoot/SaveButton", "Selectable", "colorFadeSeconds=0")
     component("CanvasRoot/SaveButton", "Button")
-    run(args.cli, "script-new", "--project", project, "--name", "StorageFlow", "--language", "lua")
-    shutil.copy2(Path(__file__).with_name("fixtures") / "StorageFlow.lua",
-        project / "Assets/Scripts/StorageFlow.lua")
+    run(args.cli, "script-new", "--project", project, "--name", script_name, "--language", "lua")
+    shutil.copy2(script_source or Path(__file__).with_name("fixtures") / "StorageFlow.lua",
+        project / "Assets/Scripts" / (script_name + ".lua"))
     run(args.cli, "scene-attach", "--project", project, "--scene", "Assets/Scenes/Main.21kbscene",
-        "--node", "SaveButton", "--script", "/Game/Scripts/StorageFlow.lua")
+        "--node", "SaveButton", "--script", "/Game/Scripts/" + script_name + ".lua")
     run(args.cooker, "--project", project, "--target", "WebGL.wasm32",
         "--output", web / "Game.kbpack", "--engine-root", args.engine_root,
         "--shaderc", args.shaderc, "--cache", root / "CookCache")

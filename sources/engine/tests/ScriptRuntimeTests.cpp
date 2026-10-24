@@ -14190,6 +14190,33 @@ void RunScriptSaveApiTest() {
     kb::tests::Require(!crossRead.Output("loaded")->AsBool() && crossRead.Output("status")->AsString() == "WrongDomain", "Save.Read of a Settings file must be rejected as WrongDomain, keeping the domains separated");
     const kb::script::ScriptFunctionCallResult settingsRead = call("Settings.Read", { slotArg("profile") });
     kb::tests::Require(settingsRead.Output("loaded")->AsBool() && settingsRead.Output("status")->AsString() == "Ok", "Settings.Read of a Settings file must succeed");
+
+    kb::tests::Require(call("Save.Delete", { slotArg("profile") }).Output("deleted")->AsBool() &&
+        call("Save.Read", { slotArg("profile") }).Output("status")->AsString() == "FileNotFound" &&
+        call("Settings.Read", { slotArg("profile") }).Output("loaded")->AsBool(),
+        "Deleting a save slot must preserve the settings slot with the same name");
+    kb::tests::Require(call("Save.GetInt", { keyArg("shared") }).Output("value")->AsInt() == 111,
+        "Deleting a named slot must preserve the active save document");
+    kb::tests::Require(call("Settings.Delete", { slotArg("profile") }).Output("deleted")->AsBool() &&
+        call("Settings.Read", { slotArg("profile") }).Output("status")->AsString() == "FileNotFound" &&
+        call("Save.Read", { slotArg("slot_1") }).Output("loaded")->AsBool(),
+        "Deleting settings must preserve another save slot");
+    kb::tests::Require(!call("Save.Delete", { slotArg("missing") }).Output("deleted")->AsBool() &&
+        !call("Settings.Delete", { slotArg("missing") }).Output("deleted")->AsBool(),
+        "Deleting a missing slot must not report a removed file");
+    for (const std::string_view function : { "Save.Delete", "Settings.Delete" }) {
+        for (const std::string& invalid : { std::string{}, std::string{"../outside"}, std::string{"name.kbsave"}, std::string(65U, 'a') }) {
+            kb::tests::Require(!call(function, { slotArg(invalid) }).Succeeded(),
+                "Slot deletion must use the same validated names as reads and writes");
+        }
+        kb::scene::Scene unconfiguredScene;
+        kb::script::ScriptRuntimeHost unconfiguredHost{unconfiguredScene};
+        const std::vector<kb::script::ScriptFunctionArgument> deletionArguments{ slotArg("profile") };
+        const auto refused = unconfiguredHost.Functions().Call(function, deletionArguments,
+            kb::script::ScriptFunctionCallContext{ .scene = &unconfiguredScene });
+        kb::tests::Require(!refused.Succeeded() && !refused.errors.empty(),
+            "Unconfigured storage must refuse slot deletion");
+    }
 }
 
 // LIB-098: kb::library::MakeWaitSecondsTask/MakeWaitFixedStepsTask as plain

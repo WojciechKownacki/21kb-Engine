@@ -170,3 +170,13 @@ check the native fields, and all three players require live hardware contexts
 and successful shader compilation. The report uses schema
 `21kb.web-game-storage-pages/v1`. The test does not accept serially opening the
 two writers after their respective saves, since that hides stale working views.
+
+`run_game_storage_delete_tests.py` accepts the same arguments and uses schema
+`21kb.web-game-storage-delete/v1`. It authors a native button and controller
+through the CLI, cooks the game, and closes and reopens one owned browser
+profile after each mutation. It verifies two save slots and a settings slot,
+independent deletion of same-name save/settings files, missing and invalid
+names, active-document preservation and recreation of a deleted slot. All
+five sessions must render with hardware and compiled shaders; two GPU captures
+check the button. A working-filesystem removal without persistence after
+restart fails the test.

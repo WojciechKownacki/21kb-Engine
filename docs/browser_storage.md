@@ -15,6 +15,15 @@ Lua uses `CallFunction("Save.Write", {slot="slot_1"})` for these catalog
 operations. Single-output operations return that value directly;
 `CallFunction("Save.StorageStatus")` returns the status/diagnostic table.
 
+`Save.Delete(slot)` and `Settings.Delete(slot)` remove only the named file in
+their own domain. They preserve the active in-memory document, other slots and
+the other domain's file of the same name. Slots use the same validated names as
+reads and writes. `deleted=true` confirms removal from the working filesystem;
+`false` means the file was absent or the filesystem refused removal. On Web,
+flush and wait for `Clean` before reporting persistent deletion. A later write
+can recreate the slot. Lua calls, for example,
+`CallFunction("Save.Delete", {slot="slot_1"})`, return the deletion boolean.
+
 After writing, call `Save.Flush()` or `Settings.Flush()`. The returned `started`
 boolean confirms that synchronization was accepted, including an operation
 already in progress. Both domains share the storage transaction. Poll
@@ -88,6 +97,15 @@ select independent native save slots, and both flushes must complete. A third
 player must read both values. GPU captures verify the native fields and every
 player must retain a live hardware context with compiled shaders. This checks
 independent named files; it does not merge concurrent edits within one slot.
+
+`sources/game/tests/web/run_game_storage_delete_tests.py` authors and cooks a
+native button with the public CLI. Five complete browser sessions reuse one
+profile and origin to verify creation, save deletion, settings deletion and
+recreation. Every restart reads the exact expected native slot values. Deletion
+must preserve the active document and unrelated files; missing files return
+false and invalid slot names are refused. Hardware contexts and two actual GPU
+captures remain required. The test reads through the normal save API rather
+than inspecting or editing private filesystem state.
 
 Different URL directories must remain isolated. Missing hardware, unexpected
 fallback, failed checks and timeouts fail the test. Fault injection is limited
