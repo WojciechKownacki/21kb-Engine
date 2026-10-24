@@ -474,6 +474,46 @@ void RunHierarchyCycleRejectionTest() {
     }
 }
 
+void RunCreationParentValidationTest() {
+    for (const bool mirrored : {true, false}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mirrored;
+        config.mirrorNativeComponentChangesToBackend = mirrored;
+        kb::scene::Scene scene{config};
+        kb::scene::Scene other{config};
+        const auto parent = scene.Entities().CreateObject({.name = "Parent"});
+        const auto foreign = other.Entities().CreateObject({.name = "Foreign parent"});
+        const auto stale = scene.Entities().CreateObject({.name = "Stale parent"});
+        scene.Entities().Destroy(stale);
+        const auto reject = [&](auto create) {
+            const auto roots = scene.Hierarchy().RootEntities();
+            const auto count = scene.Entities().Count();
+            const auto children = scene.Hierarchy().ChildEntities(parent.Entity());
+            bool rejected = false;
+            try {
+                create();
+            } catch (const std::invalid_argument&) {
+                rejected = true;
+            }
+            kb::tests::Require(rejected && scene.Entities().Count() == count && scene.Hierarchy().RootEntities() == roots &&
+                scene.Hierarchy().ChildEntities(parent.Entity()) == children,
+                "Creation with a foreign or stale parent must reject the whole operation without changing the scene");
+        };
+        for (const auto invalidParent : {foreign, stale}) {
+            reject([&] { static_cast<void>(scene.Entities().CreateObject({.parent = invalidParent})); });
+            reject([&] { static_cast<void>(scene.Entities().CreateEntity({.parent = invalidParent})); });
+            const std::array<kb::scene::SceneObjectDesc, 2U> descs{{{.parent = parent}, {.parent = invalidParent}}};
+            reject([&] { static_cast<void>(scene.Entities().CreateObjects(descs)); });
+        }
+        const auto child = scene.Entities().CreateObject({.parent = parent});
+        kb::tests::Require(kb::ecs::GeneratedEntityIndex(child.Entity()) == kb::ecs::GeneratedEntityIndex(stale.Entity()) &&
+            child.Entity() != stale.Entity(), "Parent validation fixture must reuse the destroyed parent's index with a new generation");
+        reject([&] { static_cast<void>(scene.Entities().CreateObject({.parent = stale})); });
+        kb::tests::Require(scene.Hierarchy().Parent(child.Entity()) == parent.Entity() && other.Entities().IsAlive(foreign),
+            "Rejected parent creation must leave valid parenting and the other scene usable");
+    }
+}
+
 void RunHierarchyStableCreationOrderTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject first = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First" });
@@ -2012,6 +2052,7 @@ void RunTransformWriteBenchmark() {
 void RunSceneHierarchyTests() {
     RunEntityCreationBudgetRollbackTest();
     RunHierarchyCycleRejectionTest();
+    RunCreationParentValidationTest();
     RunDeepHierarchyDestructionTest();
     RunTransformHierarchyTest();
     RunTransformHierarchyReplayDeterminismTest();
@@ -2054,6 +2095,7 @@ void RunSceneHierarchyTests() {
 
 void RunSceneHierarchyParentingTests() {
     RunHierarchyCycleRejectionTest();
+    RunCreationParentValidationTest();
     RunParentChildrenOwnershipTest();
 }
 
