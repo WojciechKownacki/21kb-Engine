@@ -1643,7 +1643,14 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
             // The forward transparent pass depth-tests against the scene depth, so it samples a copy of it
             // (decals, soft particles, depth-fading materials): a texture bound as the depth attachment reads
             // back as zero. The GPU particle emitters above read the depth itself, in a view that does not bind it.
-            sceneRenderer_->SetSceneDepthTexture(TransparentDepthCopy(viewportPlan.viewIds.transparentScene, desc.target));
+            const auto& particleSnapshot = renderScene.ParticleRenderSnapshot();
+            const bool hasDepthConsumers = renderScene.MeshProxyCount() != 0U ||
+                renderScene.GeometrySwarmProxyCount() != 0U || renderScene.SurfaceCastProxyCount() != 0U ||
+                renderScene.SpaceStrokeProxyCount() != 0U ||
+                (particleSnapshot != nullptr && !particleSnapshot->IsTombstone() && !particleSnapshot->Emitters().empty());
+            sceneRenderer_->SetSceneDepthTexture(hasDepthConsumers
+                ? TransparentDepthCopy(viewportPlan.viewIds.transparentScene, desc.target)
+                : bgfx::TextureHandle{bgfx::kInvalidHandle});
         }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass begin");
         RendererMeshPassSubmitter::SubmitViewportPass(

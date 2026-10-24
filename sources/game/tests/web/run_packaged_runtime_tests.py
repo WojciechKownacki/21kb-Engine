@@ -190,11 +190,17 @@ WebGL2RenderingContext.prototype.compileShader = function(shader) {
         const ext = this.getExtension('WEBGL_debug_renderer_info');
         window.kbRuntimeGraphics = {context:this, version:this.getParameter(this.VERSION),
             renderer:ext ? this.getParameter(ext.UNMASKED_RENDERER_WEBGL) : this.getParameter(this.RENDERER),
-            shaders:[]};
+            shaders:[], copies:[]};
     }
     compile.call(this, shader);
     window.kbRuntimeGraphics.shaders.push({compiled:this.getShaderParameter(shader, this.COMPILE_STATUS),
         message:this.getShaderInfoLog(shader)});
+};
+const copy = WebGL2RenderingContext.prototype.copyTexSubImage2D;
+WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
+    window.kbRuntimeGraphics.copies.push({complete:
+        this.checkFramebufferStatus(this.FRAMEBUFFER) === this.FRAMEBUFFER_COMPLETE});
+    return copy.apply(this, args);
 };
 """)
                     client.call("Page.navigate", url=f"http://127.0.0.1:{server.server_port}/{case}/Game.html")
@@ -230,6 +236,12 @@ WebGL2RenderingContext.prototype.compileShader = function(shader) {
                             "Rendered package has no live WebGL2 context: " + str(state["gl"]))
                         require(state["gl"]["shaders"] and all(shader["compiled"] for shader in state["gl"]["shaders"]),
                             "Actual host shader compilation failed")
+                        if case == "positive":
+                            client.evaluate("Object.assign(document.querySelector('#canvas').style,{width:'800px',height:'600px'})")
+                            state["panelPixel"] = capture_panel(client, directory, "resized-panel")
+                            state["textureCopies"] = client.evaluate("window.kbRuntimeGraphics.copies")
+                            require(state["textureCopies"] and all(item["complete"] for item in state["textureCopies"]),
+                                "UI-only rendering attempted a copy from an incomplete framebuffer")
                         if case.startswith("graphics-"):
                             require(not any(word in state["gl"]["renderer"].lower() for word in
                                 ["swiftshader", "llvmpipe", "softpipe", "microsoft basic", "warp", "software"]),

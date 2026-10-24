@@ -99,3 +99,12 @@ long-running graphics and browser lifecycle acceptance. Linux execution and
 Android device delivery remain separate verification requirements.
 A full joystick/UI run still fails graphics checks after a tab focus change;
 input checks alone do not establish recovery of the rendered scene.
+
+The positive package also resizes an authored UI panel and reads its actual
+pixels. The browser test observes the framebuffer status of each real texture
+copy without changing the copy operation. Scenes without mesh, swarm, decal,
+stroke or particle emitters skip the transparent depth copy; UI alone does not
+need it. This avoids invalid depth-to-color framebuffer copies in otherwise
+empty WebGL scenes. Depth copying for scenes with geometry remains a separate
+WebGL validation requirement. The full joystick focus/resize failure above
+remains open.
