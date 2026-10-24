@@ -40,6 +40,13 @@ and transform-pass comparisons remain bit-exact on every toolchain.
 | clang-tidy gate | `windows-2025-vs2026` | `scripts/clang_tidy_gate.py` over changed first-party sources; every source when a first-party header changes, on manual dispatch, or in the weekly scheduled run |
 | Fuzz untrusted-input readers | `windows-2025-vs2026` | The `kb_fuzzers` libFuzzer harnesses with AddressSanitizer: corpus replay, then 60 seconds of fresh inputs per reader |
 
+The static-analysis gate rejects an empty compilation database or source filter
+selection with exit code 2. Check `compile_commands.json`, `--filter` and
+`--filter-file` when no first-party sources are selected. An unchanged
+`--changed-since` scope explicitly reports `skipped`; it does not report an
+analysis pass or a finding count. Invalid filter expressions also return a CLI
+diagnostic with exit code 2.
+
 ## Not covered by CI
 
 There is no macOS job: macOS is not a tested platform. The renderer, the
