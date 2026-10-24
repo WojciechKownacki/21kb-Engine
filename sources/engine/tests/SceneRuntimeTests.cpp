@@ -123,6 +123,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunLargeNonAdditiveSceneTransitionBenchmark();
     } else if (suite == "script") {
         kb::tests::RunScriptRuntimeTests();
+    } else if (suite == "script-save") {
+        kb::tests::RunScriptSaveTests();
     } else if (suite == "script-native-header") {
         kb::tests::RunScriptNativeHeaderReloadTest();
     } else if (suite == "script-api") {

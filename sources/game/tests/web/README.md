@@ -135,3 +135,24 @@ glyphs while rejecting an empty field or caret alone. Missing fonts, software
 rendering, lost/recovered graphics, runtime errors and failed checks fail the
 test. Desktop DevTools IME and viewport emulation do not verify physical mobile
 keyboards, mobile Back behavior, keyboard occlusion or complete font coverage.
+
+The packaged storage scenario uses the same tool paths and browser arguments:
+
+```sh
+python sources/game/tests/web/run_game_storage_tests.py \
+  --cli /path/to/kb_cli --cooker /path/to/kb_cooker \
+  --engine-root /path/to/source --shaderc /path/to/shaderc \
+  --directory /path/to/web-build/bin --browser /path/to/chrome \
+  --output /path/to/storage-results --browser-arg=--use-angle=gl
+```
+
+It authors and cooks a native save button and Lua controller, verifies real GPU
+pixels, writes save/settings slots, then closes and reopens its owned browser
+with the same profile and local origin. Native values must survive. Real quota
+denial and transaction abort must report failure and preserve the previous
+committed data. Other URL directories must have separate slots, and a denied
+initial storage read must fail startup explicitly. The result uses schema
+`21kb.web-game-storage-tests/v1` and retains commands, hashes, native states,
+browser events and GPU captures. See [browser storage](../../../../docs/browser_storage.md)
+for the asynchronous flush contract and platform limits. Browser restart tests
+do not establish physical power-loss durability or mobile browser acceptance.

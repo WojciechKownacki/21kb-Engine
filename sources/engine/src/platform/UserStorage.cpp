@@ -3,7 +3,31 @@
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h>
+
+// clang-format off
+EM_JS(int, BrowserUserStorageOperation, (const char* root, int operation), {
+    const storage = Module['kbUserStorage'];
+    if (!storage || UTF8ToString(root) !== storage.root + '/Saves') return operation === 2 ? 4 : 0;
+    if (operation === 1) return storage.flush() ? 1 : 0;
+    return storage.status;
+});
+EM_JS(void, BrowserUserStorageChanged, (const char* root, const char* path), {
+    const storage = Module['kbUserStorage'];
+    if (storage && UTF8ToString(root) === storage.root + '/Saves')
+        storage.changed(path ? UTF8ToString(path) : null);
+});
+EM_JS(char*, BrowserUserStorageDiagnostic, (const char* root), {
+    const storage = Module['kbUserStorage'];
+    const message = storage && UTF8ToString(root) === storage.root + '/Saves'
+        ? storage.diagnostic : 'Persistent browser storage is not configured';
+    return stringToNewUTF8(message);
+});
+// clang-format on
+#endif
 #if defined(_WIN32)
 #include <windows.h>
 #endif
@@ -58,6 +82,9 @@ bool UserStorage::Write(std::string_view key, std::string_view data) {
     std::filesystem::rename(temporary, path, error);
     if (error) { std::filesystem::remove(temporary, error); return false; }
 #endif
+#if defined(__EMSCRIPTEN__)
+    BrowserUserStorageChanged(root_.generic_string().c_str(), path.generic_string().c_str());
+#endif
     return true;
 }
 
@@ -70,7 +97,50 @@ std::optional<std::string> UserStorage::Read(std::string_view key) const {
     return std::string{ std::istreambuf_iterator<char>{ input },
         std::istreambuf_iterator<char>{} };
 }
-bool UserStorage::Delete(std::string_view key) { const std::filesystem::path path = PathFor(key); if (path.empty()) return false; std::lock_guard lock{ mutex_ }; std::error_code error; return std::filesystem::remove(path, error); }
+bool UserStorage::Delete(std::string_view key) {
+    const std::filesystem::path path = PathFor(key);
+    if (path.empty()) return false;
+    std::lock_guard lock{ mutex_ };
+    std::error_code error;
+    const bool removed = std::filesystem::remove(path, error);
+#if defined(__EMSCRIPTEN__)
+    if (removed) BrowserUserStorageChanged(root_.generic_string().c_str(), nullptr);
+#endif
+    return removed;
+}
+
+bool UserStorage::Flush() {
+#if defined(__EMSCRIPTEN__)
+    return BrowserUserStorageOperation(root_.generic_string().c_str(), 1) != 0;
+#else
+    return true;
+#endif
+}
+
+UserStorageSyncStatus UserStorage::SyncStatus() const {
+#if defined(__EMSCRIPTEN__)
+    switch (BrowserUserStorageOperation(root_.generic_string().c_str(), 2)) {
+    case 0: return UserStorageSyncStatus::Clean;
+    case 1: return UserStorageSyncStatus::Dirty;
+    case 2: return UserStorageSyncStatus::Pending;
+    case 3: return UserStorageSyncStatus::Failed;
+    default: return UserStorageSyncStatus::Unavailable;
+    }
+#else
+    return UserStorageSyncStatus::Clean;
+#endif
+}
+
+std::string UserStorage::SyncDiagnostic() const {
+#if defined(__EMSCRIPTEN__)
+    char* message = BrowserUserStorageDiagnostic(root_.generic_string().c_str());
+    const std::string result{ message };
+    std::free(message);
+    return result;
+#else
+    return {};
+#endif
+}
 std::vector<std::string> UserStorage::List() const { std::lock_guard lock{ mutex_ }; std::vector<std::string> result; std::error_code error; for (std::filesystem::recursive_directory_iterator iterator(root_, error), end; iterator != end && !error; iterator.increment(error)) if (iterator->is_regular_file(error)) result.push_back(std::filesystem::relative(iterator->path(), root_, error).generic_string()); std::ranges::sort(result); return result; }
 std::future<bool> UserStorage::WriteAsync(std::string key, std::string data) {
     auto write = std::make_shared<std::packaged_task<bool()>>([this, key = std::move(key), data = std::move(data)] { return Write(key, data); });

@@ -14117,6 +14117,11 @@ void RunScriptSaveApiTest() {
     };
     const kb::script::ScriptFunctionCallResult written = call("Save.Write", { slotArg("slot_1") });
     kb::tests::Require(written.Output("written")->AsBool(), "Save.Write must write the ambient save to disk");
+    kb::tests::Require(call("Save.Flush", {}).Output("started")->AsBool() &&
+        call("Settings.Flush", {}).Output("started")->AsBool() &&
+        call("Save.StorageStatus", {}).Output("status")->AsString() == "Clean" &&
+        call("Settings.StorageStatus", {}).Output("diagnostic")->AsString().empty(),
+        "Native save/settings synchronization must report completed filesystem writes");
     kb::tests::Require(std::filesystem::is_regular_file(storageRoot / "slot_1.kbsave"), "Save.Write must store the slot inside the host's user storage root");
     kb::tests::Require(call("Save.Clear", {}).Output("cleared")->AsBool(), "Save.Clear must clear the ambient buffer");
     kb::tests::Require(!call("Save.Has", { keyArg("flag") }).Output("has")->AsBool(), "Save.Clear must have emptied the buffer");
@@ -14158,6 +14163,8 @@ void RunScriptSaveApiTest() {
             "Save.Write", std::vector<kb::script::ScriptFunctionArgument>{ slotArg("slot_1") }, kb::script::ScriptFunctionCallContext{ .scene = &unconfiguredScene });
         kb::tests::Require(!unconfigured.Succeeded() && unconfigured.errors.front().find("not configured") != std::string::npos,
             "Save.Write without a configured user storage root must report a script error");
+        kb::tests::Require(!unconfiguredHost.Functions().Call("Save.Flush", {}, {}).Output("started")->AsBool(),
+            "Flush without configured storage must not report success");
     }
 
     // LIB-163: Settings.* is a SEPARATE surface over a SEPARATE buffer.
@@ -16700,6 +16707,10 @@ end
 } // namespace
 
 namespace kb::tests {
+
+void RunScriptSaveTests() {
+    RunScriptSaveApiTest();
+}
 
 void RunScriptNativeHeaderReloadTest() {
     RunScriptRuntimeHostNativeDescriptorBindingTest();

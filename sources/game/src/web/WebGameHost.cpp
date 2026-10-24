@@ -146,6 +146,10 @@ EM_JS(int, RecreateBrowserCanvas, (), {
     Module['canvas'] = canvas;
     return 1;
 });
+EM_JS(void, InitializeBrowserStorage, (), { Module['kbInitializeStorage'](); });
+EM_JS(int, BrowserStorageStartup, (), { return Module['kbUserStorage'].startup; });
+EM_JS(char*, BrowserStorageRoot, (), { return stringToNewUTF8(Module['kbUserStorage'].root); });
+EM_JS(char*, BrowserStorageDiagnostic, (), { return stringToNewUTF8(Module['kbUserStorage'].diagnostic); });
 // clang-format on
 
 namespace {
@@ -315,8 +319,35 @@ private:
             Fail("pack-mount", message.str());
             return;
         }
+        InitializeBrowserStorage();
+        storageStartupTime_ = std::chrono::steady_clock::now();
+        emscripten_async_call(&WebGameHost::PollStorage, this, 0);
+    }
+
+    static void PollStorage(void* userData) {
+        auto* host = static_cast<WebGameHost*>(userData);
+        if (host == nullptr || host->shuttingDown_) return;
+        const int status = BrowserStorageStartup();
+        if (status == 0 && std::chrono::steady_clock::now() - host->storageStartupTime_ < std::chrono::seconds{15}) {
+            emscripten_async_call(&WebGameHost::PollStorage, host, 10);
+            return;
+        }
+        if (status != 1) {
+            char* diagnostic = BrowserStorageDiagnostic();
+            const std::string message = status == 0 ? "persistent storage initialization timed out" : diagnostic;
+            std::free(diagnostic);
+            host->Fail("storage-init", message);
+            return;
+        }
+        host->InitializeRuntime();
+    }
+
+    void InitializeRuntime() {
+        char* root = BrowserStorageRoot();
+        const std::filesystem::path storageRoot{root};
+        std::free(root);
         std::ostringstream diagnostics;
-        if (!runtime_.Initialize(pack_, {}, renderer_, diagnostics)) {
+        if (!runtime_.Initialize(pack_, storageRoot, renderer_, diagnostics)) {
             Fail("runtime-init", diagnostics.str());
             return;
         }
@@ -623,6 +654,7 @@ private:
     kb::game::PackagedGameRuntime runtime_;
     kb::game::WebTouchInput touches_;
     std::chrono::steady_clock::time_point previousTick_{};
+    std::chrono::steady_clock::time_point storageStartupTime_{};
     std::chrono::steady_clock::time_point graphicsLossTime_{};
     bool firstFrameReported_ = false;
     bool frameInProgress_ = false;

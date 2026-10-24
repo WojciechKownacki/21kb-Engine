@@ -19,6 +19,7 @@ void RunScenePrefabTests();
 void RunProjectSceneTests();
 void RunLargeNonAdditiveSceneTransitionBenchmark();
 void RunScriptRuntimeTests();
+void RunScriptSaveTests();
 void RunScriptApiCatalogTests();
 void RunVisualGraphTests();
 void RunInputTests();
