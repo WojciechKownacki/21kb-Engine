@@ -514,6 +514,67 @@ void RunCreationParentValidationTest() {
     }
 }
 
+void RunPrefabParentValidationTest() {
+    struct Mode { bool mirrored; bool sync; };
+    for (const auto mode : std::array<Mode, 3U>{{{true, false}, {true, true}, {false, false}}}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mode.mirrored;
+        config.mirrorNativeComponentChangesToBackend = mode.mirrored;
+        kb::scene::Scene scene{config};
+        kb::scene::Scene other{config};
+        const auto parent = scene.Entities().CreateObject({.name = "Parent"});
+        const auto foreign = other.Entities().CreateObject({.name = "Foreign parent"});
+        const auto stale = scene.Entities().CreateObject({.name = "Stale parent"});
+        scene.Entities().Destroy(stale);
+        kb::scene::ScenePrefab prefab;
+        const auto root = prefab.AddNode({.name = "Template root"});
+        static_cast<void>(prefab.AddNode({.name = "Template child", .parentNode = root}));
+        const auto registered = scene.Prefabs().Register("ParentValidation", prefab);
+        const auto spawn = [&](int form, std::size_t count, const kb::scene::ScenePrefabInstantiationSettings& settings) {
+            switch (form) {
+            case 0: static_cast<void>(scene.Prefabs().Instantiate(prefab, settings)); break;
+            case 1: static_cast<void>(scene.Prefabs().InstantiateMany(prefab, count, settings)); break;
+            case 2: static_cast<void>(scene.Prefabs().InstantiateBatch(prefab, count, settings)); break;
+            case 3: static_cast<void>(scene.Prefabs().Instantiate(registered, settings)); break;
+            case 4: static_cast<void>(scene.Prefabs().InstantiateMany(registered, count, settings)); break;
+            case 5: static_cast<void>(scene.Prefabs().InstantiateBatch(registered, count, settings)); break;
+            }
+        };
+        kb::scene::ScenePrefabInstantiationSettings settings{.parent = parent, .syncWorldHierarchy = mode.sync};
+        for (int form = 0; form < 6; ++form) {
+            const std::size_t instances = form % 3 == 0 ? 1U : 2U;
+            const auto count = scene.Entities().Count();
+            const auto childCount = scene.Hierarchy().ChildCount(parent.Entity());
+            spawn(form, instances, settings);
+            kb::tests::Require(scene.Entities().Count() == count + 2U * instances &&
+                scene.Hierarchy().ChildCount(parent.Entity()) == childCount + instances,
+                "Prefab parent validation control must create and parent every requested node");
+        }
+        for (const auto invalidParent : {foreign, stale}) {
+            settings.parent = invalidParent;
+            for (int form = 0; form < 6; ++form) {
+                const auto count = scene.Entities().Count();
+                const auto roots = scene.Hierarchy().RootEntities();
+                const auto children = scene.Hierarchy().ChildEntities(parent.Entity());
+                const auto handles = kb::scene::SceneAccess::State(scene).prefabInstances.Handles();
+                try {
+                    spawn(form, 2U, settings);
+                } catch (const std::invalid_argument&) {
+                }
+                kb::tests::Require(scene.Entities().Count() == count && scene.Hierarchy().RootEntities() == roots &&
+                    scene.Hierarchy().ChildEntities(parent.Entity()) == children &&
+                    kb::scene::SceneAccess::State(scene).prefabInstances.Handles() == handles,
+                    "Invalid prefab parents must not leave nodes, hierarchy changes or instance records");
+            }
+            const auto count = scene.Entities().Count();
+            for (const int form : {1, 2, 4, 5}) spawn(form, 0U, settings);
+            kb::tests::Require(scene.Entities().Count() == count, "Zero-count prefab spawning must remain a no-op with an unused parent");
+        }
+        kb::tests::Require(other.Entities().Count() == 1U && other.Hierarchy().ChildCount(foreign.Entity()) == 0U,
+            "Prefab spawning must not modify the scene that owns a foreign parent");
+    }
+}
+
 void RunHierarchyStableCreationOrderTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject first = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First" });
@@ -2053,6 +2114,7 @@ void RunSceneHierarchyTests() {
     RunEntityCreationBudgetRollbackTest();
     RunHierarchyCycleRejectionTest();
     RunCreationParentValidationTest();
+    RunPrefabParentValidationTest();
     RunDeepHierarchyDestructionTest();
     RunTransformHierarchyTest();
     RunTransformHierarchyReplayDeterminismTest();
@@ -2096,6 +2158,7 @@ void RunSceneHierarchyTests() {
 void RunSceneHierarchyParentingTests() {
     RunHierarchyCycleRejectionTest();
     RunCreationParentValidationTest();
+    RunPrefabParentValidationTest();
     RunParentChildrenOwnershipTest();
 }
 
