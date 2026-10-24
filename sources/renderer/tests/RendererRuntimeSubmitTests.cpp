@@ -9748,6 +9748,15 @@ void RunRendererVisibilityFeedbackTest() {
     RunRendererPublishesSceneVisibilityFeedbackTest();
 }
 
+void RunRendererScreenUiSubmitTests() {
+    RunRendererResourceGroupEnsureFallbacksTest();
+    RunEditorUIViewTransformValidationTests();
+    RunEditorCameraWireframesSubmitInHeadlessNoopTest();
+    RunRendererKeepsSceneWhenUIFrameRefusesTest();
+    RunRendererKeepsUIWhenTextCannotBePreparedTest();
+    RunRendererDetachedViewportFinalCompositePixelsTest();
+}
+
 void RunRendererRuntimeSubmitTests() {
     RunGeneratedClusterMissingResourceDiagnosticsTest();
     RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest();
