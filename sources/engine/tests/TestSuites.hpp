@@ -10,6 +10,7 @@ void RunSaveGameTests();
 void RunSecurityTests();
 void RunEcsRuntimeTests();
 void RunSceneHierarchyTests();
+void RunSceneHierarchyParentingTests();
 void RunTransformWriteBenchmark();
 void RunSceneUITests();
 void RunSceneUIBuildFrameBenchmark();

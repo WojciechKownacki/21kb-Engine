@@ -431,6 +431,49 @@ void RunParentChildrenOwnershipTest() {
     kb::tests::Require(scene.Prefabs().RegisteredCount() == 0, "Destroying plain hierarchy should not register prefabs");
 }
 
+void RunHierarchyCycleRejectionTest() {
+    for (const bool mirrored : {true, false}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mirrored;
+        config.mirrorNativeComponentChangesToBackend = mirrored;
+        kb::scene::Scene scene{config};
+        const auto root = scene.Entities().CreateObject({.name = "Root"});
+        const auto child = scene.Entities().CreateObject({.name = "Child", .parent = root});
+        const auto leaf = scene.Entities().CreateObject({.name = "Leaf", .parent = child});
+        const auto replacement = scene.Entities().CreateObject({.name = "Replacement"});
+        scene.Runtime().SynchronizeTransforms();
+        const auto roots = scene.Hierarchy().RootEntities();
+        const auto topologyVersion = kb::scene::SceneAccess::State(scene).hierarchyTopologyVersion;
+        kb::tests::Require(scene.History().Record("Rejected parenting"), "Cycle rejection history command did not open");
+        const auto undoCount = scene.History().UndoCount();
+        std::cout << "scene_parent_cycle mirrored=" << mirrored << '\n';
+        kb::tests::Require(!scene.Hierarchy().SetParent(root, leaf) &&
+            !scene.Hierarchy().SetParent(child.Entity(), leaf.Entity()) &&
+            !scene.Hierarchy().SetParent(child, child), "Scene parenting must reject cycles with or without backend mirroring");
+        scene.History().Commit();
+        kb::tests::Require(scene.Hierarchy().RootEntities() == roots &&
+            scene.Hierarchy().Parent(root.Entity()) == kb::scene::SceneEntity{} &&
+            scene.Hierarchy().Parent(child.Entity()) == root.Entity() &&
+            scene.Hierarchy().Parent(leaf.Entity()) == child.Entity() &&
+            kb::scene::SceneAccess::State(scene).hierarchyTopologyVersion == topologyVersion && scene.History().UndoCount() == undoCount,
+            "Rejected parenting must preserve roots, parents, cached topology and history");
+        scene.History().Clear();
+        kb::tests::Require(scene.History().Record("Reparent subtree"), "Valid parenting history command did not open");
+        kb::tests::Require(scene.Hierarchy().SetParent(child, replacement), "Valid subtree parenting failed after cycle rejection");
+        scene.History().Commit();
+        kb::tests::Require(scene.History().UndoCount() == 1U && scene.History().Undo() &&
+            scene.Hierarchy().Parent(child.Entity()) == root.Entity() && scene.History().Redo() &&
+            scene.Hierarchy().Parent(child.Entity()) == replacement.Entity(),
+            "Valid parenting must remain undoable and redoable after cycle rejection");
+        scene.Runtime().SynchronizeTransforms();
+        scene.Entities().Destroy(root);
+        kb::tests::Require(scene.Entities().IsAlive(child) && scene.Entities().IsAlive(leaf),
+            "Cycle rejection must preserve the subtree through a subsequent move and root destruction");
+        scene.Entities().Destroy(replacement);
+        kb::tests::Require(scene.Entities().Count() == 0U, "Cycle rejection must retain consistent subtree destruction");
+    }
+}
+
 void RunHierarchyStableCreationOrderTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject first = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First" });
@@ -1968,6 +2011,7 @@ void RunTransformWriteBenchmark() {
 
 void RunSceneHierarchyTests() {
     RunEntityCreationBudgetRollbackTest();
+    RunHierarchyCycleRejectionTest();
     RunDeepHierarchyDestructionTest();
     RunTransformHierarchyTest();
     RunTransformHierarchyReplayDeterminismTest();
@@ -2006,6 +2050,11 @@ void RunSceneHierarchyTests() {
     RunDestroyedEntityHandleDoesNotAffectNewEntityTest();
     RunSceneCameraLightVisitorBatchPathTest();
     RunTransformLinkBitsFollowHierarchyTest();
+}
+
+void RunSceneHierarchyParentingTests() {
+    RunHierarchyCycleRejectionTest();
+    RunParentChildrenOwnershipTest();
 }
 
 } // namespace kb::tests

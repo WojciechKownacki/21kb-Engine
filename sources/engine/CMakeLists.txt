@@ -1908,7 +1908,9 @@ if(BUILD_TESTING)
     )
 
     add_test(NAME kb_engine_tests COMMAND $<TARGET_FILE:kb_engine_tests>)
-    set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 1500)
+    add_test(NAME kb_engine_scene_parenting COMMAND $<TARGET_FILE:kb_engine_tests> scene-parenting)
+    set_tests_properties(kb_engine_scene_parenting PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 30)
 
     # Machine-independent performance gates: each compares two measurements taken in the same run. They
     # run alone, as other tests competing for the CPU in between would skew one measurement and not the other.
