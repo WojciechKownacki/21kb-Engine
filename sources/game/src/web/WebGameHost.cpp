@@ -1,5 +1,6 @@
 #include "GameProjectRuntime.hpp"
 #include "PackagedGameRuntime.hpp"
+#include "WebTouchInput.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -319,13 +320,16 @@ private:
             return;
         }
         SetBrowserBackendReady();
-        RegisterInput();
+        if (!RegisterInput()) {
+            Fail("input-init", "browser touch handlers could not be registered");
+            return;
+        }
         previousTick_ = std::chrono::steady_clock::now();
         std::fprintf(stdout, "kb_game_web: %s", diagnostics.str().c_str());
         emscripten_set_main_loop_arg(&WebGameHost::Frame, this, 0, false);
     }
 
-    void RegisterInput() noexcept {
+    bool RegisterInput() noexcept {
         static_cast<void>(emscripten_set_keydown_callback(
             EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebGameHost::OnKey));
         static_cast<void>(emscripten_set_keyup_callback(
@@ -334,14 +338,10 @@ private:
         static_cast<void>(emscripten_set_mouseup_callback(kCanvas, this, true, &WebGameHost::OnMouse));
         static_cast<void>(emscripten_set_mousemove_callback(kCanvas, this, true, &WebGameHost::OnMouse));
         static_cast<void>(emscripten_set_wheel_callback(kCanvas, this, true, &WebGameHost::OnWheel));
-        static_cast<void>(emscripten_set_focus_callback(
-            EMSCRIPTEN_EVENT_TARGET_WINDOW, this, true, &WebGameHost::OnFocus));
-        static_cast<void>(emscripten_set_blur_callback(
-            EMSCRIPTEN_EVENT_TARGET_WINDOW, this, true, &WebGameHost::OnFocus));
-        if (kb::scene::Scene* scene = runtime_.Scene(); scene != nullptr) {
-            scene->Input().MutableDeviceState().SetHasFocus(true);
-        }
+        if (!touches_.Attach(kCanvas, this, &WebGameHost::ResolveInput,
+                &WebGameHost::OnTouchBegan, &WebGameHost::OnInputFocus)) return false;
         RegisterBrowserTextInput(this);
+        return true;
     }
 
     static void Frame(void* userData) {
@@ -358,6 +358,7 @@ private:
             scene->Input().MutableDeviceState().SetPointerViewportExtent(
                 host->surface_.Width(), host->surface_.Height());
         }
+        host->touches_.SetViewport(host->surface_.Width(), host->surface_.Height());
         bool frameSubmitted = false;
         if (!host->runtime_.Tick(host->renderer_, delta, &frameSubmitted)) {
             host->frameInProgress_ = false;
@@ -377,6 +378,7 @@ private:
             state.SetAnalog(kb::input::InputKey::MouseWheel, 0.0F);
             state.ClearTextInput();
         }
+        host->touches_.FinishFrame();
         host->frameInProgress_ = false;
     }
 
@@ -437,18 +439,23 @@ private:
         return EM_TRUE;
     }
 
-    static EM_BOOL OnFocus(int eventType, const EmscriptenFocusEvent*, void* userData) {
+    static kb::input::InputDeviceState* ResolveInput(void* userData) noexcept {
         auto* host = static_cast<WebGameHost*>(userData);
         kb::scene::Scene* scene = host == nullptr ? nullptr : host->runtime_.Scene();
-        if (scene == nullptr) return EM_FALSE;
-        auto& state = scene->Input().MutableDeviceState();
-        const bool focused = eventType == EMSCRIPTEN_EVENT_FOCUS;
-        if (!focused) {
-            state.Reset();
-            host->SetTextInputActive(false);
-        }
-        state.SetHasFocus(focused);
-        return EM_FALSE;
+        return scene == nullptr ? nullptr : &scene->Input().MutableDeviceState();
+    }
+
+    static void OnTouchBegan(void* userData, float x, float y) noexcept {
+        auto* host = static_cast<WebGameHost*>(userData);
+        kb::scene::Scene* scene = host == nullptr ? nullptr : host->runtime_.Scene();
+        if (scene == nullptr) return;
+        const auto target = scene->UI().HitTest({x, y});
+        if (target.IsValid() && scene->Components().UI().Has<kb::scene::UIInputField>(target)) host->SetTextInputActive(true);
+    }
+
+    static void OnInputFocus(void* userData, bool focused) noexcept {
+        auto* host = static_cast<WebGameHost*>(userData);
+        if (host != nullptr && !focused) host->SetTextInputActive(false);
     }
 
     void SetTextInputActive(bool active) noexcept {
@@ -470,6 +477,7 @@ private:
     }
 
     void Shutdown() noexcept {
+        touches_.Detach();
         SetTextInputActive(false);
         DestroyBrowserTextInput();
         static_cast<void>(runtime_.Shutdown(renderer_, std::cerr));
@@ -487,6 +495,7 @@ private:
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack_;
     kb::render::Renderer renderer_;
     kb::game::PackagedGameRuntime runtime_;
+    kb::game::WebTouchInput touches_;
     std::chrono::steady_clock::time_point previousTick_{};
     bool firstFrameReported_ = false;
     bool frameInProgress_ = false;

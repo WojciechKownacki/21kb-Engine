@@ -13,6 +13,41 @@ permissions:
   contents: read
 
 jobs:
+  web-input:
+    name: Web input ASan UBSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up the browser toolchain
+        uses: emscripten-core/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        with:
+          version: 6.0.9
+          actions-cache-folder: emsdk-cache
+      - name: Build the production touch collector with sanitizers
+        run: |
+          cmake -S sources/game/tests/web -B build/web-input -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
+            -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/web-input --parallel 2
+      - name: Verify trusted browser touches and native readback
+        run: |
+          python3 -m venv build/web-input-tools
+          build/web-input-tools/bin/python -m pip install --require-hashes -r sources/game/tests/web/requirements.txt
+          browser="$(command -v google-chrome || command -v chromium)"
+          build/web-input-tools/bin/python sources/game/tests/web/run_input_tests.py \
+            --browser "$browser" --directory build/web-input --output build/web-input-results
+      - name: Keep browser input results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-input-results
+          path: |
+            build/web-input-results/result.json
+            build/web-input-results/browser-events.json
+            build/web-input-results/browser.log
+          if-no-files-found: ignore
+
   native-read-batches:
     name: Linux native read batches
     runs-on: ubuntu-24.04

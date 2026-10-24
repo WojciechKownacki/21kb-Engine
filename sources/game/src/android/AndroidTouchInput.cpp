@@ -4,25 +4,8 @@
 
 #include <cmath>
 #include <iterator>
-#include <span>
 
 namespace kb::game {
-
-void AndroidTouchInput::Update(std::uint32_t id, float x, float y, input::InputTouchPhase phase) noexcept {
-    for (std::size_t index = count_; index > 0U; --index) {
-        auto& point = points_[index - 1U];
-        if (point.id != id || point.phase == input::InputTouchPhase::Ended) continue;
-        point.x = x;
-        point.y = y;
-        if (phase != input::InputTouchPhase::Moved || point.phase != input::InputTouchPhase::Began) point.phase = phase;
-        return;
-    }
-    // A move after cancellation must not resurrect a contact. Keep terminal
-    // samples until the scene consumes a frame, even if another finger moves.
-    if (phase == input::InputTouchPhase::Began && count_ < points_.size()) {
-        points_[count_++] = input::InputTouchPoint{.id = id, .x = x, .y = y, .phase = phase};
-    }
-}
 
 bool AndroidTouchInput::Process(const GameActivityMotionEvent& event) noexcept {
     if ((event.source & AINPUT_SOURCE_TOUCHSCREEN) != AINPUT_SOURCE_TOUCHSCREEN) return false;
@@ -53,7 +36,7 @@ bool AndroidTouchInput::Process(const GameActivityMotionEvent& event) noexcept {
             phase = input::InputTouchPhase::Ended;
         }
         const auto& point = event.pointers[index];
-        Update(static_cast<std::uint32_t>(point.id), GameActivityPointerAxes_getX(&point),
+        frame_.Update(static_cast<std::uint32_t>(point.id), GameActivityPointerAxes_getX(&point),
             GameActivityPointerAxes_getY(&point), phase);
     }
     if (action == AMOTION_EVENT_ACTION_CANCEL) Cancel();
@@ -73,41 +56,6 @@ void AndroidTouchInput::HandleAppCommand(std::int32_t command) noexcept {
     default:
         break;
     }
-}
-
-void AndroidTouchInput::SetViewport(std::uint32_t width, std::uint32_t height) noexcept {
-    if (width != width_ || height != height_) Cancel();
-    width_ = width;
-    height_ = height;
-}
-
-void AndroidTouchInput::Cancel() noexcept {
-    for (std::size_t index = 0U; index < count_; ++index) points_[index].phase = input::InputTouchPhase::Ended;
-}
-
-void AndroidTouchInput::Publish(input::InputDeviceState& state) const noexcept {
-    state.SetPointerViewportExtent(width_, height_);
-    state.SetTouchPoints(std::span{points_}.first(count_));
-    if (count_ == 0U) return;
-    const input::InputTouchPoint* pointer = &points_[0];
-    for (std::size_t index = 0U; index < count_; ++index) {
-        if (points_[index].phase != input::InputTouchPhase::Ended) {
-            pointer = &points_[index];
-            break;
-        }
-    }
-    state.SetPointerPosition(pointer->x, pointer->y);
-}
-
-void AndroidTouchInput::FinishFrame() noexcept {
-    std::size_t remaining = 0U;
-    for (std::size_t index = 0U; index < count_; ++index) {
-        auto point = points_[index];
-        if (point.phase == input::InputTouchPhase::Ended) continue;
-        point.phase = input::InputTouchPhase::Moved;
-        points_[remaining++] = point;
-    }
-    count_ = remaining;
 }
 
 } // namespace kb::game

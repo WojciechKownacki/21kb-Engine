@@ -35,6 +35,7 @@ and transform-pass comparisons remain bit-exact on every toolchain.
 
 | CI job | Runner | What it runs |
 | --- | --- | --- |
+| Web input ASan UBSan | `ubuntu-24.04` | Production touch collector compiled to WebAssembly with ASan and UBSan; trusted headless Chromium touch events and native state readback |
 | Linux native read batches | `ubuntu-24.04` | Isolated background read batch tests under ASan and UBSan, covering priority, cancellation and exact ranges |
 | clang-tidy gate | `windows-2025-vs2026` | `scripts/clang_tidy_gate.py` over changed first-party sources; every source when a first-party header changes, on manual dispatch, or in the weekly scheduled run |
 | Fuzz untrusted-input readers | `windows-2025-vs2026` | The `kb_fuzzers` libFuzzer harnesses with AddressSanitizer: corpus replay, then 60 seconds of fresh inputs per reader |
@@ -43,9 +44,10 @@ and transform-pass comparisons remain bit-exact on every toolchain.
 
 There is no macOS job: macOS is not a tested platform. The renderer, the
 editor and the packaged game hosts build only on Windows in CI; the Linux row
-builds neither the renderer nor the editor, and no CI job builds Android or
-the Web targets. None of these may be described as supported until a CI job
-builds and tests them.
+builds neither the renderer nor the editor, and no CI job builds the Android or
+Web player. The isolated Web input job does not validate the browser renderer,
+asset packs or a complete game. None of these players may be described as
+supported until a CI job builds and tests them.
 
 `kb_engine_library_tests` verifies the catalog and parity of Native, Lua and
 Visual Graph entry points; it runs in the Windows MSVC and Linux rows.

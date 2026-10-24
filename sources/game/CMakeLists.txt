@@ -185,7 +185,7 @@ if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
     else()
         set(KB_GAME_WEB_TARGET kb_game_webgl)
     endif()
-    add_executable(${KB_GAME_WEB_TARGET} src/web/WebGameHost.cpp)
+    add_executable(${KB_GAME_WEB_TARGET} src/web/WebGameHost.cpp src/web/WebTouchInput.cpp)
     target_link_libraries(${KB_GAME_WEB_TARGET} PRIVATE kb_packaged_game_host_core)
     target_link_options(${KB_GAME_WEB_TARGET} PRIVATE
         "-sFETCH=1"

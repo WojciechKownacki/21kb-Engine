@@ -1,9 +1,7 @@
 #pragma once
 
-#include "engine/input/InputDeviceState.hpp"
+#include "TouchContactFrame.hpp"
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
 
 struct GameActivityMotionEvent;
@@ -14,17 +12,13 @@ class AndroidTouchInput {
 public:
     [[nodiscard]] bool Process(const GameActivityMotionEvent& event) noexcept;
     void HandleAppCommand(std::int32_t command) noexcept;
-    void SetViewport(std::uint32_t width, std::uint32_t height) noexcept;
-    void Cancel() noexcept;
-    void Publish(input::InputDeviceState& state) const noexcept;
-    void FinishFrame() noexcept;
+    void SetViewport(std::uint32_t width, std::uint32_t height) noexcept { frame_.SetViewport(width, height); }
+    void Cancel() noexcept { frame_.Cancel(); }
+    void Publish(input::InputDeviceState& state) const noexcept { frame_.Publish(state); }
+    void FinishFrame() noexcept { frame_.FinishFrame(); }
 
 private:
-    void Update(std::uint32_t id, float x, float y, input::InputTouchPhase phase) noexcept;
-    std::array<input::InputTouchPoint, input::InputDeviceState::kMaxTouchPoints> points_{};
-    std::size_t count_ = 0U;
-    std::uint32_t width_ = 0U;
-    std::uint32_t height_ = 0U;
+    TouchContactFrame frame_;
 };
 
 } // namespace kb::game
