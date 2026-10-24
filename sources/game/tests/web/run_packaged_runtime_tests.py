@@ -23,6 +23,7 @@ import time
 import urllib.request
 
 from run_input_tests import DevTools
+import graphics_stability
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
 from png_readback import read_png
@@ -140,7 +141,10 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--case", choices=["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion", "geometry-depth", "geometry-depth-opaque"], action="append")
     parser.add_argument("--browser-arg", action="append", default=[])
+    parser.add_argument("--stability-seconds", type=int, default=0)
     args = parser.parse_args()
+    if args.stability_seconds < 0 or (args.stability_seconds and args.case not in (None, ["geometry-depth-opaque"])):
+        parser.error("Stability duration must be nonnegative and selects only geometry-depth-opaque")
     for name in ["cli", "cooker", "engine_root", "shaderc", "directory", "browser", "output"]:
         setattr(args, name, getattr(args, name).resolve())
     if os.name == "nt":
@@ -185,7 +189,9 @@ def main():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        for case in args.case or ["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion", "geometry-depth", "geometry-depth-opaque"]:
+        cases = (["geometry-depth-opaque"] if args.stability_seconds else args.case or
+            ["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion", "geometry-depth", "geometry-depth-opaque"])
+        for case in cases:
             case_project = project
             if case.startswith("geometry-depth"):
                 case_project = root / ("DepthSample" + str(len(report["cases"])))
@@ -208,7 +214,8 @@ def main():
             (case_project / "Assets/Scripts/RuntimeProbe.lua").write_text(
                 'function Ready(self, dt)\n' + ready + '\nend\n'
                 'function Tick(self, dt)\nlocal frames = (GetShared("runtime.frames") or 0) + 1\n'
-                'SetShared("runtime.frames", frames)\nif ' + ('true' if case.startswith("graphics-") else 'frames <= 8') + ' then Log("' + marker +
+                'SetShared("runtime.frames", frames)\nif ' + ('true' if case.startswith("graphics-") else
+                    'frames <= 8 or frames % 60 == 0' if args.stability_seconds else 'frames <= 8') + ' then Log("' + marker +
                 '-frame=" .. tostring(frames)) end\nif frames == 8 then\n' + tick +
                 '\nend\n' + input_probe + 'end\n' + ('function Destroyed(self, dt) Log("' + marker + '-destroyed") end\n'
                     if case.startswith("graphics-") else ''), encoding="utf-8")
@@ -251,6 +258,8 @@ def main():
                     if case == "loader":
                         client.call("Network.enable")
                     client.call("Page.bringToFront")
+                    if args.stability_seconds:
+                        client.call("Page.addScriptToEvaluateOnNewDocument", source=graphics_stability.OBSERVER)
                     # Observe the context actually used by the host; do not create a test context.
                     client.call("Page.addScriptToEvaluateOnNewDocument", source="""
 const compile = WebGL2RenderingContext.prototype.compileShader;
@@ -259,7 +268,8 @@ WebGL2RenderingContext.prototype.compileShader = function(shader) {
         const ext = this.getExtension('WEBGL_debug_renderer_info');
         window.kbRuntimeGraphics = {context:this, version:this.getParameter(this.VERSION),
             renderer:ext ? this.getParameter(ext.UNMASKED_RENDERER_WEBGL) : this.getParameter(this.RENDERER),
-            shaders:[], copies:[], depthCopies:[]};
+            shaders:[], copies:[], depthCopies:[],copyCount:0,depthCopyCount:0,
+            incompleteCopyCount:0,incompleteDepthCopyCount:0};
     }
     compile.call(this, shader);
     window.kbRuntimeGraphics.shaders.push({compiled:this.getShaderParameter(shader, this.COMPILE_STATUS),
@@ -267,18 +277,27 @@ WebGL2RenderingContext.prototype.compileShader = function(shader) {
 };
 const copy = WebGL2RenderingContext.prototype.copyTexSubImage2D;
 WebGL2RenderingContext.prototype.copyTexSubImage2D = function(...args) {
-    window.kbRuntimeGraphics.copies.push({complete:
-        this.checkFramebufferStatus(this.FRAMEBUFFER) === this.FRAMEBUFFER_COMPLETE});
+    const g = window.kbRuntimeGraphics;
+    const complete = this.checkFramebufferStatus(this.FRAMEBUFFER) === this.FRAMEBUFFER_COMPLETE;
+    g.copyCount++;
+    if (!complete) g.incompleteCopyCount++;
+    g.copies.push({complete});
+    if (g.copies.length > 64) g.copies.shift();
     return copy.apply(this, args);
 };
 const blit = WebGL2RenderingContext.prototype.blitFramebuffer;
 WebGL2RenderingContext.prototype.blitFramebuffer = function(...args) {
     if (args[8] & this.DEPTH_BUFFER_BIT) {
-        window.kbRuntimeGraphics.depthCopies.push({
+        const g = window.kbRuntimeGraphics;
+        const value = {
             readComplete:this.checkFramebufferStatus(this.READ_FRAMEBUFFER) === this.FRAMEBUFFER_COMPLETE,
             drawComplete:this.checkFramebufferStatus(this.DRAW_FRAMEBUFFER) === this.FRAMEBUFFER_COMPLETE,
             mask:args[8],filter:args[9]
-        });
+        };
+        g.depthCopyCount++;
+        if (!value.readComplete || !value.drawComplete) g.incompleteDepthCopyCount++;
+        g.depthCopies.push(value);
+        if (g.depthCopies.length > 64) g.depthCopies.shift();
     }
     return blit.apply(this, args);
 };
@@ -354,6 +373,12 @@ WebGL2RenderingContext.prototype.drawArraysInstanced = function(...args) {
                                 for item in state["depthCopies"]), "Actual depth blit used an incomplete framebuffer")
                             require(all(item["complete"] for item in client.evaluate("window.kbRuntimeGraphics.copies")),
                                 "Geometry rendering copied from an incomplete framebuffer")
+                            require(client.evaluate("window.kbRuntimeGraphics.incompleteCopyCount===0 && "
+                                "window.kbRuntimeGraphics.incompleteDepthCopyCount===0"),
+                                "Geometry rendering had an earlier incomplete copy")
+                            if args.stability_seconds:
+                                state["stability"] = graphics_stability.run(client, directory, marker,
+                                    args.stability_seconds, target["id"], capture_depth)
                         if case == "positive":
                             require(client.evaluate("typeof Module.requestFullscreen === 'function'"),
                                 "The existing browser fullscreen entry point was removed")
@@ -389,6 +414,8 @@ WebGL2RenderingContext.prototype.drawArraysInstanced = function(...args) {
                             state["textureCopies"] = client.evaluate("window.kbRuntimeGraphics.copies")
                             require(state["textureCopies"] and all(item["complete"] for item in state["textureCopies"]),
                                 "UI-only rendering attempted a copy from an incomplete framebuffer")
+                            require(client.evaluate("window.kbRuntimeGraphics.incompleteCopyCount===0"),
+                                "UI-only rendering had an earlier incomplete copy")
                         if case.startswith("graphics-"):
                             state["initialPixel"] = capture_panel(client, directory, "before-loss")
                             state["recoveryCycles"] = []

@@ -81,3 +81,22 @@ readbacks. It checks that display output is opaque for source alpha zero, half
 and one while general texture copies retain those values, then verifies temporal
 reactivity, translucent blend alpha and FXAA. Missing tools or a graphics device
 fail this check. It runs in the Windows release and sanitizer CI jobs.
+
+For a short repeated focus/resize check, add `--stability-seconds 15` to the
+packaged runtime command. A nonzero duration selects only
+`geometry-depth-opaque`; the default remains the nine ordinary scenarios.
+The test checks actual GPU pixels and opaque display alpha, progressing Lua
+frames, complete depth copies, and stable live graphics handles after warmup
+at equivalent viewport sizes. It alternates canvas sizes and device pixel
+ratios and changes focus through a second owned tab. Context loss, recovery,
+software rendering and runtime errors fail this check.
+
+`stability.json` uses schema `21kb.web-graphics-stability/v1` and records the
+requested and elapsed durations, browser version, samples, cycles and resource
+counts. Graphics API handles and JavaScript heap usage do not measure VRAM;
+GPU memory is reported as unavailable. Readbacks make this a correctness test,
+not a timing benchmark. Short runs do not establish sustained stability;
+`longAcceptance` is true only after a successful requested duration of at least
+1800 seconds. Longer runs are opt-in. The verified configuration remains
+headless Chrome with ANGLE/OpenGL. Copy observations retain bounded samples
+and cumulative failure counts, so discarding old samples cannot hide failures.

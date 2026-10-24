@@ -147,3 +147,13 @@ the display composite converts it to alpha one. General fullscreen texture
 copies retain source alpha. Native GPU readbacks cover all three source alpha
 values zero, half and one, unchanged display color, temporal reactivity,
 translucent blending and FXAA.
+
+The packaged browser runner accepts an optional `--stability-seconds` duration
+for repeated geometry-depth, focus and resize checks. Use a short duration for
+targeted regressions; longer runs are opt-in. Its versioned `stability.json`
+retains actual GPU pixel checks, Lua progress, resource creation/deletion and
+live handle counts by viewport size. Copy observations are bounded while error
+counts remain cumulative. Handles and JavaScript heap usage are not GPU memory
+measurements, and synchronous readbacks are not performance benchmarks. A short
+passing run does not establish long-running acceptance. See the browser test
+README for invocation and limitations.
