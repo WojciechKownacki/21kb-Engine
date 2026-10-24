@@ -43,6 +43,23 @@ those contacts. A cancelled UI contact releases its press without clicking. Inpu
 recordings use version 5 to preserve that distinction; versions 3 and 4 remain
 readable, including version 4's text and viewport fields.
 
+Gameplay scripts can enumerate the same snapshot with `Input.TouchCount()` and
+`Input.TouchPoint(index)` in Native, Lua and Visual Graph. Indices are zero-based;
+track the returned `UInt32` contact ID across frames because the order can change.
+`TouchPoint` returns `valid`, `id`, `x`, `y`, `phase` and `active`. Positions use
+render-viewport pixels, phases are Began=0, Moved=1, Ended=2 and Cancelled=3, and
+only Began/Moved are active. The count includes pending terminal samples so
+gameplay can end its gestures. An invalid index returns `valid=false`,
+`active=false`, zero ID/position and phase Cancelled. Queries do not consume the
+snapshot or change UI capture. Physical contacts are shared by local users.
+
+The engine script suite executes these queries through Native, Lua and a
+compiled Visual Graph with reordered IDs, all four phases and the full UInt32 ID
+range. `kb_game_touch_script_package` authors and cooks a Lua caller, executes it
+in the hidden packaged Windows player and checks a failing script control. That
+package test checks API availability with an empty contact snapshot; it does not
+inject platform touch events or validate a browser joystick.
+
 Multiple simultaneous UI captures, a complete virtual joystick and button flow,
 packaged-game behavior, WebGPU execution and other browser implementations require
 further integration coverage.

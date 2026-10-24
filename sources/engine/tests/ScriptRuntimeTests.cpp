@@ -10507,6 +10507,152 @@ end
     kb::tests::Require(host.SharedState().Get("input.player2Jump")->AsBool(), "Lua Input.IsPressed(action, 2) should see player 2's Jump");
 }
 
+void RunScriptTouchApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{scene};
+    kb::tests::Require(host.Succeeded(), "Touch script host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Input.TouchCount") != nullptr &&
+        host.Functions().FindSignature("Input.TouchPoint") != nullptr,
+        "Independent touch contact queries must be registered for gameplay scripts");
+
+    using kb::script::ScriptFunctionArgument;
+    using kb::script::ScriptValue;
+    using kb::script::ScriptValueType;
+    using Phase = kb::input::InputTouchPhase;
+    std::array points{
+        kb::input::InputTouchPoint{.id = 0xFFFFFFFFU, .x = 30.0F, .y = 40.0F, .phase = Phase::Began},
+        kb::input::InputTouchPoint{.id = 23U, .x = 310.0F, .y = 140.0F, .phase = Phase::Began},
+    };
+    const kb::script::ScriptFunctionCallContext callContext{.scene = &scene};
+    const auto query = [&](int index) {
+        const std::array args{ScriptFunctionArgument{"index", ScriptValue{index}}};
+        return host.Functions().Call("Input.TouchPoint", args, callContext);
+    };
+    kb::tests::Require(!host.Functions().Call("Input.TouchCount", {}, {}).Succeeded(),
+        "Touch queries require a scene instead of inventing a snapshot");
+    for (int index : {-1, 0, 10, 2147483647}) {
+        const auto result = query(index);
+        kb::tests::Require(result.Succeeded() && !result.Output("valid")->AsBool() &&
+            !result.Output("active")->AsBool() && result.Output("id")->AsUInt32() == 0U &&
+            result.Output("phase")->AsInt() == 3,
+            "An invalid touch index must return a complete inactive result");
+    }
+
+    constexpr kb::assets::AssetId nativeAsset{8823U}, luaAsset{8824U}, graphAsset{8825U};
+    for (const auto& [asset, backend] : std::array{
+        std::pair{nativeAsset, kb::scene::BehaviourBackend::Native},
+        std::pair{luaAsset, kb::scene::BehaviourBackend::Lua},
+        std::pair{graphAsset, kb::scene::BehaviourBackend::VisualGraph}}) {
+        const auto object = scene.Entities().CreateObject({.name = "Touch Caller"});
+        scene.Components().Behaviours().Set(object.Entity(), {.behaviourAssetId = asset.value, .backend = backend});
+    }
+    kb::script::ScriptFunctionCallResult nativePoint;
+    kb::tests::Require(host.NativeBackend().RegisterLifecycle(nativeAsset, kb::script::ScriptLifecycleEvent::Tick,
+        [&](kb::script::ScriptExecutionContext& context) {
+            const std::array args{ScriptFunctionArgument{"index", ScriptValue{1}}};
+            nativePoint = context.CallFunction("Input.TouchPoint", args);
+        }), "Native touch caller registration failed");
+    kb::tests::Require(host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local point = Input.TouchPoint(1)
+    SetShared("touch.count", Input.TouchCount())
+    SetShared("touch.id", tostring(point.id))
+    SetShared("touch.x", point.x)
+    SetShared("touch.y", point.y)
+    SetShared("touch.phase", point.phase)
+    SetShared("touch.active", point.active)
+    SetShared("touch.valid", point.valid)
+    SetShared("touch.invalid", Input.TouchPoint(-1).valid)
+    local ok = pcall(Input.TouchPoint, 4294967296)
+    SetShared("touch.overflowRejected", not ok)
+end
+)").succeeded, "Lua touch caller did not load");
+
+    std::vector<ScriptFunctionArgument> graphPoint;
+    const auto* pointSignature = host.Functions().FindSignature("Input.TouchPoint");
+    kb::script::ScriptFunctionDesc observer;
+    observer.signature.name = "Tests.ObserveTouch";
+    observer.signature.description = "Records compiled graph contact outputs for cross-frontend validation.";
+    observer.signature.inputs = pointSignature->outputs;
+    observer.signature.inputs.push_back({"count", ScriptValueType::Int, true});
+    observer.callback = [&](const kb::script::ScriptFunctionCallContext&, std::span<const ScriptFunctionArgument> arguments) {
+        graphPoint.assign(arguments.begin(), arguments.end());
+        return kb::script::ScriptFunctionCallResult{.executed = true};
+    };
+    kb::tests::Require(host.RegisterFunction(std::move(observer)), "Graph touch observer registration failed");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register({
+        .opcode = kb::visual::VisualGraphIrOpcode::GetProperty, .symbol = "TouchTestIndex",
+        .outputs = {{.name = "value", .type = kb::visual::VisualGraphValueType::Int}},
+        .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+            context.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{1});
+        }}), "Graph touch index registration failed");
+    kb::visual::VisualGraphAsset graph;
+    graph.name = "Touch Caller";
+    graph.nodes = {
+        {.id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event},
+        {.id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "TouchTestIndex"},
+        {.id = 3U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Input.TouchCount"},
+        {.id = 4U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Input.TouchPoint"},
+        {.id = 5U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Function.Tests.ObserveTouch"},
+    };
+    using Direction = kb::visual::VisualGraphPinDirection;
+    using Type = kb::visual::VisualGraphValueType;
+    using Edge = kb::visual::VisualGraphEdgeKind;
+    graph.pins = {{1U, Direction::Output, "then", Type::Void}, {2U, Direction::Output, "value", Type::Int}};
+    for (const auto& [node, function] : std::array{
+        std::pair{3U, "Input.TouchCount"}, std::pair{4U, "Input.TouchPoint"}, std::pair{5U, "Tests.ObserveTouch"}}) {
+        graph.pins.push_back({node, Direction::Input, "exec", Type::Void});
+        graph.pins.push_back({node, Direction::Output, "then", Type::Void});
+        const auto* signature = host.Functions().FindSignature(function);
+        for (const auto& pin : signature->inputs) graph.pins.push_back({node, Direction::Input, pin.name, ToVisualGraphValueType(pin.type)});
+        for (const auto& pin : signature->outputs) graph.pins.push_back({node, Direction::Output, pin.name, ToVisualGraphValueType(pin.type)});
+    }
+    graph.edges = {{1U, "then", 3U, "exec", Edge::Execution}, {3U, "then", 4U, "exec", Edge::Execution},
+        {4U, "then", 5U, "exec", Edge::Execution}, {2U, "value", 4U, "index", Edge::Data},
+        {3U, "count", 5U, "count", Edge::Data}};
+    for (const auto& pin : host.Functions().FindSignature("Input.TouchPoint")->outputs)
+        graph.edges.push_back({4U, pin.name, 5U, pin.name, Edge::Data});
+    const auto compiled = kb::visual::VisualGraphCompiler::Compile(graph);
+    kb::tests::Require(compiled.Succeeded(), "Touch graph did not compile");
+    host.VisualGraphs().Store({.assetId = graphAsset, .graphName = graph.name, .module = compiled.module});
+
+    for (int frame = 0; frame < 4; ++frame) {
+        if (frame == 1) { std::swap(points[0], points[1]); points[1].phase = Phase::Moved; points[1].x = 80.0F; }
+        if (frame == 2) points[1].phase = Phase::Ended;
+        if (frame == 3) { points[1].phase = Phase::Cancelled; scene.Input().MutableDeviceState().SetHasFocus(false); }
+        scene.Input().MutableDeviceState().SetTouchPoints(points);
+        kb::tests::Require(host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F).Succeeded(),
+            "Touch script lifecycle execution failed");
+        const kb::script::ScriptFunctionCallResult graphResult{.executed = true, .outputs = graphPoint};
+        kb::tests::Require(graphResult.Output("count").has_value() && graphResult.Output("count")->AsInt() == 2,
+            "Compiled graph must enumerate both touch samples including terminal contacts");
+        const auto& expected = points[1];
+        for (const auto& result : {query(1), nativePoint, graphResult}) {
+            kb::tests::Require(result.Succeeded() && result.Output("valid")->AsBool() &&
+                result.Output("id")->Type() == ScriptValueType::UInt32 && result.Output("id")->AsUInt32() == expected.id &&
+                result.Output("phase")->AsInt() == static_cast<int>(expected.phase) &&
+                result.Output("active")->AsBool() == kb::input::IsTouchActive(expected.phase) &&
+                kb::tests::NearlyEqual(result.Output("x")->AsFloat(), expected.x) &&
+                kb::tests::NearlyEqual(result.Output("y")->AsFloat(), expected.y),
+                "Native and compiled graph touch queries must preserve ID, position and terminal state");
+        }
+        kb::tests::Require(host.SharedState().Get("touch.count")->AsInt() == 2 &&
+            host.SharedState().Get("touch.id")->AsString() == std::to_string(expected.id) &&
+            host.SharedState().Get("touch.phase")->AsInt() == static_cast<int>(expected.phase) &&
+            host.SharedState().Get("touch.active")->AsBool() == kb::input::IsTouchActive(expected.phase) &&
+            host.SharedState().Get("touch.valid")->AsBool() && !host.SharedState().Get("touch.invalid")->AsBool() &&
+            host.SharedState().Get("touch.overflowRejected")->AsBool() &&
+            kb::tests::NearlyEqual(host.SharedState().Get("touch.x")->AsFloat(), expected.x) &&
+            kb::tests::NearlyEqual(host.SharedState().Get("touch.y")->AsFloat(), expected.y),
+            "Lua touch queries must preserve independent contacts and reject index truncation");
+        kb::tests::Require(scene.Input().DeviceState().TouchPoints().size() == 2U,
+            "Script queries must not consume touch samples");
+    }
+    scene.Input().MutableDeviceState().SetTouchPoints({});
+    kb::tests::Require(host.Functions().Call("Input.TouchCount", {}, callContext).Output("count")->AsInt() == 0 &&
+        !query(1).Output("valid")->AsBool(), "Consumed touch samples must disappear from script queries");
+}
+
 // LIB-117: Pointer.Position/Delta/Button/Scroll/Ray, both as direct native calls and
 // through the Lua wrapper table - proving the engine-side pointer position
 // storage (InputDeviceState::SetPointerPosition, LIB-117) reaches script.
@@ -16486,6 +16632,7 @@ void RunScriptNativeHeaderReloadTest() {
 }
 
 void RunScriptRuntimeTests() {
+    RunScriptTouchApiTest();
     RunNativeScriptRuntimeDispatchTest();
     RunNativeScriptPluginManagerDispatchTest();
     RunNativeScriptBuildPipelineTest();

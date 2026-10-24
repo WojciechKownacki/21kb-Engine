@@ -2728,6 +2728,34 @@ int LuaInputRemoveMappingContext(lua_State* state) {
     return 1;
 }
 
+int LuaInputTouchCount(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    const ScriptFunctionCallResult result = context->CallFunction("Input.TouchCount", {});
+    if (!result.Succeeded()) return PushCallError(state, result, "touch count query failed");
+    lua_pushinteger(state, result.Output("count").value_or(ScriptValue{0}).AsInt());
+    return 1;
+}
+
+int LuaInputTouchPoint(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    const lua_Integer index = luaL_checkinteger(state, 1);
+    luaL_argcheck(state, index >= std::numeric_limits<int>::min() && index <= std::numeric_limits<int>::max(),
+        1, "index must fit an Int");
+    const std::array arguments{
+        Arg("index", ScriptValue{static_cast<int>(index)}),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Input.TouchPoint", arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "touch point query failed");
+    lua_createtable(state, 0, static_cast<int>(result.outputs.size()));
+    for (const auto& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
 int LuaPointerPosition(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -3537,6 +3565,8 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaInputBindHapticsUser,
     &LuaInputSetUserVibration,
     &LuaInputStopVibration,
+    &LuaInputTouchCount,
+    &LuaInputTouchPoint,
     &LuaTimelineCreate,
     &LuaTimelineRelease,
     &LuaTimelinePlay,

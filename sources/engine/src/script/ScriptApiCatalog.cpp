@@ -197,6 +197,8 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "Input", "BindHapticsUser", "Input.BindHapticsUser", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "SetUserVibration", "Input.SetUserVibration", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "StopVibration", "Input.StopVibration", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Input", "TouchCount", "Input.TouchCount", ScriptApiCatalogLuaReturnKind::SingleOutput, "count" },
+    { "Input", "TouchPoint", "Input.TouchPoint", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Timeline", "Create", "Timeline.Create", ScriptApiCatalogLuaReturnKind::SingleOutput, "instance" },
     { "Timeline", "Release", "Timeline.Release", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Timeline", "Play", "Timeline.Play", ScriptApiCatalogLuaReturnKind::Default, "" },
