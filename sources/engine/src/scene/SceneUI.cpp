@@ -334,7 +334,8 @@ class FrameBuilder {
             output.refusal = refusal_;
             return false;
         }
-        std::ranges::stable_sort(frame_.elements, [](const SceneUIFrameElement& a, const SceneUIFrameElement& b) {
+        // Traversal ordinals break every paint-order tie, allowing the full records to be sorted in place.
+        std::ranges::sort(frame_.elements, [](const SceneUIFrameElement& a, const SceneUIFrameElement& b) {
             if (a.canvasSortingOrder != b.canvasSortingOrder)
                 return a.canvasSortingOrder < b.canvasSortingOrder;
             if (a.zOrder != b.zOrder)

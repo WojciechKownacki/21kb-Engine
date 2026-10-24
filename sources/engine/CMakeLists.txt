@@ -1907,6 +1907,8 @@ if(BUILD_TESTING)
             "KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH=\"$<TARGET_FILE:kb_native_script_test_plugin>\""
     )
 
+    add_test(NAME kb_engine_scene_ui COMMAND $<TARGET_FILE:kb_engine_tests> scene-ui)
+    set_tests_properties(kb_engine_scene_ui PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300 RUN_SERIAL TRUE)
     add_test(NAME kb_engine_tests COMMAND $<TARGET_FILE:kb_engine_tests>)
     set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 1500)
     add_test(NAME kb_engine_scene_parenting COMMAND $<TARGET_FILE:kb_engine_tests> scene-parenting)
