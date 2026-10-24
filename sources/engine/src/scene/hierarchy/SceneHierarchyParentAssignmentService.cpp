@@ -6,6 +6,7 @@
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneTransformService.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
+#include "scene/hierarchy/SceneHierarchyDepthGuard.hpp"
 #include "scene/hierarchy/SceneHierarchyOperations.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -48,6 +49,8 @@ bool SceneHierarchyParentAssignmentService::SetParent(Scene& scene, SceneEntity 
         if (fastAncestor.IsValid()) fastAncestor = SceneHierarchyCache::Parent(state, fastAncestor);
         if (ancestor.IsValid() && ancestor == fastAncestor) return false;
     }
+
+    if (!FitsSceneHierarchyDepth(state, child, parent)) return false;
 
     SceneHistoryService::NoteObjectMoving(scene, child, parent);
     const bool backendChildAlive = ecs_is_alive(state.world.NativeHandle(), kb::ecs::FlecsEntityId(child));

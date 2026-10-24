@@ -956,6 +956,7 @@ add_library(kb_engine STATIC
     src/scene/entities/SceneEntityStatsService.cpp
     src/scene/hierarchy/SceneHierarchyOperations.cpp
     src/scene/hierarchy/SceneHierarchyChildrenService.cpp
+    src/scene/hierarchy/SceneHierarchyDepthGuard.cpp
     src/scene/hierarchy/SceneHierarchyParentAssignmentService.cpp
     src/scene/hierarchy/SceneHierarchyParenting.cpp
     src/scene/hierarchy/SceneHierarchyParentService.cpp
@@ -1918,6 +1919,8 @@ if(BUILD_TESTING)
     set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 1500)
     add_test(NAME kb_engine_scene_parenting COMMAND $<TARGET_FILE:kb_engine_tests> scene-parenting)
     set_tests_properties(kb_engine_scene_parenting PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 30)
+    add_test(NAME kb_engine_scene_hierarchy_depth COMMAND $<TARGET_FILE:kb_engine_tests> scene-hierarchy-depth)
+    set_tests_properties(kb_engine_scene_hierarchy_depth PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 180 LABELS "scene;hierarchy;correctness")
     add_test(NAME kb_engine_hierarchy_depth COMMAND $<TARGET_FILE:kb_engine_tests> ecs-hierarchy-depth)
     set_tests_properties(kb_engine_hierarchy_depth PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120 LABELS "ecs;hierarchy;correctness")
 

@@ -8,6 +8,8 @@
 #include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
+#include "scene/hierarchy/SceneHierarchyDepthGuard.hpp"
+#include "ecs/relation/HierarchyDepthGuard.hpp"
 
 #include <array>
 #include <stdexcept>
@@ -39,6 +41,9 @@ void ValidateCreationParents(const Scene& scene, std::span<const SceneObjectDesc
         if (desc.parent.EntityHandle().IsValid() &&
             (!SceneAccess::BelongsTo(scene, desc.parent) || !state.world.IsAlive(desc.parent.Entity()))) {
             throw std::invalid_argument("Scene parent must be a live object in the target scene");
+        }
+        if (SceneChildDepth(state, desc.parent.Entity()) > kb::ecs::HierarchyDepthLimit()) {
+            throw std::invalid_argument("Scene parent exceeds the supported hierarchy depth");
         }
     }
 }

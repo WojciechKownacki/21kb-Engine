@@ -1,10 +1,19 @@
 #include "TestSupport.hpp"
 #include "engine/ecs/World.hpp"
 #include "ecs/relation/HierarchyDepthGuard.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneHistory.hpp"
+#include "engine/scene/ScenePrefab.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
 
 #include <iostream>
 #include <array>
 #include <vector>
+#include <stdexcept>
 
 namespace kb::tests {
 
@@ -56,6 +65,69 @@ void RunEcsHierarchyDepthTests() {
     world.DestroyEntity(extra);
     world.DestroyEntity(above);
     for (auto it = chain.rbegin(); it != chain.rend(); ++it) world.DestroyEntity(*it);
+}
+
+void RunSceneHierarchyDepthTests() {
+    constexpr std::uint32_t depthLimit = 8192U;
+    kb::scene::ScenePrefab prefab;
+    prefab.Reserve(depthLimit + 1U);
+    auto previous = prefab.AddNode({});
+    for (std::uint32_t depth = 1U; depth <= depthLimit; ++depth) previous = prefab.AddNode({.parentNode = previous});
+    for (const bool mirrored : {true, false}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mirrored;
+        config.mirrorNativeComponentChangesToBackend = mirrored;
+        kb::scene::Scene scene{config};
+        const auto instance = scene.Prefabs().Instantiate(prefab, {.assignNames = false, .syncWorldHierarchy = mirrored});
+        kb::tests::Require(instance.ObjectCount() == depthLimit + 1U, "Scene depth fixture must instantiate every public prefab node");
+        const auto root = instance.RootObject();
+        const auto leaf = instance.ObjectAt(depthLimit);
+        const auto leafParent = instance.ObjectAt(depthLimit - 1U);
+        kb::tests::Require(scene.Hierarchy().Parent(leaf.Entity()) == leafParent.Entity(), "Scene depth fixture must retain its deepest parent");
+        const auto backendParent = kb::scene::SceneAccess::State(scene).world.Parent(leaf.Entity());
+        kb::tests::Require(mirrored ? backendParent == leafParent.Entity() : !backendParent.IsValid(),
+            "Depth fixture must exercise the requested actual backend or native-only hierarchy");
+        std::cout << "scene_hierarchy_depth supported=" << depthLimit << " mirrored=" << mirrored << std::endl;
+        const auto above = scene.Entities().CreateObject();
+        kb::tests::Require(scene.History().Record(), "Scene depth history fixture must open a command");
+        const auto undoCount = scene.History().UndoCount();
+        const auto bytes = scene.History().RecordedBytes();
+        const auto count = scene.Entities().Count();
+        const auto roots = scene.Hierarchy().RootEntities();
+        for (int form = 0; form < 3; ++form) {
+            bool rejected = false;
+            try {
+                if (form == 0) static_cast<void>(scene.Entities().CreateObject({.parent = leaf}));
+                if (form == 1) static_cast<void>(scene.Entities().CreateEntity({.parent = leaf}));
+                if (form == 2) {
+                    const std::array<kb::scene::SceneObjectDesc, 2U> descs{{{.parent = above}, {.parent = leaf}}};
+                    static_cast<void>(scene.Entities().CreateObjects(descs));
+                }
+            } catch (const std::invalid_argument&) { rejected = true; }
+            kb::tests::Require(rejected && scene.Entities().Count() == count && scene.Hierarchy().RootEntities() == roots,
+                "Excessive scene creation depth must refuse the whole request before allocating entities");
+        }
+        kb::tests::Require(!scene.Hierarchy().SetParent(root, above) && !scene.Hierarchy().Parent(root.Entity()).IsValid(),
+            "Scene reparenting must include subtree height in the depth limit");
+        kb::tests::Require(scene.History().UndoCount() == undoCount && scene.History().RecordedBytes() == bytes,
+            "Rejected scene depth changes must not record history");
+        scene.History().Commit();
+        const auto supported = scene.Entities().CreateObject({.parent = leafParent});
+        kb::tests::Require(scene.Hierarchy().Parent(supported.Entity()) == leafParent.Entity(),
+            "Scene creation at exactly the supported depth must remain usable");
+        scene.Entities().Destroy(supported);
+        const auto branch = scene.Entities().CreateObject();
+        const auto branchLeaf = scene.Entities().CreateObject({.parent = branch});
+        kb::tests::Require(scene.Hierarchy().SetParent(branch, instance.ObjectAt(depthLimit - 2U)),
+            "A scene subtree ending exactly at the supported depth must remain movable");
+        kb::tests::Require(!scene.Hierarchy().SetParent(branch, leafParent) &&
+            scene.Hierarchy().Parent(branch.Entity()) == instance.ObjectAt(depthLimit - 2U).Entity() &&
+            scene.Hierarchy().Parent(branchLeaf.Entity()) == branch.Entity(),
+            "An excessive scene subtree move must preserve every existing link");
+        scene.Entities().Destroy(root);
+        kb::tests::Require(scene.Entities().Count() == 1U && scene.Entities().IsAlive(above.Entity()) && !scene.Entities().IsAlive(leaf.Entity()),
+            "Destroying a supported deep scene subtree must retain unrelated roots");
+    }
 }
 
 } // namespace kb::tests
