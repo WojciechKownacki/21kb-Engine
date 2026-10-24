@@ -20,6 +20,8 @@ public:
     [[nodiscard]] bool Attach(const char* canvas, void* owner, StateResolver state,
         BeginHandler begin = nullptr, FocusHandler focus = nullptr) noexcept;
     void Detach() noexcept;
+    void Suspend() noexcept;
+    [[nodiscard]] bool Resume() noexcept;
     [[nodiscard]] bool Process(int type, const EmscriptenTouchEvent& event, input::InputDeviceState& state) noexcept;
     void SetViewport(std::uint32_t width, std::uint32_t height) noexcept;
     void FinishFrame() noexcept;
@@ -28,6 +30,7 @@ private:
     static bool OnTouch(int type, const EmscriptenTouchEvent* event, void* context) noexcept;
     static bool OnFocus(int type, const EmscriptenFocusEvent*, void* context) noexcept;
     void Publish() const noexcept;
+    [[nodiscard]] bool RegisterCallbacks() noexcept;
 
     TouchContactFrame frame_;
     const char* canvas_ = nullptr;
@@ -36,6 +39,7 @@ private:
     BeginHandler begin_ = nullptr;
     FocusHandler focus_ = nullptr;
     bool attached_ = false;
+    bool suspended_ = false;
 };
 
 } // namespace kb::game

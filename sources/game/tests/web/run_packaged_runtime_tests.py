@@ -6,6 +6,7 @@ Only local test files and a fresh browser profile are used.
 from __future__ import annotations
 
 import argparse
+import base64
 import ctypes
 import http.server
 import json
@@ -53,11 +54,31 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def capture_panel(client, directory, label):
+    client.call("Runtime.evaluate", expression="new Promise(resolve => requestAnimationFrame("
+        "() => requestAnimationFrame(() => resolve(true))))", awaitPromise=True)
+    rect = client.evaluate("(() => {const c = document.querySelector('#canvas');"
+        "const r = c.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};})()")
+    data = client.call("Page.captureScreenshot", format="png", clip=dict(**rect, scale=1),
+        captureBeyondViewport=True)["data"]
+    (directory / (label + ".png")).write_bytes(base64.b64decode(data))
+    result = client.call("Runtime.evaluate", expression="(async () => {const image = await createImageBitmap("
+        "await (await fetch('data:image/png;base64," + data + "')).blob());"
+        "const canvas = new OffscreenCanvas(image.width,image.height);const ctx = canvas.getContext('2d');"
+        "ctx.drawImage(image,0,0);return Array.from(ctx.getImageData(image.width/2,image.height/2,1,1).data);})()",
+        awaitPromise=True, returnByValue=True)
+    require("exceptionDetails" not in result, "GPU screenshot could not be decoded: " + str(result))
+    pixel = result["result"]["value"]
+    require(pixel[2] > pixel[0] + 50 and pixel[2] > pixel[1] + 50,
+        "The actual rendered panel is missing: " + str(pixel))
+    return pixel
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["cli", "cooker", "engine-root", "shaderc", "directory", "browser", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--case", choices=["positive", "ready", "tick", "graphics-loss"], action="append")
+    parser.add_argument("--case", choices=["positive", "ready", "tick", "graphics-loss", "graphics-timeout"], action="append")
     parser.add_argument("--browser-arg", action="append", default=[])
     args = parser.parse_args()
     for name in ["cli", "cooker", "engine_root", "shaderc", "directory", "browser", "output"]:
@@ -88,6 +109,12 @@ def main():
     run(args.cli, "script-new", "--project", project, "--name", "RuntimeProbe", "--language", "lua")
     run(args.cli, "scene-attach", "--project", project, "--scene", "Assets/Scenes/Main.21kbscene",
         "--node", "RuntimeProbe", "--script", "/Game/Scripts/RuntimeProbe.lua")
+    run(args.cli, "component", "add", "--project", project, "--entity", "RuntimeProbe", "--type", "Rect Transform",
+        "--set", "anchorMax=1,1", "--set", "offsetMax=0,0")
+    run(args.cli, "component", "add", "--project", project, "--entity", "RuntimeProbe", "--type", "Canvas")
+    run(args.cli, "component", "add", "--project", project, "--entity", "RuntimeProbe", "--type", "Border",
+        "--set", "backgroundColor.r=0.1", "--set", "backgroundColor.g=0.2", "--set", "backgroundColor.b=0.9",
+        "--set", "backgroundColor.a=1")
 
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *_args):
@@ -98,7 +125,7 @@ def main():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        for case in args.case or ["positive", "ready", "tick", "graphics-loss"]:
+        for case in args.case or ["positive", "ready", "tick", "graphics-loss", "graphics-timeout"]:
             marker = "packaged-runtime-" + case
             ready = 'error("' + marker + '")' if case == "ready" else 'Log("' + marker + '-ready")'
             tick = ('error("' + marker + '")' if case == "tick" else
@@ -107,13 +134,19 @@ def main():
                     'assert(velocity.found and velocity.y < 0, "packaged gravity did not execute")\n'
                     'Log("' + marker + '-physics-y=" .. tostring(velocity.y))\n'
                     'Log("' + marker + '-ticks")')
+            input_probe = ('local point = Input.TouchPoint(0)\nLog("' + marker +
+                '-input=" .. tostring(Input.TouchCount()) .. "," .. tostring(point.id) .. "," .. '
+                'tostring(point.phase) .. "," .. tostring(point.active) .. "," .. tostring(Input.HasFocus()))\n'
+                'local velocity = Physics.GetVelocity(World.FindByName("FallingBody"))\n'
+                'if velocity.found then Log("' + marker + '-state-y=" .. tostring(velocity.y)) end\n'
+                if case.startswith("graphics-") else '')
             (project / "Assets/Scripts/RuntimeProbe.lua").write_text(
                 'function Ready(self, dt)\n' + ready + '\nend\n'
                 'function Tick(self, dt)\nlocal frames = (GetShared("runtime.frames") or 0) + 1\n'
-                'SetShared("runtime.frames", frames)\nif ' + ('true' if case == "graphics-loss" else 'frames <= 8') + ' then Log("' + marker +
+                'SetShared("runtime.frames", frames)\nif ' + ('true' if case.startswith("graphics-") else 'frames <= 8') + ' then Log("' + marker +
                 '-frame=" .. tostring(frames)) end\nif frames == 8 then\n' + tick +
-                '\nend\nend\n' + ('function Destroyed(self, dt) Log("' + marker + '-destroyed") end\n'
-                    if case == "graphics-loss" else ''), encoding="utf-8")
+                '\nend\n' + input_probe + 'end\n' + ('function Destroyed(self, dt) Log("' + marker + '-destroyed") end\n'
+                    if case.startswith("graphics-") else ''), encoding="utf-8")
             directory = root / case
             directory.mkdir()
             for name in ["Game.html", "Game.js", "Game.wasm"]:
@@ -148,11 +181,12 @@ def main():
                     client = RuntimeClient(target["webSocketDebuggerUrl"])
                     client.call("Runtime.enable")
                     client.call("Page.enable")
+                    client.call("Page.bringToFront")
                     # Observe the context actually used by the host; do not create a test context.
                     client.call("Page.addScriptToEvaluateOnNewDocument", source="""
 const compile = WebGL2RenderingContext.prototype.compileShader;
 WebGL2RenderingContext.prototype.compileShader = function(shader) {
-    if (!window.kbRuntimeGraphics) {
+    if (!window.kbRuntimeGraphics || window.kbRuntimeGraphics.context !== this) {
         const ext = this.getExtension('WEBGL_debug_renderer_info');
         window.kbRuntimeGraphics = {context:this, version:this.getParameter(this.VERSION),
             renderer:ext ? this.getParameter(ext.UNMASKED_RENDERER_WEBGL) : this.getParameter(this.RENDERER),
@@ -173,14 +207,14 @@ WebGL2RenderingContext.prototype.compileShader = function(shader) {
                             if event.get("method") == "Runtime.exceptionThrown"]
                         require(not exceptions, "Unhandled browser/runtime exception: " + str(exceptions))
                         if state["data"].get("kbError"):
-                            require(case not in ("positive", "graphics-loss"), "Positive runtime failed: " + str(state))
+                            require(case not in ("positive", "graphics-loss", "graphics-timeout"), "Positive runtime failed: " + str(state))
                             break
-                        if case in ("positive", "graphics-loss") and marker + "-ticks" in (state.get("output") or ""):
+                        if case in ("positive", "graphics-loss", "graphics-timeout") and marker + "-ticks" in (state.get("output") or ""):
                             break
                         if time.monotonic() >= until:
                             raise TimeoutError("Packaged lifecycle result missing: " + str(state))
                         time.sleep(0.05)
-                    if case in ("positive", "graphics-loss"):
+                    if case in ("positive", "graphics-loss", "graphics-timeout"):
                         require(state["data"].get("kbFirstFrame") == "true" and
                             state["data"].get("kbBackend") == "webgl", "Actual WebGL frame missing")
                         require(marker + "-ready" in state["output"], "Actual Lua ready Log missing")
@@ -196,38 +230,109 @@ WebGL2RenderingContext.prototype.compileShader = function(shader) {
                             "Rendered package has no live WebGL2 context: " + str(state["gl"]))
                         require(state["gl"]["shaders"] and all(shader["compiled"] for shader in state["gl"]["shaders"]),
                             "Actual host shader compilation failed")
-                        if case == "graphics-loss":
-                            injected = client.evaluate("(() => {const ext = window.kbRuntimeGraphics.context.getExtension('WEBGL_lose_context');"
-                                "if (!ext) return false; ext.loseContext(); return true;})()")
-                            require(injected, "Actual WebGL context loss injection is unavailable")
-                            until = time.monotonic() + 10
-                            while True:
-                                lost = client.evaluate("({hash:location.hash,data:{...document.documentElement.dataset},"
-                                    "output:document.querySelector('#output')?.value})")
-                                observations.append(lost)
-                                if lost["data"].get("kbError") and marker + "-destroyed" in (lost.get("output") or ""):
+                        if case.startswith("graphics-"):
+                            require(not any(word in state["gl"]["renderer"].lower() for word in
+                                ["swiftshader", "llvmpipe", "softpipe", "microsoft basic", "warp", "software"]),
+                                "Graphics recovery requires a hardware GPU: " + str(state["gl"]))
+                            state["initialPixel"] = capture_panel(client, directory, "before-loss")
+                            state["recoveryCycles"] = []
+                            client.call("Emulation.setTouchEmulationEnabled", enabled=True, maxTouchPoints=10)
+                            for cycle in range(2):
+                                shader_count = client.evaluate("window.kbRuntimeGraphics.shaders.length")
+                                position = client.evaluate("(() => {const r = document.querySelector('#canvas')."
+                                    "getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()")
+                                output_offset = len(client.evaluate("document.querySelector('#output')?.value") or "")
+                                client.call("Input.dispatchTouchEvent", type="touchStart",
+                                    touchPoints=[dict(id=7, **position, radiusX=1, radiusY=1, force=1)])
+                                until = time.monotonic() + 10
+                                while True:
+                                    active = client.evaluate("document.querySelector('#output')?.value") or ""
+                                    if re.search(re.escape(marker) + r"-input=1,7,[01],true,true", active[output_offset:]):
+                                        break
+                                    require(time.monotonic() < until, "Actual contact did not reach the running script")
+                                    time.sleep(0.05)
+                                injected = client.evaluate("(() => {const ext = window.kbRuntimeGraphics.context.getExtension('WEBGL_lose_context');"
+                                    "if (!ext) return false; window.kbGraphicsLossExtension = ext; ext.loseContext(); return true;})()")
+                                require(injected, "Actual WebGL context loss injection is unavailable")
+                                until = time.monotonic() + 10
+                                while True:
+                                    lost = client.evaluate("({hash:location.hash,data:{...document.documentElement.dataset},"
+                                        "output:document.querySelector('#output')?.value})")
+                                    observations.append(lost)
+                                    if lost["data"].get("kbError"):
+                                        break
+                                    if time.monotonic() >= until:
+                                        raise TimeoutError("Graphics loss left a successful/stale runtime result: " + str(lost))
+                                    time.sleep(0.05)
+                                require(lost["data"]["kbError"] == "graphics-context-lost" and
+                                    lost["hash"] == "#kb-error-graphics-context-lost", "Wrong graphics loss result")
+                                require(client.evaluate("window.kbRuntimeGraphics.context.isContextLost()"),
+                                    "The real graphics context was not lost")
+                                require("graphics context lost" in json.dumps(client.events, ensure_ascii=False),
+                                    "Graphics loss did not reach the host diagnostic output")
+                                output = lost.get("output") or ""
+                                require(output.count(marker + "-ready") == 1 and marker + "-destroyed" not in output,
+                                    "Graphics loss destroyed or restarted the running scene")
+                                frames = re.findall(re.escape(marker) + r"-frame=(\d+)", output)
+                                client.call("Runtime.evaluate", expression="new Promise(resolve => requestAnimationFrame("
+                                    "() => requestAnimationFrame(() => resolve(true))))", awaitPromise=True)
+                                after = client.evaluate("document.querySelector('#output')?.value") or ""
+                                require(re.findall(re.escape(marker) + r"-frame=(\d+)", after) == frames,
+                                    "Game simulation continued after graphics loss")
+                                if case == "graphics-timeout":
+                                    until = time.monotonic() + 40
+                                    while True:
+                                        expired = client.evaluate("({hash:location.hash,data:{...document.documentElement.dataset},"
+                                            "output:document.querySelector('#output')?.value})")
+                                        observations.append(expired)
+                                        if expired["data"].get("kbError") == "graphics-restore-timeout" and marker + "-destroyed" in (expired.get("output") or ""):
+                                            break
+                                        require(time.monotonic() < until, "Unrecoverable graphics loss did not stop cleanly")
+                                        time.sleep(0.1)
+                                    require(expired["hash"] == "#kb-error-graphics-restore-timeout" and
+                                        expired["output"].count(marker + "-destroyed") == 1 and
+                                        re.findall(re.escape(marker) + r"-frame=(\d+)", expired["output"]) == frames,
+                                        "Failed recovery restarted simulation or repeated shutdown")
+                                    state["recoveryTimeout"] = expired
                                     break
-                                if time.monotonic() >= until:
-                                    raise TimeoutError("Graphics loss left a successful/stale runtime result: " + str(lost))
-                                time.sleep(0.05)
-                            require(lost["data"]["kbError"] == "graphics-context-lost" and
-                                lost["hash"] == "#kb-error-graphics-context-lost", "Wrong graphics loss result")
-                            require(client.evaluate("window.kbRuntimeGraphics.context.isContextLost()"),
-                                "The real graphics context was not lost")
-                            require("graphics context lost" in json.dumps(client.events, ensure_ascii=False),
-                                "Graphics loss did not reach the host diagnostic output")
-                            output = lost.get("output") or ""
-                            require(output.count(marker + "-ready") == 1 and output.count(marker + "-destroyed") == 1,
-                                "Graphics loss repeated or skipped the script lifecycle")
-                            frames = re.findall(re.escape(marker) + r"-frame=(\d+)", output)
-                            client.call("Runtime.evaluate", expression="new Promise(resolve => requestAnimationFrame("
-                                "() => requestAnimationFrame(() => resolve(true))))", awaitPromise=True)
-                            after = client.evaluate("document.querySelector('#output')?.value") or ""
-                            require(re.findall(re.escape(marker) + r"-frame=(\d+)", after) == frames,
-                                "Game simulation continued after graphics loss")
-                            require(not any(event.get("method") == "Runtime.exceptionThrown" for event in client.events),
-                                "Graphics loss caused an unhandled browser/WASM exception")
-                            state["graphicsLoss"] = lost
+                                require(client.evaluate("(() => {const ext = window.kbGraphicsLossExtension;"
+                                    "if (!ext) return false;ext.restoreContext();return true;})()"),
+                                    "Actual WebGL restoration injection is unavailable")
+                                until = time.monotonic() + 20
+                                while True:
+                                    restored = client.evaluate("({hash:location.hash,data:{...document.documentElement.dataset},"
+                                        "output:document.querySelector('#output')?.value,"
+                                        "lost:window.kbRuntimeGraphics.context.isContextLost(),"
+                                        "shaders:window.kbRuntimeGraphics.shaders})")
+                                    observations.append(restored)
+                                    if not restored["lost"] and not restored["data"].get("kbError") and restored["hash"] == "#kb-ready-webgl":
+                                        break
+                                    require(time.monotonic() < until, "GPU rendering did not recover: " + str(restored))
+                                    time.sleep(0.05)
+                                resumed = re.findall(re.escape(marker) + r"-frame=(\d+)", restored["output"])
+                                require(resumed[:len(frames)] == frames and len(resumed) > len(frames) and
+                                    int(resumed[len(frames)]) == int(frames[-1]) + 1,
+                                    "Restoration reset or failed to resume the real script state")
+                                require(restored["output"].count(marker + "-ready") == 1 and
+                                    marker + "-destroyed" not in restored["output"], "Restoration restarted the scene lifecycle")
+                                require(len(restored["shaders"]) > shader_count and
+                                    all(shader["compiled"] for shader in restored["shaders"]),
+                                    "Real bgfx shader resources were not rebuilt")
+                                before_velocity = re.findall(re.escape(marker) + r"-state-y=([-+\d.eE]+)", output)
+                                resumed_velocity = re.findall(re.escape(marker) + r"-state-y=([-+\d.eE]+)", restored["output"][len(output):])
+                                require(before_velocity and resumed_velocity and
+                                    float(resumed_velocity[0]) <= float(before_velocity[-1]) + 0.0001,
+                                    "Graphics recovery reset the real physics velocity")
+                                restored["pausedVelocityY"] = float(before_velocity[-1])
+                                restored["resumedVelocityY"] = float(resumed_velocity[0])
+                                state["restoredPixel"] = capture_panel(client, directory, "after-restore-" + str(cycle))
+                                require(marker + "-input=1,7,3,false,false" in restored["output"][len(output):],
+                                    "Restoration discarded the cancelled contact or reused an input capture")
+                                client.call("Input.dispatchTouchEvent", type="touchCancel", touchPoints=[])
+                                state["recoveryCycles"].append(dict(lost=lost, restored=restored,
+                                    pixel=state["restoredPixel"]))
+                                require(not any(event.get("method") == "Runtime.exceptionThrown" for event in client.events),
+                                    "Graphics loss caused an unhandled browser/WASM exception")
                     else:
                         require(state["data"].get("kbError") == "runtime-failed" and
                             state["hash"] == "#kb-error-runtime-failed", "Wrong runtime failure result")
@@ -236,6 +341,8 @@ WebGL2RenderingContext.prototype.compileShader = function(shader) {
                             "Actual cooked Lua fault diagnostic missing")
                         require((state["data"].get("kbFirstFrame") == "true") == (case == "tick"),
                             "Failure occurred at the wrong lifecycle phase")
+                    require(not any(event.get("method") == "Runtime.exceptionThrown" for event in client.events),
+                        "Packaged runtime caused an unhandled browser/WASM exception")
                     report["cases"].append(dict(case=case, result="PASS", state=state))
             finally:
                 if client is not None:

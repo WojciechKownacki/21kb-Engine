@@ -36,15 +36,7 @@ bool WebTouchInput::Attach(const char* canvas, void* owner, StateResolver state,
     focus_ = focus;
     frame_ = TouchContactFrame{};
     attached_ = true;
-    const std::array results{
-        emscripten_set_touchstart_callback(canvas_, this, true, &OnTouch),
-        emscripten_set_touchmove_callback(canvas_, this, true, &OnTouch),
-        emscripten_set_touchend_callback(canvas_, this, true, &OnTouch),
-        emscripten_set_touchcancel_callback(canvas_, this, true, &OnTouch),
-        emscripten_set_focus_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, false, &OnFocus),
-        emscripten_set_blur_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, false, &OnFocus),
-    };
-    if (!std::ranges::all_of(results, [](auto result) { return result == EMSCRIPTEN_RESULT_SUCCESS; })) {
+    if (!RegisterCallbacks()) {
         Detach();
         return false;
     }
@@ -53,9 +45,40 @@ bool WebTouchInput::Attach(const char* canvas, void* owner, StateResolver state,
     return true;
 }
 
+bool WebTouchInput::RegisterCallbacks() noexcept {
+    const std::array results{
+        emscripten_set_touchstart_callback(canvas_, this, true, &OnTouch),
+        emscripten_set_touchmove_callback(canvas_, this, true, &OnTouch),
+        emscripten_set_touchend_callback(canvas_, this, true, &OnTouch),
+        emscripten_set_touchcancel_callback(canvas_, this, true, &OnTouch),
+        emscripten_set_focus_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, false, &OnFocus),
+        emscripten_set_blur_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, false, &OnFocus),
+    };
+    return std::ranges::all_of(results, [](auto result) { return result == EMSCRIPTEN_RESULT_SUCCESS; });
+}
+
+void WebTouchInput::Suspend() noexcept {
+    suspended_ = true;
+    if (state_ != nullptr) {
+        if (auto* input = state_(owner_)) {
+            input->Reset();
+            input->SetHasFocus(false);
+        }
+    }
+    frame_.Cancel();
+    Publish();
+}
+
+bool WebTouchInput::Resume() noexcept {
+    if (!attached_ || !RegisterCallbacks()) return false;
+    suspended_ = false;
+    return true;
+}
+
 void WebTouchInput::Detach() noexcept {
     if (!attached_) return;
     attached_ = false;
+    suspended_ = false;
     static_cast<void>(emscripten_set_touchstart_callback(canvas_, nullptr, true, nullptr));
     static_cast<void>(emscripten_set_touchmove_callback(canvas_, nullptr, true, nullptr));
     static_cast<void>(emscripten_set_touchend_callback(canvas_, nullptr, true, nullptr));
@@ -113,7 +136,7 @@ bool WebTouchInput::Process(int type, const EmscriptenTouchEvent& event, input::
 
 bool WebTouchInput::OnTouch(int type, const EmscriptenTouchEvent* event, void* context) noexcept {
     auto* input = static_cast<WebTouchInput*>(context);
-    if (input == nullptr || event == nullptr || input->state_ == nullptr) return false;
+    if (input == nullptr || event == nullptr || input->state_ == nullptr || input->suspended_) return false;
     auto* state = input->state_(input->owner_);
     return state != nullptr && state->HasFocus() && input->Process(type, *event, *state);
 }
@@ -121,7 +144,7 @@ bool WebTouchInput::OnTouch(int type, const EmscriptenTouchEvent* event, void* c
 bool WebTouchInput::OnFocus(int type, const EmscriptenFocusEvent*, void* context) noexcept {
     auto* input = static_cast<WebTouchInput*>(context);
     if (input == nullptr || input->state_ == nullptr) return false;
-    const bool focused = type == EMSCRIPTEN_EVENT_FOCUS;
+    const bool focused = type == EMSCRIPTEN_EVENT_FOCUS && !input->suspended_;
     if (auto* state = input->state_(input->owner_)) {
         if (!focused) { state->Reset(); input->frame_.Cancel(); }
         state->SetHasFocus(focused);

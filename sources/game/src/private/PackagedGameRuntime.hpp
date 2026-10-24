@@ -49,6 +49,8 @@ public:
         std::ostream& diagnostics,
         bool* frameSubmitted = nullptr);
     [[nodiscard]] bool Shutdown(kb::render::Renderer& renderer, std::ostream& diagnostics);
+    // Keep the running scene while the platform recreates its graphics context.
+    void ReleaseRenderResources(kb::render::Renderer& renderer);
 
     [[nodiscard]] kb::scene::Scene* Scene() noexcept;
     [[nodiscard]] const GameProjectRuntime& Project() const noexcept;

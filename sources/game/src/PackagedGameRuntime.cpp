@@ -158,6 +158,13 @@ bool PackagedGameRuntime::Tick(
     return !scene_->Runtime().ShouldQuit();
 }
 
+void PackagedGameRuntime::ReleaseRenderResources(kb::render::Renderer& renderer) {
+    if (scene_ != nullptr && renderer.IsInitialized()) {
+        renderer.ReleaseScene(*scene_);
+    }
+    renderSceneSync_.Reset();
+}
+
 bool PackagedGameRuntime::Shutdown(
     kb::render::Renderer& renderer,
     std::ostream& diagnostics) {
@@ -173,11 +180,8 @@ bool PackagedGameRuntime::Shutdown(
             clean = false;
         }
     }
-    if (scene_ != nullptr && renderer.IsInitialized()) {
-        renderer.ReleaseScene(*scene_);
-    }
+    ReleaseRenderResources(renderer);
     scene_.reset();
-    renderSceneSync_.Reset();
     script_ = nullptr;
     scriptActive_ = false;
     project_ = {};

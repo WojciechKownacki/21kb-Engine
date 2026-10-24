@@ -307,25 +307,14 @@ private:
         }
         EM_ASM({ location.hash = 'kb-runtime-ready'; });
 
-        kb::render::DisplayConfig config{};
-        config.enableEditorRendering = false;
-#if defined(KB_WEB_RENDERER_WEBGPU)
-        constexpr bgfx::RendererType::Enum kRequiredRenderer = bgfx::RendererType::WebGPU;
-#else
-        constexpr bgfx::RendererType::Enum kRequiredRenderer = bgfx::RendererType::OpenGLES;
-#endif
-        config.preferredBgfxRendererType = static_cast<std::int32_t>(kRequiredRenderer);
-        if (!renderer_.Initialize(surface_, &config) ||
-            renderer_.CapabilityReport().selectedBackend != kRequiredRenderer) {
+        if (!InitializeRenderer()) {
             Fail("renderer-init", "required browser renderer could not be initialized");
             return;
         }
-        if (emscripten_set_webglcontextlost_callback(kCanvas, this, true,
-                &WebGameHost::OnGraphicsContextLost) != EMSCRIPTEN_RESULT_SUCCESS) {
+        if (!RegisterGraphicsEvents()) {
             Fail("graphics-events", "browser graphics loss handler could not be registered");
             return;
         }
-        graphicsEventsRegistered_ = true;
         SetBrowserBackendReady();
         if (!RegisterInput()) {
             Fail("input-init", "browser touch handlers could not be registered");
@@ -336,7 +325,29 @@ private:
         emscripten_set_main_loop_arg(&WebGameHost::Frame, this, 0, false);
     }
 
-    bool RegisterInput() noexcept {
+    bool InitializeRenderer() {
+        kb::render::DisplayConfig config{};
+        config.enableEditorRendering = false;
+#if defined(KB_WEB_RENDERER_WEBGPU)
+        constexpr bgfx::RendererType::Enum kRequiredRenderer = bgfx::RendererType::WebGPU;
+#else
+        constexpr bgfx::RendererType::Enum kRequiredRenderer = bgfx::RendererType::OpenGLES;
+#endif
+        config.preferredBgfxRendererType = static_cast<std::int32_t>(kRequiredRenderer);
+        return renderer_.Initialize(surface_, &config) &&
+            renderer_.CapabilityReport().selectedBackend == kRequiredRenderer;
+    }
+
+    bool RegisterGraphicsEvents() noexcept {
+        graphicsEventsRegistered_ = true;
+        const auto lost = emscripten_set_webglcontextlost_callback(
+            kCanvas, this, true, &WebGameHost::OnGraphicsContextLost);
+        const auto restored = emscripten_set_webglcontextrestored_callback(
+            kCanvas, this, true, &WebGameHost::OnGraphicsContextRestored);
+        return lost == EMSCRIPTEN_RESULT_SUCCESS && restored == EMSCRIPTEN_RESULT_SUCCESS;
+    }
+
+    bool RegisterInput(bool restore = false) noexcept {
         static_cast<void>(emscripten_set_keydown_callback(
             EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebGameHost::OnKey));
         static_cast<void>(emscripten_set_keyup_callback(
@@ -345,7 +356,9 @@ private:
         static_cast<void>(emscripten_set_mouseup_callback(kCanvas, this, true, &WebGameHost::OnMouse));
         static_cast<void>(emscripten_set_mousemove_callback(kCanvas, this, true, &WebGameHost::OnMouse));
         static_cast<void>(emscripten_set_wheel_callback(kCanvas, this, true, &WebGameHost::OnWheel));
-        if (!touches_.Attach(kCanvas, this, &WebGameHost::ResolveInput,
+        if (restore) {
+            if (!touches_.Resume()) return false;
+        } else if (!touches_.Attach(kCanvas, this, &WebGameHost::ResolveInput,
                 &WebGameHost::OnTouchBegan, &WebGameHost::OnInputFocus)) return false;
         RegisterBrowserTextInput(this);
         return true;
@@ -353,8 +366,12 @@ private:
 
     static void Frame(void* userData) {
         auto* host = static_cast<WebGameHost*>(userData);
-        if (host == nullptr || host->frameInProgress_ || host->graphicsContextLost_) return;
+        if (host == nullptr || host->frameInProgress_ || host->shuttingDown_) return;
         host->frameInProgress_ = true;
+        if (host->graphicsContextLost_ && !host->RestoreGraphics()) {
+            host->frameInProgress_ = false;
+            return;
+        }
         if (host->surface_.RefreshSize()) {
             host->renderer_.OnResize(host->surface_.Width(), host->surface_.Height());
         }
@@ -384,6 +401,10 @@ private:
         if (kb::scene::Scene* scene = host->runtime_.Scene(); scene != nullptr) {
             host->SetTextInputActive(scene->UI().HasFocusedTextInput());
             auto& state = scene->Input().MutableDeviceState();
+            if (host->inputResumePending_) {
+                state.SetHasFocus(EM_ASM_INT({ return document.hasFocus() ? 1 : 0; }) != 0);
+                host->inputResumePending_ = false;
+            }
             state.SetAnalog(kb::input::InputKey::MouseX, 0.0F);
             state.SetAnalog(kb::input::InputKey::MouseY, 0.0F);
             state.SetAnalog(kb::input::InputKey::MouseWheel, 0.0F);
@@ -397,24 +418,59 @@ private:
         auto* host = static_cast<WebGameHost*>(userData);
         if (host != nullptr && !host->graphicsContextLost_) {
             host->graphicsContextLost_ = true;
+            host->graphicsContextRestored_ = false;
+            host->graphicsResourcesReleased_ = false;
+            host->graphicsLossTime_ = std::chrono::steady_clock::now();
+            host->touches_.Suspend();
+            host->SetTextInputActive(false);
             SetBrowserStartupError("graphics-context-lost");
-            std::fputs("kb_game_web: graphics context lost; reload the game to restart rendering\n", stderr);
-            // Release bgfx resources after the browser event callback returns.
-            emscripten_async_call(&WebGameHost::ShutdownAfterGraphicsLoss, host, 0);
-            emscripten_cancel_main_loop();
+            std::fputs("kb_game_web: graphics context lost; waiting for browser restoration\n", stderr);
         }
+        return EM_TRUE;
+    }
+
+    static EM_BOOL OnGraphicsContextRestored(int, const void*, void* userData) {
+        auto* host = static_cast<WebGameHost*>(userData);
+        if (host != nullptr && host->graphicsContextLost_) host->graphicsContextRestored_ = true;
         return EM_FALSE;
     }
 
-    static void ShutdownAfterGraphicsLoss(void* userData) {
-        auto* host = static_cast<WebGameHost*>(userData);
-        if (host != nullptr) host->Shutdown();
+    bool RestoreGraphics() {
+        // Releasing the SDK context also removes canvas event handlers.
+        // Do this outside the browser event callback and restore our handlers.
+        if (!graphicsResourcesReleased_) {
+            runtime_.ReleaseRenderResources(renderer_);
+            renderer_.Shutdown();
+            graphicsResourcesReleased_ = true;
+            if (!RegisterGraphicsEvents()) {
+                Fail("graphics-events", "browser graphics handlers could not be restored");
+                return false;
+            }
+        }
+        if (!graphicsContextRestored_) {
+            if (std::chrono::steady_clock::now() - graphicsLossTime_ > std::chrono::seconds{30}) {
+                Fail("graphics-restore-timeout", "browser graphics did not recover; reload the game");
+            }
+            return false;
+        }
+        static_cast<void>(surface_.RefreshSize());
+        if (!InitializeRenderer() || !RegisterGraphicsEvents() || !RegisterInput(true)) {
+            Fail("graphics-restore", "browser graphics resources could not be rebuilt; reload the game");
+            return false;
+        }
+        previousTick_ = std::chrono::steady_clock::now();
+        graphicsContextLost_ = false;
+        inputResumePending_ = true;
+        firstFrameReported_ = false;
+        SetBrowserBackendReady();
+        std::fputs("kb_game_web: graphics resources restored\n", stderr);
+        return true;
     }
 
     static EM_BOOL OnKey(int eventType, const EmscriptenKeyboardEvent* event, void* userData) {
         auto* host = static_cast<WebGameHost*>(userData);
         kb::scene::Scene* scene = host == nullptr ? nullptr : host->runtime_.Scene();
-        if (scene == nullptr || event == nullptr) return EM_FALSE;
+        if (scene == nullptr || event == nullptr || host->graphicsContextLost_) return EM_FALSE;
         const kb::input::InputKey key = WebKey(event->code);
         if (key == kb::input::InputKey::None) return EM_FALSE;
         scene->Input().MutableDeviceState().SetKeyDown(key, eventType == EMSCRIPTEN_EVENT_KEYDOWN);
@@ -426,7 +482,7 @@ private:
     static EM_BOOL OnMouse(int eventType, const EmscriptenMouseEvent* event, void* userData) {
         auto* host = static_cast<WebGameHost*>(userData);
         kb::scene::Scene* scene = host == nullptr ? nullptr : host->runtime_.Scene();
-        if (scene == nullptr || event == nullptr) return EM_FALSE;
+        if (scene == nullptr || event == nullptr || host->graphicsContextLost_) return EM_FALSE;
         auto& state = scene->Input().MutableDeviceState();
         double cssWidth = 0.0;
         double cssHeight = 0.0;
@@ -462,7 +518,7 @@ private:
     static EM_BOOL OnWheel(int, const EmscriptenWheelEvent* event, void* userData) {
         auto* host = static_cast<WebGameHost*>(userData);
         kb::scene::Scene* scene = host == nullptr ? nullptr : host->runtime_.Scene();
-        if (scene == nullptr || event == nullptr) return EM_FALSE;
+        if (scene == nullptr || event == nullptr || host->graphicsContextLost_) return EM_FALSE;
         scene->Input().MutableDeviceState().SetAnalog(
             kb::input::InputKey::MouseWheel, static_cast<float>(-event->deltaY));
         return EM_TRUE;
@@ -506,8 +562,11 @@ private:
     }
 
     void Shutdown() noexcept {
+        shuttingDown_ = true;
+        emscripten_cancel_main_loop();
         if (graphicsEventsRegistered_) {
             static_cast<void>(emscripten_set_webglcontextlost_callback(kCanvas, nullptr, true, nullptr));
+            static_cast<void>(emscripten_set_webglcontextrestored_callback(kCanvas, nullptr, true, nullptr));
             graphicsEventsRegistered_ = false;
         }
         touches_.Detach();
@@ -532,11 +591,16 @@ private:
     kb::game::PackagedGameRuntime runtime_;
     kb::game::WebTouchInput touches_;
     std::chrono::steady_clock::time_point previousTick_{};
+    std::chrono::steady_clock::time_point graphicsLossTime_{};
     bool firstFrameReported_ = false;
     bool frameInProgress_ = false;
     bool textInputActive_ = false;
     bool graphicsContextLost_ = false;
     bool graphicsEventsRegistered_ = false;
+    bool graphicsContextRestored_ = false;
+    bool graphicsResourcesReleased_ = false;
+    bool inputResumePending_ = false;
+    bool shuttingDown_ = false;
 
     friend int ::kb_web_append_committed_text(void* host, std::uint32_t codePoint) noexcept;
 };
