@@ -119,6 +119,9 @@ class TextScenario(TouchScenario):
         client.call("Input.insertText", text="確定")
         text += "確定"
         self.wait("IME commit reaches native field once", lambda value: value["text"] == text)
+        client.call("Input.insertText", text="確定")
+        text += "確定"
+        self.wait("identical independent text after IME is preserved", lambda value: value["text"] == text)
         self.key("Backspace", "Backspace", 8)
         text = text[:-1]
         self.wait("Backspace removes one UTF8 character", lambda value: value["text"] == text)

@@ -99,7 +99,10 @@ EM_JS(void, RegisterBrowserTextInput, (void* host), {
         if (!state.active || state.composing || event.isComposing ||
             event.inputType.startsWith('delete')) return;
         const text = typeof event.data === 'string' ? event.data : control.value;
-        if (state.suppressedComposition !== null && text === state.suppressedComposition) {
+        const compositionInput = event.inputType === 'insertCompositionText' ||
+            event.inputType === 'insertFromComposition';
+        if (compositionInput && state.suppressedComposition !== null &&
+            text === state.suppressedComposition) {
             state.suppressedComposition = null;
         } else {
             state.suppressedComposition = null;

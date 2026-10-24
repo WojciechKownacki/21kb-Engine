@@ -114,6 +114,11 @@ remaining outside the native field, and exactly one composition commit.
 All text input and composition start/update events must be trusted. DevTools
 can mark its final `compositionend` untrusted; the report retains that flag
 separately and requires exactly one end event with the expected committed text.
+An independent insertion identical to the previous IME commit must also reach
+the native field. Only composition input can be suppressed as a duplicate
+composition commit; ordinary text or paste must retain repeated content.
+The [Input Events specification](https://www.w3.org/TR/input-events-2/) distinguishes
+ordinary text insertion from updates belonging to an IME composition.
 Backspace and forward Delete must preserve UTF-8 boundaries, including a
 supplementary character. Enter submits once without adding a newline; Escape
 reports cancellation without changing committed text. Focus changes and a

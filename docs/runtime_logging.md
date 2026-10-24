@@ -165,3 +165,7 @@ deletion, submit/cancel, focus and DPI resizing with GPU field and glyph
 captures. Its JSON result distinguishes this desktop browser path from the
 remaining physical mobile keyboard and occlusion requirements. Invocation uses
 the same paths and browser arguments as the packaged touch runner.
+
+The browser text bridge distinguishes duplicate composition input from ordinary
+committed input. Repeating the same text after an IME commit must append it;
+the packaged text scenario checks that the second insertion is preserved.
