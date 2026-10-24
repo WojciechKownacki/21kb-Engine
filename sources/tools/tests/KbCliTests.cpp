@@ -3,6 +3,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/AssetRegistry.hpp"
 #include "engine/assets/BuiltInShapes.hpp"
 #include "engine/assets/bake/AssetPackReader.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
@@ -183,6 +184,31 @@ void RunMiniJsonTests() {
     Require(!JsonValue::Parse("{\"a\":1,}", value, error), "MiniJson accepted a trailing comma document");
     Require(!JsonValue::Parse("[1] junk", value, error), "MiniJson accepted trailing characters");
     Require(!JsonValue::Parse("\"\\q\"", value, error), "MiniJson accepted an invalid escape");
+}
+
+void RunFlexibleAssetPathTests() {
+    ResetTestRoot();
+    const std::filesystem::path originalDirectory = std::filesystem::current_path();
+    const std::filesystem::path file = TestRoot() / "Assets" / "Field.21kbnavmesh";
+    WriteTextFile(file, "asset path fixture");
+    // Root-relative paths also reproduce leading-slash physical inputs on Windows.
+    std::filesystem::current_path(TestRoot());
+    const std::filesystem::path physical = std::filesystem::weakly_canonical(file);
+    const std::filesystem::path rooted = physical.root_directory() / physical.relative_path();
+    kb::assets::AssetRegistry registry;
+    const auto id = kb::assets::MakeAssetId("/Game/Field.21kbnavmesh:NavMesh");
+    Require(registry.Upsert(kb::assets::AssetMetadata{ .id = id, .type = "NavMesh",
+        .virtualPath = "/Game/Field.21kbnavmesh", .physicalPath = physical }), "asset path fixture registration failed");
+    for (const std::filesystem::path& input : { std::filesystem::path{ "/Game/Field.21kbnavmesh" },
+             physical, rooted, std::filesystem::path{ "Assets/../Assets/Field.21kbnavmesh" } }) {
+        const auto* found = kb::cli::FindAssetByFlexiblePath(registry, input);
+        Require(found != nullptr && found->id == id, "registered virtual or physical asset path was not resolved: " + input.generic_string());
+    }
+    Require(kb::cli::FindAssetByFlexiblePath(registry, "/Game/Missing.21kbnavmesh") == nullptr,
+        "an unregistered virtual asset path was resolved");
+    Require(kb::cli::FindAssetByFlexiblePath(registry, physical.parent_path() / "Missing.21kbnavmesh") == nullptr,
+        "an unregistered physical asset path was resolved");
+    std::filesystem::current_path(originalDirectory);
 }
 
 void RunArgumentListTests() {
@@ -3834,6 +3860,7 @@ void RunMaterialGraphUtilityNodeCommandTests() {
 int main() {
     RunMiniJsonTests();
     RunArgumentListTests();
+    RunFlexibleAssetPathTests();
     RunValidateCommandTests();
     RunImportCommandTests();
 #if KB_CLI_RENDERER

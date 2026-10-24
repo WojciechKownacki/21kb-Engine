@@ -162,7 +162,9 @@ const kb::assets::AssetMetadata* FindAssetByFlexiblePath(
     const std::filesystem::path& input) {
     const std::string text = input.generic_string();
     if (!text.empty() && text.front() == '/') {
-        return registry.FindByPath(input);
+        if (const kb::assets::AssetMetadata* asset = registry.FindByPath(input)) {
+            return asset;
+        }
     }
 
     std::error_code errorCode;
