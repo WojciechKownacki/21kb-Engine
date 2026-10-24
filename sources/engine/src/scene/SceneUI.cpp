@@ -2531,14 +2531,7 @@ bool SceneUIAccess::UpdateFromInput(float deltaSeconds) {
     input.pointerAvailable = device.HasFocus();
     input.pointerPosition = {device.PointerX(), device.PointerY()};
     input.primaryDown = device.IsKeyDown(kb::input::InputKey::MouseLeft);
-    for (const kb::input::InputTouchPoint& touch : device.TouchPoints()) {
-        if (touch.phase == kb::input::InputTouchPhase::Ended)
-            continue;
-        input.pointerAvailable = true;
-        input.pointerPosition = {touch.x, touch.y};
-        input.primaryDown = true;
-        break;
-    }
+    input.touchPoints = device.TouchPoints();
     const bool reverseTab =
         device.IsKeyDown(kb::input::InputKey::Tab) &&
         (device.IsKeyDown(kb::input::InputKey::LeftShift) || device.IsKeyDown(kb::input::InputKey::RightShift));
@@ -2618,7 +2611,8 @@ void SceneUIAccess::ClearFocus() noexcept {
     ClearUIFocus(scene_, SceneAccess::State(scene_));
 }
 
-bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const SceneUIInput& input, float deltaSeconds) {
+bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const SceneUIInput& sourceInput, float deltaSeconds) {
+    SceneUIInput input = sourceInput;
     if (!std::isfinite(viewportWidth) || !std::isfinite(viewportHeight) || viewportWidth <= 0.0F ||
         viewportHeight <= 0.0F || !std::isfinite(deltaSeconds) || deltaSeconds < 0.0F ||
         !std::isfinite(input.scrollDelta) ||
@@ -2628,6 +2622,10 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     for (const char32_t codePoint : input.textInput)
         if (!kb::input::IsUnicodeScalar(codePoint))
             return false;
+    if (input.touchPoints.size() > kb::input::InputDeviceState::kMaxTouchPoints) return false;
+    for (const auto& touch : input.touchPoints) {
+        if (!std::isfinite(touch.x) || !std::isfinite(touch.y) || touch.phase > kb::input::InputTouchPhase::Ended) return false;
+    }
     SceneUIFrame frame;
     if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(frame)) {
         // Keep the last good frame so hit testing still answers, but carry the refusal on it
@@ -2664,6 +2662,34 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     }
     if (state.uiPressed.IsValid() && Find(state.uiFrame, state.uiPressed) == nullptr)
         state.uiPressed = {};
+    if (!input.touchPoints.empty() || state.uiTouchCapture.has_value()) {
+        const bool focused = input.pointerAvailable;
+        input.pointerAvailable = false;
+        input.primaryDown = false;
+        if (!focused) {
+            state.uiTouchCapture.reset();
+        } else if (state.uiTouchCapture.has_value()) {
+            // Keep a terminal sample's own position even while other fingers move.
+            const auto contact = std::ranges::find(input.touchPoints, *state.uiTouchCapture,
+                &kb::input::InputTouchPoint::id);
+            if (contact != input.touchPoints.end()) {
+                input.pointerPosition = {contact->x, contact->y};
+                input.pointerAvailable = true;
+                input.primaryDown = contact->phase != kb::input::InputTouchPhase::Ended;
+            }
+            if (!input.primaryDown) state.uiTouchCapture.reset();
+        } else {
+            for (const auto& contact : input.touchPoints) {
+                if (contact.phase != kb::input::InputTouchPhase::Began ||
+                    !state.uiFrame.HitTest({contact.x, contact.y}).IsValid()) continue;
+                state.uiTouchCapture = contact.id;
+                input.pointerPosition = {contact.x, contact.y};
+                input.pointerAvailable = true;
+                input.primaryDown = true;
+                break;
+            }
+        }
+    }
     const SceneEntity hovered = input.pointerAvailable ? state.uiFrame.HitTest(input.pointerPosition) : SceneEntity{};
     const bool tooltipShown = state.uiHoverSeconds >= kUITooltipDelaySeconds;
     if (hovered != state.uiHovered) {
@@ -2855,6 +2881,7 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
     }
     state.previousUIInput = input;
     state.previousUIInput.textInput = {};
+    state.previousUIInput.touchPoints = {};
     state.previousUIInput.scrollDelta = 0.0F;
     presentationDirty = UpdateDropdownList(scene_, state, deltaSeconds) || presentationDirty;
     presentationDirty = SyncScrollbars(scene_, state) || presentationDirty;

@@ -775,6 +775,59 @@ void TestAutomaticRuntimeInput() {
     kb::tests::Require(!scene.UI().SetViewport(std::nanf(""), 100.0F), "Invalid viewport geometry must fail closed");
 }
 
+void TestIndependentTouchCapture() {
+    kb::scene::Scene scene;
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    auto components = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    components.rectTransform = Rect(200.0F, 0.0F, 100.0F, 100.0F);
+    const auto button = AddUI(scene, canvas, components);
+    auto& device = scene.Input().MutableDeviceState();
+    device.SetHasFocus(true);
+    device.SetPointerViewportExtent(400U, 400U);
+    const auto frame = [&](std::span<const kb::input::InputTouchPoint> points) {
+        device.SetTouchPoints(points);
+        static_cast<void>(scene.Runtime().Update(0.016F));
+    };
+    using Phase = kb::input::InputTouchPhase;
+    std::array points{kb::input::InputTouchPoint{7U, 50.0F, 50.0F, Phase::Began},
+        kb::input::InputTouchPoint{23U, 250.0F, 50.0F, Phase::Began}};
+    frame(std::span{points}.first(1U));
+    kb::tests::Require(!scene.UI().Pressed().IsValid(), "Gameplay touch outside UI must not press a widget");
+    points[0].phase = Phase::Moved;
+    frame(points);
+    kb::tests::Require(scene.UI().Pressed() == button.Entity(),
+        "A second contact must press UI independently of the first gameplay contact");
+    std::swap(points[0], points[1]);
+    points[0].phase = Phase::Moved;
+    points[1].x = 350.0F;
+    frame(points);
+    kb::tests::Require(scene.UI().Pressed() == button.Entity(), "Contact order changes must preserve the captured UI press");
+    points[0].phase = Phase::Ended;
+    frame(points);
+    kb::tests::Require(!scene.UI().Pressed().IsValid() &&
+        HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Clicked, button.Entity()),
+        "Captured contact release must activate its button while the gameplay finger remains down");
+    static_cast<void>(scene.UI().DrainEvents());
+    frame(std::span{points}.subspan(1U));
+    kb::tests::Require(!scene.UI().Pressed().IsValid() &&
+        !HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Pressed, button.Entity()) &&
+        !HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Clicked, button.Entity()),
+        "The remaining gameplay move must not become a new UI press");
+    points[0].phase = Phase::Began;
+    frame(points);
+    kb::tests::Require(scene.UI().Pressed() == button.Entity(), "A fresh contact must press UI again");
+    static_cast<void>(scene.UI().DrainEvents());
+    device.SetHasFocus(false);
+    points[0].phase = Phase::Moved;
+    frame(points);
+    kb::tests::Require(!scene.UI().Pressed().IsValid() &&
+        !HasEvent(scene.UI().Events(), kb::scene::SceneUIEventType::Clicked, button.Entity()),
+        "Focus loss must release a captured UI contact without activating it");
+    device.SetHasFocus(true);
+    frame(points);
+    kb::tests::Require(!scene.UI().Pressed().IsValid(), "A move after focus restoration must not revive a UI press");
+}
+
 void TestAuthoredDimensionsAndVisibility() {
     kb::scene::Scene scene;
     const auto canvas = AddUI(scene, {}, CanvasComponents());
@@ -1885,6 +1938,7 @@ void RunSceneUITests() {
     TestNavigationLinksSurviveHierarchyCopies();
     TestProgressAndEventQueue();
     TestAutomaticRuntimeInput();
+    TestIndependentTouchCapture();
     TestControllerNavigation();
     TestRadioGroupsAndDrivenWidgets();
     TestSelectablePresentationAndHits();

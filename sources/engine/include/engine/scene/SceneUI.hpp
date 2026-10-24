@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/math/EngineMath.hpp"
+#include "engine/input/InputTouchPoint.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/ui/UIComponentSet.hpp"
 
@@ -51,6 +52,9 @@ struct SceneUIInput {
     bool deleteDown = false;
     float scrollDelta = 0.0F;
     std::span<const char32_t> textInput;
+    // Independent device contacts. A begin over UI owns its pointer until release;
+    // contacts that start outside UI remain available to gameplay.
+    std::span<const kb::input::InputTouchPoint> touchPoints;
     // Controllers of players 1, 2 and 3. Mouse, keyboard and the first controller are player 0.
     std::array<SceneUIPlayerNavigation, 3U> otherPlayers{};
 };

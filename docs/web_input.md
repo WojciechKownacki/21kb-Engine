@@ -25,7 +25,20 @@ Registration failure produces an `input-init` startup diagnostic.
 The [browser input CLI test](../sources/game/tests/web/README.md) verifies the native
 collector in a real headless Chromium WebAssembly module with ASan and UBSan,
 including trusted DOM events and native state readback. The production WebGL player
-also builds with Emscripten 6.0.9. These checks cover the platform bridge. The scene
-UI still selects one primary touch; simultaneous virtual joystick and UI button
-handling, complete packaged-game behavior, WebGPU player execution and other
-browser implementations require further integration coverage.
+also builds with Emscripten 6.0.9. These checks cover the platform bridge.
+
+The scene UI captures one contact that begins over a widget. Contacts that begin
+outside UI remain independent, so a held gameplay contact does not prevent another
+finger from pressing a button. The captured ID survives contact reordering and its
+release uses its own position while other fingers remain down. Focus loss ends the
+UI press without activation; later moves do not revive it. Native callers can pass
+the same contact list through `SceneUIInput::touchPoints`.
+This changes the public input structure and advances the engine module ABI to 10.
+Rebuild native engine modules; the module host rejects the previous ABI before
+calling a module's creation function.
+
+Multiple simultaneous UI captures, a complete virtual joystick and button flow,
+packaged-game behavior, WebGPU execution and other browser implementations require
+further integration coverage. The platform contact phases currently represent
+cancellation as an end; distinguishing cancellation from a normal release in UI
+requires a further input protocol change.

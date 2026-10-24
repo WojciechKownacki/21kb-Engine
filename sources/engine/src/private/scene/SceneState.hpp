@@ -830,6 +830,7 @@ public:
     SceneEntity uiPressed{};
     SceneEntity uiFocused{};
     SceneUIInput previousUIInput{};
+    std::optional<std::uint32_t> uiTouchCapture;
     SceneEntity uiInertialScrollView{};
     kb::math::Vec2 uiScrollVelocity{};
     kb::math::Vec2 uiViewportSize{};
