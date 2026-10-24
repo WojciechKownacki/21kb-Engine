@@ -255,6 +255,11 @@ function(kb_add_bgfx_subdirectory)
 endfunction()
 
 function(kb_apply_quality_gates target_name)
+    get_target_property(_kb_quality_target_type ${target_name} TYPE)
+    if(MSVC AND BUILD_TESTING AND _kb_quality_target_type STREQUAL "EXECUTABLE" AND "${target_name}" MATCHES "_tests$")
+        target_sources(${target_name} PRIVATE "${PROJECT_SOURCE_DIR}/sources/engine/tests/TestProcessErrors.cpp")
+    endif()
+
     # This function is called only by first-party kb_* targets. Vendor projects
     # are added separately and intentionally do not inherit these flags: their
     # pre-existing diagnostics must stay visible without blocking a clean build

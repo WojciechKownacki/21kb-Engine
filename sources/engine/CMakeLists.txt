@@ -1746,6 +1746,17 @@ if(NOT CMAKE_CROSSCOMPILING)
 endif()
 
 if(BUILD_TESTING)
+    if(MSVC)
+        find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
+        add_executable(kb_test_process_error_tests tests/TestProcessErrorsProbe.cpp)
+        target_link_libraries(kb_test_process_error_tests PRIVATE user32)
+        kb_apply_quality_gates(kb_test_process_error_tests)
+        add_test(NAME kb_test_process_errors
+            COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/scripts/tests/test_test_process_errors.py
+                --probe $<TARGET_FILE:kb_test_process_error_tests> --debug-crt $<IF:$<CONFIG:Debug>,1,0>)
+        set_tests_properties(kb_test_process_errors PROPERTIES TIMEOUT 60)
+    endif()
+
     # Keep native I/O verification independent of the full engine dependency graph.
     add_executable(kb_background_read_tests
         tests/BackgroundReadBatchTests.cpp
