@@ -2366,6 +2366,12 @@ void RunScriptCommandTests() {
     }
     // A name the C++ script's source folder already has is taken, even from another Assets folder.
     refusedWith({ "--name", "Enemy", "--language", "cpp", "--folder", "Assets/Other" }, "Source/NativeScripts/Enemy");
+    std::filesystem::create_directories(parent / "Traversal");
+    const CommandRun alternateCpp = Run(&kb::cli::RunScriptNewCommand,
+        { "--project", (parent / "Traversal" / ".." / "Skrypty").string(), "--name", "AliasEnemy", "--language", "cpp" });
+    Require(alternateCpp.exitCode == 0 && Contains(alternateCpp.output, "source Source/NativeScripts/AliasEnemy/AliasEnemy.cpp)") &&
+        std::filesystem::is_regular_file(root / "Source" / "NativeScripts" / "AliasEnemy" / "AliasEnemy.cpp"),
+        "script-new must report a project-relative source through an alternate project path: " + alternateCpp.output);
 #endif
 
     // script-build: one built, one failing, one without a build command; the exit code says it.
@@ -2383,6 +2389,12 @@ void RunScriptCommandTests() {
     const CommandRun good = Run(&kb::cli::RunScriptBuildCommand, { "--project", buildProject, "--script", "/Game/Scripts/Good.native" });
     Require(good.exitCode == 0 && Contains(good.output, "Built /Game/Scripts/Good.native: Binaries/NativeScripts/Good.dll"),
         "script-build of a script that builds failed: " + good.output);
+    std::filesystem::create_directories(builds / "Traversal");
+    const std::string alternateProject = (builds / "Traversal" / ".." / "Budowa").string();
+    const CommandRun alternate = Run(&kb::cli::RunScriptBuildCommand,
+        { "--project", alternateProject, "--script", "/Game/Scripts/Good.native" });
+    Require(alternate.exitCode == 0 && Contains(alternate.output, "Built /Game/Scripts/Good.native: Binaries/NativeScripts/Good.dll"),
+        "script-build must report the same project-relative module through an alternate project path: " + alternate.output);
 
     WriteTextFile(buildRoot / "Assets" / "Scripts" / "Broken.native",
         "name = Broken\nsymbol = project.Broken\nmodule = ../../Binaries/NativeScripts/Broken.dll\nbuild = exit 3\n");
