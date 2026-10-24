@@ -35,6 +35,14 @@ become `Clean` merely because a frame passed. Report completion to the player
 only after `Clean`. A failed working write still returns `written=false`,
 independently of the synchronization status.
 
+Each flush persists only that page's tracked file mutations and directory
+entries in one IndexedDB transaction. Independent pages can save different
+slots without deleting each other's files, including when both pages started
+before either slot existed. A failed request aborts the whole captured batch.
+Writes to the same named slot use the last committed transaction. Pages keep
+their own working view; reload to read another page's latest committed files.
+The existing IDBFS database format remains compatible.
+
 A timed out operation requires reloading before retrying, since its browser
 transaction could still be running. Late callbacks cannot change that failure
 to success. Await a native `WriteAsync` future before flushing its results.
@@ -71,6 +79,15 @@ retry. Releasing the held transaction allows the actual queued commit to finish;
 its late callback must leave the reported timeout unchanged. Reopening the
 browser then reads the resulting valid data. No save result or completion
 callback is substituted.
+The expected value comes from the native document captured at the flush
+request, so the test distinguishes that batch from a later unconfirmed edit.
+
+`sources/game/tests/web/run_game_storage_pages_tests.py` opens two players in
+one owned profile and origin before either writes. Trusted text and Enter input
+select independent native save slots, and both flushes must complete. A third
+player must read both values. GPU captures verify the native fields and every
+player must retain a live hardware context with compiled shaders. This checks
+independent named files; it does not merge concurrent edits within one slot.
 
 Different URL directories must remain isolated. Missing hardware, unexpected
 fallback, failed checks and timeouts fail the test. Fault injection is limited

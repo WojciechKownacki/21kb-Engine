@@ -9,7 +9,7 @@ import subprocess
 from run_game_touch_tests import TouchScenario, main, read_png, require
 
 
-def author_fixture(args, root):
+def author_fixture(args, root, *, script_name="TextFlow", script_source=None):
     project = root / "Sample"
     web = root / "Web"
     web.mkdir()
@@ -51,11 +51,11 @@ def author_fixture(args, root):
     component("CanvasRoot/Form/TextEntry", "Text", "fontAssetId=/Game/Fonts/DejaVuSans.21kb")
     component("CanvasRoot/Form/TextEntry", "Selectable", "colorFadeSeconds=0")
     component("CanvasRoot/Form/TextEntry", "Input Field")
-    run(args.cli, "script-new", "--project", project, "--name", "TextFlow", "--language", "lua")
-    shutil.copy2(Path(__file__).with_name("fixtures") / "TextFlow.lua",
-        project / "Assets/Scripts/TextFlow.lua")
+    run(args.cli, "script-new", "--project", project, "--name", script_name, "--language", "lua")
+    shutil.copy2(script_source or Path(__file__).with_name("fixtures") / "TextFlow.lua",
+        project / ("Assets/Scripts/" + script_name + ".lua"))
     run(args.cli, "scene-attach", "--project", project, "--scene", "Assets/Scenes/Main.21kbscene",
-        "--node", "TextEntry", "--script", "/Game/Scripts/TextFlow.lua")
+        "--node", "TextEntry", "--script", "/Game/Scripts/" + script_name + ".lua")
     run(args.cooker, "--project", project, "--target", "WebGL.wasm32",
         "--output", web / "Game.kbpack", "--engine-root", args.engine_root,
         "--shaderc", args.shaderc, "--cache", root / "CookCache")

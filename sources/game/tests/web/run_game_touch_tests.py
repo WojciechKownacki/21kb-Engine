@@ -141,7 +141,7 @@ class TouchScenario:
         self.layout = {}
 
     def states(self):
-        state = self.client.evaluate("({data:{...document.documentElement.dataset},"
+        state = self.client.evaluate("({data:{...document.documentElement?.dataset},"
             "output:document.querySelector('#output')?.value})")
         require(not state["data"].get("kbError"), "The actual player failed: " + str(state))
         errors = [event["params"]["exceptionDetails"] for event in self.client.events

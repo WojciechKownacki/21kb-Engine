@@ -131,11 +131,12 @@ class BrowserSession:
             self.client.call("Page.navigate", url=self.origin + self.route + "/Game.html")
             self.scenario = StorageScenario(self.client, self.root, self.report)
             return self.scenario
-        except BaseException:
-            self.__exit__(None, None, None)
+        except BaseException as error:
+            self.__exit__(type(error), error, error.__traceback__)
             raise
 
-    def __exit__(self, *_):
+    def __exit__(self, exception_type, *_):
+        cleanup_errors = []
         if self.client is not None:
             try:
                 (self.root / (self.label + "-states.json")).write_text(
@@ -148,15 +149,25 @@ class BrowserSession:
                 self.client.call("Browser.close")
             except Exception:
                 pass
-            self.client.close()
+            try:
+                self.client.close()
+            except Exception as error:
+                cleanup_errors.append(str(error))
         if self.process is not None:
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self.process.terminate()
-                self.process.wait(timeout=5)
+                try:
+                    self.process.terminate()
+                    self.process.wait(timeout=5)
+                except Exception as error:
+                    cleanup_errors.append(str(error))
         if self.log is not None:
             self.log.close()
+        if cleanup_errors:
+            self.report.setdefault("cleanupErrors", []).append(dict(session=self.label, errors=cleanup_errors))
+            if exception_type is None:
+                raise RuntimeError("Owned browser cleanup failed: " + str(cleanup_errors))
 
 
 def run_cases(args, root, report, origin):
@@ -291,6 +302,8 @@ def run_cases(args, root, report, origin):
         started = time.monotonic()
         case.click_save()
         pending = case.wait("real queued storage transaction remains pending", lambda s: s["status"] == "Pending" and s["counter"] == 1, cursor)
+        require(pending["snapshotNote"] == "first" and pending["note"] == "latest",
+            "The queued flush and subsequent unconfirmed working edit were not distinguished")
         deadline = started + 18
         while True:
             states = case.states()[cursor:]
@@ -327,14 +340,15 @@ def run_cases(args, root, report, origin):
     with BrowserSession(args, root, timeout_profile, report, origin, "after-timeout") as case:
         value = case.ready()
         require(value["loaded"] and value["settingsLoaded"] and value["counter"] == 1 and
-            value["note"] == "latest" and value["label"] == "Zażółć 1",
+            value["note"] == pending["snapshotNote"] and value["label"] == "Zażółć 1",
             "The actual late transaction did not leave a valid save: " + str(value))
         report["observations"].append(dict(check="reopening reads the actual late committed data", state=value))
         case.graphics()
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(*, fixture=author_fixture, scenario=run_cases,
+        schema="21kb.web-game-storage-tests/v1", description=__doc__, prefix="GameStorage"):
+    parser = argparse.ArgumentParser(description=description)
     for name in ["cli", "cooker", "engine-root", "shaderc", "directory", "browser", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--browser-arg", action="append", default=[])
@@ -342,11 +356,11 @@ def main():
     if hasattr(ctypes, "windll"):
         ctypes.windll.kernel32.SetErrorMode(32771)
     args.output.mkdir(parents=True, exist_ok=True)
-    root = Path(tempfile.mkdtemp(prefix="GameStorage", dir=args.output.resolve()))
-    report = dict(schema="21kb.web-game-storage-tests/v1", result="FAIL", observations=[], images=[])
+    root = Path(tempfile.mkdtemp(prefix=prefix, dir=args.output.resolve()))
+    report = dict(schema=schema, result="FAIL", observations=[], images=[])
     server = thread = None
     try:
-        web = author_fixture(args, root)
+        web = fixture(args, root)
         report["artifacts"] = {name: hashlib.sha256((web / name).read_bytes()).hexdigest()
             for name in ["Game.html", "Game.js", "Game.wasm", "Game.kbpack"]}
 
@@ -362,7 +376,7 @@ def main():
             lambda *values: Quiet(*values, directory=str(web)))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        run_cases(args, root, report, f"http://127.0.0.1:{server.server_port}")
+        scenario(args, root, report, f"http://127.0.0.1:{server.server_port}")
         report["result"] = "PASS"
     except Exception as error:
         report.update(error=str(error), traceback=traceback.format_exc())

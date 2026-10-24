@@ -9,11 +9,17 @@ local settingsWritten = false
 local started = false
 local requested = false
 local previous = ""
+local snapshotNote = ""
 
 local function call(name, arguments)
     local result, diagnostic = CallFunction(name, arguments or {})
     assert(result ~= nil, diagnostic)
     return result
+end
+
+local function flush()
+    snapshotNote = call("Save.GetString", {key="note"}).value
+    return call("Save.Flush")
 end
 
 local function encode(value)
@@ -24,8 +30,8 @@ end
 
 local function report()
     local result = call("Save.StorageStatus")
-    local state = string.format('{"counter":%d,"loaded":%s,"settingsLoaded":%s,"note":%s,"label":%s,"written":%s,"settingsWritten":%s,"started":%s,"status":%s,"diagnostic":%s,"ready":%s}',
-        counter, tostring(loaded), tostring(settingsLoaded), encode(note), encode(label),
+    local state = string.format('{"counter":%d,"loaded":%s,"settingsLoaded":%s,"note":%s,"snapshotNote":%s,"label":%s,"written":%s,"settingsWritten":%s,"started":%s,"status":%s,"diagnostic":%s,"ready":%s}',
+        counter, tostring(loaded), tostring(settingsLoaded), encode(note), encode(snapshotNote), encode(label),
         tostring(written), tostring(settingsWritten), tostring(started), encode(result.status),
         encode(result.diagnostic), tostring(frames >= 8))
     if state ~= previous or frames % 8 == 0 then
@@ -49,7 +55,7 @@ end
 function OnUIClicked(self, event)
     assert(event.args.entity == self.entity)
     if call("Save.StorageStatus").status == "Failed" then
-        started = call("Save.Flush")
+        started = flush()
         report()
         return
     end
@@ -61,7 +67,7 @@ function OnUIClicked(self, event)
     written = call("Save.Write", {slot="slot_1"})
     settingsWritten = call("Settings.Write", {slot="slot_1"})
     report()
-    started = call("Save.Flush") and call("Settings.Flush")
+    started = flush() and call("Settings.Flush")
     requested = true
     report()
     -- A second write while the first transaction is pending must stay dirty.
@@ -74,7 +80,7 @@ end
 function Tick(self, dt)
     frames = frames + 1
     if requested and call("Save.StorageStatus").status == "Dirty" then
-        started = call("Save.Flush") and started
+        started = flush() and started
     end
     report()
 end

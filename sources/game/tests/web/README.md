@@ -160,3 +160,13 @@ initial storage read must fail startup explicitly. The result uses schema
 browser events and GPU captures. See [browser storage](../../../../docs/browser_storage.md)
 for the asynchronous flush contract and platform limits. Browser restart tests
 do not establish physical power-loss durability or mobile browser acceptance.
+
+`run_game_storage_pages_tests.py` accepts the same tool paths and browser
+arguments. It authors a native input field, cooks its controller and opens two
+players in the same owned browser profile before either has saved a slot.
+Trusted text and Enter events choose different slot names. After both native
+flushes report `Clean`, a third player must load both values. Two GPU captures
+check the native fields, and all three players require live hardware contexts
+and successful shader compilation. The report uses schema
+`21kb.web-game-storage-pages/v1`. The test does not accept serially opening the
+two writers after their respective saves, since that hides stale working views.
