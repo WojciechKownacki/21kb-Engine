@@ -132,6 +132,8 @@ WebGL2RenderingContext.prototype.compileShader = function(shader) {
 
 
 class TouchScenario:
+    marker = "touch-flow"
+
     def __init__(self, client, root, report):
         self.client = client
         self.root = root
@@ -147,9 +149,10 @@ class TouchScenario:
         require(not errors, "Unhandled browser/runtime exception: " + str(errors))
         require(not self.client.evaluate("window.kbTouchGraphicsLost || []"),
             "The player lost its real graphics context")
-        return [json.loads(line.split("touch-flow ", 1)[1])
+        marker = "kb_game: script: " + self.marker + " "
+        return [json.loads(line[len(marker):])
             for line in (state.get("output") or "").splitlines()
-            if line.startswith("kb_game: script: touch-flow ")]
+            if line.startswith(marker)]
 
     def wait(self, label, predicate, after=0):
         deadline = time.monotonic() + 15
@@ -359,8 +362,9 @@ class TouchScenario:
             graphics=self.graphics(), finalLayout=dict(self.layout))
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(*, fixture=author_fixture, scenario_type=TouchScenario,
+         schema="21kb.web-game-touch-tests/v1", prefix="GameTouch", description=None):
+    parser = argparse.ArgumentParser(description=description or __doc__)
     for name in ["cli", "cooker", "engine-root", "shaderc", "directory", "browser", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--browser-arg", action="append", default=[])
@@ -370,8 +374,8 @@ def main():
     if os.name == "nt":
         ctypes.windll.kernel32.SetErrorMode(1 | 2 | 0x8000)
     args.output.mkdir(parents=True, exist_ok=True)
-    root = Path(tempfile.mkdtemp(prefix="GameTouch", dir=args.output))
-    report = dict(schema="21kb.web-game-touch-tests/v1", result="FAIL", observations=[], images=[])
+    root = Path(tempfile.mkdtemp(prefix=prefix, dir=args.output))
+    report = dict(schema=schema, result="FAIL", observations=[], images=[])
     server = thread = process = client = scenario = None
 
     class Quiet(http.server.SimpleHTTPRequestHandler):
@@ -379,7 +383,7 @@ def main():
             pass
 
     try:
-        web = author_fixture(args, root)
+        web = fixture(args, root)
         report["artifacts"] = {name: hashlib.sha256((web / name).read_bytes()).hexdigest()
             for name in ["Game.html", "Game.js", "Game.wasm", "Game.kbpack"]}
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
@@ -421,7 +425,7 @@ def main():
                 deviceScaleFactor=1, mobile=False)
             client.call("Page.addScriptToEvaluateOnNewDocument", source=OBSERVER)
             client.call("Page.navigate", url=f"http://127.0.0.1:{server.server_port}/Game.html")
-            scenario = TouchScenario(client, root, report)
+            scenario = scenario_type(client, root, report)
             scenario.run(targets)
             report["result"] = "PASS"
     except Exception as error:

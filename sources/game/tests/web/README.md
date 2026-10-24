@@ -100,3 +100,30 @@ not a timing benchmark. Short runs do not establish sustained stability;
 1800 seconds. Longer runs are opt-in. The verified configuration remains
 headless Chrome with ANGLE/OpenGL. Copy observations retain bounded samples
 and cumulative failure counts, so discarding old samples cannot hide failures.
+
+`run_game_text_tests.py` accepts the same paths and browser arguments as the
+packaged touch runner. It authors a native Input Field, imports the bundled
+DejaVu Sans font through the CLI, saves and cooks the scene, then runs the
+production player. The font's existing license is copied beside the package.
+The shared headless harness retains commands, runtime/package hashes, browser
+events, native Lua snapshots and a `21kb.web-game-text-tests/v1` result.
+
+Trusted mouse input must focus the field and its normal DOM text control.
+Trusted text/composition events verify committed Unicode, pending IME text
+remaining outside the native field, and exactly one composition commit.
+All text input and composition start/update events must be trusted. DevTools
+can mark its final `compositionend` untrusted; the report retains that flag
+separately and requires exactly one end event with the expected committed text.
+Backspace and forward Delete must preserve UTF-8 boundaries, including a
+supplementary character. Enter submits once without adding a newline; Escape
+reports cancellation without changing committed text. Focus changes and a
+viewport/DPI resize must preserve text and allow further editing.
+
+Three real GPU captures check the field before editing, after editing and after
+resizing. The edited capture also requires text contrast across multiple glyph
+columns: more than 50 pixels must exceed the blue background's red and green
+channels by 64, across more than eight columns. This tolerates small antialiased
+glyphs while rejecting an empty field or caret alone. Missing fonts, software
+rendering, lost/recovered graphics, runtime errors and failed checks fail the
+test. Desktop DevTools IME and viewport emulation do not verify physical mobile
+keyboards, mobile Back behavior, keyboard occlusion or complete font coverage.

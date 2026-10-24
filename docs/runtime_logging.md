@@ -157,3 +157,11 @@ counts remain cumulative. Handles and JavaScript heap usage are not GPU memory
 measurements, and synchronous readbacks are not performance benchmarks. A short
 passing run does not establish long-running acceptance. See the browser test
 README for invocation and limitations.
+
+`sources/game/tests/web/run_game_text_tests.py` verifies packaged native text
+editing through the browser's real text and composition events. It uses CLI
+authoring, font import and cook, then checks native Unicode/IME state, UTF-8
+deletion, submit/cancel, focus and DPI resizing with GPU field and glyph
+captures. Its JSON result distinguishes this desktop browser path from the
+remaining physical mobile keyboard and occlusion requirements. Invocation uses
+the same paths and browser arguments as the packaged touch runner.
