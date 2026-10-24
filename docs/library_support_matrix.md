@@ -8,21 +8,23 @@ when the two disagree.
 
 | CI job | Runner | Build | Scope | CI targets |
 | --- | --- | --- | --- | --- |
-| Windows MSVC | `windows-2025-vs2026` | Visual Studio 2026, Debug, editor and renderer on, strict first-party warnings | Engine, renderer, Win32 editor, game host, CLI; Native, Lua and Visual Graph frontends | Complete default build graph: all configured executables and providers |
-| Windows MSVC ASan | `windows-2025-vs2026` | Visual Studio 2026, Debug, AddressSanitizer | Renderer and particle runtime under ASan | `kb_21kb_particle_snapshot_tests`, `kb_21kb_particle_cpu_backend_tests`, `kb_21kb_particle_editor_tests`, `kb_21kb_particle_renderer_tests`, `kb_renderer_tests` |
+| Windows MSVC | `windows-2025-vs2026` | Visual Studio 2026, Release, editor and renderer on, strict first-party warnings | Engine, renderer, Win32 editor, game host, CLI; Native, Lua and Visual Graph frontends | Complete default build graph: all configured executables and providers |
+| Windows MSVC ASan | `windows-2025-vs2026` | Visual Studio 2026, Debug, AddressSanitizer | Engine UI and hierarchy boundaries, renderer, particle runtime, read batches and process lifetimes | `kb_engine_tests`, `kb_21kb_particle_snapshot_tests`, `kb_21kb_particle_cpu_backend_tests`, `kb_21kb_particle_editor_tests`, `kb_21kb_particle_renderer_tests`, `kb_renderer_tests`, `kb_ecs_query_shutdown_tests`, `kb_background_read_tests`, `kb_test_process_error_tests` |
 | Linux GCC ASan UBSan | `ubuntu-24.04` | Unix Makefiles, Debug, editor and renderer off, ASan and UBSan | Headless engine runtime; Native, Lua and Visual Graph frontends | Complete default build graph: all configured executables and providers |
 
 The Windows MSVC job also runs the script API compatibility check
 (`kb_cli api-check`) and the packaging script tests
 (`python -m unittest discover -s scripts/tests`). The Windows MSVC ASan job
-runs only the tests of its five targets; the sanitized jobs skip tests labelled
-`performance`.
+runs selected CTest cases from its nine targets, including UI frames, scene and
+ECS hierarchy limits, shader resource lifetimes, native reads and process errors.
+The sanitized jobs skip tests labelled `performance`.
 
 ## Other jobs
 
 | CI job | Runner | What it runs |
 | --- | --- | --- |
-| clang-tidy gate | `windows-2025-vs2026` | `scripts/clang_tidy_gate.py` over the changed first-party sources, and over every source in the weekly scheduled run |
+| Linux native read batches | `ubuntu-24.04` | Isolated background read batch tests under ASan and UBSan, covering priority, cancellation and exact ranges |
+| clang-tidy gate | `windows-2025-vs2026` | `scripts/clang_tidy_gate.py` over changed first-party sources; every source when a first-party header changes, on manual dispatch, or in the weekly scheduled run |
 | Fuzz untrusted-input readers | `windows-2025-vs2026` | The `kb_fuzzers` libFuzzer harnesses with AddressSanitizer: corpus replay, then 60 seconds of fresh inputs per reader |
 
 ## Not covered by CI
