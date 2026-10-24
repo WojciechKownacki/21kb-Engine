@@ -376,6 +376,31 @@ void TestHierarchicalTransformsAndMaskHitTesting() {
         "Hit testing must reject a point inside the mask bounds but outside its transformed quad");
 }
 
+void TestContentSizeFitterModes() {
+    kb::scene::Scene scene;
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet components;
+    components.rectTransform = Rect(0.0F, 0.0F, 20.0F, 25.0F);
+    components.layoutElement = kb::scene::UILayoutElement{.minimumWidth = 10.0F, .minimumHeight = 15.0F,
+        .preferredWidth = 60.0F, .preferredHeight = 70.0F};
+    const auto widget = AddUI(scene, canvas, components);
+    struct Fit { kb::scene::UIFitMode mode; float width; float height; };
+    constexpr std::array modes{Fit{kb::scene::UIFitMode::Unconstrained, 20.0F, 25.0F},
+        Fit{kb::scene::UIFitMode::MinimumSize, 10.0F, 15.0F}, Fit{kb::scene::UIFitMode::PreferredSize, 60.0F, 70.0F}};
+    for (const auto horizontal : modes) {
+        for (const auto vertical : modes) {
+            scene.Components().UI().Set(widget.Entity(), kb::scene::UIContentSizeFitter{
+                .horizontalFit = horizontal.mode, .verticalFit = vertical.mode});
+            kb::scene::SceneUIFrame frame;
+            kb::tests::Require(kb::scene::SceneUIQueries{scene}.BuildFrame(100.0F, 100.0F, frame), "Every content size fitter mode must build");
+            const auto* element = FindElement(frame, widget.Entity());
+            kb::tests::Require(element != nullptr && kb::tests::NearlyEqual(element->rect.width, horizontal.width) &&
+                kb::tests::NearlyEqual(element->rect.height, vertical.height),
+                "Content size fitting must resolve minimum, preferred and unconstrained axes independently");
+        }
+    }
+}
+
 void TestClippingGroupsSortingAndScaling() {
     kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
     kb::scene::UIComponentSet canvasComponents = CanvasComponents();
@@ -1753,6 +1778,7 @@ void RunSceneUITests() {
     TestCatalogAndPresets();
     TestFrameWithoutCanvasTracksDynamicComponents();
     TestLayoutsAndFitters();
+    TestContentSizeFitterModes();
     TestHierarchicalTransformsAndMaskHitTesting();
     TestClippingGroupsSortingAndScaling();
     TestInteractionAndEditing();

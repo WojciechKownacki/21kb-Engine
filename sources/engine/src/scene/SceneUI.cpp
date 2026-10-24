@@ -595,14 +595,17 @@ class FrameBuilder {
             Refuse(entity, "Rect Transform holds an invalid value");
             return;
         }
-        const DesiredSize desired = Measure(entity);
-        const DesiredSize minimum = Measure(entity, true);
         Rect rect = allocated;
         if (const UIContentSizeFitter* fitter = ui_.TryGet<UIContentSizeFitter>(entity)) {
             if (!IsUIComponentValid(*fitter)) {
                 Refuse(entity, "Content Size Fitter holds an invalid value");
                 return;
             }
+            // Measuring walks the subtree; only request sizes consumed by the fitter.
+            const DesiredSize desired = fitter->horizontalFit == UIFitMode::PreferredSize || fitter->verticalFit == UIFitMode::PreferredSize
+                                            ? Measure(entity) : DesiredSize{};
+            const DesiredSize minimum = fitter->horizontalFit == UIFitMode::MinimumSize || fitter->verticalFit == UIFitMode::MinimumSize
+                                            ? Measure(entity, true) : DesiredSize{};
             const float width = fitter->horizontalFit == UIFitMode::Unconstrained
                                     ? rect.width
                                     : (fitter->horizontalFit == UIFitMode::MinimumSize ? minimum.width : desired.width);
