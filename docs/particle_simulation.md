@@ -38,7 +38,7 @@ births, ten steps without a depth handle must match the explicitly disabled
 depth control and constant-velocity motion within 0.00001 m. Independently
 authored killing planes must still produce empty instance records. Native
 buffer capture is cross-checked against compute/texture readback; logical
-emitter allocations return from 544 bytes to zero. This checks the simulation's
+emitter allocations return from 768 bytes to zero. This checks the simulation's
 missing-resource boundary on D3D11, without forcing renderer allocation failure.
 
 Collision planes with `killOnContact` end particle life on the GPU at contact.
@@ -128,8 +128,8 @@ its numerical host and every CPU/GPU/control pixel host. The default CTest
 selection remains D3D11. Unsupported names or malformed options fail before
 GPU initialization.
 
-The full `particle-motion` selector passed on Windows x64 Release with all four
-backends. Each run includes 14 world-space cases and four transformed local
+The full `particle-motion` selector passed on Windows x64 Release and Debug with
+AddressSanitizer on all four backends. Each run includes 14 world-space cases and four transformed local
 cases, native buffer capture cross-checked with compute/texture readback,
 contact death, resource rejection/retry, missing depth and mixed-motion/contact
 billboard pixel comparison. Maximum absolute errors after 60 fixed steps were:
@@ -146,6 +146,23 @@ image bound were used for every backend. The no-field control differed by
 10,725 channel levels in each run. These are source-runtime billboard results;
 mesh-specific contact pixels and packaged execution remain verified on D3D11.
 The performance measurements below also remain D3D11-specific.
+
+Births use a CPU-writable bgfx upload buffer. GPU buffer copies update only the
+dirty birth-ring ranges and reset their state before rebase and simulation.
+Compute-write buffers are created by size and never initialized or updated from
+the CPU, as required by bgfx. Unsorted billboard emitters request 144 bytes per
+capacity slot without state, or 208 bytes with state, including upload and reset
+buffers. Sort and trail storage add to that amount. These are logical requests,
+not physical residency. Readback tests cover initial empty slots, partial and
+wrapped uploads, repeated uploads before dispatch, origin changes, clear, and
+rebirth with the same timestamp after contact death.
+
+Renderer and renderer-enabled CLI validation executables install a fatal bx
+assertion handler. A dependency assertion fails the test instead of continuing
+with an apparently successful result. The Windows `kb_renderer_assertion_errors`
+and `kb_cli_assertion_errors` tests deliberately trigger the handler and verify
+failure diagnostics without a visible dialog. The four-backend runs above had
+no dependency assertions, sanitizer errors or bgfx allocator leak reports.
 
 `Renderer::GpuParticleDraws(scene)` exposes the last dispatched GPU instance
 buffers with their instance/emitter keys and requested buffer bytes. Instance

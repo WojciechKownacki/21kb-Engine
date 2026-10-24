@@ -17,6 +17,7 @@ namespace {
 constexpr std::uint32_t kThreadGroupSize = 64U;
 constexpr std::uint32_t kInstanceBytes = 80U;
 constexpr std::uint32_t kStateBytes = 32U;
+static_assert(sizeof(kb::particles::ParticleGpuSpawn) == kStateBytes);
 constexpr std::uint32_t kSortKeyBytes = 16U;
 // How far behind a visible surface (m) a particle still counts as having hit it.
 constexpr float kDepthCollisionThickness = 0.5F;
@@ -164,7 +165,7 @@ bool ParticleGpuEmitterSimulation::Create(Emitter& emitter, const kb::particles:
     if (static_cast<std::uint64_t>(capacity) * perSlot > kb::particles::kParticleGpuMaxTrailSegments &&
         perSlot > 1U) return false;
     const std::uint64_t bytes = static_cast<std::uint64_t>(capacity) *
-        (sizeof(kb::particles::ParticleGpuSpawn) + static_cast<std::uint64_t>(kInstanceBytes) * perSlot);
+        (2U * sizeof(kb::particles::ParticleGpuSpawn) + static_cast<std::uint64_t>(kInstanceBytes) * perSlot);
     if (allocatedBytes_ + bytes > maxBufferBytes_) return false;
     emitter.params = params;
     emitter.params.capacity = capacity;
@@ -176,10 +177,12 @@ bool ParticleGpuEmitterSimulation::Create(Emitter& emitter, const kb::particles:
     const bgfx::Memory* zero = bgfx::alloc(spawnBytes);
     if (zero == nullptr || zero->data == nullptr) return false;
     std::memset(zero->data, 0, spawnBytes);
-    // Written by the rebase kernel when the render origin moves.
-    emitter.spawns = bgfx::createDynamicVertexBuffer(zero, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
+    // bgfx forbids CPU initialization and updates of compute-write buffers. Upload into a
+    // CPU-writable source, then copy on the GPU before rebase and simulation.
+    emitter.spawnUpload = bgfx::createDynamicVertexBuffer(zero, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ);
+    emitter.spawns = bgfx::createDynamicVertexBuffer(capacity, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
     emitter.instances = bgfx::createDynamicVertexBuffer(capacity * perSlot, InstanceLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
-    if (!bgfx::isValid(emitter.spawns) || !bgfx::isValid(emitter.instances)) {
+    if (!bgfx::isValid(emitter.spawnUpload) || !bgfx::isValid(emitter.spawns) || !bgfx::isValid(emitter.instances)) {
         Destroy(emitter);
         return false;
     }
@@ -252,29 +255,41 @@ void ParticleGpuEmitterSimulation::SortInstances(
 bool ParticleGpuEmitterSimulation::EnsureState(Emitter& emitter) noexcept {
     if (bgfx::isValid(emitter.state)) return true;
     const std::uint64_t stateBytes = static_cast<std::uint64_t>(emitter.capacity) * kStateBytes;
-    if (allocatedBytes_ + stateBytes > maxBufferBytes_) return false;
+    if (allocatedBytes_ + 2U * stateBytes > maxBufferBytes_) return false;
     // A zeroed record never matches a birth stamp, so every particle starts from its birth record.
     const bgfx::Memory* zero = bgfx::alloc(static_cast<std::uint32_t>(stateBytes));
     if (zero == nullptr || zero->data == nullptr) return false;
     std::memset(zero->data, 0, static_cast<std::size_t>(stateBytes));
-    emitter.state = bgfx::createDynamicVertexBuffer(zero, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
-    if (!bgfx::isValid(emitter.state)) return false;
-    emitter.bytes += stateBytes;
-    allocatedBytes_ += stateBytes;
+    const auto stateZeros = bgfx::createDynamicVertexBuffer(zero, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ);
+    const auto state = bgfx::createDynamicVertexBuffer(emitter.capacity, SpawnLayout(), BGFX_BUFFER_COMPUTE_READ_WRITE);
+    if (!bgfx::isValid(stateZeros) || !bgfx::isValid(state)) {
+        if (bgfx::isValid(stateZeros)) bgfx::destroy(stateZeros);
+        if (bgfx::isValid(state)) bgfx::destroy(state);
+        return false;
+    }
+    emitter.stateZeros = stateZeros;
+    emitter.state = state;
+    emitter.initializeState = true;
+    emitter.bytes += 2U * stateBytes;
+    allocatedBytes_ += 2U * stateBytes;
     return true;
 }
 
 void ParticleGpuEmitterSimulation::Destroy(Emitter& emitter) noexcept {
     if (bgfx::isValid(emitter.spawns)) bgfx::destroy(emitter.spawns);
+    if (bgfx::isValid(emitter.spawnUpload)) bgfx::destroy(emitter.spawnUpload);
     if (bgfx::isValid(emitter.instances)) bgfx::destroy(emitter.instances);
     if (bgfx::isValid(emitter.state)) bgfx::destroy(emitter.state);
+    if (bgfx::isValid(emitter.stateZeros)) bgfx::destroy(emitter.stateZeros);
     if (bgfx::isValid(emitter.sortKeys)) bgfx::destroy(emitter.sortKeys);
     if (bgfx::isValid(emitter.sortedInstances)) bgfx::destroy(emitter.sortedInstances);
     emitter.sortKeys = BGFX_INVALID_HANDLE;
     emitter.sortedInstances = BGFX_INVALID_HANDLE;
     emitter.spawns = BGFX_INVALID_HANDLE;
+    emitter.spawnUpload = BGFX_INVALID_HANDLE;
     emitter.instances = BGFX_INVALID_HANDLE;
     emitter.state = BGFX_INVALID_HANDLE;
+    emitter.stateZeros = BGFX_INVALID_HANDLE;
 }
 
 void ParticleGpuEmitterSimulation::Upload(Emitter& emitter, std::span<const kb::particles::ParticleGpuSpawn> spawns) noexcept {
@@ -292,14 +307,8 @@ void ParticleGpuEmitterSimulation::Upload(Emitter& emitter, std::span<const kb::
         const bgfx::Memory* memory = CopyMemory(
             spawns.data() + uploaded, chunk * static_cast<std::uint32_t>(sizeof(kb::particles::ParticleGpuSpawn)));
         if (memory == nullptr) return;
-        bgfx::update(emitter.spawns, slot, memory);
-        if (bgfx::isValid(emitter.state)) {
-            // A recycled slot can have exactly the same birth time after a restart or a burst.
-            // Invalidate both live and contact-death stamps for every newly uploaded birth.
-            const bgfx::Memory* zero = bgfx::alloc(chunk * kStateBytes);
-            std::memset(zero->data, 0, chunk * kStateBytes);
-            bgfx::update(emitter.state, slot, zero);
-        }
+        bgfx::update(emitter.spawnUpload, slot, memory);
+        emitter.pendingBirths = std::min(emitter.capacity, emitter.pendingBirths + chunk);
         emitter.nextSlot += chunk;
         uploaded += chunk;
     }
@@ -310,7 +319,38 @@ void ParticleGpuEmitterSimulation::Clear(Emitter& emitter) noexcept {
     const bgfx::Memory* zero = bgfx::alloc(bytes);
     if (zero == nullptr || zero->data == nullptr) return;
     std::memset(zero->data, 0, bytes);
-    bgfx::update(emitter.spawns, 0U, zero);
+    bgfx::update(emitter.spawnUpload, 0U, zero);
+    emitter.initializeSpawns = true;
+    emitter.initializeState = bgfx::isValid(emitter.state);
+    emitter.pendingBirths = 0U;
+}
+
+void ParticleGpuEmitterSimulation::FlushUploads(bgfx::ViewId viewId, Emitter& emitter) noexcept {
+    const auto copyRange = [viewId](bgfx::DynamicVertexBufferHandle destination,
+                                  bgfx::DynamicVertexBufferHandle source, std::uint32_t slot, std::uint32_t count) {
+        if (count == 0U) return;
+        const std::uint32_t offset = slot * kStateBytes;
+        bgfx::blit(viewId, bgfx::BufferRegion{.handle = destination, .offset = offset},
+            bgfx::BufferRegion{.handle = source, .offset = offset, .size = count * kStateBytes});
+    };
+    if (emitter.initializeState) copyRange(emitter.state, emitter.stateZeros, 0U, emitter.capacity);
+    const auto births = [&](std::uint32_t slot, std::uint32_t count) {
+        copyRange(emitter.spawns, emitter.spawnUpload, slot, count);
+        // Invalidate live and contact-death stamps even when a recycled birth has the same time.
+        if (bgfx::isValid(emitter.state) && !emitter.initializeState)
+            copyRange(emitter.state, emitter.stateZeros, slot, count);
+    };
+    if (emitter.initializeSpawns) {
+        births(0U, emitter.capacity);
+    } else if (emitter.pendingBirths != 0U) {
+        const auto first = static_cast<std::uint32_t>((emitter.nextSlot - emitter.pendingBirths) % emitter.capacity);
+        const auto count = std::min(emitter.pendingBirths, emitter.capacity - first);
+        births(first, count);
+        births(0U, emitter.pendingBirths - count);
+    }
+    emitter.initializeSpawns = false;
+    emitter.initializeState = false;
+    emitter.pendingBirths = 0U;
 }
 
 void ParticleGpuEmitterSimulation::SetRenderOrigin(std::uint64_t sceneId, const kb::math::DVec3& renderOrigin) noexcept {
@@ -340,6 +380,7 @@ void ParticleGpuEmitterSimulation::Rebase(bgfx::ViewId viewId, std::uint64_t sce
         emitter.params.plane.distance += kb::math::Dot(emitter.params.plane.normal, shift);
         if (!bgfx::isValid(rebaseProgram_)) {
             Clear(emitter);
+            FlushUploads(viewId, emitter);
             continue;
         }
         const std::array<float, 4> rebase{ shift.x, shift.y, shift.z, static_cast<float>(emitter.capacity) };
@@ -456,6 +497,9 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
     if (!IsReady() || sceneIt == scenes_.end()) return;
     SceneClock& clock = sceneIt->second;
     clock.draws.clear();
+    // Buffer blits execute before compute in this view, including the rebase kernels.
+    for (auto& [key, emitter] : emitters_)
+        if (key.sceneId == sceneId) FlushUploads(viewId, emitter);
     Rebase(viewId, sceneId, clock);
     for (auto& [key, emitter] : emitters_) {
         if (key.sceneId != sceneId) continue;

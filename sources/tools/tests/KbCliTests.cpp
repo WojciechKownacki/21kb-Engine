@@ -35,6 +35,7 @@
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #if KB_CLI_RENDERER
+#include "RendererAssertionPolicy.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
@@ -3857,7 +3858,17 @@ void RunMaterialGraphUtilityNodeCommandTests() {
 }
 #endif
 
-int main() {
+int main(int argc, char** argv) {
+#if KB_CLI_RENDERER
+    kb::render::tests::InstallRendererAssertionPolicy();
+    if (argc == 2 && std::string_view{ argv[1] } == "assert-probe") {
+        kb::render::tests::ProbeRendererAssertion();
+        return EXIT_SUCCESS;
+    }
+#else
+    static_cast<void>(argv);
+#endif
+    if (argc != 1) return EXIT_FAILURE;
     RunMiniJsonTests();
     RunArgumentListTests();
     RunFlexibleAssetPathTests();

@@ -116,6 +116,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", required=True)
     parser.add_argument("--debug-crt", type=int, choices=(0, 1), required=True)
+    parser.add_argument("--renderer-probe")
     args = parser.parse_args()
     code, _, _, window = run_probe(args.probe, "dialog-control")
     assert window and code != 0, "negative control did not detect and terminate a private-desktop dialog"
@@ -136,6 +137,11 @@ def main():
         if mode == "crt-assert":
             assert b"CRT assertion probe" in stderr
         print(f"test_process_errors {mode}=failed_without_dialog diagnostics=preserved")
+    if args.renderer_probe:
+        code, _, stderr, window = run_probe(args.renderer_probe, "assert-probe")
+        assert code != 0 and not window, "renderer dependency assertion was ignored or opened a dialog"
+        assert b"renderer_assertion " in stderr and b"Renderer assertion probe" in stderr
+        print("test_process_errors renderer-assert=failed_without_dialog diagnostics=preserved")
     return 0
 
 

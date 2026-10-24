@@ -8080,7 +8080,7 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
             const auto draws = renderer.GpuParticleDraws(scene);
             Require(draws.size() == 1U && draws[0].key.instanceId == ids[0] && draws[0].key.emitterId == 1U,
                 "Renderer inspection lost the actual particle emitter identity");
-            const auto expectedBytes = 4096U * (112U + (draws[0].params->NeedsState() ? 32U : 0U));
+            const auto expectedBytes = 4096U * (144U + (draws[0].params->NeedsState() ? 64U : 0U));
             Require(draws[0].requestedBufferBytes == expectedBytes && renderer.GpuEmitterAllocatedBytes() == expectedBytes,
                 "Renderer inspection changed particle requested buffer accounting");
             ParticleGpuReadback capture;
@@ -8439,7 +8439,7 @@ void RunRendererReportsRejectedGpuStateUpdateTest() {
     DisplayConfig config{};
     config.syncMode = DisplaySyncMode::Uncapped;
     config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
-    config.particleGpuBufferBudgetBytes = 224U;
+    config.particleGpuBufferBudgetBytes = 288U;
     Renderer renderer;
     Require(surface.IsValid() && renderer.Initialize(surface, &config), "GPU rejection diagnostics require a real hidden renderer");
     {
@@ -8465,7 +8465,7 @@ void RunRendererReportsRejectedGpuStateUpdateTest() {
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, first);
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, second);
         SubmitLifecycleFrame(renderer, scene, desc, "GPU budget fixture did not submit");
-        Require(renderer.GpuEmitterAllocatedBytes() == 224U, "Renderer did not apply its configured particle buffer budget");
+        Require(renderer.GpuEmitterAllocatedBytes() == 288U, "Renderer did not apply its configured particle buffer budget");
         first.params.hasPlane = true;
         first.params.plane.killOnContact = true;
         first.params.motionModuleCount = 2U;
@@ -8480,7 +8480,7 @@ void RunRendererReportsRejectedGpuStateUpdateTest() {
                     event.particleInstanceId == 11U && event.particleEmitterId == 7U && event.particleGpuUpdateFailure == ParticleGpuUpdateFailure::StateAllocation;
             });
         };
-        Require(hasRejection() && renderer.RejectedGpuParticleUpdates(scene).size() == 1U && renderer.GpuEmitterAllocatedBytes() == 224U,
+        Require(hasRejection() && renderer.RejectedGpuParticleUpdates(scene).size() == 1U && renderer.GpuEmitterAllocatedBytes() == 288U,
             "Renderer hid the GPU rejection reason, identity or allocation accounting");
         SubmitLifecycleFrame(renderer, scene, desc, "Renderer did not retain a rejected update across an empty frame");
         Require(hasRejection(), "Renderer cleared an unresolved GPU update error on the next frame");
@@ -8491,7 +8491,7 @@ void RunRendererReportsRejectedGpuStateUpdateTest() {
         kb::particles::ParticlePlayback::QueueGpuEmitterCommand(scene, first);
         SubmitLifecycleFrame(renderer, scene, desc, "Renderer did not retry the complete GPU state update after release");
         const auto draws = renderer.GpuParticleDraws(scene);
-        Require(renderer.RejectedGpuParticleUpdates(scene).empty() && !hasRejection() && renderer.GpuEmitterAllocatedBytes() == 144U &&
+        Require(renderer.RejectedGpuParticleUpdates(scene).empty() && !hasRejection() && renderer.GpuEmitterAllocatedBytes() == 208U &&
             draws.size() == 1U && draws[0].params->plane.killOnContact && draws[0].params->motionModuleCount == 2U,
             "Renderer did not clear the rejection after accepting every authored field");
         ParticleGpuReadback capture;

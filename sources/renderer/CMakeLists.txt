@@ -888,6 +888,15 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     endif()
 
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)
+    if(MSVC AND TARGET kb_test_process_error_tests)
+        find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
+        add_dependencies(kb_renderer_tests kb_test_process_error_tests)
+        add_test(NAME kb_renderer_assertion_errors
+            COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/scripts/tests/test_test_process_errors.py
+                --probe $<TARGET_FILE:kb_test_process_error_tests> --debug-crt $<IF:$<CONFIG:Debug>,1,0>
+                --renderer-probe $<TARGET_FILE:kb_renderer_tests>)
+        set_tests_properties(kb_renderer_assertion_errors PROPERTIES TIMEOUT 60)
+    endif()
     add_test(NAME kb_renderer_editor_ui_view COMMAND $<TARGET_FILE:kb_renderer_tests> editor-ui-view)
     # The committed Vulkan and OpenGL shader binaries, executed on those backends where this
     # machine has a device for them (skipped, with the reason printed, where it has none).

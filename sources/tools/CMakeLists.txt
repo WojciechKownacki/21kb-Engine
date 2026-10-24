@@ -106,12 +106,22 @@ if(BUILD_TESTING)
 
     target_link_libraries(kb_cli_tests PRIVATE kb_cli_core)
     if(KB_BUILD_RENDERER)
+        target_include_directories(kb_cli_tests PRIVATE "${PROJECT_SOURCE_DIR}/sources/renderer/tests")
         add_custom_target(kb_cli_tests_stage_particle_content
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content/Materials"
                 "$<TARGET_FILE_DIR:kb_cli_tests>/Content/21kbParticle/Materials"
             VERBATIM)
         add_dependencies(kb_cli_tests kb_cli_tests_stage_particle_content)
+        if(MSVC AND TARGET kb_test_process_error_tests)
+            find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
+            add_dependencies(kb_cli_tests kb_test_process_error_tests)
+            add_test(NAME kb_cli_assertion_errors
+                COMMAND ${Python3_EXECUTABLE} -I ${PROJECT_SOURCE_DIR}/scripts/tests/test_test_process_errors.py
+                    --probe $<TARGET_FILE:kb_test_process_error_tests> --debug-crt $<IF:$<CONFIG:Debug>,1,0>
+                    --renderer-probe $<TARGET_FILE:kb_cli_tests>)
+            set_tests_properties(kb_cli_assertion_errors PROPERTIES TIMEOUT 60)
+        endif()
     endif()
     if(WIN32)
         # The commands run in-process here, under the same code page as kb_cli.

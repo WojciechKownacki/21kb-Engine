@@ -232,7 +232,7 @@ std::array<float, 20> RunAuthoredMotion(kb::scene::ParticleEffectAsset effect, b
             Require(draws.size() == 1U, "GPU motion dispatch did not produce its instance buffer");
             const auto pixels = readback.Read(draws[0]);
             std::copy_n(pixels.begin(), result.size(), result.begin());
-            Require(simulation.AllocatedBytes() == 8U * 144U, "GPU motion resource bytes changed unexpectedly");
+            Require(simulation.AllocatedBytes() == 8U * 208U, "GPU motion resource bytes changed unexpectedly");
             simulation.Shutdown();
         } else {
             Require(snapshot->Particles().size() == 1U, "CPU motion reference lost its particle");
@@ -301,7 +301,7 @@ void VerifyNativeReadbackBounds() {
     };
     dispatch();
     auto draw = simulation.Draws(1U)[0];
-    Require(draw.key == command.key && draw.capacity == 3U && draw.requestedBufferBytes == 3U * 112U,
+    Require(draw.key == command.key && draw.capacity == 3U && draw.requestedBufferBytes == 3U * 144U,
         "GPU draw identity or requested buffer accounting changed");
     ParticleGpuReadback capture;
     Require(capture.Read(draw, 3U) && capture.Records().size() == 3U, "Native readback could not read multiple rows");
@@ -434,7 +434,7 @@ void VerifyMissingDepthResource(MotionReadback& readback) {
         Require(std::all_of(dead.begin(), dead.end(), [](float value) { return value == 0.0F; }),
             "Missing frame depth disabled an independent GPU killing plane");
     }
-    Require(simulation.RejectedUpdates(1U).empty() && simulation.AllocatedBytes() == 544U,
+    Require(simulation.RejectedUpdates(1U).empty() && simulation.AllocatedBytes() == 768U,
         "Missing optional frame depth rejected emitter state or changed its allocations");
     simulation.ReleaseScene(1U);
     Require(simulation.AllocatedBytes() == 0U, "Missing-depth fixture leaked GPU emitter buffers");
@@ -442,9 +442,75 @@ void VerifyMissingDepthResource(MotionReadback& readback) {
     std::fprintf(stderr, "particle_gpu_missing_depth active_surface=bounce lost_resource=free_flight disabled_control=equal plane_kill=independent release_bytes=0\n");
 }
 
+void VerifyStagedBirthRanges() {
+    ParticleGpuEmitterSimulation simulation;
+    Require(simulation.Initialize(), "Staged birth test requires an actual GPU");
+    kb::particles::ParticleGpuEmitterCommand command;
+    command.key = {91U, 1U};
+    command.hasParams = true;
+    command.params.capacity = 4U;
+    command.params.blend = kb::particles::ParticleRenderBlendMode::Add;
+    command.params.hasPlane = true;
+    command.params.plane.normal = {0.0F, 1.0F, 0.0F};
+    command.params.plane.killOnContact = true;
+    command.params.size.fill(1.0F);
+    command.params.color.fill({1.0F, 1.0F, 1.0F, 1.0F});
+    const auto birth = [](float x, float y) {
+        return kb::particles::ParticleGpuSpawn{.position = {x, y, 0.0F}, .lifetime = 8.0F};
+    };
+    ParticleGpuReadback capture;
+    const auto dispatch = [&] {
+        simulation.Advance(1U, kStep);
+        simulation.Dispatch(0U, 1U, {});
+        static_cast<void>(bgfx::frame());
+        Require(simulation.Draws(1U).size() == 1U && capture.Read(simulation.Draws(1U)[0], 4U),
+            "Staged births did not reach the actual GPU instance buffer");
+    };
+    const auto dead = [&](std::size_t slot) {
+        const auto& row = capture.Records()[slot];
+        return std::all_of(row.begin(), row.end(), [](float value) { return value == 0.0F; });
+    };
+    command.spawns = {birth(10.0F, 1.0F), birth(20.0F, 2.0F)};
+    simulation.Apply(1U, {&command, 1U});
+    dispatch();
+    Require(capture.Records()[0][0] == 10.0F && capture.Records()[1][0] == 20.0F && dead(2U) && dead(3U),
+        "GPU birth initialization retained uninitialized slots");
+    command.hasParams = false;
+    simulation.SetRenderOrigin(1U, {1000.0, 0.0, 0.0});
+    command.spawns = {birth(30.0F, 3.0F)};
+    simulation.Apply(1U, {&command, 1U});
+    dispatch();
+    Require(capture.Records()[0][0] == -990.0F && capture.Records()[1][0] == -980.0F &&
+        capture.Records()[2][0] == -970.0F && dead(3U), "Partial birth upload overwrote or bypassed GPU rebasing");
+    command.spawns = {birth(40.0F, 4.0F), birth(50.0F, 5.0F), birth(60.0F, 6.0F)};
+    simulation.Apply(1U, {&command, 1U});
+    command.spawns = {birth(70.0F, 7.0F)};
+    simulation.Apply(1U, {&command, 1U});
+    dispatch();
+    for (std::size_t slot = 0U; slot < 4U; ++slot) {
+        const auto x = slot == 3U ? -960.0F : -950.0F + static_cast<float>(slot) * 10.0F;
+        Require(capture.Records()[slot][0] == x && capture.Records()[slot][3] == 1.0F,
+            "Wrapped or repeated uploads did not preserve the newest same-time GPU births");
+    }
+    command.spawns = {birth(80.0F, -1.0F)};
+    simulation.Apply(1U, {&command, 1U});
+    dispatch();
+    Require(dead(3U) && capture.Records()[0][0] == -950.0F, "A staged contact death changed an untouched slot");
+    command.clear = true;
+    command.spawns = {birth(90.0F, 9.0F)};
+    simulation.Apply(1U, {&command, 1U});
+    dispatch();
+    Require(capture.Records()[0][0] == -910.0F && capture.Records()[0][3] == 1.0F && dead(1U) && dead(2U) && dead(3U),
+        "GPU clear and same-time rebirth retained stale birth or state records");
+    simulation.ReleaseScene(1U);
+    Require(simulation.AllocatedBytes() == 0U, "Staged birth resources were not released");
+    simulation.Shutdown();
+    std::fprintf(stderr, "particle_gpu_staged_upload initial_dead=zero dirty_ranges=exact rebase=retained wrap=latest same_stamp=reset contact=dead release_bytes=0\n");
+}
+
 void VerifyRejectedStateUpdates() {
     ParticleGpuEmitterSimulation simulation;
-    Require(simulation.Initialize(224U), "GPU state-budget test requires actual compute support");
+    Require(simulation.Initialize(288U), "GPU state-budget test requires actual compute support");
     kb::particles::ParticleGpuEmitterCommand first;
     first.key = {1U, 1U};
     first.hasParams = true;
@@ -470,7 +536,7 @@ void VerifyRejectedStateUpdates() {
     };
     dispatch();
     const auto handle = draw().instances;
-    Require(simulation.AllocatedBytes() == 224U, "GPU budget fixture did not allocate two real emitters");
+    Require(simulation.AllocatedBytes() == 288U, "GPU budget fixture did not allocate two real emitters");
     auto update = first;
     update.spawns = {{.position = {99.0F, 99.0F, 99.0F}, .lifetime = 8.0F}};
     update.simTime = 0.2;
@@ -489,7 +555,7 @@ void VerifyRejectedStateUpdates() {
         "State allocation rejection lost its emitter identity or reason");
     ParticleGpuReadback capture;
     Require(draw().instances.idx == handle.idx && draw().params->drag == 0.0F && draw().params->size[0] == 1.0F &&
-        !draw().params->hasPlane && draw().params->motionModuleCount == 0U && simulation.AllocatedBytes() == 224U &&
+        !draw().params->hasPlane && draw().params->motionModuleCount == 0U && simulation.AllocatedBytes() == 288U &&
         capture.Read(draw(), 1U), "Rejected state update changed the previous complete GPU parameters or resources");
     Require(std::abs(capture.Records()[0][1] + 2.2F) < 0.0001F && capture.Records()[0][3] == 1.0F && capture.Records()[0][9] == -12.0F,
         "Rejected state update applied its changed size, drag or birth data to the actual GPU buffer");
@@ -503,20 +569,20 @@ void VerifyRejectedStateUpdates() {
     simulation.Apply(1U, {&update, 1U});
     dispatch();
     Require(simulation.RejectedUpdates(1U)[0].failure == ParticleGpuUpdateFailure::ResourceCreation &&
-        draw().instances.idx == handle.idx && draw().capacity == 1U && simulation.AllocatedBytes() == 224U,
+        draw().instances.idx == handle.idx && draw().capacity == 1U && simulation.AllocatedBytes() == 288U,
         "Failed GPU resize destroyed or replaced the last complete emitter");
     kb::particles::ParticleGpuEmitterCommand release;
     release.key = second.key;
     release.release = true;
     simulation.Apply(1U, {&release, 1U});
-    Require(simulation.AllocatedBytes() == 112U, "Releasing the other emitter did not restore budget headroom");
+    Require(simulation.AllocatedBytes() == 144U, "Releasing the other emitter did not restore budget headroom");
     update.params.capacity = 1U;
     update.clear = true;
     update.simTime = 0.35;
     update.spawns = {{.position = {0.0F, 0.2F, 0.0F}, .birthTime = 0.3F, .velocity = {0.0F, -12.0F, 0.0F}, .lifetime = 8.0F}};
     simulation.Apply(1U, {&update, 1U});
     dispatch();
-    Require(simulation.RejectedUpdates(1U).empty() && simulation.AllocatedBytes() == 144U &&
+    Require(simulation.RejectedUpdates(1U).empty() && simulation.AllocatedBytes() == 208U &&
         draw().params->plane.killOnContact && draw().params->motionModuleCount == 2U &&
         draw().params->motionModules[0].strength == 0.7F && draw().params->motionModules[1].strength == 1.3F && capture.Read(draw(), 1U),
         "GPU update did not accept all collision/motion parameters after budget became available");
@@ -530,7 +596,7 @@ void VerifyRejectedStateUpdates() {
     simulation.ReleaseScene(1U);
     Require(simulation.AllocatedBytes() == 0U && simulation.RejectedUpdates(1U).empty(), "GPU release retained buffers or rejected update metadata");
     simulation.Shutdown();
-    Require(simulation.Initialize(448U), "GPU resize retry could not initialize its bounded budget");
+    Require(simulation.Initialize(560U), "GPU resize retry could not initialize its bounded budget");
     simulation.Apply(1U, {&first, 1U});
     dispatch();
     const auto oldHandle = draw().instances;
@@ -546,7 +612,7 @@ void VerifyRejectedStateUpdates() {
         static_cast<unsigned long long>(simulation.AllocatedBytes()), draw().capacity, oldHandle.idx, draw().instances.idx,
         resizedRead ? 1 : 0, capture.Records().size(), capture.Records().empty() ? -1.0F : capture.Records()[0][0],
         capture.Records().size() < 2U ? -1.0F : capture.Records()[1][0], capture.Records().empty() ? -1.0F : capture.Records()[0][3]);
-    Require(simulation.RejectedUpdates(1U).empty() && simulation.AllocatedBytes() == 288U && draw().capacity == 2U &&
+    Require(simulation.RejectedUpdates(1U).empty() && simulation.AllocatedBytes() == 416U && draw().capacity == 2U &&
         draw().instances.idx != oldHandle.idx && resizedRead &&
         capture.Records()[0][0] == 1.0F && capture.Records()[1][0] == 2.0F && capture.Records()[0][3] == 2.0F,
         "Successful GPU resize did not replace the complete allocation and both actual instance records");
@@ -573,6 +639,7 @@ void RunParticleGpuMotionTests(bool kernelOnly, bgfx::RendererType::Enum backend
         VerifyNativeReadbackBounds();
         VerifyContactReadback(readback);
         VerifyMissingDepthResource(readback);
+        VerifyStagedBirthRanges();
         VerifyRejectedStateUpdates();
         for (int kind = 0; kind < 5; ++kind) {
             std::array<float, 20> baseline{};

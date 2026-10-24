@@ -1,4 +1,5 @@
 #include "RendererTestSupport.hpp"
+#include "RendererAssertionPolicy.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -105,6 +106,11 @@ void RunSuite(const char* name, void (*run)()) {
 } // namespace
 
 int main(int argc, char** argv) {
+    kb::render::tests::InstallRendererAssertionPolicy();
+    if (argc == 2 && std::string_view{ argv[1] } == "assert-probe") {
+        kb::render::tests::ProbeRendererAssertion();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "command-reuse") {
         kb::render::tests::RunMeshPipelineTests();
         kb::render::tests::RunRenderSceneSyncTests();

@@ -41,7 +41,7 @@ public:
         std::uint32_t capacity = 0U;
         std::array<float, 3> origin{};
         kb::particles::ParticleGpuEmitterKey key{};
-        // Requested buffer bytes, including birth/state/instance and optional sort storage; not physical residency.
+        // Requested buffer bytes, including birth/state/upload/instance and optional sort storage; not physical residency.
         std::uint64_t requestedBufferBytes = 0U;
     };
 
@@ -118,10 +118,13 @@ private:
         // Fields of an emitter with forces, in the frame of its records (ParticleGpuEmitterCommand::hasField).
         kb::math::Vec3 fieldOrigin{};
         bgfx::DynamicVertexBufferHandle spawns = BGFX_INVALID_HANDLE;
+        // CPU-writable birth records copied into the GPU-writable ring before compute.
+        bgfx::DynamicVertexBufferHandle spawnUpload = BGFX_INVALID_HANDLE;
         bgfx::DynamicVertexBufferHandle instances = BGFX_INVALID_HANDLE;
         // Per-slot position/velocity record of the stateful kernel; only created for emitters that need it
         // (collisions, forces).
         bgfx::DynamicVertexBufferHandle state = BGFX_INVALID_HANDLE;
+        bgfx::DynamicVertexBufferHandle stateZeros = BGFX_INVALID_HANDLE;
         // Alpha-blended emitters only: sort keys (distance, slot) padded to a power of two, and the
         // instance records in back-to-front order, which is what gets drawn.
         bgfx::DynamicVertexBufferHandle sortKeys = BGFX_INVALID_HANDLE;
@@ -130,6 +133,9 @@ private:
         // Instances written per slot: 1, or the trail segments.
         std::uint32_t perSlot = 1U;
         std::uint64_t nextSlot = 0U;
+        std::uint32_t pendingBirths = 0U;
+        bool initializeSpawns = true;
+        bool initializeState = false;
         std::uint64_t bytes = 0U;
     };
     struct SceneClock {
@@ -147,6 +153,7 @@ private:
     void Destroy(Emitter& emitter) noexcept;
     void Upload(Emitter& emitter, std::span<const kb::particles::ParticleGpuSpawn> spawns) noexcept;
     void Clear(Emitter& emitter) noexcept;
+    void FlushUploads(bgfx::ViewId viewId, Emitter& emitter) noexcept;
     // Creates the state buffer of a colliding emitter; false when the memory budget would be exceeded.
     [[nodiscard]] bool EnsureState(Emitter& emitter) noexcept;
     // Creates the sort buffers of an alpha-blended emitter; false when the budget or a kernel is missing.
