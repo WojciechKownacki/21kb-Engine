@@ -130,4 +130,71 @@ void RunSceneHierarchyDepthTests() {
     }
 }
 
+void RunPrefabHierarchyDepthTests() {
+    constexpr std::uint32_t depthLimit = 8192U;
+    kb::scene::ScenePrefab base;
+    base.Reserve(depthLimit);
+    auto previous = base.AddNode({});
+    for (std::uint32_t depth = 1U; depth < depthLimit; ++depth) previous = base.AddNode({.parentNode = previous});
+    kb::scene::ScenePrefab prefab;
+    const auto prefabRoot = prefab.AddNode({});
+    static_cast<void>(prefab.AddNode({.parentNode = prefabRoot}));
+    struct Mode { bool mirrored; bool sync; };
+    for (const auto mode : std::array<Mode, 3U>{{{true, false}, {true, true}, {false, false}}}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mode.mirrored;
+        config.mirrorNativeComponentChangesToBackend = mode.mirrored;
+        kb::scene::Scene scene{config};
+        const auto instance = scene.Prefabs().Instantiate(base, {.assignNames = false, .syncWorldHierarchy = mode.sync});
+        kb::tests::Require(instance.ObjectCount() == depthLimit, "Prefab depth fixture must retain its complete supported hierarchy");
+        const auto registered = scene.Prefabs().Register("DepthBoundary", prefab);
+        kb::tests::Require(registered.IsValid(), "A shallow prefab must remain registerable");
+        const auto spawn = [&](int form, std::size_t count, const kb::scene::ScenePrefabInstantiationSettings& settings) -> std::size_t {
+            switch (form) {
+            case 0: return scene.Prefabs().Instantiate(prefab, settings).ObjectCount();
+            case 1: return 2U * scene.Prefabs().InstantiateMany(prefab, count, settings).size();
+            case 2: return scene.Prefabs().InstantiateBatch(prefab, count, settings).entitiesCreated;
+            case 3: return scene.Prefabs().Instantiate(registered, settings).ObjectCount();
+            case 4: return 2U * scene.Prefabs().InstantiateMany(registered, count, settings).size();
+            case 5: return scene.Prefabs().InstantiateBatch(registered, count, settings).entitiesCreated;
+            }
+            return 0U;
+        };
+        kb::scene::ScenePrefabInstantiationSettings settings{.parent = instance.ObjectAt(depthLimit - 1U),
+            .assignNames = false, .syncWorldHierarchy = mode.sync};
+        std::cout << "prefab_hierarchy_depth supported=" << depthLimit << " mirrored=" << mode.mirrored << " sync=" << mode.sync << std::endl;
+        kb::tests::Require(scene.History().Record(), "Prefab depth history fixture must open a command");
+        const auto count = scene.Entities().Count();
+        const auto roots = scene.Hierarchy().RootEntities();
+        const auto handles = kb::scene::SceneAccess::State(scene).prefabInstances.Handles();
+        const auto bytes = scene.History().RecordedBytes();
+        const auto undoCount = scene.History().UndoCount();
+        for (int form = 0; form < 6; ++form) {
+            kb::tests::Require(spawn(form, 2U, settings) == 0U && scene.Entities().Count() == count &&
+                scene.Hierarchy().RootEntities() == roots && scene.Hierarchy().ChildCount(settings.parent.Entity()) == 0U &&
+                kb::scene::SceneAccess::State(scene).prefabInstances.Handles() == handles,
+                "Combined prefab and placement depth must be refused before creating entities or instance records");
+        }
+        for (const int form : {1, 2, 4, 5}) kb::tests::Require(spawn(form, 0U, settings) == 0U,
+            "Zero-count prefab creation must remain a no-op even at an excessive placement depth");
+        kb::tests::Require(scene.History().RecordedBytes() == bytes && scene.History().UndoCount() == undoCount,
+            "Refused prefab placement must not record history");
+        scene.History().Commit();
+        settings.parent = instance.ObjectAt(depthLimit - 2U);
+        for (int form = 0; form < 6; ++form) {
+            const auto before = scene.Entities().Count();
+            const auto expected = form % 3 == 0 ? 2U : 4U;
+            kb::tests::Require(spawn(form, 2U, settings) == expected && scene.Entities().Count() == before + expected,
+                "Every prefab creation form must support subtrees ending exactly at the hierarchy limit");
+        }
+        scene.Entities().Destroy(instance.RootObject());
+        kb::tests::Require(scene.Entities().Count() == 0U, "A supported combined prefab hierarchy must remain removable");
+    }
+    static_cast<void>(base.AddNode({.parentNode = previous}));
+    static_cast<void>(base.AddNode({.parentNode = depthLimit}));
+    kb::scene::Scene scene;
+    kb::tests::Require(!scene.Prefabs().Register("ExcessiveDepth", base).IsValid(),
+        "A prefab exceeding the standalone hierarchy depth limit must be refused during registration");
+}
+
 } // namespace kb::tests

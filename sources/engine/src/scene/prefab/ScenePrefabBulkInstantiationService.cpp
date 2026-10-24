@@ -11,6 +11,7 @@
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
+#include "scene/hierarchy/SceneHierarchyDepthGuard.hpp"
 #include "scene/prefab/ScenePrefabBakedData.hpp"
 #include "scene/prefab/ScenePrefabNameResolver.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
@@ -1042,7 +1043,7 @@ void ApplyTranslationResiduals(Scene& scene, std::span<const ScenePrefabNodeDesc
     state.lastPrefabInstantiationStats = ScenePrefabInstantiationStats{
         .requestedInstances = count,
     };
-    if (count == 0 || !ScenePrefabValidator::IsValid(prefab)) {
+    if (count == 0 || !ScenePrefabValidator::IsValid(prefab, SceneChildDepth(state, settings.parent.Entity()))) {
         return {};
     }
 

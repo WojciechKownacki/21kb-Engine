@@ -1,5 +1,6 @@
 #include "scene/prefab/ScenePrefabValidator.hpp"
 #include "engine/ui/UIComponentValidation.hpp"
+#include "ecs/relation/HierarchyDepthGuard.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -7,15 +8,22 @@
 
 namespace kb::scene {
 
-bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab) noexcept {
+bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab, std::size_t rootDepth) noexcept {
+    const auto limit = kb::ecs::HierarchyDepthLimit();
+    if (rootDepth > limit) return false;
     const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
     std::vector<std::uint64_t> stableIds;
     stableIds.reserve(nodes.size());
+    std::vector<std::size_t> depths;
+    depths.reserve(nodes.size());
     for (std::uint32_t nodeIndex = 0; nodeIndex < static_cast<std::uint32_t>(nodes.size()); ++nodeIndex) {
         const std::uint32_t parentNode = nodes[nodeIndex].parentNode;
         if (parentNode != ScenePrefabNodeDesc::NoParent && parentNode >= nodeIndex) {
             return false;
         }
+        const auto depth = parentNode == ScenePrefabNodeDesc::NoParent ? rootDepth : depths[parentNode] + 1U;
+        if (depth > limit) return false;
+        depths.push_back(depth);
         if (nodes[nodeIndex].stableId == ScenePrefabNodeDesc::InvalidStableId ||
             nodes[nodeIndex].stableId == ScenePrefabJointComponent::UnresolvedConnectedNodeStableId) {
             return false;

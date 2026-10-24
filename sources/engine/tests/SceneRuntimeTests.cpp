@@ -15,6 +15,7 @@
 namespace kb::tests {
 void RunEcsHierarchyDepthTests();
 void RunSceneHierarchyDepthTests();
+void RunPrefabHierarchyDepthTests();
 void RunScriptNativeHeaderReloadTest();
 void RunPhysicsReplayOnlyTest();
 void RunPhysicsStepSpikeBenchmark();
@@ -71,6 +72,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunEcsHierarchyDepthTests();
     } else if (suite == "scene-hierarchy-depth") {
         kb::tests::RunSceneHierarchyDepthTests();
+    } else if (suite == "prefab-hierarchy-depth") {
+        kb::tests::RunPrefabHierarchyDepthTests();
     } else if (suite == "ecs-native") {
         kb::tests::RunEcsNativeArchetypeStorageTests();
     } else if (suite == "scene-hierarchy") {
@@ -170,6 +173,7 @@ void RunAllSuites() {
     RunDeepParentCycleAllocationTest();
     kb::tests::RunEcsHierarchyDepthTests();
     kb::tests::RunSceneHierarchyDepthTests();
+    kb::tests::RunPrefabHierarchyDepthTests();
     kb::tests::RunSceneHierarchyTests();
     kb::tests::RunSceneUITests();
     kb::tests::RunSceneSystemTests();
