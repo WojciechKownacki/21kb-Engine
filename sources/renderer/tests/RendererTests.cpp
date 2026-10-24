@@ -2,6 +2,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <exception>
@@ -89,6 +90,19 @@ void RunPackagedWebGpuTextureFallbackTestOnly();
 void RunScreenUIDrawBatchTests();
 void RunLargeWorldRenderTests();
 }
+
+namespace {
+void RunSuite(const char* name, void (*run)()) {
+    std::fprintf(stderr, "renderer_tests begin %s\n", name);
+    std::fflush(stderr);
+    const auto started = std::chrono::steady_clock::now();
+    run();
+    const double milliseconds = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    std::fprintf(stderr, "renderer_tests passed %s elapsed_ms=%.3f\n", name, milliseconds);
+    std::fflush(stderr);
+}
+} // namespace
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string_view{argv[1]} == "command-reuse") {
@@ -363,38 +377,38 @@ int main(int argc, char** argv) {
     if (argc != 1) {
         return EXIT_FAILURE;
     }
-    kb::render::tests::RunSceneLightGridTests();
-    kb::render::tests::RunSceneLightGridGpuTests();
-    kb::render::tests::RunGraphForwardGpuRenderTests();
-    kb::render::tests::RunFinalCompositePassTests();
-    kb::render::tests::RunPostProcessChainTests();
-    kb::render::tests::RunRenderFramePipelineTests();
-    kb::render::tests::RunRenderResourceRegistryTests();
-    kb::render::tests::RunAssetImportCatalogCoverageTests();
-    kb::render::tests::RunGltfExternalResourceTests();
-    kb::render::tests::RunRuntimeAssetShaderProviderTests();
-    kb::render::tests::RunRuntimeAssetPackValidationTests();
-    kb::render::tests::RunRenderMaterialTypeSchemaTests();
-    kb::render::tests::RunGraphShaderArtifactCookTests();
-    kb::render::tests::RunMaterialProgramRegistryTests();
-    kb::render::tests::RunSceneMeshPassProgramSelectionTests();
-    kb::render::tests::RunRendererCapabilityReportTests();
-    kb::render::tests::RunRendererRuntimeSubmitTests();
-    kb::render::tests::RunRendererDefaultSubmissionResultTest();
-    kb::render::tests::RunMeshPipelineTests();
-    kb::render::tests::RunSceneDisplayCompositeTests();
-    kb::render::tests::RunSceneExposureMeterTests();
-    kb::render::tests::RunSceneDepthPolicyTests();
-    kb::render::tests::RunRenderSceneSyncTests();
-    kb::render::tests::RunLargeWorldRenderTests();
-    kb::render::tests::RunSceneRenderTargetFormatTests();
-    kb::render::tests::RunSceneRenderExtractorTests();
-    kb::render::tests::RunShaderManifestTests();
-    kb::render::tests::RunShaderPrewarmParseTests();
-    kb::render::tests::RunScreenUIDrawBatchTests();
-    kb::render::tests::RunMeshBakeTests();
-    kb::render::tests::RunWorldHlodMeshBakerTests();
-    kb::render::tests::RunTextureBakeTests();
-    kb::render::tests::RunRuntimeContentStreamingTests();
+    RunSuite("RunSceneLightGridTests", &kb::render::tests::RunSceneLightGridTests);
+    RunSuite("RunSceneLightGridGpuTests", &kb::render::tests::RunSceneLightGridGpuTests);
+    RunSuite("RunGraphForwardGpuRenderTests", &kb::render::tests::RunGraphForwardGpuRenderTests);
+    RunSuite("RunFinalCompositePassTests", &kb::render::tests::RunFinalCompositePassTests);
+    RunSuite("RunPostProcessChainTests", &kb::render::tests::RunPostProcessChainTests);
+    RunSuite("RunRenderFramePipelineTests", &kb::render::tests::RunRenderFramePipelineTests);
+    RunSuite("RunRenderResourceRegistryTests", &kb::render::tests::RunRenderResourceRegistryTests);
+    RunSuite("RunAssetImportCatalogCoverageTests", &kb::render::tests::RunAssetImportCatalogCoverageTests);
+    RunSuite("RunGltfExternalResourceTests", &kb::render::tests::RunGltfExternalResourceTests);
+    RunSuite("RunRuntimeAssetShaderProviderTests", &kb::render::tests::RunRuntimeAssetShaderProviderTests);
+    RunSuite("RunRuntimeAssetPackValidationTests", &kb::render::tests::RunRuntimeAssetPackValidationTests);
+    RunSuite("RunRenderMaterialTypeSchemaTests", &kb::render::tests::RunRenderMaterialTypeSchemaTests);
+    RunSuite("RunGraphShaderArtifactCookTests", &kb::render::tests::RunGraphShaderArtifactCookTests);
+    RunSuite("RunMaterialProgramRegistryTests", &kb::render::tests::RunMaterialProgramRegistryTests);
+    RunSuite("RunSceneMeshPassProgramSelectionTests", &kb::render::tests::RunSceneMeshPassProgramSelectionTests);
+    RunSuite("RunRendererCapabilityReportTests", &kb::render::tests::RunRendererCapabilityReportTests);
+    RunSuite("RunRendererRuntimeSubmitTests", &kb::render::tests::RunRendererRuntimeSubmitTests);
+    RunSuite("RunRendererDefaultSubmissionResultTest", &kb::render::tests::RunRendererDefaultSubmissionResultTest);
+    RunSuite("RunMeshPipelineTests", &kb::render::tests::RunMeshPipelineTests);
+    RunSuite("RunSceneDisplayCompositeTests", &kb::render::tests::RunSceneDisplayCompositeTests);
+    RunSuite("RunSceneExposureMeterTests", &kb::render::tests::RunSceneExposureMeterTests);
+    RunSuite("RunSceneDepthPolicyTests", &kb::render::tests::RunSceneDepthPolicyTests);
+    RunSuite("RunRenderSceneSyncTests", &kb::render::tests::RunRenderSceneSyncTests);
+    RunSuite("RunLargeWorldRenderTests", &kb::render::tests::RunLargeWorldRenderTests);
+    RunSuite("RunSceneRenderTargetFormatTests", &kb::render::tests::RunSceneRenderTargetFormatTests);
+    RunSuite("RunSceneRenderExtractorTests", &kb::render::tests::RunSceneRenderExtractorTests);
+    RunSuite("RunShaderManifestTests", &kb::render::tests::RunShaderManifestTests);
+    RunSuite("RunShaderPrewarmParseTests", &kb::render::tests::RunShaderPrewarmParseTests);
+    RunSuite("RunScreenUIDrawBatchTests", &kb::render::tests::RunScreenUIDrawBatchTests);
+    RunSuite("RunMeshBakeTests", &kb::render::tests::RunMeshBakeTests);
+    RunSuite("RunWorldHlodMeshBakerTests", &kb::render::tests::RunWorldHlodMeshBakerTests);
+    RunSuite("RunTextureBakeTests", &kb::render::tests::RunTextureBakeTests);
+    RunSuite("RunRuntimeContentStreamingTests", &kb::render::tests::RunRuntimeContentStreamingTests);
     return EXIT_SUCCESS;
 }
