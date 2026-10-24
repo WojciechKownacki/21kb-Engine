@@ -1635,6 +1635,10 @@ void AsyncReadsFollowPriorityAndReturnExactRanges() {
     Require(order == std::vector<int>{ 1, 10, 5, 4, 3 }, "Queued reads were not served by priority");
     Require(requests[4]->State() == streaming::BackgroundRequestState::Cancelled, "A cancelled read did not stay cancelled");
     Require(io.Stats().peakInFlight >= 4U, "The worker did not keep several reads in flight");
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
+    Require(io.Stats().peakSubmittedReadBatch >= 4U && io.Stats().asynchronousReads >= 6U,
+        "The native API did not accept several reads before the worker waited");
+#endif
 
     // Exact ranges at awkward offsets, through the unbuffered path where the platform has one.
     std::vector<streaming::BackgroundRequestHandle> ranges;

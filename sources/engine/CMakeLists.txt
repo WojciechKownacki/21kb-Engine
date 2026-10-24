@@ -1691,6 +1691,10 @@ target_link_libraries(kb_engine
         kb_zstd
 )
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(kb_engine PRIVATE rt)
+endif()
+
 if(KB_ENGINE_ENABLE_NATIVE_AVX2)
     if(MSVC)
         target_compile_options(kb_engine PUBLIC /arch:AVX2)
@@ -1742,6 +1746,21 @@ if(NOT CMAKE_CROSSCOMPILING)
 endif()
 
 if(BUILD_TESTING)
+    # Keep native I/O verification independent of the full engine dependency graph.
+    add_executable(kb_background_read_tests
+        tests/BackgroundReadBatchTests.cpp
+        src/assets/streaming/BackgroundLoadService.cpp
+    )
+    target_include_directories(kb_background_read_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    find_package(Threads REQUIRED)
+    target_link_libraries(kb_background_read_tests PRIVATE Threads::Threads)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(kb_background_read_tests PRIVATE rt)
+    endif()
+    add_test(NAME kb_background_read_tests COMMAND $<TARGET_FILE:kb_background_read_tests>)
+    set_tests_properties(kb_background_read_tests PROPERTIES TIMEOUT 60)
+    kb_apply_quality_gates(kb_background_read_tests)
+
     add_library(kb_engine_old_abi_test_plugin SHARED
         tests/OldEngineModuleAbiPlugin.cpp
     )

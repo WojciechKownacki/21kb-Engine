@@ -13,6 +13,20 @@ permissions:
   contents: read
 
 jobs:
+  native-read-batches:
+    name: Linux native read batches
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build isolated native read tests with sanitizers
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -Wno-missing-field-initializers \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -g -pthread \
+            -Isources/engine/include sources/engine/src/assets/streaming/BackgroundLoadService.cpp \
+            sources/engine/tests/BackgroundReadBatchTests.cpp -lrt -o background-read-tests
+      - name: Verify native batches, priority, cancellation and exact ranges
+        run: ./background-read-tests
+
   build-and-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -37,9 +51,9 @@ jobs:
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "ON"
-            targets: "kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests;kb_ecs_query_shutdown_tests"
+            targets: "kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests;kb_ecs_query_shutdown_tests;kb_background_read_tests"
             api_compat_check: "OFF"
-            test_regex: "^(kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests|kb_ecs_query_shutdown_tests)$"
+            test_regex: "^(kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests|kb_ecs_query_shutdown_tests|kb_background_read_tests)$"
           - name: Linux GCC ASan UBSan
             os: ubuntu-24.04
             generator: "Unix Makefiles"

@@ -22,6 +22,11 @@
     #include <fcntl.h>
     #include <sys/stat.h>
     #include <unistd.h>
+    #if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
+        #include <aio.h>
+        #include <signal.h>
+        #define KB_BACKGROUND_POSIX_AIO 1
+    #endif
 #endif
 
 namespace kb::assets::streaming {
@@ -47,6 +52,41 @@ struct AlignedBufferDeleter {
     }
 };
 using AlignedBuffer = std::unique_ptr<std::uint8_t, AlignedBufferDeleter>;
+#endif
+
+#if defined(KB_BACKGROUND_POSIX_AIO)
+struct NativeAsyncRead {
+    aiocb control{};
+    bool issued = false;
+    int error = 0;
+    ssize_t result = 0;
+
+    bool Start(int descriptor, std::uint64_t offset, std::span<std::uint8_t> bytes) noexcept {
+        control = {};
+        control.aio_fildes = descriptor;
+        control.aio_offset = static_cast<off_t>(offset);
+        control.aio_buf = bytes.data();
+        control.aio_nbytes = bytes.size();
+        control.aio_sigevent.sigev_notify = SIGEV_NONE;
+        issued = ::aio_read(&control) == 0;
+        error = issued ? 0 : errno;
+        return issued;
+    }
+
+    void Wait() noexcept {
+        if (!issued) return;
+        while ((error = ::aio_error(&control)) == EINPROGRESS) {
+            const aiocb* waitList[] = { &control };
+            if (::aio_suspend(waitList, 1, nullptr) != 0 && errno != EINTR) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+            }
+        }
+        result = ::aio_return(&control);
+        issued = false;
+    }
+
+    ~NativeAsyncRead() { Wait(); }
+};
 #endif
 
 } // namespace
@@ -85,7 +125,7 @@ BackgroundLoadService::BackgroundLoadService(BackgroundLoadServiceOptions option
     options_.jobWorkers = std::clamp<std::uint32_t>(
         options_.jobWorkers, 1U, std::max<std::uint32_t>(1U, options_.workerCount - 1U));
     options_.longJobWorkers = std::clamp<std::uint32_t>(options_.longJobWorkers, 1U, 64U);
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(KB_BACKGROUND_POSIX_AIO)
     options_.requestsInFlightPerWorker = 1U;
 #endif
     workers_.reserve(options_.workerCount);
@@ -623,6 +663,9 @@ void BackgroundLoadService::ServeBatch(std::vector<BackgroundRequestHandle>& bat
         AlignedBuffer buffer;
         OVERLAPPED overlapped{};
         bool issued = false;
+#elif defined(KB_BACKGROUND_POSIX_AIO)
+        // Destroy the operation before its file and request buffers, including on exceptions.
+        std::unique_ptr<NativeAsyncRead> native;
 #endif
     };
     std::vector<Pending> pending;
@@ -650,6 +693,14 @@ void BackgroundLoadService::ServeBatch(std::vector<BackgroundRequestHandle>& bat
             Finish(request, true);
             continue;
         }
+#if !defined(_WIN32)
+        const auto maxOffset = static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
+        if (request->offset_ > maxOffset || request->length_ > maxOffset - request->offset_) {
+            request->error_ = "the requested range exceeds the platform file offsets";
+            Finish(request, false);
+            continue;
+        }
+#endif
         std::string error;
         std::shared_ptr<FileHandle> file = AcquireFile(request->path_, error);
         if (file == nullptr) {
@@ -665,8 +716,14 @@ void BackgroundLoadService::ServeBatch(std::vector<BackgroundRequestHandle>& bat
         pending.push_back(std::move(read));
     }
 
+    const auto recordIssued = [this](std::uint32_t count) {
+        std::scoped_lock lock{ mutex_ };
+        stats_.asynchronousReads += count;
+        stats_.peakSubmittedReadBatch = std::max(stats_.peakSubmittedReadBatch, count);
+    };
 #if defined(_WIN32)
     // Issue every read of the batch before waiting for any, so the device sees them together.
+    std::uint32_t issuedCount = 0U;
     for (Pending& read : pending) {
         if (read.alignedLength == 0U) {
             continue;
@@ -688,7 +745,9 @@ void BackgroundLoadService::ServeBatch(std::vector<BackgroundRequestHandle>& bat
             continue;
         }
         read.issued = true;
+        ++issuedCount;
     }
+    recordIssued(issuedCount);
     for (Pending& read : pending) {
         bool succeeded = false;
         if (read.alignedLength == 0U) {
@@ -725,7 +784,51 @@ void BackgroundLoadService::ServeBatch(std::vector<BackgroundRequestHandle>& bat
         }
         Finish(read.request, succeeded);
     }
+#elif defined(KB_BACKGROUND_POSIX_AIO)
+    // Allocate every buffer before any submission; control blocks never move while issued.
+    for (Pending& read : pending) {
+        read.request->bytes_.resize(static_cast<std::size_t>(read.request->length_));
+        read.native = std::make_unique<NativeAsyncRead>();
+    }
+    std::uint32_t issuedCount = 0U;
+    for (Pending& read : pending) {
+        if (read.request->length_ != 0U && read.native->Start(
+                read.file->descriptor, read.request->offset_, read.request->bytes_)) {
+            ++issuedCount;
+        }
+    }
+    recordIssued(issuedCount);
+    // Wait and publish in priority order even if native completion order differs.
+    for (Pending& read : pending) {
+        BackgroundRequest& request = *read.request;
+        std::size_t done = 0U;
+        bool succeeded = true;
+        while (done < request.bytes_.size()) {
+            read.native->Wait();
+            if (read.native->error != 0 || read.native->result < 0) {
+                request.error_ = "the asynchronous read failed (errno " + std::to_string(read.native->error) + ")";
+                succeeded = false;
+                break;
+            }
+            if (read.native->result == 0) {
+                request.error_ = "the file ended before the requested range";
+                succeeded = false;
+                break;
+            }
+            done += static_cast<std::size_t>(read.native->result);
+            if (done < request.bytes_.size() && read.native->Start(read.file->descriptor,
+                    request.offset_ + done, std::span{ request.bytes_ }.subspan(done))) {
+                recordIssued(1U);
+            }
+        }
+        {
+            std::scoped_lock lock{ mutex_ };
+            ++stats_.bufferedReads;
+        }
+        Finish(read.request, succeeded);
+    }
 #else
+    static_cast<void>(recordIssued);
     for (Pending& read : pending) {
         BackgroundRequest& request = *read.request;
         request.bytes_.assign(static_cast<std::size_t>(request.length_), 0U);

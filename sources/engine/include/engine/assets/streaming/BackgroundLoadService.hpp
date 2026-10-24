@@ -32,8 +32,9 @@
 //   opened for OVERLAPPED, UNBUFFERED access (FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING): a
 //   request is widened to the volume's sector alignment, read into a sector-aligned buffer
 //   straight from the device -- the system cache is not polluted by gigabytes of streamed
-//   content -- and each worker keeps several such reads in flight at once. Elsewhere a worker
-//   reads with pread. A file that refuses unbuffered access (some network and virtual file
+//   content -- and each worker keeps several such reads in flight at once. Desktop Linux and
+//   Apple platforms submit POSIX asynchronous reads in batches; other platforms use pread.
+//   A file that refuses unbuffered access (some network and virtual file
 //   systems) is read buffered and overlapped instead. A read may carry a transform that runs on
 //   the worker once the bytes are in: content streaming verifies, decrypts and decompresses a
 //   pack block there, so nothing on the render thread ever waits for a disk or a decoder.
@@ -144,7 +145,8 @@ using BackgroundRequestHandle = std::shared_ptr<BackgroundRequest>;
 struct BackgroundLoadServiceOptions {
     // Load workers: reads and load jobs.
     std::uint32_t workerCount = 3U;
-    // Reads a worker keeps in flight at once (overlapped I/O). 1 on platforms without it.
+    // Reads a worker submits before waiting (Windows overlapped or desktop POSIX AIO).
+    // Clamped to 1 on platforms without either native API.
     std::uint32_t requestsInFlightPerWorker = 4U;
     // Workers that may run jobs at the same time. Clamped to workerCount - 1 (at least 1), so
     // with more than one worker reads always keep a worker of their own.
@@ -166,6 +168,12 @@ struct BackgroundLoadServiceStats {
     std::uint64_t bufferedReads = 0U;
     // Most reads observed in flight at the same time across all workers.
     std::uint32_t peakInFlight = 0U;
+    // File operations successfully submitted through the native asynchronous API, including
+    // partial-read retries. Memory copies and synchronous fallback reads do not count.
+    std::uint64_t asynchronousReads = 0U;
+    // Largest number accepted by that API before the worker waited for any of them. This is
+    // submission depth, not a guarantee that a device executes every read simultaneously.
+    std::uint32_t peakSubmittedReadBatch = 0U;
     // Load jobs that ran to an end (completed or failed), and the most that ran at the same time.
     std::uint64_t jobsRun = 0U;
     std::uint32_t peakJobsRunning = 0U;
