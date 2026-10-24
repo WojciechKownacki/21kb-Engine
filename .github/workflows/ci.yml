@@ -53,7 +53,7 @@ jobs:
             sanitizer: "ON"
             targets: "kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests;kb_ecs_query_shutdown_tests;kb_background_read_tests;kb_test_process_error_tests"
             api_compat_check: "OFF"
-            test_regex: "^(kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests|kb_ecs_query_shutdown_tests|kb_background_read_tests|kb_test_process_errors|kb_renderer_assertion_errors)$"
+            test_regex: "^(kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests|kb_ecs_query_shutdown_tests|kb_background_read_tests|kb_test_process_errors|kb_renderer_assertion_errors|kb_renderer_graph_program_lifetime)$"
           - name: Linux GCC ASan UBSan
             os: ubuntu-24.04
             generator: "Unix Makefiles"

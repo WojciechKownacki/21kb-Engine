@@ -33,6 +33,7 @@ std::size_t PeakCommittedBytes() noexcept {
 }
 
 void RunGraphForwardGpuRenderTests();
+void RunGraphProgramLifetimeTests();
 void RunSceneLightGridTests();
 void RunSceneLightGridGpuTests();
 void RunSkinnedMeshGpuReadbackTests();
@@ -218,6 +219,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "graph-forward-gpu") {
         kb::render::tests::RunGraphForwardGpuRenderTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "graph-program-lifetime") {
+        kb::render::tests::RunGraphProgramLifetimeTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "backend-shader-gpu") {

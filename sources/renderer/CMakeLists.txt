@@ -888,6 +888,8 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
     endif()
 
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)
+    set_tests_properties(kb_renderer_tests PROPERTIES
+        FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
     if(MSVC AND TARGET kb_test_process_error_tests)
         find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
         add_dependencies(kb_renderer_tests kb_test_process_error_tests)
@@ -925,6 +927,13 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         cmake_path(CONVERT "${KB_GRAPH_SHADERC_TOOL}" TO_CMAKE_PATH_LIST _kb_graph_shaderc_tool NORMALIZE)
     endif()
     if(_kb_graph_shaderc_tool)
+        if(WIN32)
+            add_test(NAME kb_renderer_graph_program_lifetime
+                COMMAND $<TARGET_FILE:kb_renderer_tests> graph-program-lifetime)
+            set_tests_properties(kb_renderer_graph_program_lifetime PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;headless" TIMEOUT 120
+                FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
+        endif()
         target_compile_definitions(kb_renderer_tests
             PRIVATE
                 KB_TEST_GRAPH_SHADERC_PATH="${_kb_graph_shaderc_tool}"

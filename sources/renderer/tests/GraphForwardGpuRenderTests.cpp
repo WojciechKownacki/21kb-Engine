@@ -1918,6 +1918,15 @@ void RunForwardGraphRenderTest() {
     Require(static_cast<std::uint32_t>(dielectric.r) + dielectric.g + dielectric.b > static_cast<std::uint32_t>(metal.r) + metal.g + metal.b + 30U,
         "KBMAT-MAT08: A metallic surface must change the BRDF and render darker than the dielectric surface");
 
+    bgfx::destroy(metalProgram);
+    bgfx::destroy(dielectricProgram);
+    bgfx::destroy(emissiveProgram);
+    bgfx::destroy(texMathProgram);
+    bgfx::destroy(boolFalseProgram);
+    bgfx::destroy(boolTrueProgram);
+    bgfx::destroy(textureProgram);
+    bgfx::destroy(blueProgram);
+    bgfx::destroy(redProgram);
     harness.Shutdown();
 }
 
@@ -2447,6 +2456,9 @@ void RunForwardGraphOrganizationNodesRenderTest() {
     Require(composite.b > composite.r && composite.b > composite.g && composite.b > 80U,
         "KBMAT-MAT56: Composite tunnel graph must render its inlined blue color on the GPU");
 
+    bgfx::destroy(compositeProgram);
+    bgfx::destroy(namedProgram);
+    bgfx::destroy(rerouteProgram);
     harness.Shutdown();
 }
 
@@ -2542,6 +2554,9 @@ void RunForwardGraphTimeAnimationTest() {
     Require(dynamicPixel.b > dynamicPixel.g && dynamicPixel.g > dynamicPixel.r + 50U,
         "KBMAT-MAT30: DynamicParameter rgba must reach the real GPU shader through u_dynamicParameter");
 
+    bgfx::destroy(dynamicProgram);
+    bgfx::destroy(deltaProgram);
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -2608,6 +2623,8 @@ void RunForwardGraphUv1SamplingTest() {
 
     bgfx::destroy(gradientTexture);
     bgfx::destroy(sampler);
+    bgfx::destroy(uv1Program);
+    bgfx::destroy(uv0Program);
     harness.Shutdown();
 }
 
@@ -2723,6 +2740,7 @@ void RunForwardGraphScreenPositionTest() {
 
     bgfx::destroy(gradientTexture);
     bgfx::destroy(sampler);
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -2784,6 +2802,7 @@ void RunForwardGraphPixelPositionTest() {
 
     bgfx::destroy(gradientTexture);
     bgfx::destroy(sampler);
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -2836,6 +2855,9 @@ void RunForwardGraphObjectSpaceTest() {
     Require(objectProbe.r > worldProbe.r + 40U,
         "KBMAT-MAT76: ObjectPosition.x (object origin in world) must differ from per-fragment WorldPosition.x");
 
+    bgfx::destroy(worldProgram);
+    bgfx::destroy(objectProgram);
+    bgfx::destroy(localProgram);
     harness.Shutdown();
 }
 
@@ -3108,6 +3130,7 @@ void RunForwardGraphSamplerStateTest() {
 
     bgfx::destroy(texture);
     bgfx::destroy(sampler);
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -3161,6 +3184,7 @@ void RunForwardGraphTransparentBlendTest() {
     Require(opaquePixel.b > blendedPixel.b,
         "KBMAT-MAT80: the opaque draw must be fuller material color than the half-blended draw");
 
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -3223,6 +3247,8 @@ void RunForwardGraphWorldPositionOffsetTest() {
     Require(fixedPixel.r > wpoPixel.r + 60U,
         "KBMAT-MAT81: WorldPositionOffset must move geometry — the offset uncovers the left-edge pixel (background shows)");
 
+    bgfx::destroy(wpoProgram);
+    bgfx::destroy(fixedProgram);
     harness.Shutdown();
 }
 
@@ -3290,6 +3316,8 @@ void RunForwardGraphCustomizedUv0Test() {
 
     bgfx::destroy(texture);
     bgfx::destroy(sampler);
+    bgfx::destroy(customUvProgram);
+    bgfx::destroy(fixedProgram);
     harness.Shutdown();
 }
 
@@ -3344,6 +3372,8 @@ void RunForwardGraphDisplacementVertexOutputTest() {
     Require(fixedPixel.r > displacedPixel.r + 60U,
         "KBMAT-MAT67: Displacement must move geometry in the vertex stage");
 
+    bgfx::destroy(displacedProgram);
+    bgfx::destroy(fixedProgram);
     harness.Shutdown();
 }
 
@@ -4279,6 +4309,7 @@ void RunForwardGraphMaterialAttributesTest() {
     Require(pixel.b > pixel.r + 40U && pixel.b > pixel.g + 40U,
         "KBMAT-MAT36: a blue base color carried through Make->Break MaterialAttributes must still render blue-dominant");
 
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -4337,6 +4368,7 @@ void RunForwardGraphBlendAttributesTest() {
     Require(pixel.r > 40U && pixel.b > 40U && pixel.g + 30U < pixel.r,
         "KBMAT-MAT36B: blending red and blue attributes at 0.5 must render purple (both red and blue present, little green)");
 
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -4388,6 +4420,7 @@ void RunForwardGraphGetSetAttributesTest() {
     Require(pixel.b > pixel.r + 40U && pixel.b > pixel.g + 40U,
         "KBMAT-MAT36C: SetMaterialAttributes must override baseColor to blue and GetMaterialAttributes must read it back");
 
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -4432,6 +4465,7 @@ void RunForwardGraphMaterialOutputAttributesTest() {
     Require(pixel.g > pixel.r + 40U && pixel.g > pixel.b + 40U,
         "KBMAT-MAT36D: a green MaterialAttributes set wired into MaterialOutput.attributes must render green");
 
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -4480,7 +4514,9 @@ void RunForwardGraphShadingModelTest() {
         Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT37: shading model graph must cook");
         const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *result.artifact);
         Require(bgfx::isValid(program), "KBMAT-MAT37: shading model graph program must link");
-        return ForwardRenderHarness::ProbeAt(harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE), 32U, 32U);
+        const auto pixel = ForwardRenderHarness::ProbeAt(harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE), 32U, 32U);
+        bgfx::destroy(program);
+        return pixel;
     };
 
     const ForwardRenderProbe litPixel = render("lit", baseDir / "lit");
@@ -4542,7 +4578,9 @@ void RunForwardGraphMaskedDiscardTest() {
             "KBMAT-MAT38M: the masked wrapper must contain a clip/discard");
         const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *result.artifact);
         Require(bgfx::isValid(program), "KBMAT-MAT38M: masked graph program must link");
-        return ForwardRenderHarness::ProbeAt(harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, UINT32_MAX, blueBackground, 0U), 32U, 32U);
+        const auto pixel = ForwardRenderHarness::ProbeAt(harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.0F, UINT32_MAX, blueBackground, 0U), 32U, 32U);
+        bgfx::destroy(program);
+        return pixel;
     };
 
     const ForwardRenderProbe keptPixel = render("1 0 0 0.8", baseDir / "kept");
@@ -4615,6 +4653,7 @@ void RunForwardGraphBlendModeCompositeTest() {
     Require(holdout.r < 40U && holdout.g > 90U && holdout.g < 180U && holdout.b < 40U,
         "KBMAT-MAT38C: alpha holdout must scale the background by (1-alpha) without adding source color");
 
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -4725,7 +4764,9 @@ void RunForwardGraphStaticSwitchTest() {
         Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT39: static switch graph must cook");
         const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *result.artifact);
         Require(bgfx::isValid(program), "KBMAT-MAT39: static switch graph program must link");
-        return ForwardRenderHarness::ProbeAt(harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE), 32U, 32U);
+        const auto pixel = ForwardRenderHarness::ProbeAt(harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE), 32U, 32U);
+        bgfx::destroy(program);
+        return pixel;
     };
 
     const ForwardRenderProbe truePixel = render("true", baseDir / "on");
@@ -4785,7 +4826,9 @@ void RunForwardGraphVariantSwitchesTest() {
         Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT52: variant switch graph must cook");
         const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *result.artifact);
         Require(bgfx::isValid(program), "KBMAT-MAT52: variant switch graph program must link");
-        return ForwardRenderHarness::ProbeAt(harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE), 32U, 32U);
+        const auto pixel = ForwardRenderHarness::ProbeAt(harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE), 32U, 32U);
+        bgfx::destroy(program);
+        return pixel;
     };
 
     const RenderMaterialGraphDocument qualityGraph = buildSwitchGraph(RenderMaterialGraphNodeKind::QualitySwitch, "low", "high");
@@ -4939,6 +4982,10 @@ void RunForwardGraphCoordinateNodesTest() {
 
     bgfx::destroy(gradientTexture);
     bgfx::destroy(sampler);
+    bgfx::destroy(rotatorProgram);
+    bgfx::destroy(pannerProgram);
+    bgfx::destroy(tileSmallProgram);
+    bgfx::destroy(tileOneProgram);
     harness.Shutdown();
 }
 
@@ -5116,6 +5163,7 @@ void RunForwardGraphNoiseRendersTest() {
     Require(maxLum - minLum > 30,
         "KBMAT-MAT50: the Noise field must produce visibly different brightness across the surface (spatial variation)");
 
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -5271,6 +5319,7 @@ void RunForwardGraphMaterialParameterCollectionRendersTest() {
         "KBMAT-MAT50-MPC: Live MPC uniform update must render a different green-dominant pixel without a new shader");
 
     bgfx::destroy(tintUniform);
+    bgfx::destroy(program);
     harness.Shutdown();
 }
 
@@ -7191,6 +7240,14 @@ void RunForwardGraphPixelNormalWorldSpaceTest() {
 #endif
 
 } // namespace
+
+void RunGraphProgramLifetimeTests() {
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    RunForwardGraphRenderTest();
+#else
+    Require(false, "Graph program lifetime validation requires the shader compiler and a real GPU");
+#endif
+}
 
 void RunGraphForwardGpuRenderTests() {
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
