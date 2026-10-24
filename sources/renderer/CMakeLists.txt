@@ -887,7 +887,8 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         endif()
     endif()
 
-    add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)
+    # The complete node/profile sweep has separate bounded processes below.
+    add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests> renderer-integration)
     set_tests_properties(kb_renderer_tests PROPERTIES
         FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
     if(MSVC AND TARGET kb_test_process_error_tests)
@@ -927,6 +928,13 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         cmake_path(CONVERT "${KB_GRAPH_SHADERC_TOOL}" TO_CMAKE_PATH_LIST _kb_graph_shaderc_tool NORMALIZE)
     endif()
     if(_kb_graph_shaderc_tool)
+        foreach(_kb_graph_node_shard RANGE 0 3)
+            add_test(NAME kb_renderer_graph_shader_node_cook_${_kb_graph_node_shard}
+                COMMAND $<TARGET_FILE:kb_renderer_tests> graph-shader-node-cook ${_kb_graph_node_shard} 4)
+            set_tests_properties(kb_renderer_graph_shader_node_cook_${_kb_graph_node_shard} PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;shader;headless" TIMEOUT 900
+                FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
+        endforeach()
         if(WIN32)
             add_test(NAME kb_renderer_graph_program_lifetime
                 COMMAND $<TARGET_FILE:kb_renderer_tests> graph-program-lifetime)

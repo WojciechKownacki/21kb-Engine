@@ -4,6 +4,8 @@
 #include <bgfx/bgfx.h>
 
 #include <chrono>
+#include <charconv>
+#include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <exception>
@@ -34,6 +36,8 @@ std::size_t PeakCommittedBytes() noexcept {
 
 void RunGraphForwardGpuRenderTests();
 void RunGraphProgramLifetimeTests();
+void RunGraphShaderArtifactCacheTests();
+void RunGraphShaderNodeCookTests(std::uint32_t shard, std::uint32_t shardCount);
 void RunSceneLightGridTests();
 void RunSceneLightGridGpuTests();
 void RunSkinnedMeshGpuReadbackTests();
@@ -163,6 +167,19 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "graph-shader-artifact") {
         kb::render::tests::RunGraphShaderArtifactCookTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc >= 2 && std::string_view{ argv[1] } == "graph-shader-node-cook") {
+        if (argc != 4) return EXIT_FAILURE;
+        const auto parse = [](std::string_view value, std::uint32_t& output) {
+            const auto result = std::from_chars(value.data(), value.data() + value.size(), output);
+            return result.ec == std::errc{} && result.ptr == value.data() + value.size();
+        };
+        std::uint32_t shard = 0U;
+        std::uint32_t count = 0U;
+        if (!parse(argv[2], shard) || !parse(argv[3], count) || count == 0U || count > 64U || shard >= count)
+            return EXIT_FAILURE;
+        kb::render::tests::RunGraphShaderNodeCookTests(shard, count);
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "shader-manifest") {
@@ -385,7 +402,8 @@ int main(int argc, char** argv) {
         kb::render::tests::RunSceneLightGridGpuTests();
         return EXIT_SUCCESS;
     }
-    if (argc != 1) {
+    const bool integrationOnly = argc == 2 && std::string_view{ argv[1] } == "renderer-integration";
+    if (argc != 1 && !integrationOnly) {
         return EXIT_FAILURE;
     }
     RunSuite("RunSceneLightGridTests", &kb::render::tests::RunSceneLightGridTests);
@@ -400,7 +418,8 @@ int main(int argc, char** argv) {
     RunSuite("RunRuntimeAssetShaderProviderTests", &kb::render::tests::RunRuntimeAssetShaderProviderTests);
     RunSuite("RunRuntimeAssetPackValidationTests", &kb::render::tests::RunRuntimeAssetPackValidationTests);
     RunSuite("RunRenderMaterialTypeSchemaTests", &kb::render::tests::RunRenderMaterialTypeSchemaTests);
-    RunSuite("RunGraphShaderArtifactCookTests", &kb::render::tests::RunGraphShaderArtifactCookTests);
+    RunSuite(integrationOnly ? "RunGraphShaderArtifactCacheTests" : "RunGraphShaderArtifactCookTests",
+        integrationOnly ? &kb::render::tests::RunGraphShaderArtifactCacheTests : &kb::render::tests::RunGraphShaderArtifactCookTests);
     RunSuite("RunMaterialProgramRegistryTests", &kb::render::tests::RunMaterialProgramRegistryTests);
     RunSuite("RunSceneMeshPassProgramSelectionTests", &kb::render::tests::RunSceneMeshPassProgramSelectionTests);
     RunSuite("RunRendererCapabilityReportTests", &kb::render::tests::RunRendererCapabilityReportTests);
