@@ -15,9 +15,18 @@ when the two disagree.
 The Windows MSVC job also runs the script API compatibility check
 (`kb_cli api-check`) and the packaging script tests
 (`python -m unittest discover -s scripts/tests`). The Windows MSVC ASan job
-runs selected CTest cases from its nine targets, including UI frames, scene and
-ECS hierarchy limits, shader resource lifetimes, native reads and process errors.
+runs selected CTest cases from its nine targets, including UI frames, exact scalar
+and batch transform comparisons, scene and ECS hierarchy limits, shader resource
+lifetimes, native reads and process errors.
 The sanitized jobs skip tests labelled `performance`.
+
+`kb_engine_tests scene-transform-golden` runs the transform regression directly.
+For flat, overlay, observed-component and parented scenes it compares batch writes
+with ordered scalar writes, bit for bit, including versions, interpolation and
+render-proxy updates before and after each frame. It also checks the recorded
+golden hashes and compares transform-pass writes with batch writes. Input and
+state hashes are logged separately to diagnose fixture math differences between
+toolchains; a changed input hash does not turn a failed golden check into a pass.
 
 ## Other jobs
 

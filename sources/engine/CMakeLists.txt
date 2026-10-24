@@ -1914,6 +1914,8 @@ if(BUILD_TESTING)
     )
 
     add_test(NAME kb_engine_scene_ui COMMAND $<TARGET_FILE:kb_engine_tests> scene-ui)
+    add_test(NAME kb_engine_scene_transform_golden COMMAND $<TARGET_FILE:kb_engine_tests> scene-transform-golden)
+    set_tests_properties(kb_engine_scene_transform_golden PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
     set_tests_properties(kb_engine_scene_ui PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300 RUN_SERIAL TRUE)
     add_test(NAME kb_engine_tests COMMAND $<TARGET_FILE:kb_engine_tests>)
     set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 1500)

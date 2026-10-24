@@ -1944,7 +1944,7 @@ public:
 
 // How the scenario writes the movers: SetMany with the state hashed before and after every Update (the golden
 // hash), SetMany or a transform pass with the state hashed after every Update only.
-enum class TransformGoldenWrites { SetMany, SetManyAfterUpdate, Pass };
+enum class TransformGoldenWrites { SetMany, Single, SetManyAfterUpdate, Pass };
 
 std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind, TransformGoldenWrites writes = TransformGoldenWrites::SetMany) {
     kb::ecs::WorldConfig config{};
@@ -2010,6 +2010,7 @@ std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind, TransformGol
         return found == objects.end() ? UINT64_MAX : static_cast<std::uint64_t>(found - objects.begin());
     };
     TransformGoldenHash hash;
+    TransformGoldenHash inputHash;
     const auto hashState = [&](bool afterUpdate) {
         for (const kb::scene::SceneEntity entity : objects) {
             const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(entity);
@@ -2047,7 +2048,7 @@ std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind, TransformGol
         }
         written = movers;
         // the comparison writes each row once, and the one written twice before the batch (the pass composes it)
-        const bool once = writes != TransformGoldenWrites::SetMany;
+        const bool once = writes != TransformGoldenWrites::SetMany && writes != TransformGoldenWrites::Single;
         if (frame == 5 && !once) written.push_back(movers[1]);
         if (once) scene.Transforms().Set(movers[2], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(frame), 3.0F, 0.0F } });
         batch.resize(written.size());
@@ -2057,6 +2058,9 @@ std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind, TransformGol
             value = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(index % 97) + std::sin(phase), 0.5F, static_cast<float>(index / 97) + std::cos(phase) } };
             if (index % 2U == 1U) value.localRotation = kb::scene::Quat{ 0.0F, std::sin(phase * 0.5F), 0.0F, std::cos(phase * 0.5F) };
             if (index % 7U == 0U) value.localScale = kb::scene::Vec3{ 1.5F, 1.5F, 1.5F };
+            inputHash.Vec(value.localPosition);
+            inputHash.Rotation(value.localRotation);
+            inputHash.Vec(value.localScale);
         }
         if (writes == TransformGoldenWrites::Pass) {
             std::unordered_map<kb::scene::SceneEntity::IdType, std::size_t> batchIndex;
@@ -2073,6 +2077,10 @@ std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind, TransformGol
                 return scene.Entities().IsAlive(kb::scene::SceneEntity{ entry.first });
             }));
             kb::tests::Require(stats.rowsWritten == alive, "Transform pass did not write every listed live row");
+        } else if (writes == TransformGoldenWrites::Single) {
+            for (std::size_t index = 0U; index < written.size(); ++index) {
+                scene.Transforms().Set(written[index], batch[index]);
+            }
         } else {
             scene.Transforms().SetMany(written, batch);
         }
@@ -2101,10 +2109,12 @@ std::uint64_t RunTransformGoldenScenario(TransformGoldenScene kind, TransformGol
         for (std::size_t index = 0U; index < prefabRoots.size(); ++index) {
             scene.Transforms().Set(prefabRoots[index], kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ static_cast<float>(frame + index), 0.0F, 4.0F } });
         }
-        if (writes == TransformGoldenWrites::SetMany) hashState(false);
+        if (!once) hashState(false);
         static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
         hashState(true);
     }
+    std::cout << "transform_golden scene=" << static_cast<int>(kind) << " writes=" << static_cast<int>(writes)
+              << " input_hash=0x" << std::hex << inputHash.value << " state_hash=0x" << hash.value << std::dec << '\n';
     return hash.value;
 }
 
@@ -2119,12 +2129,16 @@ void RunTransformGoldenHashTest() {
     } };
     bool matches = true;
     for (const auto& [kind, value] : expected) {
+        const std::uint64_t scalar = RunTransformGoldenScenario(kind, TransformGoldenWrites::Single);
         const std::uint64_t actual = RunTransformGoldenScenario(kind);
+        kb::tests::Require(scalar == actual,
+            "Batch transform state must match ordered scalar writes before and after every update");
         if (actual != value) {
             std::cerr << "transform golden scene " << static_cast<int>(kind) << " hash 0x" << std::hex << actual << std::dec << '\n';
             matches = false;
         }
     }
+    std::cout << "transform_golden_scalar_reference scenes=4 passed" << std::endl;
     kb::tests::Require(matches, "Transform state of a fixed-dt run differs from the recorded golden hash");
 }
 
@@ -2328,6 +2342,11 @@ void RunSceneTransformLookupTests() {
     RunSceneTransformLookupLifetimeAndFallbackTest();
 }
 
+void RunSceneTransformGoldenTests() {
+    RunTransformGoldenHashTest();
+    RunTransformPassMatchesSetManyTest();
+}
+
 void RunSceneSystemTransformSyncTests() {
     if (EnvironmentFlagEnabled("KB_SCENE_RUNTIME_STRESS")) {
         RunSceneRuntimeHeadlessStress();
@@ -2359,8 +2378,7 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneSystemPhysicsBodyQueryAccessTest();
     RunSceneBulkMarkModifiedTest();
     RunSceneBulkCreateObjectsTest();
-    RunTransformGoldenHashTest();
-    RunTransformPassMatchesSetManyTest();
+    RunSceneTransformGoldenTests();
     RunTransformPassContractTest();
     RunSceneRuntimeGrowingCrowdUpdateAllocationTest();
     RunSceneTransformSetManyMatchesPerEntityWritesTest();

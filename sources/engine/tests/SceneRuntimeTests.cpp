@@ -22,6 +22,7 @@ void RunPhysicsReplayOnlyTest();
 void RunPhysicsStepSpikeBenchmark();
 void RunAgentsFrameBenchmark();
 void RunSceneUIBuildFrameProfile();
+void RunSceneTransformGoldenTests();
 }
 
 namespace {
@@ -106,6 +107,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneSystemTransformSyncTests();
     } else if (suite == "scene-transform-lookup") {
         kb::tests::RunSceneTransformLookupTests();
+    } else if (suite == "scene-transform-golden") {
+        kb::tests::RunSceneTransformGoldenTests();
     } else if (suite == "scene-single-create") {
         kb::tests::RunSceneSingleCreateObjectAllocationTest();
     } else if (suite == "scene-prefab") {
