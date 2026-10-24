@@ -177,6 +177,10 @@ through the CLI, cooks the game, and closes and reopens one owned browser
 profile after each mutation. It verifies two save slots and a settings slot,
 independent deletion of same-name save/settings files, missing and invalid
 names, active-document preservation and recreation of a deleted slot. All
-five sessions must render with hardware and compiled shaders; two GPU captures
+five normal sessions must render with hardware and compiled shaders; two GPU captures
 check the button. A working-filesystem removal without persistence after
 restart fails the test.
+Two additional sessions abort real IndexedDB deletion transactions, once per
+domain. Native synchronization must fail, the next browser restart must retain
+the preceding committed files, and the normal button must then delete them
+successfully. These sessions also require hardware contexts and compiled shaders.

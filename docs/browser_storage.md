@@ -99,13 +99,18 @@ player must retain a live hardware context with compiled shaders. This checks
 independent named files; it does not merge concurrent edits within one slot.
 
 `sources/game/tests/web/run_game_storage_delete_tests.py` authors and cooks a
-native button with the public CLI. Five complete browser sessions reuse one
+native button with the public CLI. Five normal browser sessions reuse one
 profile and origin to verify creation, save deletion, settings deletion and
 recreation. Every restart reads the exact expected native slot values. Deletion
 must preserve the active document and unrelated files; missing files return
 false and invalid slot names are refused. Hardware contexts and two actual GPU
 captures remain required. The test reads through the normal save API rather
 than inspecting or editing private filesystem state.
+For both save and settings deletion, it also aborts an actual IndexedDB
+transaction. The working file must be removed while synchronization reports
+`Failed`; reopening must recover the previous committed files. A subsequent
+normal button action must persist the deletion. An aborted deletion may never
+report `Clean` for that attempted change.
 
 Different URL directories must remain isolated. Missing hardware, unexpected
 fallback, failed checks and timeouts fail the test. Fault injection is limited

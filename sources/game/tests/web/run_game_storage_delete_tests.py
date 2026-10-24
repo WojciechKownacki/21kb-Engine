@@ -10,7 +10,7 @@ def author_fixture(args, root):
         script_source=Path(__file__).with_name("fixtures") / "StorageDelete.lua")
 
 
-def verify(value, phase):
+def verify(value, phase, status="Clean"):
     expected = [
         (False, False, False, "", "", ""),
         (True, True, True, "first", "second", "settings"),
@@ -20,13 +20,35 @@ def verify(value, phase):
     ][phase]
     observed = tuple(value[name] for name in
         ["first", "second", "settings", "firstValue", "secondValue", "settingsValue"])
-    require(value["phase"] == phase and observed == expected and value["status"] == "Clean",
+    require(value["phase"] == phase and observed == expected and value["status"] == status,
         "Native slot contents differ at phase " + str(phase) + ": " + str(value))
 
 
 def run_cases(args, root, report, origin):
     profile = root / "profile"
     for phase in range(5):
+        if phase in [1, 2]:
+            with BrowserSession(args, root, profile, report, origin, "abort-" + str(phase)) as case:
+                verify(case.ready(), phase)
+                case.client.evaluate("window.kbDeletionAborts=0;"
+                    "window.kbDeletionOriginalTransaction=IDBDatabase.prototype.transaction;"
+                    "IDBDatabase.prototype.transaction=function(...args){"
+                    "const tx=kbDeletionOriginalTransaction.apply(this,args);"
+                    "if(args[1]==='readwrite'){"
+                    "tx.addEventListener('abort',()=>++kbDeletionAborts);"
+                    "queueMicrotask(()=>tx.abort());}return tx;}")
+                cursor = len(case.states())
+                case.click_save()
+                failed = case.wait("interrupted native deletion reports failure", lambda state:
+                    state["phase"] == phase + 1 and state["status"] == "Failed", cursor)
+                verify(failed, phase + 1, status="Failed")
+                require(failed["deleted"] and case.client.evaluate("kbDeletionAborts") == 1,
+                    "The deletion did not abort one real browser transaction: " + str(failed))
+                require(not any(state["phase"] == phase + 1 and state["status"] == "Clean"
+                    for state in case.states()[cursor:]), "An aborted deletion reported Clean")
+                report.setdefault("graphics", []).append(dict(phase=phase, aborted=True, context=case.graphics()))
+                report["observations"].append(dict(check="real deletion transaction abort preserves committed files",
+                    phase=phase, workingState=failed, abortedTransactions=1))
         with BrowserSession(args, root, profile, report, origin, "phase-" + str(phase)) as case:
             value = case.ready()
             verify(value, phase)
