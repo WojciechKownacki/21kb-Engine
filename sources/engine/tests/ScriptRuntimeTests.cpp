@@ -16529,6 +16529,38 @@ function Destroyed(self, dt) SetShared("wasDestroyed", true) end
         "DispatchShutdownLifecycle must return false when no scene system is installed");
 }
 
+void RunHostShutdownLifecycleReportsErrorsTest() {
+    ResetTestRoot();
+    const auto projectRoot = TestRoot() / "ShutdownDiagnostics";
+    WriteTextFile(projectRoot / "Assets/Shutdown.lua", R"(
+function Tick(self, dt) end
+function Destroyed(self, dt) error("shutdown fault control") end
+)");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 1U,
+        "Shutdown error script asset discovery failed");
+    const auto* asset = scene.Assets().Manager().Registry().FindByPath("/Game/Shutdown.lua");
+    kb::tests::Require(asset != nullptr, "Shutdown error script asset was not registered");
+    kb::script::ScriptRuntimeHost host{ scene, {.disableFailingBehaviours = true} };
+    const auto object = scene.Entities().CreateObject({.name = "ShutdownError"});
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = asset->id.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    kb::tests::Require(host.Succeeded() && host.InstallSceneSystem(), "Shutdown error fixture setup failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(host.DrainSceneSystemDiagnostics().empty(), "Shutdown fixture failed before shutdown");
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F), "Shutdown error fixture was not dispatched");
+    const auto errors = host.DrainSceneSystemDiagnostics();
+    kb::tests::Require(std::any_of(errors.begin(), errors.end(), [](const std::string& error) {
+        return error.find("ShutdownError") != std::string::npos &&
+            error.find("shutdown fault control") != std::string::npos;
+    }), "Shutdown Lua error must reach the normal host diagnostic queue with its entity");
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F) && host.DrainSceneSystemDiagnostics().empty(),
+        "Repeated shutdown must not repeat the terminal error");
+}
+
 // Exposed-variable override end to end: an editor-authored per-instance override
 // stored on the scene (delta-over-default) must be seeded into the Lua runtime
 // before Created and observed by the script, instead of the @expose default.
@@ -16742,6 +16774,7 @@ void RunScriptRuntimeTests() {
     RunTransformHierarchyEdgeCaseTest();
     RunWorldDestroyDeferredFlagTest();
     RunHostShutdownLifecycleFiresDestroyedTest();
+    RunHostShutdownLifecycleReportsErrorsTest();
     RunExposedVariableOverrideSeedingTest();
     RunInspectorTableRuntimeTest();
     RunWorldActiveStateTest();

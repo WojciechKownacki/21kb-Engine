@@ -23,6 +23,8 @@ endif()
 
 add_library(kb_game_core STATIC
     src/GameProjectRuntime.cpp
+    src/GameRuntimeDiagnostics.cpp
+    src/private/GameRuntimeDiagnostics.hpp
     src/GameScriptLog.cpp
     src/private/GameScriptLog.hpp
     src/ParticleRuntimeDiagnostics.cpp

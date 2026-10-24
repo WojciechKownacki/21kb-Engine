@@ -46,6 +46,7 @@ public:
     [[nodiscard]] bool Tick(
         kb::render::Renderer& renderer,
         float deltaSeconds,
+        std::ostream& diagnostics,
         bool* frameSubmitted = nullptr);
     [[nodiscard]] bool Shutdown(kb::render::Renderer& renderer, std::ostream& diagnostics);
 
@@ -57,6 +58,7 @@ private:
     std::unique_ptr<kb::scene::Scene> scene_;
     kb::script::ScriptModule* script_ = nullptr;
     bool scriptActive_ = false;
+    bool runtimeClean_ = true;
     RuntimeSceneFrameSync renderSceneSync_;
 };
 

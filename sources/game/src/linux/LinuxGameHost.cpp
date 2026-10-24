@@ -264,7 +264,7 @@ public:
                     surface_->Width(), surface_->Height());
             }
             bool frameSubmitted = false;
-            running = runtime_.Tick(renderer_, delta, &frameSubmitted);
+            running = runtime_.Tick(renderer_, delta, std::cerr, &frameSubmitted);
             if (frameSubmitted) {
                 ++frames;
             }

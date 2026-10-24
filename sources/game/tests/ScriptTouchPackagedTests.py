@@ -96,8 +96,21 @@ end
                  cwd=rejected.parent, expected=1)
     require("touch negative contact control" in output and "script error" in output,
             "Packaged negative control did not report its real script assertion")
+    script.write_text('''function Ready(self, dt)
+    Log("packaged shutdown control ready")
+end
+function Destroyed(self, dt)
+    error("packaged shutdown negative control")
+end
+''', encoding="utf-8")
+    shutdown_control = package("ShutdownControl")
+    output = run(shutdown_control, "--headless", "--frames=3", "--width=64", "--height=64",
+                 cwd=shutdown_control.parent, expected=1)
+    require("packaged shutdown control ready" in output and
+            "packaged shutdown negative control" in output and "script error" in output,
+            "Packaged shutdown did not report its real script error")
     report = dict(result="PASS", backend=backend[1], packagedFrames=3, nativeTouchContacts=0,
-                  negativeScriptExit=1,
+                  negativeScriptExit=1, negativeShutdownExit=1,
                   limitation="Package checks query availability and the empty snapshot; independent multi-contact semantics run in the engine script suite. This is not browser joystick/UI acceptance.")
     (root / "result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"PASS: cooked touch query script and negative control in actual packaged player; {root}")

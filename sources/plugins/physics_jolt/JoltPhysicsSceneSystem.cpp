@@ -1957,9 +1957,14 @@ private:
     }
 
     [[nodiscard]] static std::uint32_t WorkerThreadCount(const JoltPhysicsSceneSystemSettings& settings) noexcept {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+        static_cast<void>(settings);
+        return 0U;
+#else
         const unsigned int hardwareThreads = std::thread::hardware_concurrency();
         const auto available = hardwareThreads <= 1U ? 0U : static_cast<std::uint32_t>(hardwareThreads - 1U);
         return std::min(available, settings.workerThreadCount == 0U ? 8U : settings.workerThreadCount);
+#endif
     }
 
     void SynchronizeBodies(SceneSystemContext& context) {
@@ -2772,6 +2777,11 @@ private:
     // results before it synchronizes the world again; only the arrival of poses and contact events in
     // the scene shifts by one fixed step.
     void LaunchStep(float deltaSeconds) {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+        // Keep deferred publication, but finish the work here when the host has no threads.
+        stepDriver_.error = physicsSystem_.Update(
+            deltaSeconds, settings_.collisionSteps, &tempAllocator_, &jobSystem_);
+#else
         {
             std::lock_guard lock(stepDriver_.mutex);
             if (!stepDriver_.thread.joinable()) {
@@ -2782,6 +2792,7 @@ private:
             stepInFlight_.store(true, std::memory_order_release);
         }
         stepDriver_.wake.notify_one();
+#endif
     }
 
     void RunStepDriver() {

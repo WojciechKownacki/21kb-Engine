@@ -2,6 +2,7 @@
 #include "PackagedGameRuntime.hpp"
 #include "PackagedRuntimeModules.hpp"
 #include "RuntimeSceneFrameSync.hpp"
+#include "GameRuntimeDiagnostics.hpp"
 #include "AndroidGamepadInput.hpp"
 #include "AndroidTouchInput.hpp"
 
@@ -664,6 +665,11 @@ private:
             static_cast<float>(surface_.Height())));
         renderSceneSync_.BeforeUpdate(*scene_);
         static_cast<void>(scene_->Runtime().Update(deltaSeconds));
+        for (const std::string& error : kb::game::DrainGameRuntimeErrors(*scene_, scriptModule_)) {
+            LogError(error);
+            failed_ = true;
+        }
+        if (failed_) return;
         SetImeVisible(focused_ && scene_->UI().HasFocusedTextInput());
         FinalizeInputFrame();
         renderer_.SetFrameDeltaSeconds(deltaSeconds);
@@ -733,8 +739,15 @@ private:
             scriptModule_->Host() != nullptr) {
             if (!scriptModule_->Host()->DispatchShutdownLifecycle(0.0F)) {
                 LogError("script shutdown lifecycle could not be dispatched");
+                failed_ = true;
             }
             scriptShutdownDispatched_ = true;
+        }
+        if (scene_ != nullptr) {
+            for (const std::string& error : kb::game::DrainGameRuntimeErrors(*scene_, scriptModule_)) {
+                LogError(error);
+                failed_ = true;
+            }
         }
         ShutdownRenderer();
         scene_.reset();

@@ -3,6 +3,7 @@
 #include "RuntimeSceneFrameSync.hpp"
 #include "ParticleRuntimeDiagnostics.hpp"
 #include "GameScriptLog.hpp"
+#include "GameRuntimeDiagnostics.hpp"
 
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -613,13 +614,9 @@ int RunGame(const GameOptions& options) {
             static_cast<float>(window.Height())));
         renderSceneSync.BeforeUpdate(scene);
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
-        for (std::string& error : scene.Runtime().DrainSceneSystemErrors()) {
-            reportError("scene runtime error: " + std::move(error));
-        }
-        if (scriptActive) {
-            for (std::string& error : scriptModule->Host()->DrainSceneSystemDiagnostics()) {
-                reportError("script error: " + std::move(error));
-            }
+        for (std::string& error : kb::game::DrainGameRuntimeErrors(
+                 scene, scriptActive ? scriptModule : nullptr)) {
+            reportError(std::move(error));
         }
         const auto profileSimulationEnd = !options.profilePath.empty()
             ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
@@ -763,6 +760,10 @@ int RunGame(const GameOptions& options) {
     if (scriptActive && !scriptModule->Host()->DispatchShutdownLifecycle(0.0F)) {
         std::cerr << "kb_game: script shutdown lifecycle could not be dispatched\n";
         shutdownClean = false;
+    }
+    for (std::string& error : kb::game::DrainGameRuntimeErrors(
+             scene, scriptActive ? scriptModule : nullptr)) {
+        reportError(std::move(error));
     }
     hapticsBackend.StopAll();
     kb::input::InputHaptics::UnregisterBackend(scene, hapticsBackend);

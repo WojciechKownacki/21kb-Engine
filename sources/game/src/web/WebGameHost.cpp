@@ -360,7 +360,7 @@ private:
         }
         host->touches_.SetViewport(host->surface_.Width(), host->surface_.Height());
         bool frameSubmitted = false;
-        if (!host->runtime_.Tick(host->renderer_, delta, &frameSubmitted)) {
+        if (!host->runtime_.Tick(host->renderer_, delta, std::cerr, &frameSubmitted)) {
             host->frameInProgress_ = false;
             emscripten_cancel_main_loop();
             host->Shutdown();
@@ -480,7 +480,9 @@ private:
         touches_.Detach();
         SetTextInputActive(false);
         DestroyBrowserTextInput();
-        static_cast<void>(runtime_.Shutdown(renderer_, std::cerr));
+        if (!runtime_.Shutdown(renderer_, std::cerr)) {
+            SetBrowserStartupError("runtime-failed");
+        }
         if (renderer_.IsInitialized()) renderer_.Shutdown();
         if (pack_ != nullptr) pack_->Unmount();
         pack_.reset();
