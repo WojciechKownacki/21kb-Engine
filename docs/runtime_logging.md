@@ -122,6 +122,10 @@ cancellation, real tab focus changes and DPI/viewport resizing with actual GPU
 pixel checks on desktop Chrome. This uses desktop touch emulation; physical
 mobile browsers, the remaining browser/backend matrix and long-running
 acceptance remain separate requirements.
+The portable `sources/game/tests/web/run_game_touch_tests.py` runner creates and
+cooks this fixture through the CLI and retains native snapshots, trusted DOM
+events, package hashes and five GPU screenshots. Invocation and acceptance
+conditions are documented in `sources/game/tests/web/README.md`.
 
 The positive package also resizes an authored UI panel and reads its actual
 pixels. The browser test observes the framebuffer status of each real texture
