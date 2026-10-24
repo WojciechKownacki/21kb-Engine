@@ -7948,11 +7948,11 @@ void RunRendererSortsAlphaGpuParticlesTest() {
 #if defined(KB_21KB_PARTICLE_PLUGIN_PATH)
 // The whole particle chain in one process: an effect authored as a .kbvfx file is discovered and loaded by the
 // asset manager, the real particle provider (loaded as a module) simulates it in the scene runtime and routes
-// its emitter to the GPU queue, the renderer drains the queue, simulates and draws on a hidden D3D11 device,
+// its emitter to the GPU queue, the renderer drains the queue, simulates and draws on a hidden bgfx device,
 // and the pixels are read back. Particles leave the origin along +x at 4 m/s, so after one second the
 // right half of the image holds a bright line and the left half stays dark.
 std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingPlane = false, bool gpuPreferred = true,
-                                                               bool screenDepth = false, bool orderedMotion = false) {
+    bool screenDepth = false, bool orderedMotion = false, bgfx::RendererType::Enum backend = bgfx::RendererType::Direct3D11) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb_particle_file_to_pixel_" + std::to_string(GetCurrentProcessId()));
     std::error_code error;
@@ -8029,12 +8029,13 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
         .followTransform = true, .restartOnActivate = true });
 
     NativeTestSurface surface;
-    Require(surface.IsValid(), "File-to-pixel test could not create a hidden D3D11 surface");
+    Require(surface.IsValid(), "File-to-pixel test could not create a hidden surface");
     DisplayConfig config{};
     config.syncMode = DisplaySyncMode::Uncapped;
-    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(backend);
     Renderer renderer;
     Require(renderer.Initialize(surface, &config), "File-to-pixel test could not initialize the renderer");
+    Require(bgfx::getRendererType() == backend, "File-to-pixel test used an unexpected backend");
     renderer.SetRuntimeAssetDiscoveryEnabled(false);
     SceneRenderCamera camera{};
     bx::mtxLookAt(camera.view.data(), bx::Vec3{ 0.0F, 0.0F, -10.0F }, bx::Vec3{ 1.2F, 0.0F, 0.0F });
@@ -8093,8 +8094,8 @@ std::vector<std::uint8_t> RunRendererDrawsAuthoredParticleFileTest(bool killingP
 
     const double right = MeanBrightness(pixels, NativeTestSurface::kExtent, 20, 28, 60, 36);
     const double left = MeanBrightness(pixels, NativeTestSurface::kExtent, 0, 28, 8, 36);
-    std::fprintf(stderr, "file_to_pixel right=%.1f left=%.1f gpu_consumer=%d gpu_route=%d draws=%u cpu_particles=%zu%c",
-        right, left, consumer ? 1 : 0, gpuRoute ? 1 : 0, gpuDrawCalls, cpuParticles, 10);
+    std::fprintf(stderr, "file_to_pixel backend=%u right=%.1f left=%.1f gpu_consumer=%d gpu_route=%d draws=%u cpu_particles=%zu%c",
+        static_cast<unsigned>(backend), right, left, consumer ? 1 : 0, gpuRoute ? 1 : 0, gpuDrawCalls, cpuParticles, 10);
     Require(gpuRoute == gpuPreferred, "File-to-pixel test used an unexpected simulation route or fallback");
     Require(!gpuPreferred || cpuParticles == 0U, "GPU contact test retained CPU-simulated particles");
     if (killingPlane) {
@@ -8643,11 +8644,11 @@ void RunRendererParticleDepthAuthoringTest() {
 #endif
 }
 
-void RunRendererParticleMotionPixelsTest() {
+void RunRendererParticleMotionPixelsTest(bgfx::RendererType::Enum backend) {
 #if defined(_WIN32) && defined(KB_21KB_PARTICLE_PLUGIN_PATH)
-    const auto cpu = RunRendererDrawsAuthoredParticleFileTest(true, false, false, true);
-    const auto gpu = RunRendererDrawsAuthoredParticleFileTest(true, true, false, true);
-    const auto withoutFields = RunRendererDrawsAuthoredParticleFileTest(true, true);
+    const auto cpu = RunRendererDrawsAuthoredParticleFileTest(true, false, false, true, backend);
+    const auto gpu = RunRendererDrawsAuthoredParticleFileTest(true, true, false, true, backend);
+    const auto withoutFields = RunRendererDrawsAuthoredParticleFileTest(true, true, false, false, backend);
     Require(cpu.size() == gpu.size() && cpu.size() == withoutFields.size(), "Particle motion image extents changed");
     std::size_t mismatches = 0U;
     std::uint64_t difference = 0U;
@@ -8661,6 +8662,7 @@ void RunRendererParticleMotionPixelsTest() {
     Require(mismatches * 100U <= cpu.size(), "Ordered GPU motion and contact deaths changed the CPU image");
     Require(difference > 100U, "Ordered GPU fields did not change the rendered image");
 #else
+    static_cast<void>(backend);
     Require(false, "Particle motion pixel verification requires the Windows GPU host and particle provider");
 #endif
 }

@@ -1,5 +1,7 @@
 #include "RendererTestSupport.hpp"
 
+#include <bgfx/bgfx.h>
+
 #include <cstdlib>
 #include <cstdio>
 #include <exception>
@@ -60,8 +62,8 @@ void RunRendererVisibilityFeedbackTest();
 void RunEditorUIViewTransformValidationTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
 void RunRendererParticleContactDeathTest();
-void RunParticleGpuMotionTests(bool kernelOnly);
-void RunRendererParticleMotionPixelsTest();
+void RunParticleGpuMotionTests(bool kernelOnly, bgfx::RendererType::Enum backend);
+void RunRendererParticleMotionPixelsTest(bgfx::RendererType::Enum backend);
 void RunRendererParticleDepthAuthoringTest();
 void RunRendererParticleSortModesTest();
 void RunRendererScreenSpaceEffectTests();
@@ -252,9 +254,25 @@ int main(int argc, char** argv) {
             return EXIT_FAILURE;
         }
     }
-    if (argc == 2 && (std::string_view{argv[1]} == "particle-motion" || std::string_view{argv[1]} == "particle-motion-kernel")) {
-        kb::render::tests::RunParticleGpuMotionTests(std::string_view{argv[1]} == "particle-motion-kernel");
-        if (std::string_view{argv[1]} == "particle-motion") kb::render::tests::RunRendererParticleMotionPixelsTest();
+    if (argc >= 2 && (std::string_view{argv[1]} == "particle-motion" || std::string_view{argv[1]} == "particle-motion-kernel")) {
+        if ((argc != 2 && argc != 4) || (argc == 4 && std::string_view{argv[2]} != "--backend")) {
+            std::fputs("particle-motion expects [--backend d3d11|d3d12|vulkan|opengl]\n", stderr);
+            return EXIT_FAILURE;
+        }
+        auto backend = bgfx::RendererType::Direct3D11;
+        if (argc == 4) {
+            const std::string_view name{argv[3]};
+            if (name == "d3d11") backend = bgfx::RendererType::Direct3D11;
+            else if (name == "d3d12") backend = bgfx::RendererType::Direct3D12;
+            else if (name == "vulkan") backend = bgfx::RendererType::Vulkan;
+            else if (name == "opengl") backend = bgfx::RendererType::OpenGL;
+            else {
+                std::fputs("particle-motion received an unsupported backend\n", stderr);
+                return EXIT_FAILURE;
+            }
+        }
+        kb::render::tests::RunParticleGpuMotionTests(std::string_view{argv[1]} == "particle-motion-kernel", backend);
+        if (std::string_view{argv[1]} == "particle-motion") kb::render::tests::RunRendererParticleMotionPixelsTest(backend);
         return EXIT_SUCCESS;
     }
     if (argc == 2 && (std::string_view{ argv[1] } == "particle-contact-death" || std::string_view{ argv[1] } == "particle-collision-fallback")) {

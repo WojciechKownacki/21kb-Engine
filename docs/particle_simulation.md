@@ -103,8 +103,9 @@ bounce controls, reuse of a slot with the same timestamp, and removal of the
 plane. The particle editor exposes **Kill on contact** with Undo/Redo.
 The existing source and compiled cache formats preserve the flag; this change
 does not require an asset migration. This check also runs in the renderer's
-particle mesh suite. Other bgfx backends have compiled shader variants;
-these readback results establish execution on D3D11 only.
+particle mesh suite. This standalone billboard/mesh contact selector establishes
+D3D11 execution; the motion suite below also checks source contact death on
+additional bgfx backends.
 
 `kb_renderer_tests particle-motion` (CTest `kb_renderer_particle_motion`) also
 reads the actual GPU-written instance buffer through an RGBA32F compute image
@@ -120,8 +121,31 @@ It also verifies contact death in the actual render records and compares a
 mixed-field/contact effect's rendered image with CPU and no-field controls.
 `particle-motion-kernel` exercises the same operation cases with direct GPU
 commands, independently of provider routing. Both require a real GPU host;
-unavailable support fails rather than passing as skipped. D3D11 is the verified
-backend; compiled variants alone do not establish other backend results.
+unavailable support fails rather than passing as skipped. Append
+`--backend d3d11`, `--backend d3d12`, `--backend vulkan` or `--backend opengl`
+to select the actual bgfx backend. The command requires that backend in both
+its numerical host and every CPU/GPU/control pixel host. The default CTest
+selection remains D3D11. Unsupported names or malformed options fail before
+GPU initialization.
+
+The full `particle-motion` selector passed on Windows x64 Release with all four
+backends. Each run includes 14 world-space cases and four transformed local
+cases, native buffer capture cross-checked with compute/texture readback,
+contact death, resource rejection/retry, missing depth and mixed-motion/contact
+billboard pixel comparison. Maximum absolute errors after 60 fixed steps were:
+
+| bgfx backend | Position error (m) | Velocity error (m/s) | RGB channel values above two-byte image tolerance |
+| --- | ---: | ---: | ---: |
+| D3D11 | 2.122e-05 | 4.256e-05 | 99 |
+| D3D12 | 2.062e-05 | 5.144e-05 | 99 |
+| Vulkan | 2.122e-05 | 4.256e-05 | 99 |
+| OpenGL | 2.122e-05 | 4.363e-05 | 99 |
+
+The existing 0.001 m / 0.003 m/s numerical tolerances and one-percent RGBA-channel
+image bound were used for every backend. The no-field control differed by
+10,725 channel levels in each run. These are source-runtime billboard results;
+mesh-specific contact pixels and packaged execution remain verified on D3D11.
+The performance measurements below also remain D3D11-specific.
 
 `Renderer::GpuParticleDraws(scene)` exposes the last dispatched GPU instance
 buffers with their instance/emitter keys and requested buffer bytes. Instance
@@ -254,21 +278,21 @@ GPU timestamp coverage and process counters, not frame wall time as CPU time.
 
 The source-profile execution/readback/timestamp smoke check also passed with
 the repeated-field/contact source on Windows bgfx D3D12, Vulkan and OpenGL.
-Those checks do not extend the D3D11 numerical/pixel parity result or these
-measurements to other backends. Packaged execution checks below cover D3D11.
+Numerical and pixel parity are verified separately by the selectable motion
+suite above. The timing/memory tables and packaged execution checks below
+cover D3D11.
 Live state-buffer rejection and retry checks are described below.
 
 | bgfx backend | Executed verification | Remaining scope |
 | --- | --- | --- |
 | D3D11 | CPU/GPU numerical parity, source and packaged buffer/pixel readback, resource rejection/retry, timing and memory | Other hosts and the complete release gate |
-| D3D12, Vulkan, OpenGL | Windows source CLI routing, native buffer capture and GPU timestamp smoke checks | Numerical/pixel parity, packaged execution and representative measurements |
+| D3D12, Vulkan, OpenGL | Source CPU/GPU numerical parity, native and independent readback, mixed-motion/contact billboard pixels, resource rejection/retry, CLI timestamp smoke checks | Packaged execution, mesh-specific contact pixels, representative measurements and other hosts |
 | Metal, GLES | Compiled shader variants | Runtime execution and parity |
 | WebGPU | Required package kernel closure represented | Shader/runtime execution and parity |
 
-These results verify contact death and repeated ordered motion on D3D11. They
-are not a full platform release sign-off; general CI failures remain separate
-open release work. Shader compilation and CPU fallback do not count as GPU
-execution evidence.
+These source checks verify contact death and repeated ordered motion on four
+bgfx backends. Platform release validation still has unresolved CI failures.
+Shader compilation and CPU fallback do not count as GPU execution evidence.
 
 Packaged Windows runtimes accept `--particle-diagnostics --headless --frames=N`
 for bounded particle verification. This explicit diagnostic mode advances the

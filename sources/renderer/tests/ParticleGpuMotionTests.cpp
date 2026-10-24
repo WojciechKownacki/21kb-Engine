@@ -558,15 +558,16 @@ void VerifyRejectedStateUpdates() {
 #endif
 } // namespace
 
-void RunParticleGpuMotionTests(bool kernelOnly) {
+void RunParticleGpuMotionTests(bool kernelOnly, bgfx::RendererType::Enum backend) {
 #if defined(_WIN32) && defined(KB_21KB_PARTICLE_PLUGIN_PATH)
     MotionSurface surface;
     DisplayConfig config;
     config.syncMode = DisplaySyncMode::Uncapped;
-    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(backend);
     Renderer renderer;
-    Require(surface.NativeWindowHandle() != nullptr && renderer.Initialize(surface, &config), "Real bgfx D3D11 device unavailable");
-    Require(bgfx::getRendererType() == bgfx::RendererType::Direct3D11, "Particle GPU motion used an unexpected backend");
+    Require(surface.NativeWindowHandle() != nullptr && renderer.Initialize(surface, &config), "Requested real bgfx device unavailable");
+    Require(bgfx::getRendererType() == backend, "Particle GPU motion used an unexpected backend");
+    std::fprintf(stderr, "particle_motion_backend verified=%s\n", bgfx::getRendererName(bgfx::getRendererType()));
     {
         MotionReadback readback;
         VerifyNativeReadbackBounds();
@@ -636,6 +637,7 @@ void RunParticleGpuMotionTests(bool kernelOnly) {
     renderer.Shutdown();
 #else
     static_cast<void>(kernelOnly);
+    static_cast<void>(backend);
     Require(false, "Particle GPU motion verification requires the Windows GPU host and particle provider");
 #endif
 }
