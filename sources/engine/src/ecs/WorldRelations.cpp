@@ -151,6 +151,14 @@ void World::SetParentsForNewEntitiesKnownAcyclic(std::span<const Entity> childre
     }
 
     ValidateStructuralChangeAllowed("SetParentsForNewEntitiesKnownAcyclic");
+    const auto depth = ValidateNewEntityParentBatchDepth(world_, children, parents);
+    if (depth == NewEntityParentBatchDepth::RequiresGeneralAssignment) {
+        SetParents(children, parents);
+        return;
+    }
+    if (depth == NewEntityParentBatchDepth::Rejected) {
+        throw std::invalid_argument("New-entity parent batch exceeds the supported hierarchy depth or contains a cycle");
+    }
     const std::size_t added = RelationStorage::AddKnownAlivePairs(world_, children, EcsChildOf, parents);
     if (added > 0U) {
         InvalidateQueryPlansForArchetypeChange(nullptr, nullptr);

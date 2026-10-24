@@ -1,5 +1,6 @@
 #include "TestSupport.hpp"
 #include "engine/ecs/World.hpp"
+#include "engine/ecs/CommandBuffer.hpp"
 #include "ecs/relation/HierarchyDepthGuard.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -11,6 +12,7 @@
 #include "scene/SceneState.hpp"
 
 #include <iostream>
+#include <algorithm>
 #include <array>
 #include <vector>
 #include <stdexcept>
@@ -195,6 +197,122 @@ void RunPrefabHierarchyDepthTests() {
     kb::scene::Scene scene;
     kb::tests::Require(!scene.Prefabs().Register("ExcessiveDepth", base).IsValid(),
         "A prefab exceeding the standalone hierarchy depth limit must be refused during registration");
+}
+
+void RunEcsBatchHierarchyDepthTests() {
+    struct Marker { std::uint32_t index; };
+    constexpr std::uint32_t depthLimit = 8192U;
+    for (int playback = 0; playback < 3; ++playback) {
+        for (const bool explicitHint : {true, false}) {
+            kb::ecs::World world;
+            const auto existing = world.CreateEntity();
+            const auto execute = [&](kb::ecs::CommandBuffer& buffer) {
+                if (playback == 0) return buffer.Playback(world);
+                if (playback == 1) return buffer.PlaybackTrusted(world);
+                kb::ecs::CommandBufferPlaybackState state;
+                kb::ecs::CommandBufferPlaybackBudget budget;
+                budget.maxStructuralCommands = 1U;
+                while (!state.Complete()) {
+                    const auto slice = buffer.PlaybackSlice(world, budget, state);
+                    kb::tests::Require(slice.madeProgress || slice.complete, "Depth playback slices must make bounded progress");
+                }
+                return state.Result();
+            };
+            const auto run = [&](std::uint32_t count, bool mustReject, bool reverse = false) {
+                kb::ecs::CommandBuffer buffer{1U};
+                std::vector<Marker> markers;
+                markers.reserve(count);
+                for (std::uint32_t index = 0U; index < count; ++index) markers.push_back({index});
+                const auto created = buffer.Worker(0).CreateEntities(std::span<const Marker>{markers});
+                std::vector<kb::ecs::CommandEntity> parents;
+                parents.reserve(count);
+                for (std::uint32_t index = 0U; index < count; ++index) parents.push_back(index == 0U
+                    ? kb::ecs::CommandEntity::Existing(existing) : created[index - 1U]);
+                std::vector<kb::ecs::CommandEntity> ordered;
+                std::span<const kb::ecs::CommandEntity> children{created};
+                if (reverse) {
+                    ordered = created;
+                    std::reverse(ordered.begin(), ordered.end());
+                    std::reverse(parents.begin(), parents.end());
+                    children = ordered;
+                }
+                if (explicitHint) buffer.Worker(0).SetParentsForNewEntitiesKnownAcyclic(children, parents);
+                else buffer.Worker(0).SetParents(children, parents);
+                kb::ecs::CommandBufferPlaybackResult result;
+                bool rejected = false;
+                try {
+                    result = execute(buffer);
+                } catch (const std::invalid_argument&) { rejected = true; }
+                std::vector<kb::ecs::Entity> remaining;
+                world.CreateQuery<Marker>().ForEach([](kb::ecs::Entity entity, const Marker&, void* context) {
+                    static_cast<std::vector<kb::ecs::Entity>*>(context)->push_back(entity);
+                }, &remaining);
+                const bool noPartialParents = std::all_of(remaining.begin(), remaining.end(), [&](auto entity) {
+                    return !world.Parent(entity).IsValid();
+                });
+                bool correctParents = !rejected && result.CreatedCount() == count;
+                if (!mustReject && correctParents) {
+                    for (std::uint32_t index = 0U; index < count; ++index) {
+                        correctParents = correctParents && world.Parent(result.Resolve(created[index])) ==
+                            (index == 0U ? existing : result.Resolve(created[index - 1U]));
+                    }
+                }
+                if (!mustReject && count == depthLimit && correctParents) {
+                    kb::ecs::CommandBuffer flat{1U};
+                    const auto extra = flat.Worker(0).CreateEntities(2U);
+                    const std::array flatParents{kb::ecs::CommandEntity::Existing(result.Resolve(created.back())),
+                        kb::ecs::CommandEntity::Existing(result.Resolve(created.back()))};
+                    flat.Worker(0).SetParentsForNewEntitiesKnownAcyclic(extra, flatParents);
+                    bool flatRejected = false;
+                    try {
+                        const auto flatResult = flat.Playback(world);
+                        for (const auto entity : extra) world.DestroyEntity(flatResult.Resolve(entity));
+                    } catch (const std::invalid_argument&) { flatRejected = true; }
+                    const auto above = world.CreateEntity();
+                    kb::ecs::CommandBuffer subtree{1U};
+                    const std::array subtreeChildren{kb::ecs::CommandEntity::Existing(existing)};
+                    const std::array subtreeParents{kb::ecs::CommandEntity::Existing(above)};
+                    subtree.Worker(0).SetParentsForNewEntitiesKnownAcyclic(subtreeChildren, subtreeParents);
+                    static_cast<void>(execute(subtree));
+                    correctParents = flatRejected && !world.Parent(existing).IsValid() &&
+                        world.Parent(result.Resolve(created.front())) == existing;
+                    world.DestroyEntity(above);
+                }
+                const bool rolledBack = playback != 0 || !mustReject || remaining.empty();
+                std::sort(remaining.begin(), remaining.end(), [&](auto first, auto second) {
+                    return world.TryGet<Marker>(first)->index > world.TryGet<Marker>(second)->index;
+                });
+                for (auto entity : remaining) world.DestroyEntity(entity);
+                kb::tests::Require(mustReject ? rejected && noPartialParents && rolledBack : correctParents,
+                    mustReject ? "Excessive final batch depth must be rejected before backend parent mutations"
+                               : "Every playback path must preserve a batch ending exactly at the supported depth");
+                kb::tests::Require(world.IsAlive(existing) && !world.Parent(existing).IsValid(),
+                    "Batch depth validation must preserve pre-existing entities");
+            };
+            std::cout << "ecs_batch_hierarchy_depth supported=" << depthLimit << " playback=" << playback << " hint=" << explicitHint << std::endl;
+            run(depthLimit + 1U, true);
+            run(depthLimit, false);
+            run(64U, false, true);
+            const auto first = world.CreateEntity();
+            const auto second = world.CreateEntity();
+            const auto duplicate = world.CreateEntity();
+            const std::array duplicateChildren{kb::ecs::CommandEntity::Existing(duplicate), kb::ecs::CommandEntity::Existing(duplicate)};
+            const std::array duplicateParents{kb::ecs::CommandEntity::Existing(first), kb::ecs::CommandEntity::Existing(second)};
+            kb::ecs::CommandBuffer ordered{1U};
+            ordered.Worker(0).SetParentsForNewEntitiesKnownAcyclic(duplicateChildren, duplicateParents);
+            static_cast<void>(execute(ordered));
+            kb::tests::Require(world.Parent(duplicate) == second, "Repeated children must retain ordered general parent assignment semantics");
+            const std::array cycleChildren{kb::ecs::CommandEntity::Existing(first), kb::ecs::CommandEntity::Existing(existing)};
+            const std::array cycleParents{kb::ecs::CommandEntity::Existing(existing), kb::ecs::CommandEntity::Existing(first)};
+            kb::ecs::CommandBuffer cyclic{1U};
+            cyclic.Worker(0).SetParentsForNewEntitiesKnownAcyclic(cycleChildren, cycleParents);
+            bool cycleRejected = false;
+            try { static_cast<void>(execute(cyclic)); }
+            catch (const std::invalid_argument&) { cycleRejected = true; }
+            kb::tests::Require(cycleRejected && !world.Parent(first).IsValid() && !world.Parent(existing).IsValid(),
+                "An incorrect acyclic hint must not apply any part of a fresh cyclic batch");
+        }
+    }
 }
 
 } // namespace kb::tests

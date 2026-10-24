@@ -4,6 +4,7 @@
 
 #include <flecs.h>
 
+#include <algorithm>
 #include <optional>
 #include <new>
 #include <vector>
@@ -62,6 +63,92 @@ bool FitsHierarchyDepth(ecs_world_t* world, Entity child, Entity parent) noexcep
     return true;
 } catch (const std::bad_alloc&) {
     return false;
+}
+
+NewEntityParentBatchDepth ValidateNewEntityParentBatchDepth(
+    ecs_world_t* world, std::span<const Entity> children, std::span<const Entity> parents) noexcept try {
+    using Result = NewEntityParentBatchDepth;
+    if (children.size() != parents.size()) return Result::Rejected;
+    if (children.empty()) return Result::Fits;
+    for (std::size_t index = 0U; index < children.size(); ++index) {
+        const auto child = FlecsEntityId(children[index]);
+        const auto parent = FlecsEntityId(parents[index]);
+        if (!ecs_is_alive(world, child) || (parent != 0 && !ecs_is_alive(world, parent)) || child == parent ||
+            ecs_get_parent(world, child) != 0 || !VisitChildren(world, child, [](ecs_entity_t) { return false; })) {
+            return Result::RequiresGeneralAssignment;
+        }
+    }
+    // The common flat batch needs neither a graph allocation nor repeated ancestor walks.
+    if (std::all_of(parents.begin(), parents.end(), [&](Entity parent) { return parent == parents.front(); })) {
+        return FitsHierarchyDepth(world, children.front(), parents.front()) ? Result::Fits : Result::Rejected;
+    }
+    const auto limit = HierarchyDepthLimit();
+    const auto unknown = limit + 1U;
+    struct Node {
+        ecs_entity_t entity;
+        ecs_entity_t parent;
+        std::size_t depth;
+        bool assigned;
+        bool visiting = false;
+    };
+    std::vector<Node> nodes;
+    if (children.size() > nodes.max_size() / 2U) return Result::Rejected;
+    nodes.reserve(children.size() * 2U);
+    for (std::size_t index = 0U; index < children.size(); ++index) {
+        nodes.push_back({FlecsEntityId(children[index]), FlecsEntityId(parents[index]), unknown, true});
+        if (parents[index].IsValid()) nodes.push_back({FlecsEntityId(parents[index]), 0U, unknown, false});
+    }
+    std::sort(nodes.begin(), nodes.end(), [](const Node& first, const Node& second) {
+        return first.entity != second.entity ? first.entity < second.entity : first.assigned > second.assigned;
+    });
+    std::size_t unique = 0U;
+    for (std::size_t index = 0U; index < nodes.size();) {
+        const auto first = index++;
+        while (index < nodes.size() && nodes[index].entity == nodes[first].entity) {
+            if (nodes[index].assigned) return Result::RequiresGeneralAssignment;
+            ++index;
+        }
+        nodes[unique++] = nodes[first];
+    }
+    nodes.resize(unique);
+    for (auto& node : nodes) {
+        if (!node.assigned) node.parent = ecs_strip_generation(ecs_get_parent(world, node.entity));
+    }
+    std::vector<std::size_t> path;
+    path.reserve(std::min(nodes.size(), limit));
+    for (std::size_t index = 0U; index < nodes.size(); ++index) {
+        auto cursor = index;
+        std::size_t depth = 0U;
+        path.clear();
+        for (;;) {
+            auto& node = nodes[cursor];
+            if (node.depth != unknown) { depth = node.depth; break; }
+            if (node.visiting) return Result::Rejected;
+            if (node.parent == 0U) { node.depth = 0U; break; }
+            node.visiting = true;
+            path.push_back(cursor);
+            if (path.size() > limit) return Result::Rejected;
+            const auto parent = std::lower_bound(nodes.begin(), nodes.end(), node.parent,
+                [](const Node& candidate, ecs_entity_t entity) { return candidate.entity < entity; });
+            if (parent != nodes.end() && parent->entity == node.parent) {
+                cursor = static_cast<std::size_t>(parent - nodes.begin());
+                continue;
+            }
+            for (auto ancestor = ecs_get_parent(world, node.parent); ancestor != 0U; ancestor = ecs_get_parent(world, ancestor)) {
+                if (++depth > limit) return Result::Rejected;
+            }
+            break;
+        }
+        while (!path.empty()) {
+            if (++depth > limit) return Result::Rejected;
+            nodes[path.back()].depth = depth;
+            nodes[path.back()].visiting = false;
+            path.pop_back();
+        }
+    }
+    return Result::Fits;
+} catch (const std::bad_alloc&) {
+    return NewEntityParentBatchDepth::Rejected;
 }
 
 } // namespace kb::ecs
