@@ -46,6 +46,14 @@ Web runtime failures set `document.documentElement.dataset.kbError` to
 Diagnostics go to stderr. Streams are supplied for each tick or shutdown call;
 the runtime does not retain the initialization diagnostics stream.
 
+Loss of the browser WebGL context reports `graphics-context-lost` in the error
+dataset and location fragment, writes a reload instruction to stderr, and cancels
+the game loop. Normal script and bgfx resource shutdown runs after the browser
+event callback returns. Reloading starts a new runtime; restoring GPU resources
+while preserving the running scene is not implemented yet. The first-frame flag
+records historical submission; the error dataset and fragment take precedence
+after a failure.
+
 The packaged browser regression runner uses the production host and normal
 authoring/cook APIs. Install the pinned test transport from
 `sources/game/tests/web/requirements.txt`, build the native tools and WebGL host,
@@ -66,10 +74,16 @@ run Jolt jobs and the step driver on the calling thread, preserving deferred
 publication of pipelined step results.
 Separately cooked scripts fail in `Ready` and after eight ticks; each must emit
 its actual Lua error and the failure marker. Missing results, browser errors and
-timeouts fail the test. All three scenarios passed with hardware WebGL2 in
+timeouts fail the test. The graphics loss case first verifies a live context,
+rendered frame, shader results and gravity, then uses the real
+`WEBGL_lose_context` extension. It requires a failure result, one script shutdown
+and a stopped simulation. Missing fault injection support fails the test.
+All four scenarios passed with hardware WebGL2 in
 headless Chrome using `--browser-arg=--use-angle=gl` (ANGLE/OpenGL). ANGLE/D3D11
 reached eight script ticks after the physics fix, but its context checks timed
 out or reported context loss; that configuration is not a passing graphics run.
 These short lifecycle checks are separate from full joystick/UI, audio, storage,
 long-running graphics and browser lifecycle acceptance. Linux execution and
 Android device delivery remain separate verification requirements.
+A full joystick/UI run still fails graphics checks after a tab focus change;
+input checks alone do not establish recovery of the rendered scene.

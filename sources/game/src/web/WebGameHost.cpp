@@ -19,6 +19,7 @@
 #include <emscripten/emscripten.h>
 #include <emscripten/fetch.h>
 #include <emscripten/html5.h>
+#include <emscripten/html5_webgl.h>
 
 #include <algorithm>
 #include <chrono>
@@ -319,6 +320,12 @@ private:
             Fail("renderer-init", "required browser renderer could not be initialized");
             return;
         }
+        if (emscripten_set_webglcontextlost_callback(kCanvas, this, true,
+                &WebGameHost::OnGraphicsContextLost) != EMSCRIPTEN_RESULT_SUCCESS) {
+            Fail("graphics-events", "browser graphics loss handler could not be registered");
+            return;
+        }
+        graphicsEventsRegistered_ = true;
         SetBrowserBackendReady();
         if (!RegisterInput()) {
             Fail("input-init", "browser touch handlers could not be registered");
@@ -346,7 +353,7 @@ private:
 
     static void Frame(void* userData) {
         auto* host = static_cast<WebGameHost*>(userData);
-        if (host == nullptr || host->frameInProgress_) return;
+        if (host == nullptr || host->frameInProgress_ || host->graphicsContextLost_) return;
         host->frameInProgress_ = true;
         if (host->surface_.RefreshSize()) {
             host->renderer_.OnResize(host->surface_.Width(), host->surface_.Height());
@@ -366,6 +373,10 @@ private:
             host->Shutdown();
             return;
         }
+        if (host->graphicsContextLost_) {
+            host->frameInProgress_ = false;
+            return;
+        }
         if (frameSubmitted && !host->firstFrameReported_) {
             host->firstFrameReported_ = true;
             SetBrowserFirstFrameReady();
@@ -380,6 +391,24 @@ private:
         }
         host->touches_.FinishFrame();
         host->frameInProgress_ = false;
+    }
+
+    static EM_BOOL OnGraphicsContextLost(int, const void*, void* userData) {
+        auto* host = static_cast<WebGameHost*>(userData);
+        if (host != nullptr && !host->graphicsContextLost_) {
+            host->graphicsContextLost_ = true;
+            SetBrowserStartupError("graphics-context-lost");
+            std::fputs("kb_game_web: graphics context lost; reload the game to restart rendering\n", stderr);
+            // Release bgfx resources after the browser event callback returns.
+            emscripten_async_call(&WebGameHost::ShutdownAfterGraphicsLoss, host, 0);
+            emscripten_cancel_main_loop();
+        }
+        return EM_FALSE;
+    }
+
+    static void ShutdownAfterGraphicsLoss(void* userData) {
+        auto* host = static_cast<WebGameHost*>(userData);
+        if (host != nullptr) host->Shutdown();
     }
 
     static EM_BOOL OnKey(int eventType, const EmscriptenKeyboardEvent* event, void* userData) {
@@ -477,6 +506,10 @@ private:
     }
 
     void Shutdown() noexcept {
+        if (graphicsEventsRegistered_) {
+            static_cast<void>(emscripten_set_webglcontextlost_callback(kCanvas, nullptr, true, nullptr));
+            graphicsEventsRegistered_ = false;
+        }
         touches_.Detach();
         SetTextInputActive(false);
         DestroyBrowserTextInput();
@@ -502,6 +535,8 @@ private:
     bool firstFrameReported_ = false;
     bool frameInProgress_ = false;
     bool textInputActive_ = false;
+    bool graphicsContextLost_ = false;
+    bool graphicsEventsRegistered_ = false;
 
     friend int ::kb_web_append_committed_text(void* host, std::uint32_t codePoint) noexcept;
 };
