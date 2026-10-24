@@ -129,7 +129,8 @@ selection remains D3D11. Unsupported names or malformed options fail before
 GPU initialization.
 
 The full `particle-motion` selector passed on Windows x64 Release and Debug with
-AddressSanitizer on all four backends. Each run includes 14 world-space cases and four transformed local
+AddressSanitizer on all four backends. Each run includes 14 world-space cases
+and four transformed local
 cases, native buffer capture cross-checked with compute/texture readback,
 contact death, resource rejection/retry, missing depth and mixed-motion/contact
 billboard pixel comparison. Maximum absolute errors after 60 fixed steps were:
@@ -167,7 +168,7 @@ no dependency assertions, sanitizer errors or bgfx allocator leak reports.
 `Renderer::GpuParticleDraws(scene)` exposes the last dispatched GPU instance
 buffers with their instance/emitter keys and requested buffer bytes. Instance
 counts are capacities, including empty slots; byte counts include birth,
-state, instance and sort buffers rather than physical GPU residency.
+state, upload/reset, instance and sort buffers rather than physical GPU residency.
 `GpuEmitterAllocatedBytes()` totals those allocations across this renderer's
 scenes. Neither query copies particle data to the CPU during normal frames.
 
@@ -241,7 +242,8 @@ separate motion/contact tests described above. Source profiling does not prove
 execution from a packaged runtime.
 
 Local reference measurements (Windows x64, Release, bgfx D3D11, 2026-10-24;
-engine `ea5ac40e0`) include the automatic birth-phase and resource-rejection fixes.
+GPU implementation `0aac28018`) include valid bgfx birth uploads, the automatic
+birth-phase fix and resource rejection. The measurement checkout was `21bab5793`.
 They use one billboard emitter, a single burst equal to capacity, a sphere of
 radius 2 m, initial speed 0.15 m/s, size 0.03 m, 100 s lifetime and additive
 output without soft particles/depth testing. Six authored fields execute as
@@ -257,32 +259,32 @@ variation particularly affect the short GPU windows.
 
 | Effect | Capacity | CPU policy: process ms/frame | CPU policy: GPU frame ms | GPU policy: process ms/frame | GPU policy: GPU frame ms |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Six fields | 1,000 | 0.729 | 0.011 | 0.156 | 0.031 |
-| Six fields | 10,000 | 4.271 | 0.038 | 0.365 | 0.118 |
-| Six fields | 60,000 | 23.802 | 1.173 | 0.365 | 0.113 |
-| Six fields + contact death | 1,000 | 0.625 | 0.010 | 0.260 | 0.032 |
-| Six fields + contact death | 10,000 | 2.917 | 0.026 | 0.208 | 0.043 |
-| Six fields + contact death | 60,000 | 17.760 | 0.638 | 0.260 | 0.117 |
+| Six fields | 1,000 | 0.729 | 0.011 | 0.312 | 0.035 |
+| Six fields | 10,000 | 4.531 | 0.039 | 0.156 | 0.048 |
+| Six fields | 60,000 | 25.000 | 1.354 | 0.312 | 0.115 |
+| Six fields + contact death | 1,000 | 0.573 | 0.009 | 0.156 | 0.038 |
+| Six fields + contact death | 10,000 | 2.812 | 0.026 | 0.208 | 0.046 |
+| Six fields + contact death | 60,000 | 15.156 | 0.381 | 0.365 | 0.129 |
 
 CPU-policy GPU times include rendering CPU-simulated particles. Contact deaths
 reduce live work over time: the CPU reference ends with 432, 4,135 and 24,552
 records respectively, rather than the initial capacities. GPU ring capacity
 and requested allocation remain constant after death; its raw sample is not
 a full live-count reduction. GPU timing coverage across the 36 runs is
-262..300 of 300 unique measured frames.
+263..300 of 300 unique measured frames.
 
 | Effect | Capacity | CPU policy: private / working set MiB | GPU policy: private / working set MiB | GPU requested buffers MiB |
 | --- | ---: | ---: | ---: | ---: |
-| Six fields | 1,000 | 194.9 / 128.3 | 169.4 / 89.1 | 0.137 |
-| Six fields | 10,000 | 188.3 / 120.6 | 177.5 / 98.2 | 1.373 |
-| Six fields | 60,000 | 216.8 / 150.4 | 200.2 / 104.5 | 8.240 |
-| Six fields + contact death | 1,000 | 187.6 / 121.9 | 169.7 / 89.6 | 0.137 |
-| Six fields + contact death | 10,000 | 187.6 / 120.7 | 173.9 / 91.6 | 1.373 |
-| Six fields + contact death | 60,000 | 216.5 / 150.6 | 199.4 / 104.0 | 8.240 |
+| Six fields | 1,000 | 183.4 / 116.1 | 170.0 / 90.8 | 0.198 |
+| Six fields | 10,000 | 187.6 / 121.1 | 175.6 / 92.9 | 1.984 |
+| Six fields | 60,000 | 216.2 / 150.5 | 199.7 / 102.9 | 11.902 |
+| Six fields + contact death | 1,000 | 194.6 / 127.6 | 167.6 / 89.5 | 0.198 |
+| Six fields + contact death | 10,000 | 187.7 / 120.9 | 173.3 / 91.3 | 1.984 |
+| Six fields + contact death | 60,000 | 216.5 / 151.1 | 200.5 / 103.6 | 11.902 |
 
 GPU-policy runs retain the provider's conservative CPU fallback pool budget;
 process memory therefore includes more than GPU command records. Requested GPU
-buffers were 144 bytes per capacity slot in these unsorted stateful effects
+buffers were 208 bytes per capacity slot in these unsorted stateful effects
 and returned to zero after scene release in every GPU run. Whole-device memory
 is deliberately excluded from per-effect attribution. All GPU runs required
 actual GPU execution/readback and reported no rejected updates. Runs were
@@ -292,6 +294,26 @@ For an effect with these authored values, reproduce each policy's measurement
 with `kb_cli vfx-profile --project <dir> --effect /Game/Particles/Measure.kbvfx --backend d3d11 --warmup 60 --frames 300 --samples 64`, adding `--require-gpu`
 for the GPU policy. Use three fresh processes per policy and capacity. Compare
 GPU timestamp coverage and process counters, not frame wall time as CPU time.
+
+A separate continuous-emission reference uses the same six fields without the
+plane, 10,000 capacity slots, 6,000 births/s, a 1 s lifetime and no burst.
+Three fresh processes per policy use 120 warmup and 300 measured updates.
+The CPU reference has 6,000 live render records at the end of every run; GPU
+routing retains zero CPU render records. At 100 births per fixed update, birth
+and state-reset copies request 6,400 bytes per update, in addition to the
+3,200-byte CPU upload. This exercises ring reuse and ongoing uploads inside the
+measurement window, which the long-lived burst references do not.
+
+| Policy | Process ms/frame | GPU frame ms | Private / working set MiB | Requested GPU buffers MiB |
+| --- | ---: | ---: | ---: | ---: |
+| CPU | 2.760 | 0.025 | 191.9 / 124.7 | 0 |
+| GPU | 0.260 | 0.051 | 175.8 / 92.5 | 1.984 |
+
+GPU timestamp coverage was 280..300 unique measured frames. All six runs had
+no admission drops or rejected updates. Each GPU run required actual execution
+and native readback, and returned its logical buffer allocation to zero on
+release. These are whole-host costs, including drawing, rather than isolated
+copy or kernel timings.
 
 The source-profile execution/readback/timestamp smoke check also passed with
 the repeated-field/contact source on Windows bgfx D3D12, Vulkan and OpenGL.
