@@ -354,8 +354,6 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
-    // Without it (no shader variant or renderable cube map) reflections keep the environment colour.
-    static_cast<void>(skyReflection_.Initialize());
     static_cast<void>(giVoxelGrid_.Initialize());
     if (displayConfig_.enableEditorRendering && !editorPassSubmitter_.Initialize()) {
         Shutdown();

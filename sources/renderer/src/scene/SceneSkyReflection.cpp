@@ -168,7 +168,10 @@ void SceneSkyReflection::SubmitFace(bgfx::ViewId viewId, bgfx::FrameBufferHandle
 }
 
 void SceneSkyReflection::Update(const SceneBackdropUniformValues& backdrop, bgfx::TextureHandle environment, bool originBottomLeft) {
-    if (!IsInitialized() || steppedThisFrame_ || completed_ || !backdrop.HasSky()) {
+    if (steppedThisFrame_ || completed_ || !backdrop.HasSky()) {
+        return;
+    }
+    if (!Initialize()) {
         return;
     }
     const Key key{ .backdrop = backdrop, .environment = environment.idx };

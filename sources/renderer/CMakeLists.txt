@@ -893,6 +893,9 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         add_test(NAME kb_renderer_gi_resolve COMMAND $<TARGET_FILE:kb_renderer_tests> gi-resolve)
         set_tests_properties(kb_renderer_gi_resolve PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;gi" TIMEOUT 180)
+        add_test(NAME kb_renderer_sky_reflection COMMAND $<TARGET_FILE:kb_renderer_tests> sky-reflection)
+        set_tests_properties(kb_renderer_sky_reflection PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;sky" TIMEOUT 180)
     endif()
     set_tests_properties(kb_renderer_tests PROPERTIES
         FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")

@@ -43,6 +43,8 @@
 #include "kb/render/ShaderBinaryProvider.hpp"
 #include "kb/render/ShaderManifest.hpp"
 #include "kb/render/gi/SceneGiResolvePass.hpp"
+#include "kb/render/scene/SceneSkyReflection.hpp"
+#include "kb/render/ViewIdPolicy.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/overlay/SceneGizmoPass.hpp"
@@ -118,6 +120,33 @@ public:
 };
 
 #if defined(_WIN32)
+struct ShaderRequestTrackingProvider final : ShaderBinaryProvider {
+    mutable std::uint32_t resolveReads = 0U;
+    mutable std::uint32_t skyCaptureReads = 0U;
+    mutable std::uint32_t skyPrefilterReads = 0U;
+    bool ReadFixedShader(bgfx::RendererType::Enum backend, std::string_view name,
+        std::vector<std::uint8_t>& bytes, std::uint64_t& revision) const override {
+        if (name == "fs_ssgi_resolve.sc") ++resolveReads;
+        if (name == "fs_sky_capture.sc") ++skyCaptureReads;
+        if (name == "fs_sky_prefilter.sc") ++skyPrefilterReads;
+        const char* directory = ShaderProfileDirectoryForRenderer(backend);
+        if (directory == nullptr) return false;
+        std::ifstream input(std::filesystem::path{directory} / (std::string{name} + ".bin"),
+            std::ios::binary | std::ios::ate);
+        if (!input.is_open()) return false;
+        const std::streamsize size = input.tellg();
+        if (size <= 0) return false;
+        input.seekg(0, std::ios::beg);
+        bytes.resize(static_cast<std::size_t>(size));
+        revision = 1U;
+        return static_cast<bool>(input.read(reinterpret_cast<char*>(bytes.data()), size));
+    }
+    bool ReadMaterialShader(std::uint64_t, std::uint64_t, std::string_view, bgfx::RendererType::Enum,
+        std::string_view, std::vector<std::uint8_t>&, std::uint64_t&) const override { return false; }
+    std::uint64_t MaterialShaderRevision(std::uint64_t, std::uint64_t, std::string_view,
+        bgfx::RendererType::Enum) const noexcept override { return 0U; }
+};
+
 class NativeTestSurface final : public RenderSurface {
 public:
     explicit NativeTestSurface(std::uint16_t width = kExtent, std::uint16_t height = kExtent)
@@ -8697,35 +8726,73 @@ void RunRendererParticleContactDeathTest() {
 #endif
 }
 
+void RunRendererSkyReflectionTests() {
+#if defined(_WIN32)
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Sky reflection test needs a hidden native surface");
+    Renderer renderer;
+    const auto provider = std::make_shared<ShaderRequestTrackingProvider>();
+    Require(renderer.SetShaderBinaryProvider(provider), "Sky reflection shader provider was not installed");
+    DisplayConfig config;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Require(renderer.Initialize(surface, &config), "Sky reflection renderer initialization failed");
+    Require(provider->skyCaptureReads == 0U && provider->skyPrefilterReads == 0U,
+        "Renderer startup must not load sky reflection shaders without a sky backdrop");
+    SceneSkyReflection sky;
+    sky.Update({}, BGFX_INVALID_HANDLE, false);
+    Require(!sky.IsInitialized() && provider->skyCaptureReads == 0U,
+        "An absent sky must not create reflection resources");
+    SceneBackdropUniformValues backdrop;
+    backdrop.horizon = {0.8F, 0.2F, 0.1F, 1.0F};
+    backdrop.zenith = {0.8F, 0.2F, 0.1F, 1.0F};
+    backdrop.params = {1.0F, 0.0F, 1.0F, 0.0F};
+    for (int frame = 0; frame < 10; ++frame) {
+        Require(renderer.BeginFrame(), "Sky capture frame could not begin");
+        sky.Update(backdrop, BGFX_INVALID_HANDLE, false);
+        renderer.EndFrame();
+        sky.EndFrame();
+    }
+    Require(sky.IsInitialized() && provider->skyCaptureReads == 1U && provider->skyPrefilterReads == 1U,
+        "The first sky backdrop must load capture and prefilter shaders once");
+    const auto reflection = sky.ReflectionFor(backdrop, BGFX_INVALID_HANDLE);
+    Require(bgfx::isValid(reflection), "Sky capture and mip prefilter must publish the reflection cube");
+    for (const std::uint8_t mip : std::array{std::uint8_t{0U}, static_cast<std::uint8_t>(SceneSkyReflection::kMipCount - 1U)}) {
+        const auto extent = static_cast<std::uint16_t>(SceneSkyReflection::kFaceSize >> mip);
+        const auto readback = bgfx::createTexture2D(extent, extent,
+            false, 1U, bgfx::TextureFormat::RGBA16F, BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+        Require(bgfx::isValid(readback), "Sky reflection readback texture could not be created");
+        bgfx::blit(ViewId::ScreenCapture, bgfx::TextureRegion{.handle = readback}, bgfx::TextureRegion{.handle = reflection, .mip = mip, .depth = 1U});
+        std::vector<std::uint16_t> pixels(static_cast<std::size_t>(extent) * extent * 4U);
+        const std::uint32_t readyFrame = bgfx::read(bgfx::TextureRegion{.handle = readback}, pixels.data());
+        bool ready = false;
+        for (int frame = 0; frame < 16; ++frame) {
+            if (bgfx::frame() >= readyFrame) { ready = true; break; }
+        }
+        Require(ready, "Sky reflection GPU readback did not finish");
+        std::array<double, 3> mean{};
+        for (std::size_t pixel = 0U; pixel < pixels.size(); pixel += 4U) {
+            for (std::size_t channel = 0U; channel < mean.size(); ++channel) mean[channel] += bx::halfToFloat(pixels[pixel + channel]);
+        }
+        for (double& channel : mean) channel /= static_cast<double>(pixels.size() / 4U);
+        std::fprintf(stderr, "sky_reflection_pixels mip=%u rgb=%.5f,%.5f,%.5f\n", static_cast<unsigned>(mip), mean[0], mean[1], mean[2]);
+        Require(std::abs(mean[0] - 0.8) < 0.005 && std::abs(mean[1] - 0.2) < 0.005 && std::abs(mean[2] - 0.1) < 0.005,
+            "Captured and prefiltered sky pixels must preserve the authored HDR gradient color");
+        bgfx::destroy(readback);
+    }
+    sky.Shutdown();
+    renderer.Shutdown();
+#else
+    throw std::runtime_error("Sky reflection readback requires a supported native GPU test surface");
+#endif
+}
+
 void RunRendererGiResolveTests() {
 #if defined(_WIN32)
-    struct TrackingProvider final : ShaderBinaryProvider {
-        mutable std::uint32_t resolveReads = 0U;
-        bool ReadFixedShader(bgfx::RendererType::Enum backend, std::string_view name,
-            std::vector<std::uint8_t>& bytes, std::uint64_t& revision) const override {
-            if (name == "fs_ssgi_resolve.sc") ++resolveReads;
-            const char* directory = ShaderProfileDirectoryForRenderer(backend);
-            if (directory == nullptr) return false;
-            std::ifstream input(std::filesystem::path{directory} / (std::string{name} + ".bin"),
-                std::ios::binary | std::ios::ate);
-            if (!input.is_open()) return false;
-            const std::streamsize size = input.tellg();
-            if (size <= 0) return false;
-            input.seekg(0, std::ios::beg);
-            bytes.resize(static_cast<std::size_t>(size));
-            revision = 1U;
-            return static_cast<bool>(input.read(reinterpret_cast<char*>(bytes.data()), size));
-        }
-        bool ReadMaterialShader(std::uint64_t, std::uint64_t, std::string_view, bgfx::RendererType::Enum,
-            std::string_view, std::vector<std::uint8_t>&, std::uint64_t&) const override { return false; }
-        std::uint64_t MaterialShaderRevision(std::uint64_t, std::uint64_t, std::string_view,
-            bgfx::RendererType::Enum) const noexcept override { return 0U; }
-    };
     {
         NativeTestSurface surface;
         Require(surface.IsValid(), "Lazy GI test needs a hidden native surface");
         Renderer renderer;
-        const auto provider = std::make_shared<TrackingProvider>();
+        const auto provider = std::make_shared<ShaderRequestTrackingProvider>();
         Require(renderer.SetShaderBinaryProvider(provider), "Lazy GI shader provider was not installed");
         DisplayConfig config;
         config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
