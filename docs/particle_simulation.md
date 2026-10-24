@@ -181,6 +181,10 @@ counts are capacities, including empty slots; byte counts include birth,
 state, upload/reset, instance and sort buffers rather than physical GPU residency.
 `GpuEmitterAllocatedBytes()` totals those allocations across this renderer's
 scenes. Neither query copies particle data to the CPU during normal frames.
+Draw and parameter references remain valid until the next emitter sync,
+dispatch or scene release. Emitter release and accepted buffer replacement
+retire the affected cached draw before mesh collection. Rejected resource
+updates preserve the previous complete draw and its resources.
 
 `ParticleGpuReadback` provides an explicit terminal diagnostic capture after
 ending the last frame and before renderer shutdown. It uses bgfx buffer

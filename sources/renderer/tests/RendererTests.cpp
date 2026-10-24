@@ -37,6 +37,7 @@ std::size_t PeakCommittedBytes() noexcept {
 void RunGraphForwardGpuRenderTests();
 void RunGraphProgramLifetimeTests();
 void RunRendererScreenUiSubmitTests();
+void RunRendererReportsRejectedGpuStateUpdateTest();
 void RunParticleGpuVisualCounterTests(bgfx::RendererType::Enum backend);
 void RunGraphShaderArtifactCacheTests();
 void RunGraphShaderNodeCookTests(std::uint32_t shard, std::uint32_t shardCount);
@@ -246,6 +247,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "runtime-submit") {
         kb::render::tests::RunRendererRuntimeSubmitTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-state-rejection") {
+        kb::render::tests::RunRendererReportsRejectedGpuStateUpdateTest();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "screen-ui-submit") {

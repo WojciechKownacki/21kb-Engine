@@ -567,6 +567,8 @@ void VerifyRejectedStateUpdates() {
     Require(simulation.RejectedUpdates(1U).size() == 1U, "A clock-only update hid an unresolved GPU rejection");
     update.params.capacity = 4U;
     simulation.Apply(1U, {&update, 1U});
+    Require(simulation.Draws(1U).size() == 2U && draw().instances.idx == handle.idx && !draw().params->hasPlane,
+        "Rejected GPU resize retired or changed a previously valid draw before dispatch");
     dispatch();
     Require(simulation.RejectedUpdates(1U)[0].failure == ParticleGpuUpdateFailure::ResourceCreation &&
         draw().instances.idx == handle.idx && draw().capacity == 1U && simulation.AllocatedBytes() == 288U,
@@ -575,6 +577,9 @@ void VerifyRejectedStateUpdates() {
     release.key = second.key;
     release.release = true;
     simulation.Apply(1U, {&release, 1U});
+    Require(simulation.Draws(1U).size() == 1U && simulation.Draws(1U)[0].key == first.key &&
+        draw().instances.idx == handle.idx && draw().params->size[0] == 1.0F,
+        "GPU release retained a dangling draw or retired the other live emitter before dispatch");
     Require(simulation.AllocatedBytes() == 144U, "Releasing the other emitter did not restore budget headroom");
     update.params.capacity = 1U;
     update.clear = true;
@@ -606,6 +611,7 @@ void VerifyRejectedStateUpdates() {
     update.spawns = {{.position = {1.0F, 1.0F, 0.0F}, .birthTime = 0.1F, .lifetime = 8.0F},
         {.position = {2.0F, 1.0F, 0.0F}, .birthTime = 0.1F, .lifetime = 8.0F}};
     simulation.Apply(1U, {&update, 1U});
+    Require(simulation.Draws(1U).empty(), "Successful GPU resize retained the retired instance-buffer draw before dispatch");
     dispatch();
     const bool resizedRead = capture.Read(draw(), 2U);
     std::fprintf(stderr, "particle_gpu_resize bytes=%llu capacity=%u old=%u new=%u read=%d rows=%zu x=%g/%g size=%g\n",

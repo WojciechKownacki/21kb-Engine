@@ -408,6 +408,11 @@ void ParticleGpuEmitterSimulation::Apply(
             clock.rejections.push_back({key, failure});
         else clock.rejections.back() = {{}, ParticleGpuUpdateFailure::DiagnosticCapacity};
     };
+    const auto invalidateDraw = [&](const kb::particles::ParticleGpuEmitterKey& key) {
+        // Mesh collection can inspect the previous dispatch before this frame's dispatch.
+        // Retire references before releasing their parameters or replacing their GPU buffers.
+        std::erase_if(clock.draws, [&](const Draw& draw) { return draw.key == key; });
+    };
     for (const kb::particles::ParticleGpuEmitterCommand& command : commands) {
         const Key key{ sceneId, command.key.instanceId, command.key.emitterId };
         clock.latest = std::max(clock.latest, command.simTime);
@@ -418,6 +423,7 @@ void ParticleGpuEmitterSimulation::Apply(
         auto found = emitters_.find(key);
         if (command.release) {
             clearRejection(command.key);
+            invalidateDraw(command.key);
             if (found != emitters_.end()) {
                 allocatedBytes_ -= found->second.bytes;
                 Destroy(found->second);
@@ -439,6 +445,7 @@ void ParticleGpuEmitterSimulation::Apply(
                     reject(command.key, ParticleGpuUpdateFailure::ResourceCreation);
                     continue;
                 }
+                invalidateDraw(command.key);
                 if (found == emitters_.end()) found = emitters_.emplace(key, std::move(replacement)).first;
                 else {
                     allocatedBytes_ -= found->second.bytes;
