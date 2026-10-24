@@ -1,6 +1,7 @@
 #include "PackagedRuntimeModules.hpp"
 
 #include "PackagedRuntimeModuleContract.hpp"
+#include "GameScriptLog.hpp"
 
 #include "AIModule.hpp"
 #include "BasicLightingModule.hpp"
@@ -27,6 +28,7 @@ bool CreatePackagedRuntimeModules(
     kb::script::ScriptModuleOptions scriptOptions;
     scriptOptions.runtimeOptions.userStorageRoot = std::move(scriptUserStorageRoot);
     scriptOptions.runtimeOptions.disableFailingBehaviours = true;
+    scriptOptions.configureHost = &ConfigureGameScriptLog;
     auto script = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
     candidate.script = script.get();
     candidate.modules.push_back(std::move(script));

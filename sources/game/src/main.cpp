@@ -2,6 +2,7 @@
 #include "GameWindow.hpp"
 #include "RuntimeSceneFrameSync.hpp"
 #include "ParticleRuntimeDiagnostics.hpp"
+#include "GameScriptLog.hpp"
 
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -473,6 +474,7 @@ int RunGame(const GameOptions& options) {
     kb::script::ScriptModuleOptions scriptOptions;
     scriptOptions.runtimeOptions.userStorageRoot = userStorageRoot;
     scriptOptions.runtimeOptions.disableFailingBehaviours = true;
+    scriptOptions.configureHost = &kb::game::ConfigureGameScriptLog;
     auto scriptModuleOwner = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
     kb::script::ScriptModule* scriptModule = scriptModuleOwner.get();
     std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules;
