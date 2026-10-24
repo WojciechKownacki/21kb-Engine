@@ -349,7 +349,8 @@ def run_cases(args, root, report, origin):
 
 
 def main(*, fixture=author_fixture, scenario=run_cases,
-        schema="21kb.web-game-storage-tests/v1", description=__doc__, prefix="GameStorage"):
+        schema="21kb.web-game-storage-tests/v1", description=__doc__, prefix="GameStorage",
+        http_handler_type=http.server.SimpleHTTPRequestHandler):
     parser = argparse.ArgumentParser(description=description)
     for name in ["cli", "cooker", "engine-root", "shaderc", "directory", "browser", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
@@ -367,7 +368,7 @@ def main(*, fixture=author_fixture, scenario=run_cases,
         report["artifacts"] = {name: hashlib.sha256((web / name).read_bytes()).hexdigest()
             for name in ["Game.html", "Game.js", "Game.wasm", "Game.kbpack"]}
 
-        class Quiet(http.server.SimpleHTTPRequestHandler):
+        class Quiet(http_handler_type):
             def log_message(self, *_):
                 pass
 

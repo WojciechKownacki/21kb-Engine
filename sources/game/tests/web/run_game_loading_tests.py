@@ -1,5 +1,6 @@
 """Check real package loading failures, hardware startup and memory observations."""
 from pathlib import Path
+import http.server
 import os
 import time
 
@@ -24,6 +25,26 @@ setInterval(()=>{
 """
 
 
+class LoadingHandler(http.server.SimpleHTTPRequestHandler):
+    interrupt = True
+    transmissions = []
+
+    def do_GET(self):
+        if self.path == "/Disconnected/Game.kbpack" and LoadingHandler.interrupt:
+            data = Path(self.translate_path(self.path)).read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            sent = self.wfile.write(data[:len(data) // 2])
+            self.wfile.flush()
+            LoadingHandler.transmissions.append(dict(declaredBytes=len(data), sentBytes=sent))
+            self.close_connection = True
+            return
+        super().do_GET()
+
+
 def measure(case, label, report, pack_size):
     metrics = case.client.evaluate("({...kbLoadMetrics,readyMs:performance.now(),"
         "wasmCapacity:typeof HEAPU8==='undefined'?null:HEAPU8.byteLength,"
@@ -41,6 +62,8 @@ def measure(case, label, report, pack_size):
 
 
 def run_cases(args, root, report, origin):
+    LoadingHandler.interrupt = True
+    LoadingHandler.transmissions = []
     web = root / "Web"
     pack = (web / "Game.kbpack").read_bytes()
     profile = root / "profile"
@@ -61,7 +84,8 @@ def run_cases(args, root, report, origin):
             ("Missing", None, "fetch-http", "HTTP 404"),
             ("Empty", b"", "pack-empty", "asset pack response was empty"),
             ("Truncated", pack[:len(pack) // 2], "pack-mount", "asset pack mount failed"),
-            ("Corrupt", bytes([pack[0] ^ 255]) + pack[1:], "pack-mount", "asset pack mount failed")]:
+            ("Corrupt", bytes([pack[0] ^ 255]) + pack[1:], "pack-mount", "asset pack mount failed"),
+            ("Disconnected", pack, "fetch-http", "HTTP 0")]:
         folder = web / label
         folder.mkdir()
         for name in ["Game.html", "Game.js", "Game.wasm"]:
@@ -95,8 +119,31 @@ def run_cases(args, root, report, origin):
                 "A later frame cleared the package failure")
             report["observations"].append(dict(check="native package startup refuses " + label,
                 expected=code, state=value, diagnostic=diagnostic))
+            if label == "Disconnected":
+                require(LoadingHandler.transmissions and all(0 < value["sentBytes"] < value["declaredBytes"]
+                    for value in LoadingHandler.transmissions), "No actual partial HTTP body was sent")
+                report["interruptedResponses"] = list(LoadingHandler.transmissions)
+                LoadingHandler.interrupt = False
+                previous_origin = case.client.evaluate("performance.timeOrigin")
+                case.client.call("Page.reload")
+                deadline = time.monotonic() + 10
+                while case.client.evaluate("performance.timeOrigin") == previous_origin:
+                    require(time.monotonic() < deadline, "Normal reload did not create a new document")
+                    time.sleep(0.03)
+                recovered = case.ready()
+                verify(recovered, 0)
+                case.blue_button("after-download-reload")
+                measure(case, "after-download-reload", report, len(pack))
+                report["observations"].append(dict(check="interrupted download recovers on normal reload", state=recovered))
+                cursor = len(case.states())
+                case.click_save()
+                saved = case.wait("native input and storage work after download recovery", lambda state:
+                    state["phase"] == 1 and state["started"] and state["status"] == "Clean", cursor)
+                verify(saved, 1)
+                report["observations"].append(dict(check="recovered native button commits save and settings", state=saved))
 
 
 if __name__ == "__main__":
     raise SystemExit(main(fixture=author_fixture, scenario=run_cases,
-        schema="21kb.web-game-loading/v1", description=__doc__, prefix="GameLoading"))
+        schema="21kb.web-game-loading/v1", description=__doc__, prefix="GameLoading",
+        http_handler_type=LoadingHandler))

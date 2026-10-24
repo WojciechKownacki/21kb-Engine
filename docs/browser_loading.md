@@ -21,13 +21,20 @@ notification, not a physical low-memory device or an operating-system kill.
 Separate local URL directories serve the same runtime with a missing, empty,
 truncated or corrupt package. The real host must report `fetch-http`,
 `pack-empty` or `pack-mount`, retain that error on later frames and show its
-reload message. No case may reach a first native frame or throw an unhandled
+reload message. Each failed load must stop before a first native frame and avoid an unhandled
 browser exception. The console must contain the corresponding host diagnostic.
 Distinct package URLs prevent a previously cached valid package from hiding
 the injected file error.
 
+A separate route declares a complete HTTP body but closes the connection after
+sending only half of it. The browser's real request failure must reach the
+native `fetch-http` path. The report records declared and sent byte counts.
+After the server restores the complete response, a normal reload of the same
+URL must recover native script readiness and hardware rendering. A real button
+click must then save both domains and complete their browser transaction.
+
 The `21kb.web-game-loading/v1` result retains package/runtime hashes, native
-observations, browser events, resource and heap measurements and three GPU
+observations, browser events, resource and heap measurements and four GPU
 captures. WASM capacity and JavaScript heap samples do not measure process RSS,
 GPU residency or every transient allocation. This small native UI fixture
 does not establish large-package, decompression or physical mobile memory

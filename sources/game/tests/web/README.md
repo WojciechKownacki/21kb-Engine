@@ -189,9 +189,12 @@ successfully. These sessions also require hardware contexts and compiled shaders
 `21kb.web-game-loading/v1`. Cold and subsequent loads require native readiness
 and hardware-rendered button captures. It records first-frame/resource timings,
 WASM capacity and JavaScript heap usage, then requires continued native progress
-and rendering after a moderate browser memory-pressure notification. Four
-separate local package URLs check actual missing, empty, truncated and corrupt
-files, explicit native errors and the visible reload message. See
+and rendering after a moderate browser memory-pressure notification. Five
+separate local package URLs check missing, empty, truncated and corrupt files
+and a response interrupted before its declared length. All require explicit
+native errors and the visible reload message. Restoring the complete response
+and reloading the same URL must restore native UI/GPU operation and a button
+must commit save/settings data. See
 [browser loading](../../../../docs/browser_loading.md) for measurement limits.
 
 `run_game_content_loading_tests.py` authors a deterministic 2048 by 2048 texture
