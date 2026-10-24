@@ -59,6 +59,7 @@ void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
 void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
+void RunRendererGiResolveTests();
 void RunRendererCommandReuseTests();
 void RunRendererTransparentGpuReadbackTests();
 void RunRendererDefaultSubmissionResultTest();
@@ -247,6 +248,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "runtime-submit") {
         kb::render::tests::RunRendererRuntimeSubmitTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "gi-resolve") {
+        kb::render::tests::RunRendererGiResolveTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "particle-state-rejection") {

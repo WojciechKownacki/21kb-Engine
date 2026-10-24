@@ -889,6 +889,11 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
 
     # The complete node/profile sweep has separate bounded processes below.
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests> renderer-integration)
+    if(WIN32)
+        add_test(NAME kb_renderer_gi_resolve COMMAND $<TARGET_FILE:kb_renderer_tests> gi-resolve)
+        set_tests_properties(kb_renderer_gi_resolve PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;gi" TIMEOUT 180)
+    endif()
     set_tests_properties(kb_renderer_tests PROPERTIES
         FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
     if(MSVC AND TARGET kb_test_process_error_tests)

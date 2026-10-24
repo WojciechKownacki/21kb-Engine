@@ -40,6 +40,9 @@
 #include "kb/render/particles/ParticleGpuVisualSimulation.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/ShaderBinaryProvider.hpp"
+#include "kb/render/ShaderManifest.hpp"
+#include "kb/render/gi/SceneGiResolvePass.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/overlay/SceneGizmoPass.hpp"
@@ -8691,6 +8694,58 @@ void RunRendererParticleContactDeathTest() {
     Require(contactDifference > reference.size() / 2U, "Contact deaths did not visibly remove the free-flying particles");
 #else
     throw std::runtime_error("Particle collision readback requires the Windows renderer and particle provider module");
+#endif
+}
+
+void RunRendererGiResolveTests() {
+#if defined(_WIN32)
+    struct TrackingProvider final : ShaderBinaryProvider {
+        mutable std::uint32_t resolveReads = 0U;
+        bool ReadFixedShader(bgfx::RendererType::Enum backend, std::string_view name,
+            std::vector<std::uint8_t>& bytes, std::uint64_t& revision) const override {
+            if (name == "fs_ssgi_resolve.sc") ++resolveReads;
+            const char* directory = ShaderProfileDirectoryForRenderer(backend);
+            if (directory == nullptr) return false;
+            std::ifstream input(std::filesystem::path{directory} / (std::string{name} + ".bin"),
+                std::ios::binary | std::ios::ate);
+            if (!input.is_open()) return false;
+            const std::streamsize size = input.tellg();
+            if (size <= 0) return false;
+            input.seekg(0, std::ios::beg);
+            bytes.resize(static_cast<std::size_t>(size));
+            revision = 1U;
+            return static_cast<bool>(input.read(reinterpret_cast<char*>(bytes.data()), size));
+        }
+        bool ReadMaterialShader(std::uint64_t, std::uint64_t, std::string_view, bgfx::RendererType::Enum,
+            std::string_view, std::vector<std::uint8_t>&, std::uint64_t&) const override { return false; }
+        std::uint64_t MaterialShaderRevision(std::uint64_t, std::uint64_t, std::string_view,
+            bgfx::RendererType::Enum) const noexcept override { return 0U; }
+    };
+    {
+        NativeTestSurface surface;
+        Require(surface.IsValid(), "Lazy GI test needs a hidden native surface");
+        Renderer renderer;
+        const auto provider = std::make_shared<TrackingProvider>();
+        Require(renderer.SetShaderBinaryProvider(provider), "Lazy GI shader provider was not installed");
+        DisplayConfig config;
+        config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+        Require(renderer.Initialize(surface, &config), "Lazy GI renderer initialization failed");
+        Require(provider->resolveReads == 0U, "Renderer startup must not load an unused GI resolve shader");
+        SceneGiResolvePass resolve;
+        Require(resolve.Initialize() && provider->resolveReads == 1U,
+            "The deferred GI shader must remain available when requested");
+        Require(renderer.BeginFrame(), "Lazy GI test could not submit shader creation");
+        renderer.EndFrame();
+        resolve.Shutdown();
+        renderer.Shutdown();
+    }
+    RunRendererRendersScreenSpaceGiBounceTest();
+    RunRendererSmoothsScreenSpaceGiOverTimeTest();
+    RunRendererRendersScreenSpaceAmbientOcclusionTest();
+    RunRendererRendersVoxelGiFromOffscreenObjectsTest();
+    RunRendererShadowsVoxelGiBounceTest();
+#else
+    throw std::runtime_error("GI resolve readback requires a supported native GPU test surface");
 #endif
 }
 

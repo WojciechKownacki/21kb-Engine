@@ -354,8 +354,6 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
-    // Optional: without its shader screen-space GI simply contributes nothing.
-    static_cast<void>(giResolvePass_.Initialize());
     // Without it (no shader variant or renderable cube map) reflections keep the environment colour.
     static_cast<void>(skyReflection_.Initialize());
     static_cast<void>(giVoxelGrid_.Initialize());
@@ -1574,6 +1572,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
         }
         SceneGiBinding giBinding{};
         const bool giEnabled = UsesScreenSpaceEffects(effectiveLightingConfig);
+        // Compile the optional resolve shader only for a viewport that uses it.
+        if (giEnabled) static_cast<void>(giResolvePass_.Initialize());
         if (giEnabled && giHistories_[desc.target.viewport.viewportIndex].Ensure(desc.target.viewport.extent, desc.target.colorFormat)) {
             giBinding = giHistories_[desc.target.viewport.viewportIndex].Binding();
         }
