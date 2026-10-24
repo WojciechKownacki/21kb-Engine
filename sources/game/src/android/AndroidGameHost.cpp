@@ -3,6 +3,7 @@
 #include "PackagedRuntimeModules.hpp"
 #include "RuntimeSceneFrameSync.hpp"
 #include "AndroidGamepadInput.hpp"
+#include "AndroidTouchInput.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -487,6 +488,7 @@ private:
     }
 
     void HandleAppCommand(int32_t command) noexcept {
+        touches_.HandleAppCommand(command);
         switch (command) {
         case APP_CMD_INIT_WINDOW:
         case APP_CMD_WINDOW_RESIZED:
@@ -565,6 +567,7 @@ private:
 
     void DrainInput() noexcept {
         gamepads_.Update();
+        touches_.SetViewport(surface_.Width(), surface_.Height());
         kb::input::InputDeviceState* state = nullptr;
         if (scene_ != nullptr) {
             state = &scene_->Input().MutableDeviceState();
@@ -574,7 +577,7 @@ private:
             if (!focused_) {
                 state->Reset();
                 state->SetHasFocus(false);
-                touchPoints_.clear();
+                touches_.Cancel();
             }
         }
         if (app_.textInputState != 0) {
@@ -587,7 +590,10 @@ private:
         }
         android_input_buffer* const input = android_app_swap_input_buffers(&app_);
         if (input == nullptr) {
-            if (state != nullptr) gamepads_.Publish(*state, focused_);
+            if (state != nullptr) {
+                gamepads_.Publish(*state, focused_);
+                touches_.Publish(*state);
+            }
             return;
         }
         if (state != nullptr) {
@@ -605,67 +611,21 @@ private:
             }
             for (std::uint64_t index = 0U; index < input->motionEventsCount; ++index) {
                 const auto& event = input->motionEvents[index];
-                if (!gamepads_.Process(event) && focused_) ApplyTouchEvent(event);
+                if (!gamepads_.Process(event) && focused_ && resumed_ && app_.window != nullptr) {
+                    static_cast<void>(touches_.Process(event));
+                }
             }
             gamepads_.Publish(*state, focused_);
         }
-        if (state != nullptr && focused_) {
-            state->SetTouchPoints(touchPoints_);
-            if (!touchPoints_.empty()) {
-                state->SetPointerPosition(touchPoints_.front().x, touchPoints_.front().y);
-            }
-        }
+        if (state != nullptr) touches_.Publish(*state);
         android_app_clear_motion_events(input);
         android_app_clear_key_events(input);
     }
 
-    void ApplyTouchEvent(const GameActivityMotionEvent& event) noexcept {
-        if ((event.source & AINPUT_SOURCE_TOUCHSCREEN) != AINPUT_SOURCE_TOUCHSCREEN) {
-            return;
-        }
-        const int32_t action = event.action & AMOTION_EVENT_ACTION_MASK;
-        const std::uint32_t actionIndex = static_cast<std::uint32_t>(
-            (event.action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
-            AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
-        touchPoints_.clear();
-        const std::uint32_t count = (std::min)(
-            event.pointerCount,
-            static_cast<std::uint32_t>(kb::input::InputDeviceState::kMaxTouchPoints));
-        touchPoints_.reserve(count);
-        for (std::uint32_t index = 0U; index < count; ++index) {
-            const GameActivityPointerAxes& pointer = event.pointers[index];
-            kb::input::InputTouchPhase phase = kb::input::InputTouchPhase::Moved;
-            if ((action == AMOTION_EVENT_ACTION_DOWN || action == AMOTION_EVENT_ACTION_POINTER_DOWN) &&
-                index == actionIndex) {
-                phase = kb::input::InputTouchPhase::Began;
-            } else if (action == AMOTION_EVENT_ACTION_CANCEL ||
-                ((action == AMOTION_EVENT_ACTION_UP || action == AMOTION_EVENT_ACTION_POINTER_UP) &&
-                    index == actionIndex)) {
-                phase = kb::input::InputTouchPhase::Ended;
-            }
-            touchPoints_.push_back(kb::input::InputTouchPoint{
-                .id = pointer.id < 0 ? 0U : static_cast<std::uint32_t>(pointer.id),
-                .x = GameActivityPointerAxes_getX(&pointer),
-                .y = GameActivityPointerAxes_getY(&pointer),
-                .phase = phase,
-            });
-        }
-    }
-
     void FinalizeInputFrame() noexcept {
-        touchPoints_.erase(
-            std::remove_if(
-                touchPoints_.begin(),
-                touchPoints_.end(),
-                [](const kb::input::InputTouchPoint& point) {
-                    return point.phase == kb::input::InputTouchPhase::Ended;
-                }),
-            touchPoints_.end());
-        for (kb::input::InputTouchPoint& point : touchPoints_) {
-            point.phase = kb::input::InputTouchPhase::Moved;
-        }
+        touches_.FinishFrame();
         if (scene_ != nullptr) {
-            scene_->Input().MutableDeviceState().SetTouchPoints(touchPoints_);
+            touches_.Publish(scene_->Input().MutableDeviceState());
         }
     }
 
@@ -794,6 +754,7 @@ private:
 
     android_app& app_;
     kb::game::AndroidGamepadInput gamepads_;
+    kb::game::AndroidTouchInput touches_;
     AndroidAssetMapping packMapping_;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack_;
     std::shared_ptr<kb::render::RuntimeAssetShaderProvider> shaderProvider_;
@@ -815,7 +776,6 @@ private:
     bool firstFrameReported_ = false;
     bool imeVisibleRequested_ = false;
     std::chrono::steady_clock::time_point previousTick_{};
-    std::vector<kb::input::InputTouchPoint> touchPoints_;
 };
 
 } // namespace

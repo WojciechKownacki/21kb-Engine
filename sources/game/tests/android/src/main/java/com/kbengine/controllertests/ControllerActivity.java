@@ -12,6 +12,21 @@ public final class ControllerActivity extends GameActivity {
         return mSurfaceView.dispatchGenericMotionEvent(event);
     }
 
+    public boolean dispatchTestTouch(MotionEvent event) {
+        return mSurfaceView.dispatchTouchEvent(event);
+    }
+
+    public void detachTestSurface() {
+        ((android.view.ViewGroup) mSurfaceView.getParent()).removeView(mSurfaceView);
+    }
+
+    public void attachTestSurface() {
+        setContentView(mSurfaceView);
+    }
+
+    public int touchWidth() { return mSurfaceView.getWidth(); }
+    public int touchHeight() { return mSurfaceView.getHeight(); }
+
     @Override protected void onCreate(Bundle state) {
         WindowManager.LayoutParams attributes = getWindow().getAttributes();
         attributes.alpha = 0.0f;

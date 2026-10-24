@@ -1,4 +1,5 @@
 #include "AndroidGamepadInput.hpp"
+#include "AndroidTouchInput.hpp"
 
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 
@@ -10,6 +11,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+
+void VerifyAndroidTouchInput();
 
 namespace {
 using kb::input::InputDeviceState;
@@ -31,6 +34,14 @@ std::mutex observationMutex;
 Observation observation;
 std::atomic<bool> focused{true};
 std::atomic<unsigned> starts{0U}, stops{0U};
+std::atomic<unsigned> surfaces{0U}, lostSurfaces{0U}, resizedSurfaces{0U};
+std::atomic<bool> holdMotion{false}, finishTouchFrame{false};
+std::atomic<unsigned> touchEvents{0U};
+std::atomic<bool> touchBoundaries{false};
+struct PlatformInput {
+    kb::game::AndroidGamepadInput controllers;
+    kb::game::AndroidTouchInput touches;
+};
 
 void Require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
@@ -136,6 +147,58 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_setFocused(JNIEnv*, 
     focused.store(value);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_holdMotion(JNIEnv*, jclass, jboolean value) {
+    holdMotion.store(value);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_consumeTouchFrame(JNIEnv*, jclass) {
+    finishTouchFrame.store(true);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_touchMatches(
+    JNIEnv* env, jclass, jintArray ids, jintArray phases, jfloatArray coordinates, jint width, jint height) {
+    if (ids == nullptr || phases == nullptr || coordinates == nullptr) return false;
+    const auto count = env->GetArrayLength(ids);
+    if (count > static_cast<jsize>(InputDeviceState::kMaxTouchPoints) || env->GetArrayLength(phases) != count ||
+        env->GetArrayLength(coordinates) != count * 2) return false;
+    std::array<jint, InputDeviceState::kMaxTouchPoints> expectedIds{}, expectedPhases{};
+    std::array<jfloat, InputDeviceState::kMaxTouchPoints * 2U> expectedCoordinates{};
+    env->GetIntArrayRegion(ids, 0, count, expectedIds.data());
+    env->GetIntArrayRegion(phases, 0, count, expectedPhases.data());
+    env->GetFloatArrayRegion(coordinates, 0, count * 2, expectedCoordinates.data());
+    const std::lock_guard lock{observationMutex};
+    const auto points = observation.state.TouchPoints();
+    if (!observation.ready || !observation.error.empty() || points.size() != static_cast<std::size_t>(count)) return false;
+    if (width > 0 && (observation.state.PointerViewportWidth() != static_cast<unsigned>(width) ||
+        observation.state.PointerViewportHeight() != static_cast<unsigned>(height))) return false;
+    bool active = false;
+    std::size_t primary = 0U;
+    for (std::size_t index = 0U; index < points.size(); ++index) {
+        if (points[index].id != static_cast<unsigned>(expectedIds[index]) ||
+            static_cast<int>(points[index].phase) != expectedPhases[index] ||
+            !Near(points[index].x, expectedCoordinates[index * 2U]) ||
+            !Near(points[index].y, expectedCoordinates[index * 2U + 1U])) return false;
+        if (!active && points[index].phase != kb::input::InputTouchPhase::Ended) { primary = index; active = true; }
+    }
+    return observation.state.IsKeyDown(InputKey::TouchDown) == active &&
+        (points.empty() || (Near(observation.state.PointerX(), points[primary].x) &&
+            Near(observation.state.PointerY(), points[primary].y)));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_kbengine_controllertests_ControllerInstrumentation_surfaceState(JNIEnv*, jclass, jint phase) {
+    const std::lock_guard lock{observationMutex};
+    const bool available = observation.state.PointerViewportWidth() > 0U && observation.state.PointerViewportHeight() > 0U;
+    if (phase == 0) return surfaces.load() > 0U && available;
+    if (phase == 1) return resizedSurfaces.load() > 0U;
+    if (phase == 2) return lostSurfaces.load() > 0U && !available;
+    if (phase == 3) return surfaces.load() >= 2U && available;
+    return false;
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_kbengine_controllertests_ControllerInstrumentation_diagnostics(JNIEnv* env, jclass) {
     const std::lock_guard lock{observationMutex};
@@ -143,7 +206,14 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_diagnostics(JNIEnv* 
     text << "ready=" << observation.ready << " stopped=" << observation.stopped << " motions=" << observation.motions
          << '/' << observation.motionsSeen
          << " keys=" << observation.keys << " starts=" << starts.load() << " stops=" << stops.load()
+         << " surfaces=" << surfaces.load() << " lost-surfaces=" << lostSurfaces.load()
+         << " resized-surfaces=" << resizedSurfaces.load() << " viewport=" << observation.state.PointerViewportWidth()
+         << 'x' << observation.state.PointerViewportHeight() << " touches=" << observation.state.TouchPoints().size()
+         << " touch-events=" << touchEvents.load() << " touch-boundaries=" << touchBoundaries.load()
          << " error=" << observation.error << " statuses=";
+    for (const auto& point : observation.state.TouchPoints()) {
+        text << " touch=" << point.id << ',' << static_cast<unsigned>(point.phase) << ',' << point.x << ',' << point.y;
+    }
     for (auto status : observation.statuses) text << status << ',';
     for (std::uint8_t slot = 0; slot < InputDeviceState::kMaxGamepads; ++slot) {
         text << " slot=" << static_cast<unsigned>(slot) << " device=" << observation.devices[slot];
@@ -158,13 +228,21 @@ extern "C" void android_main(android_app* app) {
     try {
         Require(app != nullptr && app->activity != nullptr, "GameActivity context required");
         VerifySampleBoundaries();
-        kb::game::AndroidGamepadInput controllers;
+        VerifyAndroidTouchInput();
+        touchBoundaries.store(true);
+        PlatformInput platform;
+        auto& controllers = platform.controllers;
         Require(controllers.Initialize(*app->activity), "Controller library initialization failed");
-        app->userData = &controllers;
+        app->userData = &platform;
         app->onAppCmd = [](android_app* host, int32_t command) {
-            auto& input = *static_cast<kb::game::AndroidGamepadInput*>(host->userData);
+            auto& inputs = *static_cast<PlatformInput*>(host->userData);
+            inputs.touches.HandleAppCommand(command);
+            auto& input = inputs.controllers;
             if (command == APP_CMD_START) { ++starts; input.OnStart(); }
             if (command == APP_CMD_STOP) { ++stops; input.OnStop(); }
+            if (command == APP_CMD_INIT_WINDOW) ++surfaces;
+            if (command == APP_CMD_TERM_WINDOW) ++lostSurfaces;
+            if (command == APP_CMD_WINDOW_RESIZED) ++resizedSurfaces;
         };
         android_app_set_key_event_filter(app, nullptr);
         android_app_set_motion_event_filter(app, nullptr);
@@ -175,20 +253,30 @@ extern "C" void android_main(android_app* app) {
             if (source != nullptr) source->process(app, source);
             if (app->destroyRequested != 0) break;
             controllers.Update();
-            auto* events = android_app_swap_input_buffers(app);
+            const auto width = app->window == nullptr ? 0U : static_cast<unsigned>(ANativeWindow_getWidth(app->window));
+            const auto height = app->window == nullptr ? 0U : static_cast<unsigned>(ANativeWindow_getHeight(app->window));
+            platform.touches.SetViewport(width, height);
+            if (!focused.load()) platform.touches.Cancel();
+            if (finishTouchFrame.exchange(false)) platform.touches.FinishFrame();
+            auto* events = holdMotion.load() ? nullptr : android_app_swap_input_buffers(app);
             if (events != nullptr) {
                 for (std::uint64_t index = 0; index < events->keyEventsCount; ++index) {
                     if (controllers.Process(events->keyEvents[index])) ++keys;
                 }
                 for (std::uint64_t index = 0; index < events->motionEventsCount; ++index) {
-                    ++motionsSeen;
-                    if (controllers.Process(events->motionEvents[index])) ++motions;
+                    const auto& event = events->motionEvents[index];
+                    if ((event.source & AINPUT_SOURCE_JOYSTICK) == AINPUT_SOURCE_JOYSTICK) ++motionsSeen;
+                    if (controllers.Process(event)) ++motions;
+                    else if (focused.load()) {
+                        if (platform.touches.Process(event)) ++touchEvents;
+                    }
                 }
                 android_app_clear_motion_events(events);
                 android_app_clear_key_events(events);
             }
             const std::lock_guard lock{observationMutex};
             controllers.Publish(observation.state, focused.load());
+            platform.touches.Publish(observation.state);
             for (int slot = 0; slot < PADDLEBOAT_MAX_CONTROLLERS; ++slot) {
                 observation.statuses[static_cast<std::size_t>(slot)] = Paddleboat_getControllerStatus(slot);
             }

@@ -123,7 +123,8 @@ if(ANDROID AND KB_BUILD_ANDROID_HOST)
     find_package(game-activity REQUIRED CONFIG)
     find_package(games-controller REQUIRED CONFIG)
 
-    add_library(kb_android_gamepad_input STATIC src/android/AndroidGamepadInput.cpp)
+    add_library(kb_android_gamepad_input STATIC
+        src/android/AndroidGamepadInput.cpp src/android/AndroidTouchInput.cpp)
     target_include_directories(kb_android_gamepad_input PUBLIC src/private)
     target_link_libraries(kb_android_gamepad_input PUBLIC
         kb_engine games-controller::paddleboat_static game-activity::game-activity_static)

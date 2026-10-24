@@ -1,6 +1,6 @@
-# Android controller tests
+# Android input tests
 
-This APK runs the production Android controller adapter with GameActivity 4.4.2
+This APK runs the production Android controller and touch adapters with GameActivity 4.4.2
 and Android Games Controller 2.0.2. It uses a transparent, nonfocusable activity
 with preview disabled. The CLI registers two OS virtual controllers with `uinput`
 and sends Java `MotionEvent` and `KeyEvent` objects through GameActivity's surface
@@ -26,6 +26,18 @@ inputs, slot isolation, reconnection with a new device ID, and native shutdown.
 The engine exposes four controller slots. Extra library slots do not alias them.
 Android axes pointing down are converted to the engine's positive-up convention.
 
+The touchscreen scenario dispatches two-contact events through the actual
+GameActivity SurfaceView touch handler and reads the native adapter's snapshots.
+It holds one event batch to check that a move cannot erase a begin or an earlier
+release, then verifies cancel, focus loss, stale moves, an actual orientation
+change and coordinates against the resized surface. Removing and reattaching the
+SurfaceView exercises native window termination and initialization. Explicit frame
+consumption checks that terminal samples persist until consumed and then clear.
+Native boundary cases cover malformed counts, IDs, indices, nonfinite coordinates,
+unrelated sources, lifecycle commands, reused IDs and the contact capacity.
+The CLI requires a separate `touch=PASS` instrumentation result.
+
 An emulator run verifies the Android SDK/JNI/native event path with OS virtual
-devices. Physical controller mappings, wireless transport and a fully packaged
-game's lifecycle require their own device tests.
+devices and touchscreen events delivered to the test surface. Physical controller
+mappings, wireless transport, touchscreen drivers, OS navigation gestures and a
+fully packaged game's lifecycle require their own device tests.

@@ -124,13 +124,16 @@ def main() -> None:
         (args.output / "instrumentation.log").write_text(text, encoding="utf-8")
         instrumentation.wait(timeout=10)
         if (instrumentation.returncode != 0 or "INSTRUMENTATION_RESULT: result=PASS" not in text or
+                "INSTRUMENTATION_RESULT: touch=PASS" not in text or
                 "INSTRUMENTATION_CODE: -1" not in text):
             raise RuntimeError("Native GameActivity controller assertions failed")
         report.update(result="PASS", evidence="instrumentation.log", checks=[
             "real GameActivity key/motion queue and Paddleboat consumption",
             "two OS device IDs with independent six-axis values and buttons",
             "hardware flat regions, sign convention, range and nonfinite conversion",
-            "focus suppression, disconnect clears one slot, reconnect uses a new device ID"])
+            "focus suppression, disconnect clears one slot, reconnect uses a new device ID",
+            "two touchscreen IDs and queued begin/end phases through real GameActivity motion handlers",
+            "synthetic ACTION_CANCEL, focus cancellation, actual orientation resize and surface destruction/recreation"])
     except Exception as error:
         report["error"] = str(error)
         raise
