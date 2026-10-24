@@ -1247,6 +1247,8 @@ void RunSceneTransformLookupLifetimeAndFallbackTest() {
     kb::scene::Scene scene;
     const kb::scene::Scene& readOnly = scene;
     auto& world = scene.Runtime().EcsWorld();
+    const auto component = world.Component<kb::scene::TransformComponent>();
+    ecs_add_pair(world.NativeHandle(), component, EcsOnInstantiate, EcsInherit);
     const auto entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Transform lookup",
         .transform = kb::scene::TransformComponent{.localPosition = {17.0F, 0.0F, 0.0F}},
@@ -1261,12 +1263,10 @@ void RunSceneTransformLookupLifetimeAndFallbackTest() {
     kb::tests::Require(scene.Transforms().TryGet(entity) == nullptr && readOnly.Transforms().TryGet(entity) == nullptr,
         "Scene transform lookup retained a removed component");
 
-    const auto component = world.Component<kb::scene::TransformComponent>();
     const auto base = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Inherited transform base",
         .transform = kb::scene::TransformComponent{.localPosition = {31.0F, 0.0F, 0.0F}},
     });
-    ecs_add_pair(world.NativeHandle(), component, EcsOnInstantiate, EcsInherit);
     ecs_add_pair(world.NativeHandle(), ecs_strip_generation(entity.Id()), EcsIsA, ecs_strip_generation(base.Id()));
     const auto* inherited = readOnly.Transforms().TryGet(entity);
     kb::tests::Require(inherited != nullptr && kb::tests::NearlyEqual(inherited->localPosition.x, 31.0F),
@@ -2309,6 +2309,10 @@ void RunSceneTransformSetManyMatchesPerEntityWritesTest() {
         static_cast<void>(single.scene.Runtime().Update(1.0F / 60.0F));
         compare("A batch transform write synchronized differently from writing each entity on its own");
     }
+}
+
+void RunSceneTransformLookupTests() {
+    RunSceneTransformLookupLifetimeAndFallbackTest();
 }
 
 void RunSceneSystemTransformSyncTests() {
