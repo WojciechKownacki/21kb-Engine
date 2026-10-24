@@ -13,6 +13,8 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshSourceImport.hpp"
 
+#include <cgltf/cgltf.h>
+
 #include <cmath>
 #include <algorithm>
 #include <array>
@@ -325,6 +327,44 @@ struct MeshBounds {
     return std::fabs(value - expected) < 0.001F;
 }
 
+void OversizedAccessorCountsAreRefused() {
+    const std::string document = R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"accessors":[{"componentType":5126,"count":9223372036854775807,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}]})";
+    const auto bytes = std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(document.data()), document.size() };
+    RequireThat(!RenderMeshAssetBuilder::LoadGltf(bytes, {}).has_value(),
+        "An accessor count must be bounded before allocating its decoded float array");
+}
+
+void DecodedAccessorBudgetIsCheckedWithoutAllocatingIt() {
+    for (const std::string_view counts : {
+            R"({"componentType":5126,"count":178956970,"type":"VEC3"})",
+            R"({"componentType":5126,"count":178956971,"type":"VEC3"})",
+            R"({"componentType":5126,"count":100000000,"type":"VEC3"},{"componentType":5126,"count":100000000,"type":"VEC3"})",
+            R"({"componentType":5126,"count":0,"type":"VEC3"})",
+            R"({"componentType":5126,"count":3,"type":"VEC3"})" }) {
+        const std::string document = "{\"asset\":{\"version\":\"2.0\"},\"accessors\":[" + std::string{ counts } + "]}";
+        cgltf_options options{};
+        cgltf_data* parsed = nullptr;
+        Require(cgltf_parse(&options, document.data(), document.size(), &parsed) == cgltf_result_success && parsed != nullptr,
+            "Accessor budget fixture must parse");
+        const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data{ parsed, &cgltf_free };
+        std::string error;
+        const bool expected = data->accessors_count == 1U &&
+            (data->accessors[0].count == 178956970U || data->accessors[0].count == 3U);
+        RequireThat(kb::assets::LoadGltfBuffers(options, *data, {}, {}, &error) == expected,
+            "Decoded accessor budget or zero-initialized accessor validation differs: " + error);
+        const auto bytes = std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(document.data()), document.size() };
+        RequireThat(kb::assets::CollectGltfExternalBuffers(bytes, {}, &error).has_value() == expected,
+            "Import and runtime accessor budgets must agree");
+        if (data->accessors[0].count == 3U) {
+            std::array<float, 9> values;
+            values.fill(1.0F);
+            Require(cgltf_accessor_unpack_floats(&data->accessors[0], values.data(), values.size()) == values.size() &&
+                std::ranges::all_of(values, [](float value) { return value == 0.0F; }),
+                "Valid accessors without a backing buffer must retain zero initialization");
+        }
+    }
+}
+
 // The import scale and rotation (ModelImporter Scale Factor, Interchange Import Rotation) reach
 // the loaded mesh of an OBJ and a glTF source after the right- to left-handed conversion: the
 // triangle (0,0,0) (1,0,0) (0,1,0) mirrors X to (-1,0,0), turns 90 degrees about Y to (0,0,1) and
@@ -362,6 +402,8 @@ void ImportScaleAndRotationReachTheMesh() {
 } // namespace
 
 void RunGltfExternalResourceTests() {
+    OversizedAccessorCountsAreRefused();
+    DecodedAccessorBudgetIsCheckedWithoutAllocatingIt();
     ImportScaleAndRotationReachTheMesh();
     RelativeResourcePathsAreTheOnlyAcceptedFileUris();
     ExternalBufferImportsAndLoadsWithoutTheSourceFolder();

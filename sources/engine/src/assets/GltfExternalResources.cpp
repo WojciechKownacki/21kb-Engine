@@ -15,6 +15,7 @@ namespace {
 
 // A glTF buffer is addressed with 32-bit offsets by every importer here; nothing larger is read.
 constexpr std::uintmax_t kMaximumExternalBufferBytes = std::uintmax_t{ 1U } << 31U;
+constexpr std::uintmax_t kMaximumDecodedAccessorBytes = std::uintmax_t{ 1U } << 31U;
 
 bool Fail(std::string* error, std::string message) {
     if (error != nullptr) *error = std::move(message);
@@ -110,6 +111,26 @@ struct ParsedGltfDeleter {
     void operator()(cgltf_data* data) const noexcept { cgltf_free(data); }
 };
 
+[[nodiscard]] bool ValidateAccessorDimensions(const cgltf_data& data, std::string* error) {
+    std::uintmax_t remaining = kMaximumDecodedAccessorBytes;
+    for (cgltf_size index = 0U; index < data.accessors_count; ++index) {
+        const cgltf_accessor& accessor = data.accessors[index];
+        const cgltf_size components = cgltf_num_components(accessor.type);
+        if (accessor.count == 0U || components == 0U) {
+            return Fail(error, "glTF accessor " + std::to_string(index) + " has an invalid element count or type.");
+        }
+        // Bound the expanded float arrays even for accessors without a backing buffer.
+        // Divide before multiplying so an untrusted count cannot wrap the size check.
+        const std::uintmax_t elementBytes = components * sizeof(cgltf_float);
+        if (accessor.count > remaining / elementBytes) {
+            return Fail(error, "glTF accessor " + std::to_string(index) +
+                " exceeds the 2 GiB decoded accessor data limit for one document.");
+        }
+        remaining -= accessor.count * elementBytes;
+    }
+    return true;
+}
+
 [[nodiscard]] bool ValidateAccessorAlignment(const cgltf_data& data, std::string* error) {
     const auto aligned = [](const cgltf_buffer_view* view, cgltf_size offset, cgltf_size size) {
         return size != 0U && offset % size == 0U && (view == nullptr || view->offset % size == 0U);
@@ -188,7 +209,7 @@ bool LoadGltfBuffers(
     std::span<const ImportedAssetResource> embedded,
     std::string* error) {
     // Accessor readers use typed loads, including for sparse indices and values.
-    if (!ValidateAccessorAlignment(data, error)) return false;
+    if (!ValidateAccessorDimensions(data, error) || !ValidateAccessorAlignment(data, error)) return false;
     for (cgltf_size index = 0U; index < data.buffers_count; ++index) {
         cgltf_buffer& buffer = data.buffers[index];
         if (buffer.data != nullptr || buffer.uri == nullptr || IsDataUri(buffer.uri)) continue;
@@ -239,6 +260,7 @@ std::optional<std::vector<ImportedAssetResource>> CollectGltfExternalBuffers(
         return std::nullopt;
     }
     const std::unique_ptr<cgltf_data, ParsedGltfDeleter> data{ raw };
+    if (!ValidateAccessorDimensions(*data, error)) return std::nullopt;
     std::vector<ImportedAssetResource> resources;
     for (cgltf_size index = 0U; index < data->buffers_count; ++index) {
         const cgltf_buffer& buffer = data->buffers[index];
