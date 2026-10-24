@@ -3,6 +3,7 @@
 #include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/frame/FullscreenTexturePass.hpp"
+#include "kb/render/post/SceneDisplayCompositeRenderer.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
@@ -7246,6 +7247,56 @@ void RunGraphProgramLifetimeTests() {
     RunForwardGraphRenderTest();
 #else
     Require(false, "Graph program lifetime validation requires the shader compiler and a real GPU");
+#endif
+}
+
+void RunDisplayAlphaGpuTests() {
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    FullscreenFloatHarness harness;
+    Require(harness.Init(), "Display alpha validation requires a Direct3D11 device");
+    FullscreenTexturePass copy;
+    SceneDisplayCompositeRenderer display;
+    Require(copy.Initialize() && display.Initialize(), "Display alpha programs must load");
+    constexpr std::size_t kTexels = static_cast<std::size_t>(FullscreenFloatHarness::kSize) * FullscreenFloatHarness::kSize;
+    for (float alpha : { 0.0F, 0.5F, 1.0F }) {
+        std::vector<float> texels(kTexels * 4U);
+        for (std::size_t index = 0U; index < kTexels; ++index) {
+            texels[index * 4U] = 0.25F;
+            texels[index * 4U + 1U] = 0.5F;
+            texels[index * 4U + 2U] = 0.75F;
+            texels[index * 4U + 3U] = alpha;
+        }
+        const bgfx::TextureHandle source = FullscreenFloatHarness::CreateTexture(texels);
+        const FullscreenTextureOutputTransform transform{
+            .gamma = 1.0F, .tonemap = FullscreenTextureTonemapOperator::None };
+        Require(copy.Submit(FullscreenTexturePassDesc{
+            .sourceTexture = source, .frameBuffer = harness.FrameBuffer(),
+            .extent = { FullscreenFloatHarness::kSize, FullscreenFloatHarness::kSize },
+            .outputTransform = transform }), "The general texture copy must submit");
+        const auto copied = FullscreenFloatHarness::At(harness.Render(BGFX_INVALID_HANDLE, false), 32U, 32U);
+        Require(std::abs(copied[3] - alpha) < 0.001F, "A general texture copy must preserve source alpha");
+        Require(display.Submit(SceneDisplayCompositeDesc{
+            .hdrColor = source, .frameBuffer = harness.FrameBuffer(),
+            .extent = { FullscreenFloatHarness::kSize, FullscreenFloatHarness::kSize },
+            .outputTransform = transform }), "The display composite must submit");
+        const auto shown = FullscreenFloatHarness::At(harness.Render(BGFX_INVALID_HANDLE, false), 32U, 32U);
+        Require(std::abs(shown[3] - 1.0F) < 0.001F,
+            "The display image must be opaque even when its HDR reactive share is zero");
+        for (std::size_t channel = 0U; channel < 3U; ++channel) {
+            Require(std::abs(shown[channel] - copied[channel]) < 0.001F &&
+                    std::abs(shown[channel] - 0.25F * static_cast<float>(channel + 1U)) < 0.005F,
+                "Display alpha conversion changed the actual color");
+        }
+        bgfx::destroy(source);
+    }
+    display.Shutdown();
+    copy.Shutdown();
+    harness.Shutdown();
+    RunTemporalResolveReactiveAlphaGpuTest();
+    RunTranslucentBlendVisibleShareGpuTest();
+    RunFxaaAfterTonemapGpuTest();
+#else
+    Require(false, "Display alpha validation requires shader tools and actual GPU readbacks");
 #endif
 }
 

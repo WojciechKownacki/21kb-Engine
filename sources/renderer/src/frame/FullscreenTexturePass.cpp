@@ -216,7 +216,7 @@ bool FullscreenTexturePass::Submit(const FullscreenTexturePassDesc& desc) const 
         ResolveFullscreenTextureExposureStops(desc.outputTransform),
         1.0F / gamma,
         TonemapOperatorValue(desc.outputTransform.tonemap),
-        0.0F,
+        desc.forceOpaqueAlpha ? 1.0F : 0.0F,
     };
     const float colorGradeParams[4] = {
         kLutSize,

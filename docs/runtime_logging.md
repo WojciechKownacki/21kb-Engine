@@ -105,7 +105,7 @@ The loader case removes the fixture's WASM file and requires its actual HTTP 404
 the loader abort result and a visible reload instruction. Script failures also
 require an actionable player message. These startup failures do not count as
 passing rendered frames.
-All eight scenarios passed with hardware WebGL2 in
+All nine scenarios passed with hardware WebGL2 in
 headless Chrome using `--browser-arg=--use-angle=gl` (ANGLE/OpenGL).
 The attempted ANGLE/D3D11 and Edge/OpenGL configurations failed startup checks;
 their graphics execution remains unverified.
@@ -140,5 +140,10 @@ uniform fallback depth fails. The test also observes complete read and draw
 framebuffers for the actual depth blits. The bgfx framebuffer copy path uses
 depth/stencil attachments and nearest framebuffer blits for these formats,
 instead of color texture copies. The verified case uses desktop Chrome with
-ANGLE/OpenGL. It uses partial opacity; final browser presentation of the scene's
-translucency alpha remains a separate validation requirement.
+ANGLE/OpenGL. The partial- and full-opacity cases also read the actual display
+buffer and require opaque output alpha. HDR scene alpha records the share of
+opaque geometry still visible through translucency for temporal reprojection;
+the display composite converts it to alpha one. General fullscreen texture
+copies retain source alpha. Native GPU readbacks cover all three source alpha
+values zero, half and one, unchanged display color, temporal reactivity,
+translucent blending and FXAA.

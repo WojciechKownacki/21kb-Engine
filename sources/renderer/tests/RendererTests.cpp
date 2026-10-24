@@ -36,6 +36,7 @@ std::size_t PeakCommittedBytes() noexcept {
 
 void RunGraphForwardGpuRenderTests();
 void RunGraphProgramLifetimeTests();
+void RunDisplayAlphaGpuTests();
 void RunRendererScreenUiSubmitTests();
 void RunRendererReportsRejectedGpuStateUpdateTest();
 void RunParticleGpuVisualCounterTests(bgfx::RendererType::Enum backend);
@@ -277,6 +278,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "capabilities") {
         kb::render::tests::RunRendererCapabilityReportTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "display-alpha") {
+        kb::render::tests::RunDisplayAlphaGpuTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "exposure-meter") {

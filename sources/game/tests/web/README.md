@@ -71,4 +71,13 @@ visualizes copied scene depth. Actual pixels must distinguish the mesh from
 cleared background, and the observed depth blits must use complete read/draw
 framebuffers. The case runs in a separate project copy so its materials and UI
 settings cannot affect other requested cases. The default runtime suite includes
-this case alongside the seven lifecycle and error scenarios.
+this case and `geometry-depth-opaque` alongside the seven lifecycle and error
+scenarios. The latter uses full material opacity. Both verify actual GPU display
+readbacks with alpha 255 and visible scene depth in the browser screenshot;
+the scene's internal reactive alpha must not hide the final canvas image.
+
+The native `kb_renderer_display_alpha` CTest requires shader tools and real bgfx
+readbacks. It checks that display output is opaque for source alpha zero, half
+and one while general texture copies retain those values, then verifies temporal
+reactivity, translucent blend alpha and FXAA. Missing tools or a graphics device
+fail this check. It runs in the Windows release and sanitizer CI jobs.

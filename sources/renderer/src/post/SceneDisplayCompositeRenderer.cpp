@@ -36,6 +36,7 @@ bool SceneDisplayCompositeRenderer::Submit(const SceneDisplayCompositeDesc& desc
         .vignetteIntensity = desc.vignetteIntensity,
         .antiAliasing = desc.antiAliasing,
         .sourceExtent = desc.hdrExtent,
+        .forceOpaqueAlpha = true,
     });
 }
 

@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
 from png_readback import read_png
 
 
-def author_depth_fixture(run, args, project):
+def author_depth_fixture(run, args, project, opacity="0.5"):
     for name, value in [("DepthOccluder", "0"), ("DepthSampler", "200")]:
         material = "/Game/Materials/" + name + ".kbmat"
         run(args.cli, "material-new", "--project", project, "--name", name)
@@ -40,7 +40,7 @@ def author_depth_fixture(run, args, project):
         graph("add-node", "--kind", "Constant", "--name", "Scale", "--value", value)
         if name == "DepthSampler":
             graph("setting", "--name", "Blend Mode", "--value", "translucent")
-            graph("add-node", "--kind", "Constant", "--name", "Opacity", "--value", "0.5")
+            graph("add-node", "--kind", "Constant", "--name", "Opacity", "--value", opacity)
             graph("connect", "--from", "Opacity", "--to", "Output", "--to-pin", "alpha")
             graph("add-node", "--kind", "SceneDepth", "--name", "Depth")
             graph("add-node", "--kind", "Multiply", "--name", "VisibleDepth")
@@ -138,7 +138,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["cli", "cooker", "engine-root", "shaderc", "directory", "browser", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--case", choices=["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion", "geometry-depth"], action="append")
+    parser.add_argument("--case", choices=["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion", "geometry-depth", "geometry-depth-opaque"], action="append")
     parser.add_argument("--browser-arg", action="append", default=[])
     args = parser.parse_args()
     for name in ["cli", "cooker", "engine_root", "shaderc", "directory", "browser", "output"]:
@@ -185,12 +185,12 @@ def main():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        for case in args.case or ["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion", "geometry-depth"]:
+        for case in args.case or ["positive", "ready", "tick", "loader", "graphics-loss", "graphics-recreate", "graphics-exhaustion", "geometry-depth", "geometry-depth-opaque"]:
             case_project = project
-            if case == "geometry-depth":
+            if case.startswith("geometry-depth"):
                 case_project = root / ("DepthSample" + str(len(report["cases"])))
                 shutil.copytree(project, case_project)
-                author_depth_fixture(run, args, case_project)
+                author_depth_fixture(run, args, case_project, "1" if case.endswith("opaque") else "0.5")
             marker = "packaged-runtime-" + case
             ready = 'error("' + marker + '")' if case == "ready" else 'Log("' + marker + '-ready")'
             tick = ('error("' + marker + '")' if case == "tick" else
@@ -282,6 +282,21 @@ WebGL2RenderingContext.prototype.blitFramebuffer = function(...args) {
     }
     return blit.apply(this, args);
 };
+window.kbDisplayReadbacks = [];
+const captureDisplay = location.pathname.includes('geometry-depth');
+const draw = WebGL2RenderingContext.prototype.drawArraysInstanced;
+WebGL2RenderingContext.prototype.drawArraysInstanced = function(...args) {
+    const result = draw.apply(this, args);
+    if (captureDisplay && this.getParameter(this.DRAW_FRAMEBUFFER_BINDING) === null &&
+            this.getParameter(this.READ_FRAMEBUFFER_BINDING) === null) {
+        const rgba = new Uint8Array(4);
+        this.readPixels(Math.floor(this.drawingBufferWidth/2), Math.floor(this.drawingBufferHeight/2),
+            1, 1, this.RGBA, this.UNSIGNED_BYTE, rgba);
+        kbDisplayReadbacks.push(Array.from(rgba));
+        if (kbDisplayReadbacks.length > 16) kbDisplayReadbacks.shift();
+    }
+    return result;
+};
 """)
                     client.call("Page.navigate", url=f"http://127.0.0.1:{server.server_port}/{case}/Game.html")
                     until = time.monotonic() + 60
@@ -293,9 +308,9 @@ WebGL2RenderingContext.prototype.blitFramebuffer = function(...args) {
                             if event.get("method") == "Runtime.exceptionThrown"]
                         require(case == "loader" or not exceptions, "Unhandled browser/runtime exception: " + str(exceptions))
                         if state["data"].get("kbError"):
-                            require(case not in ("positive", "geometry-depth") and not case.startswith("graphics-"), "Positive runtime failed: " + str(state))
+                            require(case != "positive" and not case.startswith(("graphics-", "geometry-depth")), "Positive runtime failed: " + str(state))
                             break
-                        if (case in ("positive", "geometry-depth") or case.startswith("graphics-")) and marker + "-ticks" in (state.get("output") or ""):
+                        if (case == "positive" or case.startswith(("graphics-", "geometry-depth"))) and marker + "-ticks" in (state.get("output") or ""):
                             break
                         if time.monotonic() >= until:
                             raise TimeoutError("Packaged lifecycle result missing: " + str(state))
@@ -310,7 +325,7 @@ WebGL2RenderingContext.prototype.blitFramebuffer = function(...args) {
                             "The loader test did not observe the actual missing WASM response")
                         require(exceptions and all("Aborted(" in json.dumps(error) for error in exceptions),
                             "The startup exception did not come from the actual WASM loader")
-                    elif case in ("positive", "geometry-depth") or case.startswith("graphics-"):
+                    elif case == "positive" or case.startswith(("graphics-", "geometry-depth")):
                         require(state["data"].get("kbFirstFrame") == "true" and
                             state["data"].get("kbBackend") == "webgl", "Actual WebGL frame missing")
                         require(marker + "-ready" in state["output"], "Actual Lua ready Log missing")
@@ -329,9 +344,12 @@ WebGL2RenderingContext.prototype.blitFramebuffer = function(...args) {
                         require(not any(word in state["gl"]["renderer"].lower() for word in
                             ["swiftshader", "llvmpipe", "softpipe", "microsoft basic", "warp", "software"]),
                             "Packaged graphics checks require a hardware GPU: " + str(state["gl"]))
-                        if case == "geometry-depth":
+                        if case.startswith("geometry-depth"):
                             state["depthCopies"] = client.evaluate("window.kbRuntimeGraphics.depthCopies")
+                            state["displayReadbacks"] = client.evaluate("window.kbDisplayReadbacks")
                             state["depthPixels"] = capture_depth(client, directory, "copied-depth")
+                            require(state["displayReadbacks"] and state["displayReadbacks"][-1][3] == 255,
+                                "The actual display buffer leaked its HDR reactive alpha: " + str(state["displayReadbacks"]))
                             require(state["depthCopies"] and all(item["readComplete"] and item["drawComplete"]
                                 for item in state["depthCopies"]), "Actual depth blit used an incomplete framebuffer")
                             require(all(item["complete"] for item in client.evaluate("window.kbRuntimeGraphics.copies")),
