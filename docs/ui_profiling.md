@@ -24,3 +24,8 @@ chains to distinguish frame work from scene construction. The diagnostic adds no
 production instrumentation and leaves the original failing test result unchanged.
 Raw recordings and stack memory are not uploaded. If sampling is unavailable, the
 diagnostic step fails visibly; no profiling or performance acceptance is inferred.
+
+Frame validation counts active layout components from the same typed reads that
+validate their values. It does not issue separate presence queries for those
+components. Invalid values and multiple layouts still refuse the frame; existing
+frame-content and timing regressions remain the acceptance checks.

@@ -422,25 +422,20 @@ class FrameBuilder {
         if (!IsUIComponentValid(*value)) return #Type " holds an invalid value"; \
         element.Field = *value; \
     }
+#define KB_VALIDATE_LAYOUT(Type) \
+    if (const Type* value = ui_.TryGet<Type>(entity)) { \
+        if (!IsUIComponentValid(*value)) return #Type " holds an invalid value"; \
+        ++layoutCount; \
+    }
         KB_VALIDATE(UIRectTransform);
         KB_VALIDATE(UICanvas);
         KB_VALIDATE(UICanvasScaler);
         KB_VALIDATE(UICanvasGroup);
-        if (ui_.Has<UIHorizontalLayout>(entity))
-            ++layoutCount;
-        if (ui_.Has<UIVerticalLayout>(entity))
-            ++layoutCount;
-        if (ui_.Has<UIGridLayout>(entity))
-            ++layoutCount;
-        if (ui_.Has<UIWrapLayout>(entity))
-            ++layoutCount;
-        if (ui_.Has<UIOverlayLayout>(entity))
-            ++layoutCount;
-        KB_VALIDATE(UIHorizontalLayout);
-        KB_VALIDATE(UIVerticalLayout);
-        KB_VALIDATE(UIGridLayout);
-        KB_VALIDATE(UIWrapLayout);
-        KB_VALIDATE(UIOverlayLayout);
+        KB_VALIDATE_LAYOUT(UIHorizontalLayout);
+        KB_VALIDATE_LAYOUT(UIVerticalLayout);
+        KB_VALIDATE_LAYOUT(UIGridLayout);
+        KB_VALIDATE_LAYOUT(UIWrapLayout);
+        KB_VALIDATE_LAYOUT(UIOverlayLayout);
         KB_VALIDATE(UILayoutElement);
         KB_VALIDATE(UIContentSizeFitter);
         KB_VALIDATE(UIAspectRatioFitter);
@@ -464,6 +459,7 @@ class FrameBuilder {
         KB_VALIDATE_COPY(UIProgressBar, progressBar);
         KB_VALIDATE(UIWidgetSwitcher);
 #undef KB_VALIDATE_COPY
+#undef KB_VALIDATE_LAYOUT
 #undef KB_VALIDATE
         if (layoutCount > 1U)
             return "UI object carries more than one layout component";
