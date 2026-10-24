@@ -188,7 +188,8 @@ jobs:
           fi
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends linux-tools-generic
-          perf_tool="$(find /usr/lib/linux-tools -type f -name perf | sort -V | tail -n 1)"
+          # Kernel tool packages expose perf through versioned symlinks.
+          perf_tool="$(find -L /usr/lib/linux-tools -type f -name perf | sort -V | tail -n 1)"
           test -x "$perf_tool"
           mkdir -p build/ci/ui-profile
           # Upload aggregated symbols and call graphs only, never the raw recording.

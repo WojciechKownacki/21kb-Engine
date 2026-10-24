@@ -15,8 +15,10 @@ percentiles use the sorted sample at `floor((frameCount - 1) * percentile / 100)
 does not replace or pass the separate timing and allocation regression test.
 
 After a Linux CI `kb_engine_scene_ui` failure, the job samples this workload with `perf` software
-CPU events and frame-pointer call stacks. Its test-results artifact includes the
-workload log, aggregated symbol costs and call graph. Setup and teardown are also
+CPU events and frame-pointer call stacks. Tool discovery follows the kernel package's
+versioned links under `/usr/lib/linux-tools` and selects the latest installed executable.
+Its test-results artifact includes the workload log, aggregated symbol costs and call graph.
+Setup and teardown are also
 sampled; use the `RunSceneUIBuildFrameProfile` / `SceneUIQueries::BuildFrame` call
 chains to distinguish frame work from scene construction. The diagnostic adds no
 production instrumentation and leaves the original failing test result unchanged.
