@@ -861,6 +861,62 @@ void TestAuthoredDimensionsAndVisibility() {
         kb::tests::NearlyEqual(visible->rect.width, 240.0F), "Restored UI must render at its authored width and accept input");
 }
 
+void TestFocusedTextAfterViewportResize() {
+    kb::scene::Scene scene;
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet formComponents;
+    formComponents.rectTransform = Rect(0.0F, 0.0F, 0.0F, 0.0F);
+    formComponents.rectTransform->anchorMax = {1.0F, 1.0F};
+    formComponents.mask.emplace();
+    formComponents.scrollView.emplace();
+    formComponents.scrollView->horizontal = false;
+    formComponents.scrollView->inertia = false;
+    const auto form = AddUI(scene, canvas, formComponents);
+    auto fieldComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::InputField);
+    fieldComponents.rectTransform = Rect(40.0F, 320.0F, 160.0F, 80.0F);
+    const auto field = AddUI(scene, form, fieldComponents);
+    kb::scene::SceneUIInput input;
+    input.pointerAvailable = true;
+    input.pointerPosition = {100.0F, 350.0F};
+    kb::tests::Require(scene.UI().Update(400.0F, 600.0F, input, 0.016F), "Form must build before focus");
+    input.primaryDown = true;
+    kb::tests::Require(scene.UI().Update(400.0F, 600.0F, input, 0.016F), "Pointer must focus the field");
+    input.primaryDown = false;
+    const std::array<char32_t, 1U> typed{U'x'};
+    input.textInput = typed;
+    kb::tests::Require(scene.UI().Update(400.0F, 600.0F, input, 0.016F), "Focused field must accept text");
+    input.textInput = {};
+    kb::tests::Require(scene.UI().Focused() == field.Entity(), "The form field must hold actual pointer focus");
+    const auto resize = [&](float height) {
+        kb::tests::Require(scene.UI().Update(400.0F, height, input, 0.016F), "Focused form must resize");
+    };
+    const auto requireVisible = [&] {
+        const auto* item = FindElement(scene.UI().Frame(), field.Entity());
+        const auto* viewport = FindElement(scene.UI().Frame(), form.Entity());
+        kb::tests::Require(item != nullptr && viewport != nullptr && item->rect.y >= viewport->rect.y - 0.01F &&
+            item->rect.y + item->rect.height <= viewport->rect.y + viewport->rect.height + 0.01F,
+            "Viewport changes must reveal the focused text field inside its scroll view");
+        kb::tests::Require(scene.UI().Focused() == field.Entity() &&
+            kb::scene::UITextContent(*scene.Components().UI().TryGet<kb::scene::UIText>(field.Entity())) == "x",
+            "Revealing a field must preserve focus and committed text");
+        kb::tests::Require(scene.UI().HitTest({100.0F, item->rect.y + 40.0F}) == field.Entity(),
+            "The revealed field must hit-test where it is drawn");
+    };
+    resize(280.0F);
+    requireVisible();
+    input.pointerPosition = {100.0F, 240.0F};
+    input.scrollDelta = 10.0F;
+    resize(280.0F);
+    input.scrollDelta = 0.0F;
+    resize(280.0F);
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Components().UI().TryGet<kb::scene::UIScrollView>(form.Entity())->scrollY, 0.0F),
+        "Ordinary frames must let the user scroll away without forcing the focus back into view");
+    resize(600.0F);
+    requireVisible();
+    resize(280.0F);
+    requireVisible();
+}
+
 // A pad player has no pointer: the left stick and the D-pad have to walk focus, a focused slider has
 // to take left/right as its value, and holding a direction on a long list has to keep stepping and
 // keep the focused row scrolled into view. Driven through the device state the platform collector
@@ -1948,6 +2004,7 @@ void RunSceneUITests() {
     TestNavigationLinksSurviveHierarchyCopies();
     TestProgressAndEventQueue();
     TestAutomaticRuntimeInput();
+    TestFocusedTextAfterViewportResize();
     TestIndependentTouchCapture();
     TestControllerNavigation();
     TestRadioGroupsAndDrivenWidgets();

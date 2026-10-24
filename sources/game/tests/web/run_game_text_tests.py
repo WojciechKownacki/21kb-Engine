@@ -40,13 +40,17 @@ def author_fixture(args, root):
     component("CanvasRoot", "Rect Transform", "anchorMax=1,1", "offsetMax=0,0")
     component("CanvasRoot", "Canvas")
     component("CanvasRoot", "Canvas Scaler", "scaleMode=0", "scaleFactor=1")
-    run(args.cli, "entity", "add", "--project", project, "--name", "TextEntry", "--parent", "CanvasRoot")
-    component("CanvasRoot/TextEntry", "Rect Transform", "offsetMin=40,320", "offsetMax=560,400")
-    component("CanvasRoot/TextEntry", "Border", "backgroundColor.r=0.05",
+    run(args.cli, "entity", "add", "--project", project, "--name", "Form", "--parent", "CanvasRoot")
+    component("CanvasRoot/Form", "Rect Transform", "anchorMax=1,1", "offsetMax=0,0")
+    component("CanvasRoot/Form", "Mask")
+    component("CanvasRoot/Form", "Scroll View", "horizontal=false", "inertia=false")
+    run(args.cli, "entity", "add", "--project", project, "--name", "TextEntry", "--parent", "CanvasRoot/Form")
+    component("CanvasRoot/Form/TextEntry", "Rect Transform", "offsetMin=40,320", "offsetMax=560,400")
+    component("CanvasRoot/Form/TextEntry", "Border", "backgroundColor.r=0.05",
         "backgroundColor.g=0.1", "backgroundColor.b=0.5", "backgroundColor.a=1")
-    component("CanvasRoot/TextEntry", "Text", "fontAssetId=/Game/Fonts/DejaVuSans.21kb")
-    component("CanvasRoot/TextEntry", "Selectable", "colorFadeSeconds=0")
-    component("CanvasRoot/TextEntry", "Input Field")
+    component("CanvasRoot/Form/TextEntry", "Text", "fontAssetId=/Game/Fonts/DejaVuSans.21kb")
+    component("CanvasRoot/Form/TextEntry", "Selectable", "colorFadeSeconds=0")
+    component("CanvasRoot/Form/TextEntry", "Input Field")
     run(args.cli, "script-new", "--project", project, "--name", "TextFlow", "--language", "lua")
     shutil.copy2(Path(__file__).with_name("fixtures") / "TextFlow.lua",
         project / "Assets/Scripts/TextFlow.lua")
@@ -161,6 +165,19 @@ class TextScenario(TouchScenario):
         client.call("Input.insertText", text="!")
         self.wait("editing continues after DPI resize", lambda value: value["text"] == text + "!")
         self.field_picture("resized")
+        client.call("Emulation.setDeviceMetricsOverride", width=1100, height=900,
+            deviceScaleFactor=1, mobile=False)
+        client.evaluate("Object.assign(document.querySelector('#canvas').style,{width:'800px',height:'280px'})")
+        self.paint()
+        self.geometry()
+        self.wait("smaller viewport reveals the focused text field",
+            lambda value: value["focused"] == value["entry"] and value["scrollY"] >= 119.9)
+        pixels = self.picture("smaller-viewport", [[60, 260]])
+        require(pixels[0][2] > pixels[0][0] + 50,
+            "The focused field is outside the actual smaller viewport: " + str(pixels))
+        self.click(140, 230)
+        client.call("Input.insertText", text="?")
+        self.wait("revealed field continues editing", lambda value: value["text"] == text + "!?")
         events = client.evaluate("window.kbTextEvents")
         self.report["textEvents"] = events
         commits = [event for event in events if event["type"] == "compositionend"]

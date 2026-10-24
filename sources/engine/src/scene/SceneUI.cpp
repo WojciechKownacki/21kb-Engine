@@ -2891,16 +2891,19 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
             return false;
         state.uiFrame = std::move(refreshed);
     }
+    bool revealFocus = previousFrame.viewportSize.x != viewportWidth || previousFrame.viewportSize.y != viewportHeight;
     // Focus handed to a widget created this frame - an opened list's item - lands once it has been laid out.
     if (state.uiPendingFocus.IsValid()) {
         const SceneEntity pending = state.uiPendingFocus;
         state.uiPendingFocus = {};
-        if (SetFocus(pending) && ScrollFocusedIntoView(scene_, state, input)) {
-            SceneUIFrame scrolled;
-            if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(scrolled))
-                return false;
-            state.uiFrame = std::move(scrolled);
-        }
+        revealFocus = SetFocus(pending) || revealFocus;
+    }
+    // A smaller viewport must not leave the active field behind its scroll view's clip.
+    if (revealFocus && ScrollFocusedIntoView(scene_, state, input)) {
+        SceneUIFrame scrolled;
+        if (!FrameBuilder{scene_, {viewportWidth, viewportHeight}}.Build(scrolled))
+            return false;
+        state.uiFrame = std::move(scrolled);
     }
     ResolveInteractionPresentation(scene_, state, input.primaryDown, deltaSeconds, previousFrame, state.uiFrame, true);
     return true;

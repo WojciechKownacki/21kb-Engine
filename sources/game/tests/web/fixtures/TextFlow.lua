@@ -1,4 +1,5 @@
 local entry = 0
+local form = 0
 local submitted = 0
 local canceled = 0
 local previous = ""
@@ -12,7 +13,8 @@ end
 
 function Ready(self, dt)
     entry = World.FindByName("TextEntry")
-    assert(entry ~= 0)
+    form = World.FindByName("Form")
+    assert(entry ~= 0 and form ~= 0)
 end
 
 function OnUISubmitted(self, event)
@@ -31,8 +33,12 @@ function Tick(self, dt)
         entity = entry, component = "Text", property = "content"
     })
     assert(type(value) == "string" and message == nil, message or "Text property read failed")
-    local state = string.format('{"text":%s,"focused":%d,"entry":%d,"submitted":%d,"canceled":%d,"hasFocus":%s,"ready":%s}',
-        encode(value), UI.Focused(), entry, submitted, canceled, tostring(Input.HasFocus()), tostring(frames >= 8))
+    local scroll, scrollMessage = CallFunction("World.GetPropertyFloat", {
+        entity = form, component = "Scroll View", property = "scrollY"
+    })
+    assert(type(scroll) == "number" and scrollMessage == nil, scrollMessage or "Scroll property read failed")
+    local state = string.format('{"text":%s,"focused":%d,"entry":%d,"submitted":%d,"canceled":%d,"hasFocus":%s,"ready":%s,"scrollY":%.4f}',
+        encode(value), UI.Focused(), entry, submitted, canceled, tostring(Input.HasFocus()), tostring(frames >= 8), scroll)
     if state ~= previous or frames % 8 == 0 then
         previous = state
         Log("text-flow " .. state)

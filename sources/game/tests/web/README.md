@@ -124,8 +124,11 @@ supplementary character. Enter submits once without adding a newline; Escape
 reports cancellation without changing committed text. Focus changes and a
 viewport/DPI resize must preserve text and allow further editing.
 
-Three real GPU captures check the field before editing, after editing and after
-resizing. The edited capture also requires text contrast across multiple glyph
+Four real GPU captures check the field before editing, after editing, after DPI
+resizing and after reducing the viewport height. The authored field sits in a
+masked scroll view. Reducing the viewport must scroll the focused field into
+view, preserve its text and allow further input at its new visible position.
+The edited capture also requires text contrast across multiple glyph
 columns: more than 50 pixels must exceed the blue background's red and green
 channels by 64, across more than eight columns. This tolerates small antialiased
 glyphs while rejecting an empty field or caret alone. Missing fonts, software

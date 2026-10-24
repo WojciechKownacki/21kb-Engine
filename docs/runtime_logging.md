@@ -169,3 +169,11 @@ the same paths and browser arguments as the packaged touch runner.
 The browser text bridge distinguishes duplicate composition input from ordinary
 committed input. Repeating the same text after an IME commit must append it;
 the packaged text scenario checks that the second insertion is preserved.
+
+When the UI viewport changes size, existing focus scrolling reveals the active
+widget inside its authored scroll view. Focus and committed text survive the
+resize. Ordinary frames leave manual scrolling alone. The native UI regression
+checks shrinking, growing, hit testing and manual scrolling; the packaged browser
+scenario also verifies the revealed field's actual GPU pixels and continued
+editing after a controlled height reduction. Physical keyboard inset delivery
+and keyboard occlusion on mobile hosts remain separate requirements.
