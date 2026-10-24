@@ -184,3 +184,12 @@ Two additional sessions abort real IndexedDB deletion transactions, once per
 domain. Native synchronization must fail, the next browser restart must retain
 the preceding committed files, and the normal button must then delete them
 successfully. These sessions also require hardware contexts and compiled shaders.
+
+`run_game_loading_tests.py` uses the same arguments and reports
+`21kb.web-game-loading/v1`. Cold and subsequent loads require native readiness
+and hardware-rendered button captures. It records first-frame/resource timings,
+WASM capacity and JavaScript heap usage, then requires continued native progress
+and rendering after a moderate browser memory-pressure notification. Four
+separate local package URLs check actual missing, empty, truncated and corrupt
+files, explicit native errors and the visible reload message. See
+[browser loading](../../../../docs/browser_loading.md) for measurement limits.
