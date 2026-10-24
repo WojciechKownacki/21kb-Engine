@@ -56,32 +56,33 @@ using AlignedBuffer = std::unique_ptr<std::uint8_t, AlignedBufferDeleter>;
 
 #if defined(KB_BACKGROUND_POSIX_AIO)
 struct NativeAsyncRead {
-    aiocb control{};
+    // Some libc control blocks contain a zero-length array and cannot be embedded in C++.
+    std::unique_ptr<aiocb> control = std::make_unique<aiocb>();
     bool issued = false;
     int error = 0;
     ssize_t result = 0;
 
     bool Start(int descriptor, std::uint64_t offset, std::span<std::uint8_t> bytes) noexcept {
-        control = {};
-        control.aio_fildes = descriptor;
-        control.aio_offset = static_cast<off_t>(offset);
-        control.aio_buf = bytes.data();
-        control.aio_nbytes = bytes.size();
-        control.aio_sigevent.sigev_notify = SIGEV_NONE;
-        issued = ::aio_read(&control) == 0;
+        *control = {};
+        control->aio_fildes = descriptor;
+        control->aio_offset = static_cast<off_t>(offset);
+        control->aio_buf = bytes.data();
+        control->aio_nbytes = bytes.size();
+        control->aio_sigevent.sigev_notify = SIGEV_NONE;
+        issued = ::aio_read(control.get()) == 0;
         error = issued ? 0 : errno;
         return issued;
     }
 
     void Wait() noexcept {
         if (!issued) return;
-        while ((error = ::aio_error(&control)) == EINPROGRESS) {
-            const aiocb* waitList[] = { &control };
+        while ((error = ::aio_error(control.get())) == EINPROGRESS) {
+            const aiocb* waitList[] = { control.get() };
             if (::aio_suspend(waitList, 1, nullptr) != 0 && errno != EINTR) {
                 std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
             }
         }
-        result = ::aio_return(&control);
+        result = ::aio_return(control.get());
         issued = false;
     }
 
