@@ -2,6 +2,7 @@
 #include "PackagedGameRuntime.hpp"
 #include "PackagedRuntimeModules.hpp"
 #include "RuntimeSceneFrameSync.hpp"
+#include "AndroidGamepadInput.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -439,6 +440,10 @@ public:
 
         app_.userData = this;
         app_.onAppCmd = &AndroidGameHost::OnAppCommand;
+        if (!gamepads_.Initialize(*app_.activity)) {
+            LogError("Android game controller initialization failed");
+            return false;
+        }
         android_app_set_key_event_filter(&app_, nullptr);
         android_app_set_motion_event_filter(&app_, nullptr);
         LogInfo("Android runtime host initialized");
@@ -507,8 +512,11 @@ private:
             resumed_ = false;
             tickClockReady_ = false;
             SetImeVisible(false);
+            if (command == APP_CMD_STOP) gamepads_.OnStop();
             break;
         case APP_CMD_START:
+            gamepads_.OnStart();
+            break;
         case APP_CMD_SAVE_STATE:
         case APP_CMD_CONFIG_CHANGED:
         case APP_CMD_LOW_MEMORY:
@@ -556,6 +564,7 @@ private:
     }
 
     void DrainInput() noexcept {
+        gamepads_.Update();
         kb::input::InputDeviceState* state = nullptr;
         if (scene_ != nullptr) {
             state = &scene_->Input().MutableDeviceState();
@@ -578,23 +587,29 @@ private:
         }
         android_input_buffer* const input = android_app_swap_input_buffers(&app_);
         if (input == nullptr) {
+            if (state != nullptr) gamepads_.Publish(*state, focused_);
             return;
         }
-        if (state != nullptr && focused_) {
+        if (state != nullptr) {
             for (std::uint64_t index = 0U; index < input->keyEventsCount; ++index) {
                 const GameActivityKeyEvent& event = input->keyEvents[index];
+                if (gamepads_.Process(event) || !focused_ ||
+                    (event.source & AINPUT_SOURCE_GAMEPAD) == AINPUT_SOURCE_GAMEPAD ||
+                    (event.source & AINPUT_SOURCE_JOYSTICK) == AINPUT_SOURCE_JOYSTICK) continue;
                 const kb::input::InputKey key = AndroidKey(event.keyCode);
                 if (key != kb::input::InputKey::None &&
+                    kb::input::DeviceKindOf(key) != kb::input::InputDeviceKind::Gamepad &&
                     (event.action == AKEY_EVENT_ACTION_DOWN || event.action == AKEY_EVENT_ACTION_UP)) {
                     state->SetKeyDown(key, event.action == AKEY_EVENT_ACTION_DOWN);
-                    if (kb::input::DeviceKindOf(key) == kb::input::InputDeviceKind::Gamepad) {
-                        state->SetGamepadConnected(0U, true);
-                    }
                 }
             }
             for (std::uint64_t index = 0U; index < input->motionEventsCount; ++index) {
-                ApplyTouchEvent(input->motionEvents[index]);
+                const auto& event = input->motionEvents[index];
+                if (!gamepads_.Process(event) && focused_) ApplyTouchEvent(event);
             }
+            gamepads_.Publish(*state, focused_);
+        }
+        if (state != nullptr && focused_) {
             state->SetTouchPoints(touchPoints_);
             if (!touchPoints_.empty()) {
                 state->SetPointerPosition(touchPoints_.front().x, touchPoints_.front().y);
@@ -752,6 +767,7 @@ private:
 
     void Shutdown() noexcept {
         SetImeVisible(false);
+        gamepads_.Shutdown();
         if (!scriptShutdownDispatched_ && scene_ != nullptr &&
             scene_->IsModuleActive("Script") && scriptModule_ != nullptr &&
             scriptModule_->Host() != nullptr) {
@@ -777,6 +793,7 @@ private:
     }
 
     android_app& app_;
+    kb::game::AndroidGamepadInput gamepads_;
     AndroidAssetMapping packMapping_;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack_;
     std::shared_ptr<kb::render::RuntimeAssetShaderProvider> shaderProvider_;

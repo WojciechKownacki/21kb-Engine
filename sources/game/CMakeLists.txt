@@ -37,6 +37,10 @@ target_compile_definitions(kb_game_core PRIVATE
 )
 
 kb_apply_quality_gates(kb_game_core)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Renderer diagnostics include bx's established GNU variadic assertion macros.
+    target_compile_options(kb_game_core PRIVATE -Wno-gnu-zero-variadic-macro-arguments)
+endif()
 
 if(NOT ANDROID AND NOT EMSCRIPTEN)
     add_library(kb_cooker_core STATIC
@@ -117,6 +121,13 @@ endif()
 
 if(ANDROID AND KB_BUILD_ANDROID_HOST)
     find_package(game-activity REQUIRED CONFIG)
+    find_package(games-controller REQUIRED CONFIG)
+
+    add_library(kb_android_gamepad_input STATIC src/android/AndroidGamepadInput.cpp)
+    target_include_directories(kb_android_gamepad_input PUBLIC src/private)
+    target_link_libraries(kb_android_gamepad_input PUBLIC
+        kb_engine games-controller::paddleboat_static game-activity::game-activity_static)
+    kb_apply_quality_gates(kb_android_gamepad_input)
 
     add_library(kb_game_android SHARED
         src/android/AndroidGameHost.cpp
@@ -126,6 +137,7 @@ if(ANDROID AND KB_BUILD_ANDROID_HOST)
         PRIVATE
             kb_game_core
             kb_packaged_game_host_core
+            kb_android_gamepad_input
             game-activity::game-activity_static
             android
             log

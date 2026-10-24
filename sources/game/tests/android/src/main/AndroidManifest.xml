@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:allowBackup="false" android:label="Controller Tests"
+        android:theme="@style/ControllerTestTheme">
+        <activity android:name=".ControllerActivity" android:exported="false"
+            android:configChanges="orientation|keyboardHidden|screenSize">
+            <meta-data android:name="android.app.lib_name" android:value="kb_controller_tests" />
+        </activity>
+    </application>
+    <instrumentation android:name=".ControllerInstrumentation"
+        android:targetPackage="com.kbengine.controllertests" />
+</manifest>

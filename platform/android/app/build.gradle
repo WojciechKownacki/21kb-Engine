@@ -164,6 +164,7 @@ android {
             cmake {
                 targets += ["kb_game_android"]
                 arguments += [
+                    "-DANDROID_STL=c++_shared",
                     "-DKB_BUILD_ANDROID_HOST=ON",
                     "-DKB_BUILD_PACKAGED_GAME_HOST=ON",
                     "-DKB_BUILD_RENDERER=ON",
@@ -229,6 +230,7 @@ android {
 dependencies {
     implementation "androidx.appcompat:appcompat:1.8.0"
     implementation "androidx.games:games-activity:4.4.2"
+    implementation "androidx.games:games-controller:2.0.2"
 }
 
 def validateRuntimeAssetPack = tasks.register(

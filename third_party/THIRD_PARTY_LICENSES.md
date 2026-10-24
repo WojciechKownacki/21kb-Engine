@@ -197,6 +197,8 @@ in `third_party_manifest.json`.
 - RenderDoc in-application API header (MIT; text in `licenses/renderdoc.txt`)
 - Dawn and Tint (WebGPU) (BSD 3-Clause), WebGPU players
 - AndroidX AppCompat, Games Activity and their AndroidX dependencies (Apache 2.0), Android players
+- Android Games Controller (Paddleboat) 2.0.2 (Apache 2.0), statically linked into Android players.
+  Copyright 2021 The Android Open Source Project; license text in `licenses/apache-2.0.txt`.
 
 Compiled only into the editor, the cooker and the shader compiler:
 
