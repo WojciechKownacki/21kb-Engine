@@ -364,11 +364,16 @@ class FrameBuilder {
     // Returns the reason the entity cannot be laid out, or nullptr when it is sound. A bare
     // bool would force the caller to re-derive what went wrong, which is what made an invalid
     // widget indistinguishable from a renderer fault.
-    [[nodiscard]] const char* ValidateComponents(SceneEntity entity) const noexcept {
+    [[nodiscard]] const char* ValidateComponents(SceneEntity entity, SceneUIFrameElement& element) const {
         std::size_t layoutCount = 0U;
 #define KB_VALIDATE(Type)                                                                                              \
     if (const Type* value = ui_.TryGet<Type>(entity); value != nullptr && !IsUIComponentValid(*value))                 \
     return #Type " holds an invalid value"
+#define KB_VALIDATE_COPY(Type, Field) \
+    if (const Type* value = ui_.TryGet<Type>(entity)) { \
+        if (!IsUIComponentValid(*value)) return #Type " holds an invalid value"; \
+        element.Field = *value; \
+    }
         KB_VALIDATE(UIRectTransform);
         KB_VALIDATE(UICanvas);
         KB_VALIDATE(UICanvasScaler);
@@ -391,25 +396,26 @@ class FrameBuilder {
         KB_VALIDATE(UILayoutElement);
         KB_VALIDATE(UIContentSizeFitter);
         KB_VALIDATE(UIAspectRatioFitter);
-        KB_VALIDATE(UISprite);
-        KB_VALIDATE(UIImage);
-        KB_VALIDATE(UIRawImage);
-        KB_VALIDATE(UIText);
-        KB_VALIDATE(UIBorder);
-        KB_VALIDATE(UIMask);
-        KB_VALIDATE(UIShadow);
-        KB_VALIDATE(UIOutline);
-        KB_VALIDATE(UIBackgroundBlur);
+        KB_VALIDATE_COPY(UISprite, sprite);
+        KB_VALIDATE_COPY(UIImage, image);
+        KB_VALIDATE_COPY(UIRawImage, rawImage);
+        KB_VALIDATE_COPY(UIText, text);
+        KB_VALIDATE_COPY(UIBorder, border);
+        KB_VALIDATE_COPY(UIMask, mask);
+        KB_VALIDATE_COPY(UIShadow, shadow);
+        KB_VALIDATE_COPY(UIOutline, outline);
+        KB_VALIDATE_COPY(UIBackgroundBlur, backgroundBlur);
         KB_VALIDATE(UISelectable);
         KB_VALIDATE(UIButton);
-        KB_VALIDATE(UIToggle);
-        KB_VALIDATE(UISlider);
-        KB_VALIDATE(UIScrollbar);
-        KB_VALIDATE(UIScrollView);
-        KB_VALIDATE(UIInputField);
-        KB_VALIDATE(UIDropdown);
-        KB_VALIDATE(UIProgressBar);
+        KB_VALIDATE_COPY(UIToggle, toggle);
+        KB_VALIDATE_COPY(UISlider, slider);
+        KB_VALIDATE_COPY(UIScrollbar, scrollbar);
+        KB_VALIDATE_COPY(UIScrollView, scrollView);
+        KB_VALIDATE_COPY(UIInputField, inputField);
+        KB_VALIDATE_COPY(UIDropdown, dropdown);
+        KB_VALIDATE_COPY(UIProgressBar, progressBar);
         KB_VALIDATE(UIWidgetSwitcher);
+#undef KB_VALIDATE_COPY
 #undef KB_VALIDATE
         if (layoutCount > 1U)
             return "UI object carries more than one layout component";
@@ -560,7 +566,8 @@ class FrameBuilder {
                  Affine2D inheritedTransform, const std::vector<std::array<Vec2, 4U>>& inheritedClipQuads) {
         if (!valid_ || !scene_.Entities().IsActive(entity))
             return;
-        if (const char* invalid = ValidateComponents(entity); invalid != nullptr) {
+        SceneUIFrameElement element;
+        if (const char* invalid = ValidateComponents(entity, element); invalid != nullptr) {
             Refuse(entity, invalid);
             return;
         }
@@ -654,7 +661,6 @@ class FrameBuilder {
         if (const auto graphic = toggleGraphics_.find(entity.Id()); graphic != toggleGraphics_.end() && !graphic->second)
             group.opacity = 0.0F;
 
-        SceneUIFrameElement element;
         element.entity = entity;
         element.canvas = canvas;
         element.canvasScale = scale;
@@ -699,31 +705,6 @@ class FrameBuilder {
             element.rect.width = std::round(element.rect.width);
             element.rect.height = std::round(element.rect.height);
         }
-#define KB_COPY(Type, Field)                                                                                           \
-    if (const Type* value = ui_.TryGet<Type>(entity)) {                                                                \
-        if (!IsUIComponentValid(*value)) {                                                                             \
-            Refuse(entity, #Type " holds an invalid value");                                                           \
-            return;                                                                                                    \
-        }                                                                                                              \
-        element.Field = *value;                                                                                        \
-    }
-        KB_COPY(UISprite, sprite)
-        KB_COPY(UIImage, image)
-        KB_COPY(UIRawImage, rawImage)
-        KB_COPY(UIText, text)
-        KB_COPY(UIBorder, border)
-        KB_COPY(UIMask, mask)
-        KB_COPY(UIShadow, shadow)
-        KB_COPY(UIOutline, outline)
-        KB_COPY(UIBackgroundBlur, backgroundBlur)
-        KB_COPY(UIToggle, toggle)
-        KB_COPY(UISlider, slider)
-        KB_COPY(UIScrollbar, scrollbar)
-        KB_COPY(UIScrollView, scrollView)
-        KB_COPY(UIDropdown, dropdown)
-        KB_COPY(UIProgressBar, progressBar)
-        KB_COPY(UIInputField, inputField)
-#undef KB_COPY
         if (const auto caption = captionTexts_.find(entity.Id()); caption != captionTexts_.end() && element.text.has_value()) {
             const UIDropdown& dropdown = *caption->second;
             static_cast<void>(SetUITextContent(

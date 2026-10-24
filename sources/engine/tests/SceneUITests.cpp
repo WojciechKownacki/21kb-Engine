@@ -376,6 +376,35 @@ void TestHierarchicalTransformsAndMaskHitTesting() {
         "Hit testing must reject a point inside the mask bounds but outside its transformed quad");
 }
 
+template <typename Component, typename Mutation>
+void RequireInvalidFramePayload(Mutation mutate, std::string_view componentName) {
+    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
+    const auto canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet components;
+    components.rectTransform = Rect(0.0F, 0.0F, 40.0F, 30.0F);
+    const auto widget = AddUI(scene, canvas, components);
+    auto ui = scene.Components().UI();
+    ui.Set(widget.Entity(), Component{});
+    const kb::scene::SceneUIQueries query{scene};
+    kb::scene::SceneUIFrame frame;
+    kb::tests::Require(query.BuildFrame(100.0F, 100.0F, frame), "Valid UI payload control must build");
+    auto* payload = ui.TryGet<Component>(widget.Entity());
+    kb::tests::Require(payload != nullptr, "UI payload mutation fixture must resolve its authored component");
+    mutate(*payload);
+    kb::tests::Require(!query.BuildFrame(100.0F, 100.0F, frame) && frame.refusal.entity == widget.Entity() &&
+        frame.refusal.reason != nullptr && std::string_view{frame.refusal.reason}.starts_with(componentName),
+        "Invalid UI payload must refuse the frame with the component and entity before layout uses it");
+}
+
+void TestInvalidFramePayloads() {
+    RequireInvalidFramePayload<kb::scene::UIText>([](auto& value) { value.fontSize = std::numeric_limits<float>::quiet_NaN(); }, "UIText");
+    RequireInvalidFramePayload<kb::scene::UIText>([](auto& value) { value.content.fill('x'); }, "UIText");
+    RequireInvalidFramePayload<kb::scene::UIImage>([](auto& value) { value.alphaHitThreshold = std::numeric_limits<float>::quiet_NaN(); }, "UIImage");
+    RequireInvalidFramePayload<kb::scene::UIDropdown>([](auto& value) { value.optionCount = kb::scene::UIDropdown::MaxOptions + 1U; }, "UIDropdown");
+    RequireInvalidFramePayload<kb::scene::UIDropdown>([](auto& value) { value.optionCount = 1U; value.options[0].text.fill('x'); }, "UIDropdown");
+    RequireInvalidFramePayload<kb::scene::UIInputField>([](auto& value) { value.contentType = static_cast<kb::scene::UIInputContentType>(255U); }, "UIInputField");
+}
+
 void TestContentSizeFitterModes() {
     kb::scene::Scene scene;
     const auto canvas = AddUI(scene, {}, CanvasComponents());
@@ -1778,6 +1807,7 @@ void RunSceneUITests() {
     TestCatalogAndPresets();
     TestFrameWithoutCanvasTracksDynamicComponents();
     TestLayoutsAndFitters();
+    TestInvalidFramePayloads();
     TestContentSizeFitterModes();
     TestHierarchicalTransformsAndMaskHitTesting();
     TestClippingGroupsSortingAndScaling();
