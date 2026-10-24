@@ -16529,6 +16529,48 @@ function Destroyed(self, dt) SetShared("wasDestroyed", true) end
         "DispatchShutdownLifecycle must return false when no scene system is installed");
 }
 
+void RunHostShutdownDoesNotRestartBehavioursTest() {
+    ResetTestRoot();
+    const auto projectRoot = TestRoot() / "ShutdownOnce";
+    WriteTextFile(projectRoot / "Assets/Shutdown.lua", R"(
+function Ready(self, dt) SetShared("readyCount", (GetShared("readyCount") or 0) + 1) end
+function Destroyed(self, dt) SetShared("destroyedCount", (GetShared("destroyedCount") or 0) + 1) end
+)");
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 1U,
+        "Shutdown-once asset discovery failed");
+    const auto* asset = scene.Assets().Manager().Registry().FindByPath("/Game/Shutdown.lua");
+    kb::tests::Require(asset != nullptr, "Shutdown-once asset was not registered");
+    const auto assetId = asset->id;
+    kb::script::ScriptRuntimeHost host{scene};
+    const auto addBehaviour = [&](const char* name) {
+        const auto object = scene.Entities().CreateObject({.name = name});
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = assetId.value,
+            .backend = kb::scene::BehaviourBackend::Lua,
+            .enabled = true,
+        });
+    };
+    const auto count = [&](std::string_view key) {
+        return host.SharedState().Get(key).value_or(kb::script::ScriptValue{0}).AsInt();
+    };
+    addBehaviour("Started");
+    kb::tests::Require(host.Succeeded() && host.InstallSceneSystem(), "Shutdown-once host setup failed");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(count("readyCount") == 1 && host.DrainSceneSystemDiagnostics().empty(),
+        "Shutdown-once fixture did not start exactly one behaviour");
+    addBehaviour("NotStartedYet");
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F) && count("readyCount") == 1 &&
+        count("destroyedCount") == 1, "Shutdown must tear down only started behaviours without starting new ones");
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F) && count("readyCount") == 1 &&
+        count("destroyedCount") == 1, "Repeated shutdown must not restart or destroy behaviours again");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(count("readyCount") == 3 && host.DrainSceneSystemDiagnostics().empty(),
+        "A normal frame after shutdown must start both enabled behaviours");
+    kb::tests::Require(host.DispatchShutdownLifecycle(0.0F) && count("readyCount") == 3 &&
+        count("destroyedCount") == 3, "Resumed behaviours must each shut down exactly once");
+}
+
 void RunHostShutdownLifecycleReportsErrorsTest() {
     ResetTestRoot();
     const auto projectRoot = TestRoot() / "ShutdownDiagnostics";
@@ -16774,6 +16816,7 @@ void RunScriptRuntimeTests() {
     RunTransformHierarchyEdgeCaseTest();
     RunWorldDestroyDeferredFlagTest();
     RunHostShutdownLifecycleFiresDestroyedTest();
+    RunHostShutdownDoesNotRestartBehavioursTest();
     RunHostShutdownLifecycleReportsErrorsTest();
     RunExposedVariableOverrideSeedingTest();
     RunInspectorTableRuntimeTest();

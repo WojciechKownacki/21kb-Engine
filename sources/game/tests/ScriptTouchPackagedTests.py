@@ -62,6 +62,9 @@ function Tick(self, dt)
     assert(Input.TouchCount() == 0 and not Input.TouchPoint(-1).valid,
            "packaged touch queries remain callable")
 end
+function Destroyed(self, dt)
+    Log("packaged touch queries stopped")
+end
 ''', encoding="utf-8")
     run(args.cli, "scene-attach", "--project", project, "--scene", "Assets/Scenes/Main.21kbscene",
         "--node", "InputProbe", "--script", "/Game/Scripts/TouchProbe.lua")
@@ -84,6 +87,10 @@ end
             "shutdown=clean" in output, "Packaged script did not execute, draw and finish three frames")
     require("kb_game: script: packaged touch queries ready" in output, "Packaged script log did not reach the host output")
     require("kb_game: script: runtime Unicode: Ω日" in output, "Packaged script log lost UTF-8 text")
+    ready_count = output.count("kb_game: script: packaged touch queries ready")
+    destroyed_count = output.count("kb_game: script: packaged touch queries stopped")
+    require(ready_count == 1 and destroyed_count == 1,
+            "Packaged shutdown restarted or repeated the script lifecycle")
     backend = re.search(r" backend=(.+?) resolution=", output)
     require(backend is not None and backend[1].lower() != "noop", "Packaged player did not select a rendering backend")
 
@@ -111,6 +118,7 @@ end
             "Packaged shutdown did not report its real script error")
     report = dict(result="PASS", backend=backend[1], packagedFrames=3, nativeTouchContacts=0,
                   negativeScriptExit=1, negativeShutdownExit=1,
+                  readyDeliveries=ready_count, destroyedDeliveries=destroyed_count,
                   limitation="Package checks query availability and the empty snapshot; independent multi-contact semantics run in the engine script suite. This is not browser joystick/UI acceptance.")
     (root / "result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"PASS: cooked touch query script and negative control in actual packaged player; {root}")

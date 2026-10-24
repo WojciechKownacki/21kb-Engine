@@ -35,6 +35,12 @@ shutdown calls. Renderer frame/submission failures also make shutdown unclean.
 Android reports update/shutdown script errors through the system log and stops
 its update loop after an update error.
 
+Shutdown tears down only behaviours that have started. It does not invoke
+`Created` or `Ready` on newly attached behaviours, and repeated teardown does not
+restart stopped behaviours. A subsequent normal scene frame can start enabled
+behaviours again. The packaged Windows regression checks exactly one `Ready`
+and `Destroyed` delivery, including final scene destruction.
+
 Web runtime failures set `document.documentElement.dataset.kbError` to
 `runtime-failed` and the location fragment to `#kb-error-runtime-failed`.
 Diagnostics go to stderr. Streams are supplied for each tick or shutdown call;

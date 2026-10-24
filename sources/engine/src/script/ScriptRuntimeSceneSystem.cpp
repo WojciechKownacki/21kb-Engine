@@ -693,8 +693,8 @@ void ScriptRuntimeSceneSystem::SyncBehaviourLifecycles(kb::scene::Scene& scene, 
 }
 
 void ScriptRuntimeSceneSystem::ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds) {
-    SyncBehaviourLifecycles(scene, deltaSeconds);
-
+    // Teardown only visits started records. Synchronization here would start live
+    // behaviours again after an earlier shutdown cleared their tracking.
     std::vector<BehaviourLifecycleRecord> remaining;
     remaining.reserve(lifecycleRecords_.size());
     for (const auto& [key, tracked] : lifecycleRecords_) {
