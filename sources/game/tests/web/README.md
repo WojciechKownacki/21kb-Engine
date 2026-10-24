@@ -150,7 +150,11 @@ It authors and cooks a native save button and Lua controller, verifies real GPU
 pixels, writes save/settings slots, then closes and reopens its owned browser
 with the same profile and local origin. Native values must survive. Real quota
 denial and transaction abort must report failure and preserve the previous
-committed data. Other URL directories must have separate slots, and a denied
+committed data. Explicit retry must persist the failed working revision without
+rewriting it. An actual held IndexedDB transaction exercises the unchanged
+15-second deadline: retries are refused after timeout and a late real commit
+cannot turn that failure into success. Reopening must read valid data.
+Other URL directories must have separate slots, and a denied
 initial storage read must fail startup explicitly. The result uses schema
 `21kb.web-game-storage-tests/v1` and retains commands, hashes, native states,
 browser events and GPU captures. See [browser storage](../../../../docs/browser_storage.md)

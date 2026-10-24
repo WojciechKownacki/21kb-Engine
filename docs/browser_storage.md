@@ -60,6 +60,18 @@ API. It checks actual hardware rendering, closes and reopens the owned browser
 with the same profile, verifies save/settings values, imposes a real quota on
 its local origin, aborts a real IndexedDB transaction, and checks the preceding
 committed data after restart. A separate profile verifies storage denial.
+After a quota failure it removes the local quota limit and retries through the
+native button. The tracked revision must stay unchanged and the committed
+values must survive another browser restart.
+
+For the timeout case, the test keeps an actual IndexedDB transaction active,
+which queues the player's synchronization behind it. The production deadline
+remains 15 seconds. The timeout must report failure and refuse an overlapping
+retry. Releasing the held transaction allows the actual queued commit to finish;
+its late callback must leave the reported timeout unchanged. Reopening the
+browser then reads the resulting valid data. No save result or completion
+callback is substituted.
+
 Different URL directories must remain isolated. Missing hardware, unexpected
 fallback, failed checks and timeouts fail the test. Fault injection is limited
 to that test's own local page, origin and profiles.

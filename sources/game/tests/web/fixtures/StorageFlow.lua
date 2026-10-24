@@ -48,6 +48,11 @@ end
 
 function OnUIClicked(self, event)
     assert(event.args.entity == self.entity)
+    if call("Save.StorageStatus").status == "Failed" then
+        started = call("Save.Flush")
+        report()
+        return
+    end
     counter = counter + 1
     call("Save.SetInt", {key="counter", value=counter})
     call("Save.SetString", {key="note", value="first"})

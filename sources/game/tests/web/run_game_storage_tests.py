@@ -214,6 +214,25 @@ def run_cases(args, root, report, origin):
             "An aborted transaction damaged the previous save/settings: " + str(value))
         report["observations"].append(dict(check="interrupted transaction preserves previous native save/settings", state=value))
         case.graphics()
+        case.client.call("Storage.overrideQuotaForOrigin", origin=origin, quotaSize=1)
+        cursor = len(case.states())
+        case.click_save()
+        case.wait("retry preparation reaches real quota failure", lambda s: s["status"] == "Failed" and s["counter"] == 2, cursor)
+        revision = case.client.evaluate("Module.kbUserStorage.revision")
+        case.client.call("Storage.overrideQuotaForOrigin", origin=origin)
+        cursor = len(case.states())
+        case.click_save()
+        case.wait("explicit flush retry commits existing working data", lambda s: s["status"] == "Clean" and s["counter"] == 2 and s["started"], cursor)
+        require(case.client.evaluate("Module.kbUserStorage.revision") == revision,
+            "The retry rewrote working files instead of flushing the failed revision")
+
+    with BrowserSession(args, root, profile, report, origin, "after-retry") as case:
+        value = case.ready()
+        require(value["loaded"] and value["settingsLoaded"] and value["counter"] == 2 and
+            value["note"] == "latest" and value["label"] == "Zażółć 2",
+            "Explicit retry did not survive browser restart: " + str(value))
+        report["observations"].append(dict(check="explicit retry survives browser restart", state=value))
+        case.graphics()
 
     with BrowserSession(args, root, profile, report, origin, "other-directory", route="/other") as case:
         value = case.ready()
@@ -235,6 +254,83 @@ def run_cases(args, root, report, origin):
             state["data"].get("kbFirstFrame") != "true" and "SecurityError" in state["diagnostic"],
             "Storage denial silently started a volatile game: " + str(state))
         report["observations"].append(dict(check="storage denial fails startup explicitly", state=state))
+
+    timeout_profile = root / "timeout-profile"
+    with BrowserSession(args, root, timeout_profile, report, origin, "timeout") as case:
+        case.ready()
+        # Keep a real transaction active in this profile's database. IndexedDB
+        # queues the player's synchronization behind it; no fake save result
+        # or callback is supplied and the production deadline stays unchanged.
+        case.client.call("Runtime.evaluate", awaitPromise=True, expression="""
+            new Promise((resolve,reject) => {
+                const request=indexedDB.open(Module.kbUserStorage.root);
+                request.onerror=()=>reject(request.error);
+                request.onsuccess=()=>{
+                    const database=request.result;
+                    const transaction=database.transaction('FILE_DATA','readwrite');
+                    const store=transaction.objectStore('FILE_DATA');
+                    window.kbStorageHold={active:true,reads:0,database,transaction};
+                    const next=()=>{
+                        const query=store.get('__21kb_local_test_hold__');
+                        query.onsuccess=()=>{++kbStorageHold.reads;if(kbStorageHold.active)next();};
+                    };
+                    next();
+                    window.kbCompletedStorageWrites=0;
+                    const original=IDBDatabase.prototype.transaction;
+                    IDBDatabase.prototype.transaction=function(...args){
+                        const tx=original.apply(this,args);
+                        if(this.name===Module.kbUserStorage.root && args[1]==='readwrite')
+                            tx.addEventListener('complete',()=>++kbCompletedStorageWrites);
+                        return tx;
+                    };
+                    resolve(true);
+                };
+            })
+        """)
+        cursor = len(case.states())
+        started = time.monotonic()
+        case.click_save()
+        pending = case.wait("real queued storage transaction remains pending", lambda s: s["status"] == "Pending" and s["counter"] == 1, cursor)
+        deadline = started + 18
+        while True:
+            states = case.states()[cursor:]
+            failed = next((s for s in reversed(states) if s["status"] == "Failed"), None)
+            if failed is not None:
+                break
+            require(time.monotonic() < deadline, "The unchanged 15-second storage deadline did not report failure")
+            time.sleep(0.05)
+        elapsed = time.monotonic() - started
+        require("TimeoutError" in failed["diagnostic"] and 14.8 <= elapsed < 18,
+            "The actual storage timeout was not observed: " + str((elapsed, failed)))
+        require(not any(s["counter"] == 1 and s["status"] == "Clean" for s in states),
+            "Queued writes were reported complete before the storage transaction finished")
+        report["observations"].append(dict(check="unchanged storage deadline reports real queued transaction timeout",
+            elapsedSeconds=elapsed, state=failed))
+        case.click_save()
+        refused = case.states()[-1]
+        require(not refused["started"] and refused["status"] == "Failed" and refused["counter"] == 1,
+            "A timed out transaction allowed an overlapping retry: " + str(refused))
+        report["observations"].append(dict(check="timeout refuses overlapping retry", state=refused))
+        require(case.client.evaluate("kbStorageHold.reads") > 0, "The real database transaction was not held")
+        case.client.evaluate("kbStorageHold.active=false")
+        deadline = time.monotonic() + 5
+        while not case.client.evaluate("kbCompletedStorageWrites > 0"):
+            require(time.monotonic() < deadline, "The queued real transaction did not finish after release")
+            time.sleep(0.03)
+        case.paint()
+        late = case.states()[-1]
+        require(late["status"] == "Failed" and "TimeoutError" in late["diagnostic"],
+            "A late successful callback replaced the reported timeout: " + str(late))
+        report["observations"].append(dict(check="late real commit cannot acknowledge a timed out operation", state=late))
+        case.graphics()
+
+    with BrowserSession(args, root, timeout_profile, report, origin, "after-timeout") as case:
+        value = case.ready()
+        require(value["loaded"] and value["settingsLoaded"] and value["counter"] == 1 and
+            value["note"] == "latest" and value["label"] == "Zażółć 1",
+            "The actual late transaction did not leave a valid save: " + str(value))
+        report["observations"].append(dict(check="reopening reads the actual late committed data", state=value))
+        case.graphics()
 
 
 def main():
