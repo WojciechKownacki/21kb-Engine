@@ -37,6 +37,7 @@
 #include "kb/render/shadow/ShadowMapResource.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/particles/ParticleGpuReadback.hpp"
+#include "kb/render/particles/ParticleGpuVisualSimulation.hpp"
 #include "kb/render/gi/SceneGiVoxelGrid.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
@@ -9748,6 +9749,75 @@ void RunRendererVisibilityFeedbackTest() {
     RunRendererPublishesSceneVisibilityFeedbackTest();
 }
 
+void RunParticleGpuVisualCounterTests(bgfx::RendererType::Enum backend) {
+#if defined(_WIN32)
+    NativeTestSurface surface;
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(backend);
+    Renderer renderer;
+    Require(surface.IsValid() && renderer.Initialize(surface, &config), "GPU counter validation needs a native device");
+    Require(bgfx::getRendererType() == backend, "GPU counter validation used another backend");
+    ParticleGpuVisualSimulation simulation;
+    Require(simulation.Initialize(), "GPU visual simulation is unavailable");
+    std::array<ParticleGpuInstance, 4U> source{};
+    for (std::size_t index = 0U; index < source.size(); ++index) {
+        const float x = static_cast<float>(index + 1U);
+        source[index].positionSize = {x, 1.0F, 2.0F, 1.0F};
+        source[index].previousPositionRotation = {x, 1.0F, 2.0F, 0.0F};
+        source[index].color.fill(1.0F);
+    }
+    std::array<std::uint32_t, 4U> mask{1U, 1U, 0U, 1U};
+    const auto readCount = [&] {
+        std::array<std::uint32_t, 4U> counters{};
+        counters.fill(UINT32_MAX);
+        Require(bgfx::isValid(simulation.CounterBuffer()), "GPU visual counter buffer was not created");
+        const auto ready = bgfx::read(bgfx::BufferRegion{.handle = simulation.CounterBuffer(),
+            .size = static_cast<std::uint32_t>(sizeof(counters))}, counters.data());
+        auto frame = bgfx::frame();
+        while (frame < ready) frame = bgfx::frame();
+        Require(counters[1] == 0U && counters[2] == 0U && counters[3] == 0U,
+            "GPU visual counter reset did not clear the complete record");
+        return counters[0];
+    };
+    const auto prepare = [&](std::uint64_t scene, std::uint64_t step, std::uint32_t expected) {
+        Require(simulation.Prepare(0U, scene, step, source, mask), "Actual GPU visual dispatch failed");
+        static_cast<void>(bgfx::frame());
+        Require(readCount() == expected, "GPU visual counters accumulated instead of resetting for the next dispatch");
+        ParticleGpuReadback capture;
+        const ParticleGpuEmitterSimulation::Draw draw{.instances = simulation.InstanceBuffer(), .capacity = 4U};
+        Require(capture.Read(draw, 4U), "GPU visual output could not be read from the native instance buffer");
+        for (std::size_t index = 0U; index < source.size(); ++index) {
+            const auto& row = capture.Records()[index];
+            Require(row[0] == source[index].positionSize[0] && row[1] == 1.0F && row[2] == 2.0F &&
+                row[3] == 1.0F && row[15] == 1.0F, "GPU visual output changed the stationary CPU reference");
+        }
+    };
+    prepare(101U, 1U, 3U);
+    mask = {1U, 0U, 0U, 0U};
+    prepare(101U, 2U, 1U);
+    mask.fill(0U);
+    Require(simulation.Prepare(0U, 101U, 2U, source, mask) && readCount() == 1U,
+        "A repeated fixed step reset or dispatched the GPU counters twice");
+    prepare(101U, 3U, 0U);
+    simulation.ReleaseScene(101U);
+    Require(!bgfx::isValid(simulation.CounterBuffer()) && !bgfx::isValid(simulation.InstanceBuffer()) &&
+        simulation.Availability() == kb::particles::ParticleGpuVisualAvailability::ResourceUnavailable,
+        "GPU visual scene release retained buffers or advertised ready resources");
+    mask.fill(1U);
+    prepare(102U, 1U, 4U);
+    simulation.Shutdown();
+    Require(!bgfx::isValid(simulation.CounterBuffer()) && !bgfx::isValid(simulation.InstanceBuffer()),
+        "GPU visual shutdown retained counter or output resources");
+    renderer.Shutdown();
+    std::fprintf(stderr, "particle_visual_counters backend=%s first=3 next=1 repeated=1 masked=0 reuse=4 native_output=equal released=1\n",
+        bgfx::getRendererName(backend));
+#else
+    static_cast<void>(backend);
+    Require(false, "GPU visual counter validation requires a native Windows host");
+#endif
+}
+
 void RunRendererScreenUiSubmitTests() {
     RunRendererResourceGroupEnsureFallbacksTest();
     RunEditorUIViewTransformValidationTests();
@@ -9758,6 +9828,9 @@ void RunRendererScreenUiSubmitTests() {
 }
 
 void RunRendererRuntimeSubmitTests() {
+#if defined(_WIN32)
+    RunParticleGpuVisualCounterTests(bgfx::RendererType::Direct3D11);
+#endif
     RunGeneratedClusterMissingResourceDiagnosticsTest();
     RunRuntimeStructuralFrameSyncKeepsQueuedChangesTest();
     RunRuntimeFrameSyncAppendsRootsTest();

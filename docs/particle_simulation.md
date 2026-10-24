@@ -165,6 +165,16 @@ and `kb_cli_assertion_errors` tests deliberately trigger the handler and verify
 failure diagnostics without a visible dialog. The four-backend runs above had
 no dependency assertions, sanitizer errors or bgfx allocator leak reports.
 
+`kb_renderer_tests particle-visual-counters` checks the renderer's visual compute
+stage with native counter and instance-buffer readback. It requires the actual
+backend selected with `--backend d3d11|d3d12|vulkan|opengl`. The count of selected
+records must reset between dispatches, while a repeated fixed step reuses its
+completed result. Mask changes, scene release, reuse and shutdown are checked.
+Counter reset copies an immutable 16-byte zero record on the GPU; the CPU never
+updates the compute-write counter buffer. This selector passed on all four
+Windows backends in Release and Debug with AddressSanitizer, without dependency
+assertions, sanitizer errors or allocator leak reports.
+
 `Renderer::GpuParticleDraws(scene)` exposes the last dispatched GPU instance
 buffers with their instance/emitter keys and requested buffer bytes. Instance
 counts are capacities, including empty slots; byte counts include birth,

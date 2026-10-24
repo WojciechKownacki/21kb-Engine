@@ -37,6 +37,7 @@ std::size_t PeakCommittedBytes() noexcept {
 void RunGraphForwardGpuRenderTests();
 void RunGraphProgramLifetimeTests();
 void RunRendererScreenUiSubmitTests();
+void RunParticleGpuVisualCounterTests(bgfx::RendererType::Enum backend);
 void RunGraphShaderArtifactCacheTests();
 void RunGraphShaderNodeCookTests(std::uint32_t shard, std::uint32_t shardCount);
 void RunSceneLightGridTests();
@@ -305,9 +306,10 @@ int main(int argc, char** argv) {
             return EXIT_FAILURE;
         }
     }
-    if (argc >= 2 && (std::string_view{argv[1]} == "particle-motion" || std::string_view{argv[1]} == "particle-motion-kernel")) {
+    if (argc >= 2 && (std::string_view{argv[1]} == "particle-motion" || std::string_view{argv[1]} == "particle-motion-kernel" ||
+        std::string_view{argv[1]} == "particle-visual-counters")) {
         if ((argc != 2 && argc != 4) || (argc == 4 && std::string_view{argv[2]} != "--backend")) {
-            std::fputs("particle-motion expects [--backend d3d11|d3d12|vulkan|opengl]\n", stderr);
+            std::fprintf(stderr, "%s expects [--backend d3d11|d3d12|vulkan|opengl]\n", argv[1]);
             return EXIT_FAILURE;
         }
         auto backend = bgfx::RendererType::Direct3D11;
@@ -318,9 +320,13 @@ int main(int argc, char** argv) {
             else if (name == "vulkan") backend = bgfx::RendererType::Vulkan;
             else if (name == "opengl") backend = bgfx::RendererType::OpenGL;
             else {
-                std::fputs("particle-motion received an unsupported backend\n", stderr);
+                std::fprintf(stderr, "%s received an unsupported backend\n", argv[1]);
                 return EXIT_FAILURE;
             }
+        }
+        if (std::string_view{argv[1]} == "particle-visual-counters") {
+            kb::render::tests::RunParticleGpuVisualCounterTests(backend);
+            return EXIT_SUCCESS;
         }
         kb::render::tests::RunParticleGpuMotionTests(std::string_view{argv[1]} == "particle-motion-kernel", backend);
         if (std::string_view{argv[1]} == "particle-motion") kb::render::tests::RunRendererParticleMotionPixelsTest(backend);
