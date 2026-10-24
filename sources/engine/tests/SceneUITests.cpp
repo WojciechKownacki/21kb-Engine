@@ -193,6 +193,66 @@ void TestFrameWithoutCanvasTracksDynamicComponents() {
         "UI update must discard elements after removal of the last canvas");
 }
 
+void TestFrameTracksWidgetComponentLifetimes() {
+    for (const bool mirrored : {true, false}) {
+        kb::ecs::WorldConfig config;
+        config.mirrorEntitiesToBackend = mirrored;
+        config.mirrorNativeComponentChangesToBackend = mirrored;
+        kb::scene::Scene scene{config};
+        const auto canvas = AddUI(scene, {}, CanvasComponents());
+        kb::scene::UIComponentSet components;
+        components.rectTransform = Rect(0.0F, 0.0F, 80.0F, 20.0F);
+        const auto first = AddUI(scene, canvas, components);
+        static_cast<void>(kb::scene::SetUITextContent(components.text.emplace(), "Sibling"));
+        const auto sibling = AddUI(scene, canvas, components);
+        auto ui = scene.Components().UI();
+        const kb::scene::SceneUIQueries queries{scene};
+        kb::scene::SceneUIFrame frame;
+        const auto build = [&] {
+            kb::tests::Require(queries.BuildFrame(640.0F, 360.0F, frame),
+                "UI frames must build after widget component changes");
+        };
+        build();
+        kb::tests::Require(FindElement(frame, first.Entity()) != nullptr &&
+            !FindElement(frame, first.Entity())->text &&
+            FindElement(frame, sibling.Entity()) != nullptr &&
+            kb::scene::UITextContent(*FindElement(frame, sibling.Entity())->text) == "Sibling",
+            "Missing widget components must not reuse a sibling's payload");
+
+        kb::scene::UIText text;
+        static_cast<void>(kb::scene::SetUITextContent(text, "Added"));
+        ui.Set(first.Entity(), text);
+        build();
+        kb::tests::Require(FindElement(frame, first.Entity())->text &&
+            kb::scene::UITextContent(*FindElement(frame, first.Entity())->text) == "Added",
+            "A frame must observe a component added after an earlier missing lookup");
+        const auto previous = frame;
+        static_cast<void>(kb::scene::SetUITextContent(*ui.TryGet<kb::scene::UIText>(first.Entity()), "Edited"));
+        ui.Set(first.Entity(), Rect(10.0F, 0.0F, 120.0F, 20.0F));
+        build();
+        kb::tests::Require(kb::scene::UITextContent(*FindElement(frame, first.Entity())->text) == "Edited" &&
+            kb::tests::NearlyEqual(FindElement(frame, first.Entity())->rect.width, 120.0F) &&
+            kb::scene::UITextContent(*FindElement(previous, first.Entity())->text) == "Added",
+            "Frame payloads must reflect current values while earlier snapshots remain owned");
+
+        ui.Remove<kb::scene::UIText>(first.Entity());
+        build();
+        kb::tests::Require(!FindElement(frame, first.Entity())->text &&
+            kb::scene::UITextContent(*FindElement(frame, sibling.Entity())->text) == "Sibling",
+            "Removing a component must clear only its widget's frame payload");
+        const auto retired = first.Entity();
+        scene.Entities().Destroy(first);
+        static_cast<void>(kb::scene::SetUITextContent(*components.text, "Replacement"));
+        const auto replacement = AddUI(scene, canvas, components);
+        build();
+        kb::tests::Require(replacement.Entity() != retired && FindElement(frame, retired) == nullptr &&
+            FindElement(frame, replacement.Entity()) != nullptr &&
+            kb::scene::UITextContent(*FindElement(frame, replacement.Entity())->text) == "Replacement" &&
+            kb::scene::UITextContent(*FindElement(frame, sibling.Entity())->text) == "Sibling",
+            "Destroyed widgets must leave the frame without transferring payloads to new entities");
+    }
+}
+
 void TestLayoutsAndFitters() {
     kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
     const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
@@ -1806,6 +1866,7 @@ void RunSceneUITests() {
     TestAuthoredDimensionsAndVisibility();
     TestCatalogAndPresets();
     TestFrameWithoutCanvasTracksDynamicComponents();
+    TestFrameTracksWidgetComponentLifetimes();
     TestLayoutsAndFitters();
     TestInvalidFramePayloads();
     TestContentSizeFitterModes();

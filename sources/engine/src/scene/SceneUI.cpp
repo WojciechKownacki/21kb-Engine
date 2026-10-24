@@ -276,6 +276,54 @@ void SetTextClipped(UIText& text, std::string_view value) noexcept {
     return event;
 }
 
+// A frame build only reads authored components. Consecutive reads of one entity can
+// share their results; every builder starts with fresh state for the next frame.
+class FrameUIComponentQueries {
+  public:
+    explicit FrameUIComponentQueries(SceneUIComponentQueries source) noexcept : source_(source) {}
+
+    template <SceneUIComponent T>
+    [[nodiscard]] const T* TryGet(SceneEntity entity) const noexcept {
+        constexpr auto index = static_cast<std::size_t>(UIComponentTypeOf<T>::value);
+        static_assert(index < kComponentCount && index < 64U);
+        const auto bit = std::uint64_t{1U} << index;
+        UseEntity(entity);
+        if ((queried_ & bit) == 0U) {
+            components_[index] = source_.TryGet<T>(entity);
+            queried_ |= bit;
+        }
+        return static_cast<const T*>(components_[index]);
+    }
+
+    template <SceneUIComponent T>
+    [[nodiscard]] bool Has(SceneEntity entity) const noexcept {
+        constexpr auto index = static_cast<std::size_t>(UIComponentTypeOf<T>::value);
+        static_assert(index < kComponentCount && index < 64U);
+        const auto bit = std::uint64_t{1U} << index;
+        UseEntity(entity);
+        if ((hasQueried_ & bit) == 0U) {
+            if (source_.Has<T>(entity)) present_ |= bit;
+            hasQueried_ |= bit;
+        }
+        return (present_ & bit) != 0U;
+    }
+
+  private:
+    void UseEntity(SceneEntity entity) const noexcept {
+        if (entity != entity_) {
+            entity_ = entity;
+            queried_ = hasQueried_ = present_ = 0U;
+        }
+    }
+    static constexpr auto kComponentCount = static_cast<std::size_t>(UIComponentType::WidgetSwitcher) + 1U;
+    SceneUIComponentQueries source_;
+    mutable SceneEntity entity_{};
+    mutable std::array<const void*, kComponentCount> components_{};
+    mutable std::uint64_t queried_ = 0U;
+    mutable std::uint64_t hasQueried_ = 0U;
+    mutable std::uint64_t present_ = 0U;
+};
+
 class FrameBuilder {
   public:
     FrameBuilder(const Scene& scene, Vec2 viewport)
@@ -1166,7 +1214,7 @@ class FrameBuilder {
     const SceneState& state_;
     std::unordered_set<std::uint64_t> uiHierarchy_;
     std::vector<SceneEntity> uiRoots_;
-    SceneUIComponentQueries ui_;
+    FrameUIComponentQueries ui_;
     Vec2 viewport_{};
     // The player owning the canvas being laid out, and the soft edge of the mask around it.
     std::int32_t player_ = -1;
