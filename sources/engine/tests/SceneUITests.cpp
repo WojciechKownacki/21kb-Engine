@@ -604,6 +604,83 @@ void TestInputFieldEditsGraphemeClusters() {
     kb::tests::Require(content() == flag, "A second character must be refused at a limit of one");
 }
 
+// A menu laid out for a reference screen keeps every control on screen, whole, apart and clickable across screens of
+// every shape and size: phone and tablet, portrait and landscape, ultra wide and 4K, with the scaler matching the
+// width, the height or both, with and without a safe area. A text far too long for its place is cut to the text
+// limit and the element keeps a finite, bounded size.
+void TestResponsiveMenuKeepsEveryControlReachable() {
+    struct Screen {
+        float width;
+        float height;
+    };
+    constexpr std::array<Screen, 8U> screens{ Screen{ 1920.0F, 1080.0F }, Screen{ 1280.0F, 720.0F }, Screen{ 800.0F, 600.0F },
+        Screen{ 360.0F, 640.0F }, Screen{ 640.0F, 360.0F }, Screen{ 3840.0F, 2160.0F }, Screen{ 2560.0F, 1080.0F }, Screen{ 1024.0F, 1366.0F } };
+    constexpr std::array<float, 3U> matches{ 0.0F, 0.5F, 1.0F };
+    for (const bool safeArea : { false, true }) {
+        for (const float match : matches) {
+            kb::scene::Scene scene{ kb::scene::SceneMode::PrefabPrivate };
+            kb::scene::UIComponentSet canvasComponents = CanvasComponents();
+            canvasComponents.canvasScaler->scaleMode = kb::scene::UICanvasScaleMode::ScaleWithScreenSize;
+            canvasComponents.canvasScaler->referenceResolution = { 1920.0F, 1080.0F };
+            canvasComponents.canvasScaler->matchWidthOrHeight = match;
+            const kb::scene::SceneObject canvas = AddUI(scene, {}, canvasComponents);
+            kb::scene::UIComponentSet menuComponents;
+            menuComponents.rectTransform = kb::scene::UIRectTransform{};
+            menuComponents.rectTransform->anchorMin = { 0.1F, 0.1F };
+            menuComponents.rectTransform->anchorMax = { 0.9F, 0.9F };
+            menuComponents.rectTransform->offsetMin = { 0.0F, 0.0F };
+            menuComponents.rectTransform->offsetMax = { 0.0F, 0.0F };
+            menuComponents.verticalLayout = kb::scene::UIVerticalLayout{ .spacing = 10.0F, .controlChildWidth = true, .expandChildWidth = true };
+            const kb::scene::SceneObject menu = AddUI(scene, canvas, menuComponents);
+            std::vector<kb::scene::SceneEntity> buttons;
+            for (int index = 0; index < 5; ++index) {
+                kb::scene::UIComponentSet button = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+                button.rectTransform = Rect(0.0F, 0.0F, 400.0F, 80.0F);
+                button.layoutElement = kb::scene::UILayoutElement{ .preferredWidth = 400.0F, .preferredHeight = 80.0F };
+                buttons.push_back(AddUI(scene, menu, button).Entity());
+            }
+            // A label with a text far longer than anything fits: the limit cuts it and the size stays sane.
+            kb::scene::UIComponentSet longLabel = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Text);
+            longLabel.rectTransform = Rect(0.0F, 0.0F, 400.0F, 40.0F);
+            longLabel.layoutElement = kb::scene::UILayoutElement{ .preferredWidth = 400.0F, .preferredHeight = 40.0F };
+            const kb::scene::SceneObject label = AddUI(scene, menu, longLabel);
+            kb::tests::Require(kb::scene::SetUITextContent(*scene.Components().UI().TryGet<kb::scene::UIText>(label.Entity()), std::string(1000U, 'W')),
+                "A text of 1000 letters must be accepted by the text limit");
+            for (const Screen& screen : screens) {
+                if (safeArea) {
+                    static_cast<void>(scene.UI().SetSafeAreaInsets(kb::scene::UIEdges{ .left = 20.0F, .top = 40.0F, .right = 20.0F, .bottom = 30.0F }));
+                }
+                kb::tests::Require(scene.UI().Update(screen.width, screen.height, {}, 0.016F), "The responsive menu must build a frame");
+                const kb::scene::SceneUIFrame& frame = scene.UI().Frame();
+                float previousBottom = -1.0e9F;
+                for (const kb::scene::SceneEntity entity : buttons) {
+                    const kb::scene::SceneUIFrameElement* element = FindElement(frame, entity);
+                    kb::tests::Require(element != nullptr && element->interactionEnabled, "Every control of the menu must be in the frame and usable");
+                    const kb::math::Rect& rect = element->rect;
+                    kb::tests::Require(std::isfinite(rect.x) && std::isfinite(rect.y) && std::isfinite(rect.width) && std::isfinite(rect.height) &&
+                            rect.width > 1.0F && rect.height > 1.0F,
+                        "Every control must have a finite, visible size");
+                    kb::tests::Require(rect.x >= -0.5F && rect.y >= -0.5F && rect.x + rect.width <= screen.width + 0.5F &&
+                            rect.y + rect.height <= screen.height + 0.5F,
+                        "Every control must lie inside the screen");
+                    kb::tests::Require(rect.y >= previousBottom - 0.5F, "Controls of a vertical menu must not overlap");
+                    previousBottom = rect.y + rect.height;
+                    kb::tests::Require(scene.UI().HitTest({ rect.x + rect.width * 0.5F, rect.y + rect.height * 0.5F }) == entity,
+                        "The middle of a control must hit that control");
+                }
+                const kb::scene::SceneUIFrameElement* labelElement = FindElement(frame, label.Entity());
+                kb::tests::Require(labelElement != nullptr && std::isfinite(labelElement->rect.width) && std::isfinite(labelElement->rect.height) &&
+                        labelElement->rect.width <= screen.width * 4.0F && labelElement->rect.height <= screen.height * 4.0F,
+                    "A very long text must not give its element an unbounded size");
+                if (labelElement != nullptr && labelElement->text.has_value()) {
+                    kb::tests::Require(kb::scene::UITextContent(*labelElement->text).size() < kb::scene::UIText::MaxUtf8Bytes,
+                        "A text longer than the text limit must be cut to it");
+                }
+            }
+        }
+    }
+}
+
 void TestInteractionAndEditing() {
     kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
     const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
@@ -2096,6 +2173,7 @@ void RunSceneUITests() {
     TestFrameAmongManyRootsMatchesRecordedFrame();
     TestFrameNextToMillionRootsIsCheap();
     TestInputFieldEditsGraphemeClusters();
+    TestResponsiveMenuKeepsEveryControlReachable();
     RunUITextLineBreakingTests();
 }
 
