@@ -125,7 +125,7 @@ void AccumulateReplayChecksum(kb::ecs::Entity entity, const EcsPosition& positio
     *checksum += (id * 31) ^ (positionX * 17) ^ (positionY * 13) ^ (velocityX * 7) ^ velocityY;
 }
 
-[[nodiscard]] ReplayResult RunReplay() {
+[[nodiscard]] ReplayResult RunReplay(std::size_t workerCount) {
     kb::ecs::World world;
     for (int index = 0; index < 48; ++index) {
         const kb::ecs::Entity entity = world.CreateEntity();
@@ -134,10 +134,11 @@ void AccumulateReplayChecksum(kb::ecs::Entity entity, const EcsPosition& positio
     }
 
     kb::ecs::WorkerPoolConfig workerPool;
-    workerPool.singleThreaded = true;
+    workerPool.singleThreaded = workerCount == 0U;
+    workerPool.workerCount = workerCount;
     kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{
         .mode = kb::ecs::SystemSchedulingMode::Deterministic,
-        .parallelExecutionEnabled = false,
+        .parallelExecutionEnabled = workerCount != 0U,
         .workerPool = workerPool,
     } };
     scheduler.Add(std::make_unique<ReplayOffsetPositionSystem>(), world);
@@ -156,13 +157,42 @@ void AccumulateReplayChecksum(kb::ecs::Entity entity, const EcsPosition& positio
 }
 
 void RunDeterministicReplayProducesStableResultTest() {
-    const ReplayResult first = RunReplay();
-    const ReplayResult second = RunReplay();
+    const ReplayResult first = RunReplay(0U);
+    const ReplayResult second = RunReplay(0U);
 
     kb::tests::Require(first.executionOrder == second.executionOrder, "ECS deterministic replay produced different system order");
     kb::tests::Require(first.executionOrder.size() == 3U, "ECS deterministic replay omitted systems");
     kb::tests::Require(first.executionOrder[0] == "Replay.01.Integrate", "ECS deterministic replay ignored explicit dependency order");
     kb::tests::Require(first.checksum == second.checksum, "ECS deterministic replay produced different component results");
+}
+
+// Documented scope (docs/ecs_runtime_contracts.md): with the Deterministic scheduling mode and the
+// Deterministic query policy, the same registration order and the same fixed step give the same
+// system order and the same component values whatever the number of workers.
+void RunDeterministicReplayIgnoresWorkerCountTest() {
+    const ReplayResult reference = RunReplay(0U);
+    for (const std::size_t workerCount : { std::size_t{ 1U }, std::size_t{ 2U }, std::size_t{ 4U }, std::size_t{ 7U } }) {
+        const ReplayResult result = RunReplay(workerCount);
+        const std::string message = "ECS deterministic replay changed with " + std::to_string(workerCount) + " workers";
+        kb::tests::Require(result.executionOrder == reference.executionOrder && result.checksum == reference.checksum, message.c_str());
+    }
+}
+
+// Golden result of the replay above. It is an exact-value contract for one toolchain family, not a
+// promise of bitwise identical floating point on every platform: a Linux or ARM run that differs
+// from this value is evidence about that platform (for example fused multiply-add contraction) and
+// has to be recorded, not silently re-baselined.
+constexpr std::int64_t kReplayGoldenChecksumMsvcX64 = 536938034;
+
+void RunDeterministicReplayGoldenTest() {
+    const ReplayResult result = RunReplay(0U);
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_AMD64))
+    const std::string message = "ECS deterministic replay golden checksum changed: got " + std::to_string(result.checksum);
+    kb::tests::Require(result.checksum == kReplayGoldenChecksumMsvcX64, message.c_str());
+#else
+    static_cast<void>(result);
+    static_cast<void>(kReplayGoldenChecksumMsvcX64);
+#endif
 }
 
 } // namespace
@@ -171,6 +201,8 @@ namespace kb::tests {
 
 void RunEcsDeterministicReplayTests() {
     RunDeterministicReplayProducesStableResultTest();
+    RunDeterministicReplayIgnoresWorkerCountTest();
+    RunDeterministicReplayGoldenTest();
 }
 
 } // namespace kb::tests
