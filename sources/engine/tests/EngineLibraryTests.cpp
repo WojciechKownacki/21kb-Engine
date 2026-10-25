@@ -2700,6 +2700,14 @@ void RunEngineLibraryComponentRegistryTest() {
     const std::vector<kb::library::LibraryComponentDesc>& catalog = kb::library::EngineLibraryComponentRegistry::Catalog();
     const std::span<const std::string_view> scriptComponentNames = kb::script::ScriptSceneComponentApi::ComponentNames();
 
+    if (catalog.size() != scriptComponentNames.size()) {
+        std::cerr << "component registry has " << catalog.size() << " entries, script API gates " << scriptComponentNames.size() << '\n';
+        for (const std::string_view scriptName : scriptComponentNames) {
+            if (kb::library::EngineLibraryComponentRegistry::Find(scriptName) == nullptr) {
+                std::cerr << "  missing from the registry: " << scriptName << '\n';
+            }
+        }
+    }
     kb::tests::Require(catalog.size() == scriptComponentNames.size(),
         "Engine21kbLibrary component registry must catalog exactly the same number of components ScriptSceneComponentApi.cpp gates Lua/VisualGraph access behind");
     for (const std::string_view scriptName : scriptComponentNames) {
@@ -2737,6 +2745,10 @@ void RunEngineLibraryComponentRegistryTest() {
     source.Components().Tilemaps().Set(object.Entity(), kb::scene::TilemapComponent{ .mapAssetId = 101U, .locked = true });
     source.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{ .sortingOrder = 5, .enabled = false });
     source.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{ .enabled = false });
+    kb::scene::AudioSourceComponent audioSource{ .clipAssetId = 4242U, .volume = 0.4F, .pitch = 1.5F, .loop = true, .spatial = false, .mute = true };
+    kb::tests::Require(kb::scene::SetAudioSourceOutputBus(audioSource, "Effects"), "Engine21kbLibrary component registry audio fixture needs a valid output bus");
+    source.Components().AudioSources().Set(object.Entity(), audioSource);
+    source.Components().AudioListeners().Set(object.Entity(), kb::scene::AudioListenerComponent{ .priority = 3, .primary = false, .enabled = false });
     source.Components().Visibility().Set(object.Entity(), kb::scene::VisibilityComponent{ .mask = 0x0000000FU, .visible = false });
     source.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 55.0F });
     source.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{ .intensity = 3.0F });
@@ -2890,6 +2902,16 @@ void RunEngineLibraryComponentRegistryTest() {
         *target.Components().TilemapRenderers().TryGet(restored) == *source.Components().TilemapRenderers().TryGet(object.Entity()), "Tilemap renderer fields survive the library serialization contract");
     kb::tests::Require(target.Components().TilemapColliders().Has(restored) &&
         *target.Components().TilemapColliders().TryGet(restored) == *source.Components().TilemapColliders().TryGet(object.Entity()), "Tilemap collider fields survive the library serialization contract");
+
+    const kb::scene::AudioSourceComponent* restoredAudioSource = target.Components().AudioSources().TryGet(restored);
+    kb::tests::Require(restoredAudioSource != nullptr && restoredAudioSource->clipAssetId == 4242U &&
+                            kb::tests::NearlyEqual(restoredAudioSource->volume, 0.4F) && kb::tests::NearlyEqual(restoredAudioSource->pitch, 1.5F) &&
+                            restoredAudioSource->loop && !restoredAudioSource->spatial && restoredAudioSource->mute &&
+                            kb::scene::AudioSourceOutputBus(*restoredAudioSource) == "Effects",
+        "Engine21kbLibrary component registry: Audio Source is marked serializable=true and must survive a save/load round trip with its routing");
+    const kb::scene::AudioListenerComponent* restoredAudioListener = target.Components().AudioListeners().TryGet(restored);
+    kb::tests::Require(restoredAudioListener != nullptr && restoredAudioListener->priority == 3 && !restoredAudioListener->primary && !restoredAudioListener->enabled,
+        "Engine21kbLibrary component registry: Audio Listener is marked serializable=true and must survive a save/load round trip");
 
     kb::tests::Require(target.Components().Cameras().Has(restored), "Engine21kbLibrary component registry: Camera is marked serializable=true and must survive a save/load round trip");
     kb::tests::Require(target.Components().Lights().Has(restored), "Engine21kbLibrary component registry: Light is marked serializable=true and must survive a save/load round trip");
@@ -3387,7 +3409,8 @@ void RunComponentInspectorDescCatalogTest() {
     // Particle Effect contributes nine authoring and playback fields.
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
-    kb::tests::Require(fieldsChecked == 774U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (774, including the collision mesh and the compatibility aliases) across all components");
+    // Audio Source contributes sixteen fields and Audio Listener four.
+    kb::tests::Require(fieldsChecked == 794U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (794, including the collision mesh and the compatibility aliases) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

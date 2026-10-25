@@ -17,6 +17,40 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
     static const std::vector<LibraryComponentInspectorDesc> kCatalog = [] {
         std::vector<LibraryComponentInspectorDesc> catalog{
         LibraryComponentInspectorDesc{
+            .componentName = "AudioSource",
+            .displayName = "Audio Source",
+            .category = "Audio",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "clipAssetId", "Clip", "Audio asset this source plays, or zero for none." },
+                LibraryComponentInspectorFieldDesc{ "volume", "Volume", "Playback gain; zero is silent and one leaves the clip unchanged." },
+                LibraryComponentInspectorFieldDesc{ "pitch", "Pitch", "Playback speed multiplier, at least 0.01." },
+                LibraryComponentInspectorFieldDesc{ "loop", "Loop", "Restart the clip when it reaches the end." },
+                LibraryComponentInspectorFieldDesc{ "spatial", "Spatial", "Position the sound in the scene relative to the active listener." },
+                LibraryComponentInspectorFieldDesc{ "autoplay", "Play On Start", "Start playing when the scene begins running." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this source can play." },
+                LibraryComponentInspectorFieldDesc{ "mute", "Mute", "Silence the source without stopping its playback position." },
+                LibraryComponentInspectorFieldDesc{ "pan", "Stereo Pan", "Left to right balance from -1 to 1." },
+                LibraryComponentInspectorFieldDesc{ "spatialBlend", "Spatial Blend", "Mix between non-positional (0) and fully spatial (1) sound." },
+                LibraryComponentInspectorFieldDesc{ "attenuationModel", "Attenuation", "How loudness falls with distance: None, Inverse, Linear or Exponential." },
+                LibraryComponentInspectorFieldDesc{ "minDistance", "Min Distance", "Distance within which the sound plays at full volume." },
+                LibraryComponentInspectorFieldDesc{ "maxDistance", "Max Distance", "Distance beyond which attenuation stops changing, at least the minimum." },
+                LibraryComponentInspectorFieldDesc{ "rolloff", "Rolloff", "How quickly the sound fades with distance." },
+                LibraryComponentInspectorFieldDesc{ "dopplerFactor", "Doppler", "Strength of the pitch shift from relative motion." },
+                LibraryComponentInspectorFieldDesc{ "outputBus", "Output Bus", "Mixer bus this source feeds; empty routes to the master output." },
+            },
+        },
+        LibraryComponentInspectorDesc{
+            .componentName = "AudioListener",
+            .displayName = "Audio Listener",
+            .category = "Audio",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "priority", "Priority", "The enabled listener with the highest priority hears the scene." },
+                LibraryComponentInspectorFieldDesc{ "localUser", "Local User", "Local user whose audio output this listener represents." },
+                LibraryComponentInspectorFieldDesc{ "primary", "Primary", "Prefer this listener when priorities are equal." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this listener can be selected." },
+            },
+        },
+        LibraryComponentInspectorDesc{
             .componentName = "Transform",
             .displayName = "Transform",
             .category = "Transform",

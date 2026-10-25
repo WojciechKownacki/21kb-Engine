@@ -43,6 +43,16 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
     static const std::vector<LibraryComponentDesc> kCatalog = [] {
         std::vector<LibraryComponentDesc> catalog{
         LibraryComponentDesc{
+            .name = "AudioSource",
+            .id = ComputeLibraryComponentId("AudioSource"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "AudioListener",
+            .id = ComputeLibraryComponentId("AudioListener"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "Transform",
             .id = ComputeLibraryComponentId("Transform"),
             .serializable = true,
