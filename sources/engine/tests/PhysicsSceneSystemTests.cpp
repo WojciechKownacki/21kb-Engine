@@ -37,6 +37,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
+#include "engine/script/ScriptBehaviourBindingService.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -3092,6 +3093,273 @@ void RunPhysicsPipelinedStepEquivalenceTest() {
         "A FixedTick must see the same poses whether or not the physics step is pipelined");
 }
 
+// A jump asked for within 0.1 s of walking off an edge succeeds (coyote time); later it does not, and a jump
+// never succeeds twice from one stand.
+[[nodiscard]] std::unique_ptr<kb::scene::Scene> MakeLedgeScene(kb::scene::SceneEntity& character) {
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back({ .name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true });
+    auto scene = std::make_unique<kb::scene::Scene>(std::move(descriptor));
+    kb::scene::PhysicsBackend::SetStepPipelining(*scene, false);
+    const auto ground = scene->Entities().CreateObject({ .name = "Ledge", .transform = { .localPosition = { -5.0F, -0.5F, 0.0F } } });
+    scene->Components().Colliders().Set(ground.Entity(), { .boxSize = { 10.0F, 1.0F, 4.0F } });
+    const auto body = scene->Entities().CreateObject({ .name = "Walker", .transform = { .localPosition = { -1.0F, 0.95F, 0.0F } } });
+    scene->Components().CharacterControllers().Set(body.Entity(), { .radius = 0.3F, .height = 1.8F });
+    character = body.Entity();
+    return scene;
+}
+
+// Walks off the edge, waits `waitFrames` more frames in the air and asks for a jump; returns the highest upward speed
+// of the next 12 frames, and the change in vertical speed made by asking again in the air.
+struct LedgeJump { float peak = 0.0F; float secondRequestChange = 0.0F; bool left = false; };
+[[nodiscard]] LedgeJump LedgeJumpAfter(unsigned waitFrames, bool standing) {
+    kb::scene::SceneEntity character{};
+    const std::unique_ptr<kb::scene::Scene> owner = MakeLedgeScene(character);
+    kb::scene::Scene& scene = *owner;
+    const auto step = [&]() { static_cast<void>(scene.Runtime().Update(1.0F / 60.0F)); };
+    for (unsigned frame = 0U; frame < 30U; ++frame) step();
+    LedgeJump result;
+    if (!kb::scene::PhysicsBackend::CharacterIsGrounded(scene, character)) return result;
+    if (!standing) {
+        for (unsigned frame = 0U; frame < 240U && kb::scene::PhysicsBackend::CharacterIsGrounded(scene, character); ++frame) {
+            static_cast<void>(kb::scene::PhysicsBackend::CharacterMove(scene, character, { 3.0F, 0.0F, 0.0F }));
+            step();
+        }
+        result.left = !kb::scene::PhysicsBackend::CharacterIsGrounded(scene, character);
+        for (unsigned frame = 0U; frame < waitFrames; ++frame) {
+            static_cast<void>(kb::scene::PhysicsBackend::CharacterMove(scene, character, { 3.0F, 0.0F, 0.0F }));
+            step();
+        }
+    }
+    static_cast<void>(kb::scene::PhysicsBackend::CharacterJump(scene, character, 8.0F));
+    for (unsigned frame = 0U; frame < 12U; ++frame) {
+        static_cast<void>(kb::scene::PhysicsBackend::CharacterMove(scene, character, { standing ? 0.0F : 3.0F, 0.0F, 0.0F }));
+        step();
+        const float speed = kb::scene::PhysicsBackend::CharacterVelocity(scene, character).value.y;
+        result.peak = std::max(result.peak, speed);
+        if (frame == 5U) {
+            static_cast<void>(kb::scene::PhysicsBackend::CharacterJump(scene, character, 8.0F));
+            const float before = speed;
+            step();
+            result.secondRequestChange = kb::scene::PhysicsBackend::CharacterVelocity(scene, character).value.y - before;
+            ++frame;
+        }
+    }
+    return result;
+}
+
+void RunCharacterJumpGraceTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) return;
+    const LedgeJump standing = LedgeJumpAfter(0U, true);
+    kb::tests::Require(standing.peak > 7.0F, "A standing character jumps");
+    kb::tests::Require(standing.secondRequestChange < 0.0F, "A jump asked for again in the air does not push the character up a second time");
+    const LedgeJump justLeft = LedgeJumpAfter(0U, false);
+    kb::tests::Require(justLeft.left && justLeft.peak > 7.0F, "A jump asked for as the character leaves the edge succeeds (coyote time)");
+    kb::tests::Require(justLeft.secondRequestChange < 0.0F, "The coyote jump is used up by the first jump");
+    const LedgeJump soon = LedgeJumpAfter(3U, false);
+    kb::tests::Require(soon.left && soon.peak > 7.0F, "A jump 0.05 s after leaving the edge still succeeds");
+    const LedgeJump late = LedgeJumpAfter(12U, false);
+    kb::tests::Require(late.left && late.peak < 1.0F, "A jump 0.2 s after leaving the edge is too late");
+}
+
+// The ready-made platformer and top-down players of ScriptAgentProjectFiles, as a project holds them, against the
+// real physics: input in, movement out.
+struct PlayerRig {
+    kb::scene::Scene scene;
+    std::unique_ptr<kb::script::ScriptRuntimeHost> host;
+    kb::scene::SceneEntity player{};
+    std::filesystem::path root;
+    std::unordered_map<std::uint64_t, std::shared_ptr<kb::input::InputActionAsset>> actions;
+    std::unordered_map<std::uint64_t, std::shared_ptr<kb::input::InputMappingContextAsset>> contexts;
+
+    explicit PlayerRig(kb::project::ProjectDescriptor descriptor) : scene(std::move(descriptor)) {}
+    void Step(unsigned frames = 1U) {
+        for (unsigned frame = 0U; frame < frames; ++frame) {
+            scene.Input().Evaluate(1.0F / 60.0F);
+            static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        }
+    }
+    [[nodiscard]] kb::scene::Vec3 Position() { return scene.Transforms().Get(player).localPosition; }
+    [[nodiscard]] float SpeedY() { return kb::scene::PhysicsBackend::CharacterVelocity(scene, player).value.y; }
+    void Key(kb::input::InputKey key, bool down) { scene.Input().MutableDeviceState().SetKeyDown(key, down); }
+};
+
+[[nodiscard]] std::unique_ptr<PlayerRig> MakePlayerRig(std::string_view scriptName, kb::scene::Vec3 start, bool gravity, bool withGround) {
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back({ .name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true });
+    auto rig = std::make_unique<PlayerRig>(std::move(descriptor));
+    auto& scene = rig->scene;
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    if (withGround) {
+        // A floor from x = -20 to 10 whose top is y = 0.
+        const auto ground = scene.Entities().CreateObject({ .name = "Floor", .transform = { .localPosition = { -5.0F, -0.5F, 0.0F } } });
+        scene.Components().Colliders().Set(ground.Entity(), { .boxSize = { 30.0F, 1.0F, 4.0F } });
+    }
+    rig->host = std::make_unique<kb::script::ScriptRuntimeHost>(scene);
+    kb::tests::Require(rig->host->Succeeded(), "player script host setup failed");
+    kb::tests::Require(rig->host->InstallSceneSystem(), "the player script scene system must install");
+
+    rig->root = std::filesystem::temp_directory_path() / ("21kb_engine_player_preset_" + std::string{ scriptName });
+    std::error_code fileError;
+    std::filesystem::remove_all(rig->root, fileError);
+    std::filesystem::create_directories(rig->root / "Assets" / "Logic", fileError);
+    const std::string_view source = kb::script::ScriptAgentProjectFiles::PresetScript(scriptName);
+    kb::tests::Require(!source.empty(), "the preset script must exist");
+    {
+        std::ofstream out{ rig->root / "Assets" / "Logic" / std::string{ scriptName }, std::ios::binary };
+        out << source;
+    }
+    kb::tests::Require(scene.Assets().MountProject(rig->root) && scene.Assets().Discover() == 1U, "the preset script must be a project asset");
+    const auto* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/" + std::string{ scriptName });
+    kb::tests::Require(metadata != nullptr, "the preset script must be discovered");
+
+    // Move: WASD and the arrows; Jump: Space.
+    auto move = std::make_shared<kb::input::InputActionAsset>();
+    move->name = "Move";
+    move->valueType = kb::input::InputActionValueType::Axis2D;
+    auto jump = std::make_shared<kb::input::InputActionAsset>();
+    jump->name = "Jump";
+    jump->valueType = kb::input::InputActionValueType::Bool;
+    auto context = std::make_shared<kb::input::InputMappingContextAsset>();
+    context->composites.push_back(kb::input::InputCompositeBinding{ .actionId = 1U, .slots = {
+        kb::input::InputCompositeSlot{ .key = kb::input::InputKey::D, .axis = 0U, .scale = 1.0F },
+        kb::input::InputCompositeSlot{ .key = kb::input::InputKey::A, .axis = 0U, .scale = -1.0F },
+        kb::input::InputCompositeSlot{ .key = kb::input::InputKey::W, .axis = 1U, .scale = 1.0F },
+        kb::input::InputCompositeSlot{ .key = kb::input::InputKey::S, .axis = 1U, .scale = -1.0F } } });
+    context->mappings.push_back(kb::input::InputKeyMapping{ .actionId = 2U, .key = kb::input::InputKey::Space });
+    rig->actions = { { 1U, move }, { 2U, jump } };
+    rig->contexts = { { 60U, context } };
+    PlayerRig* raw = rig.get();
+    scene.Input().SetResolvers(
+        [raw](std::uint64_t id) -> std::shared_ptr<const kb::input::InputActionAsset> {
+            const auto found = raw->actions.find(id);
+            return found != raw->actions.end() ? found->second : nullptr;
+        },
+        [raw](std::uint64_t id) -> std::shared_ptr<const kb::input::InputMappingContextAsset> {
+            const auto found = raw->contexts.find(id);
+            return found != raw->contexts.end() ? found->second : nullptr;
+        });
+    kb::tests::Require(scene.Input().AddMappingContext(60U, 0), "the player mapping context must be added");
+
+    const auto player = scene.Entities().CreateObject({ .name = "Player", .transform = { .localPosition = start } });
+    scene.Components().CharacterControllers().Set(player.Entity(), { .radius = 0.3F, .height = 1.6F, .useGravity = gravity });
+    rig->player = player.Entity();
+    const auto bound = kb::script::ScriptBehaviourBindingService::AttachMetadata(scene, player.Entity(), *metadata, {}, &rig->host->AssetPreparer());
+    kb::tests::Require(bound.Succeeded(), "the preset script must attach to the player");
+    return rig;
+}
+
+void RunPlatformerPlayerPresetTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) return;
+    using kb::input::InputKey;
+    // Falls from 3 m, lands, and stands.
+    auto rig = MakePlayerRig("Platformer2DPlayer.lua", { 0.0F, 3.0F, 0.0F }, true, true);
+    rig->Step(20);
+    kb::tests::Require(rig->Position().y < 2.6F, "the platformer player falls under gravity");
+    rig->Step(60);
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterIsGrounded(rig->scene, rig->player) && std::abs(rig->Position().y - 0.8F) < 0.05F,
+        "the platformer player lands on the floor and stands on it");
+    kb::tests::Require(rig->scene.Runtime().DrainSceneSystemErrors().empty(), "the platformer script runs without errors");
+
+    // Walks with Move.
+    const float startX = rig->Position().x;
+    rig->Key(InputKey::D, true);
+    rig->Step(30);
+    rig->Key(InputKey::D, false);
+    kb::tests::Require(rig->Position().x > startX + 2.0F && rig->Position().x < startX + 3.5F, "the platformer player walks at its speed");
+    rig->Step(10);
+
+    // Jumps on Jump, and a held jump goes higher than a tapped one.
+    const auto jumpHeight = [&](unsigned heldFrames) {
+        const float ground = rig->Position().y;
+        float top = ground;
+        rig->Key(InputKey::Space, true);
+        for (unsigned frame = 0U; frame < 90U; ++frame) {
+            if (frame == heldFrames) rig->Key(InputKey::Space, false);
+            rig->Step();
+            top = std::max(top, rig->Position().y);
+        }
+        rig->Key(InputKey::Space, false);
+        rig->Step(30);
+        return top - ground;
+    };
+    const float tapped = jumpHeight(2U);
+    const float held = jumpHeight(80U);
+    kb::tests::Require(tapped > 0.3F && held > tapped + 0.5F, "a held jump is higher than a tapped one (variable height)");
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterIsGrounded(rig->scene, rig->player), "the platformer player lands again");
+
+    // No jump in the air: pressing Jump again while rising or falling adds nothing.
+    rig->Key(InputKey::Space, true);
+    rig->Step(3);
+    rig->Key(InputKey::Space, false);
+    rig->Step(10);
+    const float inAir = rig->SpeedY();
+    rig->Key(InputKey::Space, true);
+    rig->Step(1);
+    rig->Key(InputKey::Space, false);
+    kb::tests::Require(rig->SpeedY() < inAir + 0.1F, "pressing Jump in the air does not jump again");
+    rig->Step(100);
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterIsGrounded(rig->scene, rig->player), "the platformer player is back on the floor");
+
+    // Jump buffer: a press shortly before landing jumps on landing.
+    auto faller = MakePlayerRig("Platformer2DPlayer.lua", { 0.0F, 3.0F, 0.0F }, true, true);
+    for (unsigned frame = 0U; frame < 150U && !(faller->Position().y < 1.25F && faller->SpeedY() < -2.0F); ++frame) faller->Step();
+    kb::tests::Require(!kb::scene::PhysicsBackend::CharacterIsGrounded(faller->scene, faller->player), "the faller is still in the air when it presses Jump");
+    faller->Key(InputKey::Space, true);
+    faller->Step(1);
+    faller->Key(InputKey::Space, false);
+    float peak = -100.0F;
+    for (unsigned frame = 0U; frame < 40U; ++frame) { faller->Step(); peak = std::max(peak, faller->SpeedY()); }
+    kb::tests::Require(peak > 3.0F, "a Jump press just before landing is remembered and jumps on landing (jump buffer)");
+    kb::tests::Require(faller->scene.Runtime().DrainSceneSystemErrors().empty(), "the faller script runs without errors");
+    // Coyote time: walking off the edge of the floor (x = 10), Jump 0.03 s later still jumps, 0.17 s later does not.
+    for (const unsigned wait : { 2U, 10U }) {
+        auto walker = MakePlayerRig("Platformer2DPlayer.lua", { 8.0F, 0.85F, 0.0F }, true, true);
+        walker->Step(20);
+        walker->Key(InputKey::D, true);
+        for (unsigned frame = 0U; frame < 120U && kb::scene::PhysicsBackend::CharacterIsGrounded(walker->scene, walker->player); ++frame) walker->Step();
+        kb::tests::Require(!kb::scene::PhysicsBackend::CharacterIsGrounded(walker->scene, walker->player), "the walker leaves the edge of the floor");
+        walker->Step(wait);
+        walker->Key(InputKey::Space, true);
+        walker->Step(1);
+        walker->Key(InputKey::Space, false);
+        float top = -100.0F;
+        for (unsigned frame = 0U; frame < 8U; ++frame) { walker->Step(); top = std::max(top, walker->SpeedY()); }
+        if (wait == 2U) kb::tests::Require(top > 3.0F, "a Jump press just after walking off an edge still jumps (coyote time)");
+        else kb::tests::Require(top < 1.0F, "a Jump press well after walking off an edge does not jump");
+    }
+}
+
+void RunTopDownPlayerPresetTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) return;
+    using kb::input::InputKey;
+    auto rig = MakePlayerRig("TopDown2DPlayer.lua", { 0.0F, 0.8F, 0.0F }, false, false);
+    rig->Step(5);
+    const float startY = rig->Position().y;
+    kb::tests::Require(std::abs(startY - 0.8F) < 0.01F, "the top-down player does not fall: it keeps its level");
+    // Right: speed 5 m/s over 60 frames.
+    rig->Key(InputKey::D, true);
+    rig->Step(60);
+    rig->Key(InputKey::D, false);
+    const float across = rig->Position().x;
+    kb::tests::Require(across > 4.5F && across < 5.5F, "the top-down player moves at its speed");
+    rig->Step(5);
+    // Diagonal (D and W together) is as fast as one axis, in a straight line.
+    const kb::scene::Vec3 before = rig->Position();
+    rig->Key(InputKey::D, true);
+    rig->Key(InputKey::W, true);
+    rig->Step(60);
+    rig->Key(InputKey::D, false);
+    rig->Key(InputKey::W, false);
+    const kb::scene::Vec3 after = rig->Position();
+    const float distance = std::hypot(after.x - before.x, after.z - before.z);
+    kb::tests::Require(distance > 4.5F && distance < 5.5F, "a diagonal move is normalized: as fast as straight");
+    kb::tests::Require(std::abs((after.x - before.x) - (after.z - before.z)) < 0.2F, "the diagonal runs at 45 degrees");
+    kb::tests::Require(std::abs(after.y - startY) < 0.01F, "and stays at its level");
+    kb::tests::Require(rig->scene.Runtime().DrainSceneSystemErrors().empty(), "the top-down script runs without errors");
+}
+
 void RunPhysicsSceneSystemTests() {
     RunStaticColliderBatchInvalidationTest();
     RunPhysicsEventBatchReuseTest();
@@ -3099,6 +3367,9 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsDebugDrawTest();
     RunPhysicsIdenticalReplayTest();
     RunOneWayPlatformTest();
+    RunCharacterJumpGraceTest();
+    RunPlatformerPlayerPresetTest();
+    RunTopDownPlayerPresetTest();
     RunGeneratedCollisionMeshRemovalTest();
     RunPhysicsSceneSystemFallingBodyTest();
     RunPhysicsPersistentSleeperTransitionTest();
@@ -3108,7 +3379,7 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsPipelinedStepEquivalenceTest();
 }
 
-void RunPhysicsOneWayOnlyTest() { RunOneWayPlatformTest(); RunGeneratedCollisionMeshRemovalTest(); }
+void RunPhysicsOneWayOnlyTest() { RunOneWayPlatformTest(); RunCharacterJumpGraceTest(); RunPlatformerPlayerPresetTest(); RunTopDownPlayerPresetTest(); RunGeneratedCollisionMeshRemovalTest(); }
 
 void RunPhysicsReplayOnlyTest() {
     RunPhysicsIdenticalReplayTest();

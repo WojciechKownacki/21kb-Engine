@@ -597,6 +597,9 @@ struct CharacterSignature {
     return SameVec3(lhs.scale, rhs.scale) && SameVec3(lhs.center, rhs.center) && lhs.radius == rhs.radius && lhs.height == rhs.height;
 }
 
+// How long after leaving its ground a character may still jump (coyote time).
+constexpr float kCharacterJumpGraceSeconds = 0.1F;
+
 struct CharacterRecord {
     JPH::Ref<JPH::CharacterVirtual> character;
     CharacterSignature signature{};
@@ -608,6 +611,10 @@ struct CharacterRecord {
     // semantics.
     Vec3 moveInput{};
     float pendingJumpSpeed = 0.0F;
+    // Seconds left in which a jump is still honored after the character walked off its ground
+    // (coyote time). Refilled on every step spent standing, spent by a jump so that it never
+    // makes a second one in the air.
+    float jumpGraceSeconds = 0.0F;
     // Mirrors of CharacterControllerComponent's own fields that Jolt has no "live setter"
     // for (unlike slopeLimitDegrees, applied straight to the JPH::CharacterVirtual via
     // SetMaxSlopeAngle - see SynchronizeCharacter) - refreshed every step regardless of
@@ -2424,7 +2431,8 @@ private:
             const bool movingTowardsGround = (currentVerticalVelocity.Dot(up) - groundVelocity.Dot(up)) < 0.1F;
 
             JPH::Vec3 newVelocity;
-            if (character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround && movingTowardsGround) {
+            const bool onGround = character->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+            if (onGround && movingTowardsGround) {
                 // LIB-131 "platform motion": assume the velocity of whatever is stood on -
                 // zero for static/no ground, the real moving velocity for a Kinematic/Dynamic
                 // platform, so the character rides along with it automatically.
@@ -2432,11 +2440,20 @@ private:
                 // LIB-131 jump: only actually honored while grounded and not already moving
                 // away from the ground - a request made while airborne was already dropped by
                 // this same `if` not being taken, so pendingJumpSpeed is simply never added.
+                record.jumpGraceSeconds = kCharacterJumpGraceSeconds;
                 if (record.pendingJumpSpeed > 0.0F) {
                     newVelocity += up * record.pendingJumpSpeed;
+                    record.jumpGraceSeconds = 0.0F;
                 }
             } else {
                 newVelocity = currentVerticalVelocity;
+                record.jumpGraceSeconds = std::max(0.0F, record.jumpGraceSeconds - deltaSeconds);
+                // Coyote time: a jump asked for just after the ground was lost, while the character has not
+                // started to rise, is honored as if it were still standing. The ground's velocity is kept.
+                if (record.pendingJumpSpeed > 0.0F && record.jumpGraceSeconds > 0.0F && currentVerticalVelocity.Dot(up) <= 0.1F) {
+                    newVelocity = groundVelocity + up * record.pendingJumpSpeed;
+                    record.jumpGraceSeconds = 0.0F;
+                }
             }
             record.pendingJumpSpeed = 0.0F;
 

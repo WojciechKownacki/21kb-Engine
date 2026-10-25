@@ -316,6 +316,91 @@ function Tick(self, dt)
 end
 )lua";
 
+// Ready-made 2D players (kb_cli entity add --create 'Platformer Player' / 'Top Down Player'). Plain Lua files of
+// the project; the @expose lines are the tunables the Inspector shows. The CharacterController supplies gravity,
+// ground and walls; the engine lets a jump asked for within 0.1 s of leaving the ground succeed (coyote time).
+constexpr std::string_view kPlatformer2DPlayerLuaTemplate = R"lua(-- Platformer2DPlayer.lua
+-- For a Map Platformer (a wall map: x across, y up). Requires: CharacterController.
+-- Input: Move (Axis2D, x = left and right), Jump (Bool).
+-- @expose speed Float = 6.0
+-- @expose jumpSpeed Float = 9.0
+-- @expose coyoteTime Float = 0.1
+-- @expose jumpBuffer Float = 0.12
+-- @expose releaseGravity Float = 3.0
+-- @expose fallGravity Float = 1.5
+-- coyoteTime: seconds after walking off an edge in which Jump still works (the engine allows up to 0.1).
+-- jumpBuffer: seconds before landing in which a Jump press is remembered.
+-- releaseGravity: gravity multiplier while rising with Jump released (a short hop); fallGravity: while falling.
+
+local states = {}
+
+function Tick(self, dt)
+    local entity = self.entity
+    local vars = self.variables
+    local move = Input.Vector2("Move")
+    Physics.CharacterMove(entity, (move.x or 0.0) * vars.speed, 0.0)
+
+    local state = states[entity]
+    if state == nil then
+        state = { sinceGround = 1000.0, sincePress = 1000.0, gravity = 1.0 }
+        states[entity] = state
+    end
+    local grounded = Physics.CharacterIsGrounded(entity)
+    local sinceGround = state.sinceGround
+    local sincePress = state.sincePress
+    if grounded then sinceGround = 0.0 else sinceGround = sinceGround + dt end
+    if Input.Pressed("Jump") then sincePress = 0.0 else sincePress = sincePress + dt end
+
+    local velocity = Physics.CharacterVelocity(entity)
+    local rising = velocity.found and velocity.y > 0.5
+    if rising then
+        -- The jump has started: it is used up, and so is the time on the ground.
+        sincePress = 1000.0
+        sinceGround = 1000.0
+    elseif sincePress <= vars.jumpBuffer and sinceGround <= vars.coyoteTime then
+        Physics.CharacterJump(entity, vars.jumpSpeed)
+    end
+    state.sinceGround = sinceGround
+    state.sincePress = sincePress
+
+    local gravity = 1.0
+    if velocity.found and velocity.y > 0.0 and not Input.Held("Jump") then
+        gravity = vars.releaseGravity
+    elseif velocity.found and velocity.y < -0.1 then
+        gravity = vars.fallGravity
+    end
+    if gravity ~= state.gravity then
+        self:SetProperty("CharacterController", "gravityScale", gravity)
+        state.gravity = gravity
+    end
+end
+)lua";
+
+constexpr std::string_view kTopDown2DPlayerLuaTemplate = R"lua(-- TopDown2DPlayer.lua
+-- For a Map Top Down (a flat map: x across, z up the screen). Requires: CharacterController with
+-- Use Gravity off, so that the player stays on the floor level. Input: Move (Axis2D).
+-- @expose speed Float = 5.0
+-- @expose eightWay Bool = true
+-- eightWay: false allows the four directions only (the stronger axis wins).
+
+function Tick(self, dt)
+    local vars = self.variables
+    local move = Input.Vector2("Move")
+    local x = move.x or 0.0
+    local y = move.y or 0.0
+    if not vars.eightWay then
+        if math.abs(x) >= math.abs(y) then y = 0.0 else x = 0.0 end
+    end
+    -- A diagonal key press is (1, 1): as fast as one axis once it is normalized. A stick is not boosted.
+    local length = math.sqrt(x * x + y * y)
+    if length > 1.0 then
+        x = x / length
+        y = y / length
+    end
+    Physics.CharacterMove(self.entity, x * vars.speed, y * vars.speed)
+end
+)lua";
+
 constexpr std::string_view kSimpleShooterControllerLuaTemplate = R"lua(-- SimpleShooterController.lua
 -- Requires: CharacterController and the shipped Projectile.kbprefab.
 -- Input: Move (Axis2D), Fire (Bool).
@@ -409,6 +494,12 @@ constexpr std::string_view kLuarcTemplate = R"json({
 }
 
 } // namespace
+
+std::string_view ScriptAgentProjectFiles::PresetScript(std::string_view fileName) noexcept {
+    if (fileName == "Platformer2DPlayer.lua") return kPlatformer2DPlayerLuaTemplate;
+    if (fileName == "TopDown2DPlayer.lua") return kTopDown2DPlayerLuaTemplate;
+    return {};
+}
 
 ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
     const std::filesystem::path& projectRoot,
