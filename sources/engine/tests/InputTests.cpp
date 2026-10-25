@@ -11,10 +11,15 @@
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/input/InputText.hpp"
 #include "engine/input/InputTriggers.hpp"
+#if defined(_WIN32)
+#include "engine/platform/win32/Win32InputCollector.hpp"
+#include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <system_error>
 #include <unordered_map>
@@ -1263,6 +1268,37 @@ void TestInputRecordingRefusesUnknownVersionsAndMagic() {
     Require(first.subsystem.IsActionPressed("Go") && second.subsystem.IsActionPressed("Go"), "A recording must replay the same actions in separate subsystems");
 }
 
+
+#if defined(_WIN32)
+// The Windows host calls, without a window or a pad: a collector with no foreground owner reports no focus and clears
+// every held key and button (nothing can stay stuck after the window lost focus), and the XInput vibration backend
+// refuses slots that do not exist, ignores values that are not numbers and silences on stop. These check the calls the
+// host makes, not that a controller physically vibrates.
+void TestWindowsCollectorAndHapticsHostCalls() {
+    Win32InputCollector collector;
+    InputDeviceState state;
+    state.SetKeyDown(InputKey::W, true);
+    state.SetKeyDown(InputKey::MouseLeft, true);
+    state.SetKeyDown(InputKey::GamepadFaceBottom, true, 1U);
+    state.SetAnalog(InputKey::GamepadLeftStickX, 0.8F, 1U);
+    collector.Collect(state, nullptr);
+    Require(!state.HasFocus() && !state.IsKeyDown(InputKey::W) && !state.IsKeyDown(InputKey::MouseLeft) &&
+            !state.IsKeyDown(InputKey::GamepadFaceBottom, 1U),
+        "A collector without a foreground owner must report no focus and no held keys or buttons");
+
+    Win32XInputHapticsBackend backend;
+    const InputHapticsCapability missing = backend.Capability(7U);
+    Require(!missing.supported && !missing.disabledReason.empty(), "A slot that does not exist must be unsupported with a reason");
+    const InputHapticsCapability first = backend.Capability(0U);
+    Require(first.supported && first.dualMotor && first.maxGamepads == 4U, "Slot 0 must report dual motor support for four pads");
+    Require(!backend.SetVibration(9U, 0.5F, 0.5F), "Vibration on a slot that does not exist must fail");
+    const float notANumber = std::numeric_limits<float>::quiet_NaN();
+    static_cast<void>(backend.SetVibration(0U, notANumber, notANumber));
+    backend.StopAll();
+    Require(!backend.SetVibration(9U, 0.0F, 0.0F), "The backend must keep refusing missing slots after StopAll");
+}
+#endif
+
 } // namespace
 
 void RunInputTests() {
@@ -1282,6 +1318,9 @@ void RunInputTests() {
     TestInvalidAndAnalogBindingsAreHandled();
     TestGamepadRebindSurvivesARestart();
     TestInputRecordingRefusesUnknownVersionsAndMagic();
+#if defined(_WIN32)
+    TestWindowsCollectorAndHapticsHostCalls();
+#endif
     TestPointerPosition();
     TestNamedContextPriorityBands();
     TestRebindConflictDetection();
