@@ -386,7 +386,8 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
             "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
             "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_ai_plugin>")
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_particle_gpu_package PROPERTIES
             LABELS "game;runtime;packaging;gpu" TIMEOUT 360)
         set(_kb_touch_test_runtime_args)
@@ -407,7 +408,8 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
             "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
             "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_ai_plugin>")
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_touch_script_package PROPERTIES
             LABELS "game;runtime;packaging;input" TIMEOUT 360)
         add_test(NAME kb_game_audio_dsp_package COMMAND "${Python3_EXECUTABLE}"
@@ -423,7 +425,8 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
             "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
             "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_ai_plugin>")
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_audio_dsp_package PROPERTIES
             LABELS "game;runtime;packaging;audio" TIMEOUT 180)
     endif()

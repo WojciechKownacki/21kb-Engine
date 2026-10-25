@@ -1539,7 +1539,8 @@ if(BUILD_TESTING)
 
     if(TARGET kb_cli AND TARGET kb_cooker AND TARGET kb_game AND KB_BUILD_PROVIDER_MODULES_AS_DLL
         AND TARGET kb_physics_jolt_plugin AND TARGET kb_audio_miniaudio_plugin
-        AND TARGET kb_basic_lighting_plugin AND TARGET kb_21kb_particle_plugin AND TARGET kb_ai_plugin)
+        AND TARGET kb_basic_lighting_plugin AND TARGET kb_21kb_particle_plugin AND TARGET kb_ai_plugin
+        AND TARGET kb_world2d_plugin)
         find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
         set(_kb_editor_dsp_shaderc "${KB_COOKER_SHADERC}")
         if(TARGET bgfx::shaderc)
@@ -1560,7 +1561,8 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
             "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
             "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
-            "--plugin" "$<TARGET_FILE:kb_ai_plugin>")
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_editor_audio_dsp_package PROPERTIES
             LABELS "editor;audio;runtime;packaging" TIMEOUT 180)
     endif()
