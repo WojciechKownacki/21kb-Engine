@@ -4219,14 +4219,16 @@ bool EditorSceneContext::SwitchOnDefaultPlugin(std::string_view pluginId, std::s
 
 bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId) {
     if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
-        console_.Warning("Inspector", "Component add ignored for invalid entity.");
+        console_.Warning("Inspector", "Cannot add " + std::string{ componentId } +
+            ": the object it was for is gone. Fix: select an object in the Hierarchy, then add the component again.");
         return false;
     }
 
     if (EditorUIComponentAuthoring::Supports(componentId)) {
         const kb::scene::UIComponentDescriptor* definition = kb::scene::FindUIComponentDescriptor(componentId);
         if (definition != nullptr && EditorUIComponentAuthoring::Has(*scene_, entity, definition->type)) {
-            console_.Warning("Inspector", "Entity already has a " + std::string{ definition->displayName } + " component.");
+            console_.Warning("Inspector", "'" + scene_->Entities().Name(entity) + "' already has " + std::string{ definition->displayName } +
+                ". Fix: change its values in the Inspector, or remove it from the component's menu first.");
             return false;
         }
         const std::string label = "Add " + std::string{ definition != nullptr ? definition->displayName : componentId };
@@ -4288,12 +4290,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
     // Every other component: one table shared with kb_cli and automation.
     const kb::scene::SceneComponentKind* kind = kb::scene::SceneComponentAuthoring::Find(componentId);
     if (kind == nullptr) {
-        console_.Warning("Inspector", "Unknown component: " + std::string{ componentId });
+        const kb::scene::SceneComponentAddAdvice advice = kb::scene::SceneComponentAuthoring::AddAdvice(
+            kb::scene::SceneComponentAddStatus::UnknownComponent, nullptr, componentId, scene_->Entities().Name(entity));
+        console_.Warning("Inspector", "Cannot add: " + advice.cause + ". Fix: " + advice.editorRemedy + ".");
         return false;
     }
     const std::string displayName{ kind->displayName };
     if (kb::scene::SceneComponentAuthoring::Has(*scene_, entity, componentId)) {
-        console_.Warning("Inspector", "Entity already has a " + displayName + " component.");
+        const kb::scene::SceneComponentAddAdvice advice = kb::scene::SceneComponentAuthoring::AddAdvice(
+            kb::scene::SceneComponentAddStatus::AlreadyPresent, kind, componentId, scene_->Entities().Name(entity));
+        console_.Warning("Inspector", advice.cause + ". Fix: " + advice.editorRemedy + ".");
         return false;
     }
     // Plugins on by default are switched on by asking for what they provide (an AI Brain turns
@@ -4304,8 +4310,9 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         return false;
     }
     if (!kb::scene::SceneComponentAuthoring::PluginEnabled(project_, *kind)) {
-        console_.Warning("Plugins", "Enable the " + std::string{ kind->requiredPlugin } +
-            " plugin in Edit > Plugins before adding " + displayName + ".");
+        const kb::scene::SceneComponentAddAdvice advice = kb::scene::SceneComponentAuthoring::AddAdvice(
+            kb::scene::SceneComponentAddStatus::PluginDisabled, kind, componentId, scene_->Entities().Name(entity));
+        console_.Warning("Plugins", advice.cause + ". Fix: " + advice.editorRemedy + ".");
         return false;
     }
     if (kind->id == "Collider") {

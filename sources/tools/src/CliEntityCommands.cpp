@@ -859,17 +859,16 @@ void ListProperties(std::string_view component, std::ostream& out) {
         case kb::scene::SceneComponentAddStatus::Added:
             break;
         case kb::scene::SceneComponentAddStatus::AlreadyPresent:
-            io.err << "error: '" << *entityName << "' already has " << added.kind->displayName << " (use component set)\n";
-            return 1;
         case kb::scene::SceneComponentAddStatus::PluginDisabled:
-            io.err << "error: " << added.kind->displayName << " needs the project plugin " << added.kind->requiredPlugin << '\n';
+        case kb::scene::SceneComponentAddStatus::Rejected: {
+            const kb::scene::SceneComponentAddAdvice advice =
+                kb::scene::SceneComponentAuthoring::AddAdvice(added.status, added.kind, *type, *entityName);
+            io.err << "error: " << advice.cause << ". Fix: " << advice.commandLineRemedy << '\n';
             return 1;
-        case kb::scene::SceneComponentAddStatus::Rejected:
-            io.err << "error: " << added.kind->displayName << " could not be added to '" << *entityName << "'\n";
-            return 1;
+        }
         case kb::scene::SceneComponentAddStatus::UnknownComponent:
         default:
-            io.err << "error: unknown component '" << *type << "'. Components:";
+            io.err << "error: unknown component '" << *type << "'. Fix: kb_cli schema lists the components. Components:";
             for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) io.err << " '" << kind.id << "'";
             io.err << '\n';
             return 1;

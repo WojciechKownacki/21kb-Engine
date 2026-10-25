@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
 
 namespace kb::scene {
 namespace {
@@ -211,6 +212,36 @@ SceneComponentAddResult SceneComponentAuthoring::Add(
         return { SceneComponentAddStatus::PluginDisabled, kind };
     }
     return { entry->add(scene, entity) ? SceneComponentAddStatus::Added : SceneComponentAddStatus::Rejected, kind };
+}
+
+SceneComponentAddAdvice SceneComponentAuthoring::AddAdvice(
+    SceneComponentAddStatus status, const SceneComponentKind* kind, std::string_view componentId, std::string_view entityName) {
+    const std::string name{ kind != nullptr ? std::string{ kind->displayName } : std::string{ componentId } };
+    const std::string object = "'" + std::string{ entityName } + "'";
+    switch (status) {
+    case SceneComponentAddStatus::Added:
+        return {};
+    case SceneComponentAddStatus::AlreadyPresent:
+        return { object + " already has " + name,
+            "kb_cli component set --entity " + std::string{ entityName } + " --type " + std::string{ kind != nullptr ? kind->id : componentId } +
+                " --set <name>=<value>",
+            "change its values in the Inspector, or remove it from the component's menu first" };
+    case SceneComponentAddStatus::PluginDisabled: {
+        const std::string plugin{ kind != nullptr ? kind->requiredPlugin : std::string_view{} };
+        return { name + " needs the project plugin " + plugin,
+            "enable " + plugin + " in the project's plugin list, then run the command again",
+            "enable " + plugin + " in Edit > Plugins, then add the component again" };
+    }
+    case SceneComponentAddStatus::Rejected:
+        return { name + " could not be added to " + object,
+            "run kb_cli schema to see the component's fields, then try again with explicit --set values",
+            "look at the Console for the reason, then try again" };
+    case SceneComponentAddStatus::UnknownComponent:
+    default:
+        return { "unknown component '" + std::string{ componentId } + "'",
+            "kb_cli schema lists the components",
+            "pick one from the Add Component menu" };
+    }
 }
 
 bool SceneComponentAuthoring::Remove(Scene& scene, SceneEntity entity, std::string_view id) {

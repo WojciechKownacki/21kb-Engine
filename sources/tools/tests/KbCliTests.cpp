@@ -2458,8 +2458,17 @@ void RunEntityComponentCommandTests() {
         "--rotation", "35,30,0" }).exitCode == 0, "entity add failed");
     Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "Light",
         "--set", "intensity=2.5", "--set", "color=1,0.5,0.25" }).exitCode == 0, "component add with settings failed");
-    Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "Light" }).exitCode != 0,
-        "a second Light must be refused");
+    {
+        // A refusal names the object and the cause and gives a command that works.
+        const auto second = Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "Light" });
+        Require(second.exitCode != 0, "a second Light must be refused");
+        Require(Contains(second.output, "'Sun' already has Light") &&
+                Contains(second.output, "Fix: kb_cli component set --entity Sun --type Light --set <name>=<value>"),
+            "a refused add must name the object, the cause and a command that works: " + second.output);
+        const auto unknown = Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Sun", "--type", "NoSuchThing" });
+        Require(unknown.exitCode != 0 && Contains(unknown.output, "unknown component 'NoSuchThing'") && Contains(unknown.output, "Fix: kb_cli schema"),
+            "an unknown component must say how to find the right one: " + unknown.output);
+    }
     Require(Run(&kb::cli::RunComponentCommand, { "set", "--project", project, "--entity", "Sun", "--type", "Light",
         "--set", "nosuch=1" }).exitCode != 0, "an unknown property must be refused");
     Require(Run(&kb::cli::RunComponentCommand, { "add", "--project", project, "--entity", "Nobody", "--type", "Camera" }).exitCode != 0,
