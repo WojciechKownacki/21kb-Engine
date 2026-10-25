@@ -578,6 +578,57 @@ void RunAssetManagerTrueAsyncLoadTest() {
         "Unload during an async request must invalidate the worker result before owner-thread commit");
 }
 
+// An I/O error of an asynchronous load is reported as a failure with the loader's message and does not publish
+// anything; a payload that was unloaded and requested again while the first read was still running is published
+// by the new request, not lost with the old one.
+void RunAssetManagerAsyncFailureAndRequestAfterUnloadTest() {
+    ResetTestRoot();
+    const std::filesystem::path assetsRoot = TestRoot() / "AsyncFailureProject" / "Assets";
+    WriteTextFile(assetsRoot / "Text" / "Vanishing.gated", "will be deleted");
+    WriteTextFile(assetsRoot / "Text" / "Reloaded.gated", "second request payload");
+
+    std::promise<void> releasePromise;
+    auto gate = std::make_shared<AsyncLoaderGate>();
+    gate->release = releasePromise.get_future().share();
+    releasePromise.set_value(); // the loader never waits in the failure case
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)) &&
+            manager.Mounts().Mount("Game", assetsRoot) && manager.DiscoverMountedAssets() == 2U,
+        "Async failure fixture could not be registered");
+    const kb::assets::AssetId vanishing = manager.Registry().FindByPath("/Game/Text/Vanishing.gated")->id;
+    std::error_code error;
+    std::filesystem::remove(assetsRoot / "Text" / "Vanishing.gated", error);
+    kb::tests::Require(!error, "Async failure fixture could not delete its file");
+    kb::tests::Require(manager.RequestLoadAsync(vanishing), "A request for a file that has vanished is still accepted");
+    SpinUntil([&] { return manager.AsyncLoadStatus(vanishing) != kb::assets::AsyncAssetLoadStatus::Pending; }, [&] { manager.PumpAsyncLoads(); });
+    kb::tests::Require(manager.AsyncLoadStatus(vanishing) == kb::assets::AsyncAssetLoadStatus::Failed &&
+            manager.AsyncLoadError(vanishing).find("could not be opened") != std::string::npos && !manager.IsLoaded(vanishing),
+        "An I/O error of an async load must be reported as a failure with the loader's message and publish nothing");
+
+    // Unload while the read is running, then request again: the second request must be the one that publishes.
+    std::promise<void> secondRelease;
+    auto secondGate = std::make_shared<AsyncLoaderGate>();
+    secondGate->release = secondRelease.get_future().share();
+    kb::assets::AssetManager again;
+    kb::tests::Require(again.RegisterLoader(std::make_unique<GatedTextAssetLoader>(secondGate)) &&
+            again.Mounts().Mount("Game", assetsRoot) && again.DiscoverMountedAssets() == 1U,
+        "Async re-request fixture could not be registered");
+    const kb::assets::AssetId reloaded = again.Registry().FindByPath("/Game/Text/Reloaded.gated")->id;
+    kb::tests::Require(again.RequestLoadAsync(reloaded), "The first request must be accepted");
+    SpinUntil([&] { return secondGate->entered.load(std::memory_order_acquire); });
+    const bool entered = secondGate->entered.load(std::memory_order_acquire);
+    static_cast<void>(again.Unload(reloaded));
+    const bool secondAccepted = again.RequestLoadAsync(reloaded);
+    secondRelease.set_value();
+    kb::tests::Require(entered, "The first read never started");
+    kb::tests::Require(secondAccepted, "A request made after the unload must be accepted");
+    SpinUntil([&] { return again.AsyncLoadStatus(reloaded) == kb::assets::AsyncAssetLoadStatus::Completed; }, [&] { again.PumpAsyncLoads(); });
+    kb::tests::Require(again.AsyncLoadStatus(reloaded) == kb::assets::AsyncAssetLoadStatus::Completed && again.IsLoaded(reloaded),
+        "A request made after an unload during I/O must publish its own result");
+    const kb::assets::AssetHandle<std::string> payload = again.AcquireLoaded<std::string>(reloaded);
+    kb::tests::Require(payload.IsLoaded() && *payload == "second request payload", "The re-requested payload must be the loaded text");
+}
+
 // Asynchronous loads are jobs of the engine's one background load service: a blocked loader
 // holds one worker, while streaming reads and other users' jobs keep running, and destroying the
 // manager drops its queued loads and waits for the running one without a thread of its own.
@@ -2617,6 +2668,7 @@ void RunAssetRuntimeTests() {
     RunAssetManagerRuntimePublicationTest();
     RunAssetManagerLoadOpaqueTest();
     RunAssetManagerTrueAsyncLoadTest();
+    RunAssetManagerAsyncFailureAndRequestAfterUnloadTest();
     RunAssetManagerAsyncLoadsShareBackgroundServiceTest();
     RunAssetManagerAsyncDependencyValidationTest();
     RunAssetManagerAsyncLoaderReplacementTest();

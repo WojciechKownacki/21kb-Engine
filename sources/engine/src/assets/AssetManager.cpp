@@ -577,8 +577,14 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
         asyncLoadErrors_.erase(id.value);
         return true;
     }
-    if (asyncLoads_.contains(id.value)) {
-        return true;
+    if (const auto pending = asyncLoads_.find(id.value); pending != asyncLoads_.end()) {
+        if (pending->second.generation == asyncLoadGenerations_[id.value]) {
+            return true;
+        }
+        // The asset was unloaded while this read was running; PumpAsyncLoads would discard its result. Forget the
+        // record (the running job only writes into its own shared state) so that this new request starts a read
+        // of its own instead of being answered by the one that is already dead.
+        asyncLoads_.erase(pending);
     }
     const AssetMetadata* registered = registry_.Find(id);
     if (registered == nullptr || !registered->runtimeLoadable) {
