@@ -47,23 +47,27 @@ def author_fixture(args, root):
         script_source=Path(__file__).with_name("fixtures") / "StorageDelete.lua", configure=configure)
 
 
+def verify_content(case, label, report, pack_size):
+    verify(case.ready(), 0)
+    colors = case.picture(label + "-cooked-pattern", [[316, 96], [540, 96], [316, 320], [540, 320], [60, 100]])
+    red, green, blue, yellow, button = colors
+    require(red[0] > 180 and red[1] < 70 and red[2] < 70 and
+        green[1] > 180 and green[0] < 70 and green[2] < 70 and
+        blue[2] > 180 and blue[0] < 70 and blue[1] < 70 and
+        yellow[0] > 180 and yellow[1] > 180 and yellow[2] < 70 and
+        button[2] > button[0] + 50,
+        "The real cooked texture pixels, orientation or native button differ: " + str(colors))
+    measure(case, label, report, pack_size)
+    report["observations"].append(dict(check="cooked texture and native button render", label=label, pixels=colors))
+
+
 def run_cases(args, root, report, origin):
     pack_size = (root / "Web/Game.kbpack").stat().st_size
     require(pack_size >= 4 * 1024 * 1024, "The actual cooked workload package is too small: " + str(pack_size))
     report["workload"] = dict(textureWidth=2048, textureHeight=2048, packageBytes=pack_size)
     for label in ["cold", "warm"]:
         with BrowserSession(args, root, root / "profile", report, origin, label, LOAD_OBSERVER) as case:
-            verify(case.ready(), 0)
-            colors = case.picture(label + "-cooked-pattern", [[316, 96], [540, 96], [316, 320], [540, 320], [60, 100]])
-            red, green, blue, yellow, button = colors
-            require(red[0] > 180 and red[1] < 70 and red[2] < 70 and
-                green[1] > 180 and green[0] < 70 and green[2] < 70 and
-                blue[2] > 180 and blue[0] < 70 and blue[1] < 70 and
-                yellow[0] > 180 and yellow[1] > 180 and yellow[2] < 70 and
-                button[2] > button[0] + 50,
-                "The real cooked texture pixels, orientation or native button differ: " + str(colors))
-            measure(case, label, report, pack_size)
-            report["observations"].append(dict(check="cooked texture and native button render", label=label, pixels=colors))
+            verify_content(case, label, report, pack_size)
 
 
 if __name__ == "__main__":

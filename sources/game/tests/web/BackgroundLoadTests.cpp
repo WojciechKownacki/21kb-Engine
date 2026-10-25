@@ -1,5 +1,6 @@
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
 #include "WebDownloadProgress.hpp"
+#include "WebDownloadBuffer.hpp"
 
 #include <emscripten/emscripten.h>
 
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <memory>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -26,6 +28,18 @@ std::vector<BackgroundRequestHandle> fairnessReads;
 BackgroundRequestHandle fairnessJob;
 unsigned readsFinished = 0;
 unsigned readsAtLongJob = 0;
+unsigned allocations = 0;
+unsigned releases = 0;
+bool refuseAllocation = false;
+
+void* AllocateDownload(void* pointer, std::size_t count) {
+    ++allocations;
+    return refuseAllocation ? nullptr : std::realloc(pointer, count);
+}
+void ReleaseDownload(void* pointer) {
+    ++releases;
+    std::free(pointer);
+}
 
 void Require(bool condition, const char* message) {
     if (!condition) {
@@ -107,6 +121,47 @@ void CheckYield(void*) {
 } // namespace
 
 int main() {
+    {
+        using Buffer = kb::game::WebDownloadBuffer;
+        Buffer buffer{128, AllocateDownload, ReleaseDownload};
+        Require(buffer.Reserve(0) && allocations == 0, "An unknown length allocated before receiving bytes");
+        Require(buffer.Reserve(4), "A known download length could not be reserved");
+        auto* first = buffer.Append(4);
+        Require(first != nullptr && allocations == 1 && buffer.Capacity() == 4,
+            "A known length caused duplicate allocations");
+        for (unsigned i = 0; i < 4; ++i) first[i] = static_cast<std::uint8_t>(i + 1);
+        refuseAllocation = true;
+        Require(buffer.Append(1) == nullptr && buffer.LastError() == Buffer::Error::Allocation &&
+            buffer.Bytes().size() == 4 && buffer.Bytes()[3] == 4,
+            "Allocation refusal lost received bytes or advanced the download");
+        refuseAllocation = false;
+        auto* second = buffer.Append(124);
+        Require(second != nullptr && buffer.Bytes().size() == 128 && buffer.Bytes()[0] == 1 &&
+            buffer.Bytes()[3] == 4, "Growing an unknown-length download changed its previous bytes");
+        for (unsigned i = 0; i < 124; ++i) second[i] = static_cast<std::uint8_t>(i);
+        const unsigned before = allocations;
+        Require(buffer.Append(1) == nullptr && buffer.Append((std::numeric_limits<std::size_t>::max)()) == nullptr &&
+            !buffer.Reserve(129) && allocations == before && buffer.LastError() == Buffer::Error::SizeLimit &&
+            buffer.Bytes().size() == 128 && buffer.Bytes().back() == 123,
+            "An oversized or overflowing download reached allocation or changed received bytes");
+        buffer.Reset();
+        buffer.Reset();
+        Require(releases == 1 && buffer.Bytes().empty() && buffer.Capacity() == 0 &&
+            buffer.LastError() == Buffer::Error::None, "Download cleanup did not release its allocation exactly once");
+        Require(buffer.Append(3) != nullptr && buffer.Capacity() == 128,
+            "A new unknown-length download could not reuse the bounded buffer");
+    }
+    Require(releases == 2, "A download buffer outlived its owner");
+    {
+        kb::game::WebDownloadBuffer buffer{128, AllocateDownload, ReleaseDownload};
+        refuseAllocation = true;
+        Require(!buffer.Reserve(64) && buffer.Bytes().empty() && buffer.Capacity() == 0 &&
+            buffer.LastError() == kb::game::WebDownloadBuffer::Error::Allocation,
+            "An initial allocation refusal left an invalid download buffer");
+        refuseAllocation = false;
+    }
+    Require(releases == 2, "An allocation refusal tried to release an unowned buffer");
+    std::puts("Web download allocation/size/overflow/ownership checks passed");
     {
         using namespace std::chrono_literals;
         kb::game::WebDownloadProgress progress;

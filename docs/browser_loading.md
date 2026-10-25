@@ -37,7 +37,7 @@ The `Game.kbpack` request stops with `fetch-timeout` after 30 seconds without
 additional received bytes. Duplicate progress notifications and headers alone
 do not extend that idle deadline. A transfer with continuing byte progress can
 last longer. The watchdog is cancelled when the body finishes and during
-shutdown. Cancelling the SDK request preserves the original timeout cause.
+shutdown. Cancelling the browser request preserves the original timeout cause.
 Reload starts a new request for the complete package.
 
 `run_game_download_timeout_tests.py` exercises that real deadline. Two owned
@@ -68,6 +68,36 @@ correct orientation and the native button. The report retains the resulting
 package size, startup/resource timings, WASM capacity and JavaScript heap
 observations. This verifies an actual cooked texture workload rather than
 padding a small package with unused bytes.
+
+The browser reads the response stream directly into a checked, owned WASM
+buffer. A known uncompressed length reserves that buffer once; an unknown or
+HTTP-compressed length grows it as decoded bytes arrive. The host does not keep
+a complete JavaScript response buffer. Each copy obtains the current WASM view
+after allocation, which can grow linear memory. The mounted package borrows
+the buffer until runtime shutdown and package unmount, then releases it.
+The existing whole-file package and seal budgets also bound declared and
+received download sizes. Oversized responses report `pack-size`, while a
+refused buffer allocation reports `fetch-memory`. Neither failure starts the
+runtime. Header lengths are checked before conversion to a WASM pointer-sized
+integer, and HTTP compression never treats encoded length as decoded size.
+
+`run_game_streamed_loading_tests.py` extends the cooked texture scenario with
+real unknown-length and gzip HTTP responses, requiring the same GPU pixels.
+It also serves an oversized declared length above the 32-bit range with no
+body and requires a stable native failure before rendering. The sanitized
+buffer tests exercise allocation refusal, growth, overflow and ownership
+without allocating a large test payload. Loading reports include both the
+observed JavaScript heap and the retained heap after a debugging-protocol GC.
+The latter distinguishes retained buffers from temporary browser chunks;
+neither observation establishes every transient peak or process RSS.
+
+For the same 6,098,165-byte cooked package, a headless Chromium/WebGL2 check
+observed retained JavaScript backing storage fall from 6,319,278 to 213,038
+bytes after this change. Cold and warm checks both rendered the expected
+texture and button. Observed WASM capacity remained 93,454,336 bytes for the
+known-length response. These samples demonstrate removal of the retained
+response copy, rather than a reduction of all memory counters or a mobile
+memory guarantee.
 
 For single-threaded Web builds, the shared load service dispatches one queued
 job or read through each browser event-loop callback. Texture mip streaming

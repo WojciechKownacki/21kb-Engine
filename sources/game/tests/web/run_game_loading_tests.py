@@ -57,8 +57,10 @@ def measure(case, label, report, pack_size):
     packs = [value for value in metrics["resources"] if value["name"].endswith("/Game.kbpack")]
     require(len(packs) == 1 and packs[0]["decodedBodySize"] == pack_size,
         "Resource timing did not observe the actual package download: " + str(packs))
+    heap = case.client.call("Runtime.getHeapUsage")
+    case.client.call("HeapProfiler.collectGarbage")
     report.setdefault("measurements", []).append(dict(label=label, metrics=metrics,
-        heap=case.client.call("Runtime.getHeapUsage"), graphics=case.graphics()))
+        heap=heap, retainedHeapAfterGc=case.client.call("Runtime.getHeapUsage"), graphics=case.graphics()))
 
 
 def run_cases(args, root, report, origin):

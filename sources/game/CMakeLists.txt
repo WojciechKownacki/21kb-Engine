@@ -196,7 +196,6 @@ if(EMSCRIPTEN AND KB_BUILD_PACKAGED_GAME_HOST)
         "--pre-js" "${CMAKE_CURRENT_SOURCE_DIR}/src/web/WebUserStorage.js"
         "-lidbfs.js"
         "-sEXPORTED_RUNTIME_METHODS=requestFullscreen"
-        "-sFETCH=1"
         "-sALLOW_MEMORY_GROWTH=1"
         "-sMAXIMUM_MEMORY=2147483648"
         "-sSTACK_SIZE=1048576"

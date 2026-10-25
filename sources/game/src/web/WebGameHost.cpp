@@ -2,6 +2,7 @@
 #include "PackagedGameRuntime.hpp"
 #include "WebTouchInput.hpp"
 #include "WebDownloadProgress.hpp"
+#include "WebDownloadBuffer.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -19,12 +20,12 @@
 #include <bgfx/bgfx.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/eventloop.h>
-#include <emscripten/fetch.h>
 #include <emscripten/html5.h>
 #include <emscripten/html5_webgl.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -37,8 +38,76 @@
 
 extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_append_committed_text(
     void* host, std::uint32_t codePoint) noexcept;
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_download_begin(void* host, double length);
+extern "C" EMSCRIPTEN_KEEPALIVE void* kb_web_download_append(void* host, std::size_t count);
+extern "C" EMSCRIPTEN_KEEPALIVE void kb_web_download_progress(void* host);
+extern "C" EMSCRIPTEN_KEEPALIVE void kb_web_download_complete(void* host);
+extern "C" EMSCRIPTEN_KEEPALIVE void kb_web_download_error(void* host, int status);
 
 // clang-format off
+EM_JS(void, StartBrowserDownload, (void* host, const char* url), {
+    const state = { controller: new AbortController(), cancelled: false };
+    Module['kbPackDownload'] = state;
+    const current = () => !state.cancelled && Module['kbPackDownload'] === state;
+    const fail = (status) => {
+        if (!current()) return;
+        state.controller.abort();
+        delete Module['kbPackDownload'];
+        _kb_web_download_error(host, status);
+    };
+    const address = UTF8ToString(url);
+    (async () => {
+        let response;
+        try {
+            response = await fetch(address, { signal: state.controller.signal });
+        } catch (error) {
+            fail(0);
+            return;
+        }
+        if (!current()) return;
+        if (!response.ok) { fail(response.status); return; }
+        if (!response.body) { fail(0); return; }
+        // Content-Length describes encoded bytes when HTTP compression is enabled.
+        const encoding = response.headers.get('Content-Encoding');
+        const header = response.headers.get('Content-Length');
+        const length = (!encoding || encoding.toLowerCase() === 'identity') && header !== null
+            ? (/^[0-9]+$/.test(header) ? Number(header) : NaN) : 0;
+        if (!_kb_web_download_begin(host, length)) return;
+        const reader = response.body.getReader();
+        let complete = false;
+        try {
+            while (current()) {
+                let chunk;
+                try { chunk = await reader.read(); }
+                catch (error) { fail(0); return; }
+                if (!current()) return;
+                if (chunk.done) { complete = true; break; }
+                if (!chunk.value.byteLength) continue;
+                const destination = _kb_web_download_append(host, chunk.value.byteLength);
+                if (!destination) return;
+                // Allocation may grow WASM memory, so obtain its current view afterwards.
+                HEAPU8.set(chunk.value, destination);
+                _kb_web_download_progress(host);
+            }
+        } finally {
+            reader.releaseLock();
+        }
+        if (complete && current()) {
+            delete Module['kbPackDownload'];
+            // Runtime initialization is outside the network exception handlers.
+            _kb_web_download_complete(host);
+        }
+    })();
+});
+
+EM_JS(void, CancelBrowserDownload, (), {
+    const state = Module['kbPackDownload'];
+    if (!state) return;
+    state.cancelled = true;
+    delete Module['kbPackDownload'];
+    state.controller.abort();
+});
+
 EM_JS(void, RegisterBrowserTextInput, (void* host), {
     if (Module['kbTextInput']) return;
     const control = document.createElement('textarea');
@@ -273,17 +342,9 @@ public:
 
     void StartFetch() {
         downloadProgress_.Start(kb::game::WebDownloadProgress::Clock::now());
-        emscripten_fetch_attr_t attributes{};
-        emscripten_fetch_attr_init(&attributes);
-        std::snprintf(attributes.requestMethod, sizeof(attributes.requestMethod), "GET");
-        attributes.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY;
-        attributes.userData = this;
-        attributes.onsuccess = &WebGameHost::OnFetchSuccess;
-        attributes.onerror = &WebGameHost::OnFetchError;
-        attributes.onprogress = &WebGameHost::OnFetchProgress;
-        fetch_ = emscripten_fetch(&attributes, kAssetPackUrl);
-        if (fetch_ == nullptr) Fail("fetch-start", "asset pack request could not be started");
-        else ScheduleFetchWatchdog();
+        downloadActive_ = true;
+        ScheduleFetchWatchdog();
+        StartBrowserDownload(this, kAssetPackUrl);
     }
 
 private:
@@ -303,7 +364,7 @@ private:
     static void CheckFetchProgress(void* pointer) {
         auto* host = static_cast<WebGameHost*>(pointer);
         host->fetchWatchdog_ = -1;
-        if (host->shuttingDown_ || host->fetch_ == nullptr) return;
+        if (host->shuttingDown_ || !host->downloadActive_) return;
         if (host->downloadProgress_.Remaining(kb::game::WebDownloadProgress::Clock::now()).count() == 0) {
             host->Fail("fetch-timeout", "asset pack download made no progress for 30 seconds; reload to retry");
         } else {
@@ -311,34 +372,43 @@ private:
         }
     }
 
-    static void OnFetchProgress(emscripten_fetch_t* fetch) {
-        auto* host = static_cast<WebGameHost*>(fetch->userData);
-        if (host != nullptr && !host->shuttingDown_) {
-            // In LOAD_TO_MEMORY mode the SDK reports cumulative received bytes in dataOffset.
-            host->downloadProgress_.Observe(fetch->dataOffset, kb::game::WebDownloadProgress::Clock::now());
+    int BeginDownload(double length) {
+        if (shuttingDown_ || !downloadActive_) return 0;
+        if (!std::isfinite(length) || length < 0 || std::floor(length) != length ||
+            length > static_cast<double>(kDownloadLimit)) {
+            Fail("pack-size", "asset pack response exceeds the in-memory package size limit");
+            return 0;
         }
+        if (!downloadBytes_.Reserve(static_cast<std::size_t>(length))) {
+            Fail("fetch-memory", "asset pack download buffer could not be allocated");
+            return 0;
+        }
+        return 1;
     }
 
-    static void OnFetchSuccess(emscripten_fetch_t* fetch) {
-        auto* host = static_cast<WebGameHost*>(fetch->userData);
-        if (host != nullptr && !host->shuttingDown_) {
-            host->CancelFetchWatchdog();
-            EM_ASM({ location.hash = 'kb-pack-loaded'; });
-            host->Initialize(fetch);
+    void* AppendDownload(std::size_t count) {
+        if (shuttingDown_ || !downloadActive_) return nullptr;
+        auto* destination = downloadBytes_.Append(count);
+        if (destination == nullptr) {
+            if (downloadBytes_.LastError() == kb::game::WebDownloadBuffer::Error::SizeLimit) {
+                Fail("pack-size", "asset pack response exceeds the in-memory package size limit");
+            } else {
+                Fail("fetch-memory", "asset pack download buffer could not be allocated");
+            }
         }
+        return destination;
     }
 
-    static void OnFetchError(emscripten_fetch_t* fetch) {
-        auto* host = static_cast<WebGameHost*>(fetch->userData);
-        if (host != nullptr && !host->shuttingDown_) {
-            std::ostringstream message;
-            message << "asset pack request failed: HTTP " << fetch->status;
-            host->Fail("fetch-http", message.str());
-        }
+    void CompleteDownload() {
+        if (shuttingDown_ || !downloadActive_) return;
+        downloadActive_ = false;
+        CancelFetchWatchdog();
+        EM_ASM({ location.hash = 'kb-pack-loaded'; });
+        Initialize();
     }
 
-    void Initialize(emscripten_fetch_t* fetch) {
-        if (fetch == nullptr || fetch->data == nullptr || fetch->numBytes <= 0) {
+    void Initialize() {
+        if (downloadBytes_.Bytes().empty()) {
             Fail("pack-empty", "asset pack response was empty");
             return;
         }
@@ -348,10 +418,8 @@ private:
             return;
         }
         pack_ = std::make_shared<kb::assets::bake::RuntimeAssetPack>();
-        const auto* bytes = reinterpret_cast<const std::uint8_t*>(fetch->data);
         const kb::assets::bake::RuntimeAssetPackStatus status = pack_->MountMemory(
-            std::span<const std::uint8_t>{ bytes, static_cast<std::size_t>(fetch->numBytes) },
-            profile);
+            downloadBytes_.Bytes(), profile);
         if (status != kb::assets::bake::RuntimeAssetPackStatus::Success) {
             std::ostringstream message;
             message << "asset pack mount failed: " << kb::assets::bake::ToString(status);
@@ -669,7 +737,9 @@ private:
 
     void Shutdown() noexcept {
         shuttingDown_ = true;
+        downloadActive_ = false;
         CancelFetchWatchdog();
+        CancelBrowserDownload();
         emscripten_cancel_main_loop();
         UnregisterGraphicsEvents();
         touches_.Detach();
@@ -681,13 +751,14 @@ private:
         if (renderer_.IsInitialized()) renderer_.Shutdown();
         if (pack_ != nullptr) pack_->Unmount();
         pack_.reset();
-        if (fetch_ != nullptr) {
-            emscripten_fetch_close(std::exchange(fetch_, nullptr));
-        }
+        downloadBytes_.Reset();
     }
 
     WebRenderSurface surface_;
-    emscripten_fetch_t* fetch_ = nullptr;
+    static constexpr std::size_t kDownloadLimit = static_cast<std::size_t>(
+        kb::assets::bake::kMaxWholeFileAssetPackBytes + kb::assets::bake::kMaxAssetPackSealBytes);
+    kb::game::WebDownloadBuffer downloadBytes_{kDownloadLimit};
+    bool downloadActive_ = false;
     kb::game::WebDownloadProgress downloadProgress_;
     int fetchWatchdog_ = -1;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack_;
@@ -710,11 +781,41 @@ private:
     std::uint32_t healthyGraphicsFrames_ = 0U;
 
     friend int ::kb_web_append_committed_text(void* host, std::uint32_t codePoint) noexcept;
+    friend int ::kb_web_download_begin(void* host, double length);
+    friend void* ::kb_web_download_append(void* host, std::size_t count);
+    friend void ::kb_web_download_progress(void* host);
+    friend void ::kb_web_download_complete(void* host);
+    friend void ::kb_web_download_error(void* host, int status);
 };
 
 std::unique_ptr<WebGameHost> g_host;
 
 } // namespace
+
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_download_begin(void* host, double length) {
+    return static_cast<WebGameHost*>(host)->BeginDownload(length);
+}
+extern "C" EMSCRIPTEN_KEEPALIVE void* kb_web_download_append(void* host, std::size_t count) {
+    return static_cast<WebGameHost*>(host)->AppendDownload(count);
+}
+extern "C" EMSCRIPTEN_KEEPALIVE void kb_web_download_progress(void* host) {
+    auto* gameHost = static_cast<WebGameHost*>(host);
+    if (!gameHost->shuttingDown_ && gameHost->downloadActive_) {
+        gameHost->downloadProgress_.Observe(gameHost->downloadBytes_.Bytes().size(),
+            kb::game::WebDownloadProgress::Clock::now());
+    }
+}
+extern "C" EMSCRIPTEN_KEEPALIVE void kb_web_download_complete(void* host) {
+    static_cast<WebGameHost*>(host)->CompleteDownload();
+}
+extern "C" EMSCRIPTEN_KEEPALIVE void kb_web_download_error(void* host, int status) {
+    auto* gameHost = static_cast<WebGameHost*>(host);
+    if (!gameHost->shuttingDown_ && gameHost->downloadActive_) {
+        std::ostringstream message;
+        message << "asset pack request failed: HTTP " << status;
+        gameHost->Fail("fetch-http", message.str());
+    }
+}
 
 extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_append_committed_text(
     void* host, std::uint32_t codePoint) noexcept {

@@ -205,9 +205,17 @@ hardware GPU. The report uses `21kb.web-game-content-loading/v1` and retains
 startup/resource timings and memory observations. Pass `--cook-cache` to reuse
 an existing owned cook cache across these storage and loading scenarios.
 
+`run_game_streamed_loading_tests.py` uses those same arguments and reports
+`21kb.web-game-streamed-loading/v1`. In addition to cold/warm texture readback,
+it serves complete packages without a declared length and with HTTP gzip
+encoding. Both must render the same GPU pixels. A declared length above the
+32-bit range with no body must fail before rendering. The report records
+actual transmitted byte counts and retained JavaScript heap after GC.
+
 Build `kb_web_background_tests` in the standalone Web test project and run
 `node BackgroundLoadTests.js` to check the production cooperative load service
 with ASan and UBSan. It verifies queued execution, priorities, cancellation,
+download buffer allocation refusal, size bounds, overflow, ownership,
 real memory/file reads, transforms, lane draining, explicit waits and safe
 dispatch lifetimes. The CI Web job runs it automatically.
 
