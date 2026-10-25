@@ -98,7 +98,10 @@ PucLuaLoadResult PucLuaScriptRuntime::ReloadScript(kb::assets::AssetId assetId, 
         return PucLuaLoadResult{ .error = std::move(*error) };
     }
 
-    const std::string chunk = chunkName.empty() ? std::string{ "lua-script-" } + std::to_string(assetId.value) : std::string{ chunkName };
+    // "@name" makes Lua report errors as "name:line:" with the whole path; a bare name would be reported as
+    // [string "name"]:line: and cut to a few dozen characters.
+    const std::string chunk = chunkName.empty() ? std::string{ "@lua-script-" } + std::to_string(assetId.value)
+        : (chunkName.front() == '@' || chunkName.front() == '=' ? std::string{ chunkName } : "@" + std::string{ chunkName });
     if (luaL_loadbufferx(state_, source.data(), source.size(), chunk.c_str(), "t") != LUA_OK) {
         return PucLuaLoadResult{ .error = PucLuaErrorReporter::ErrorFromTop(state_) };
     }
@@ -108,12 +111,17 @@ PucLuaLoadResult PucLuaScriptRuntime::ReloadScript(kb::assets::AssetId assetId, 
     lua_pushcfunction(state_, &PucLuaErrorReporter::Traceback);
     const int errorHandlerIndex = lua_gettop(state_) - 1;
     lua_insert(state_, errorHandlerIndex);
+    // The code at the top of a script runs under the same instruction budget as its functions: a loop there would
+    // otherwise hang the host while the script loads or reloads.
+    const bool budgetArmedHere = !executionBudgetActive_;
+    if (budgetArmedHere) BeginExecutionBudget();
     PucLuaDebugHook::Install(state_, *this);
     const int status = [&] {
         const PucLuaMemoryLimitScope memoryLimit{ state_ };
         return lua_pcall(state_, 0, 0, errorHandlerIndex);
     }();
     PucLuaDebugHook::Clear(state_);
+    if (budgetArmedHere) EndExecutionBudget();
     if (status != LUA_OK) {
         return PucLuaLoadResult{ .error = PucLuaErrorReporter::ErrorFromTop(state_) };
     }

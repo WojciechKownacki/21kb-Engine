@@ -1046,6 +1046,172 @@ end
         "Lua Fail execution budget policy did not produce an explicit diagnostic");
 }
 
+// A small host for the Lua safety tests below: one runtime, a scene with a behaviour per script and the dispatcher.
+struct LuaSafetyHost {
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntime dispatcher;
+    LuaSafetyHost() {
+        kb::tests::Require(dispatcher.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Lua safety backend registration failed");
+    }
+    void Attach(kb::assets::AssetId asset) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Safety" });
+        scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+            .behaviourAssetId = asset.value, .backend = kb::scene::BehaviourBackend::Lua, .enabled = true });
+    }
+    kb::script::ScriptRuntimeExecutionResult Tick() {
+        return dispatcher.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    }
+    std::int64_t Shared(const char* key) const {
+        const std::optional<kb::script::ScriptValue> value = dispatcher.SharedState().Get(key);
+        return value.has_value() ? value->AsInt() : -1;
+    }
+};
+
+// Hostile or careless scripts cannot reach the machine or hang the host: the sandbox has no way to load code,
+// open files or processes, a loop that never ends fails with a diagnostic instead of freezing the frame (also in
+// the code at the top of a script, which runs while it loads), and the other scripts keep running.
+void RunPucLuaHostileScriptsTest() {
+    LuaSafetyHost host;
+    host.luaRuntime.SetExecutionBudgetSettings({
+        .luaInstructionsPerBehaviour = 10000U, .visualGraphStepsPerBehaviour = 1024U, .policy = kb::core::BudgetExceededPolicy::Fail });
+    constexpr kb::assets::AssetId kProbe{ 3601U };
+    constexpr kb::assets::AssetId kForever{ 3602U };
+    constexpr kb::assets::AssetId kHealthy{ 3603U };
+    kb::tests::Require(host.luaRuntime.LoadScript(kProbe, R"(
+function Tick(self, dt)
+    SetShared("sandbox.require", require == nil and 1 or 0)
+    SetShared("sandbox.package", package == nil and 1 or 0)
+    SetShared("sandbox.load", load == nil and 1 or 0)
+    SetShared("sandbox.dofile", dofile == nil and 1 or 0)
+    SetShared("sandbox.loadfile", loadfile == nil and 1 or 0)
+    SetShared("sandbox.os", os == nil and 1 or 0)
+    SetShared("sandbox.io", io == nil and 1 or 0)
+    SetShared("sandbox.debug", debug == nil and 1 or 0)
+    SetShared("sandbox.collectgarbage", collectgarbage == nil and 1 or 0)
+end
+)", "Probe.lua").succeeded, "The sandbox probe did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kForever, R"(
+function Tick(self, dt)
+    while true do end
+end
+)", "Forever.lua").succeeded, "The endless loop script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kHealthy, R"(
+function Tick(self, dt)
+    SetShared("healthy.ticks", (GetShared("healthy.ticks") or 0) + 1)
+end
+)", "Healthy.lua").succeeded, "The healthy script did not load");
+    host.Attach(kProbe);
+    host.Attach(kForever);
+    host.Attach(kHealthy);
+    for (int tick = 0; tick < 3; ++tick) {
+        const kb::script::ScriptRuntimeExecutionResult result = host.Tick();
+        bool reported = false;
+        for (const auto& diagnostic : result.diagnostics) reported = reported || diagnostic.message.find("execution budget exceeded") != std::string::npos;
+        kb::tests::Require(!result.Succeeded() && reported, "An endless loop must end with an execution budget diagnostic, every tick");
+    }
+    kb::tests::Require(host.Shared("healthy.ticks") == 3, "A script that loops forever must not stop the other scripts");
+    for (const char* name : { "sandbox.require", "sandbox.package", "sandbox.load", "sandbox.dofile", "sandbox.loadfile", "sandbox.os",
+                              "sandbox.io", "sandbox.debug", "sandbox.collectgarbage" }) {
+        kb::tests::Require(host.Shared(name) == 1, (std::string{ "The sandbox must not offer " } + name).c_str());
+    }
+    // The same endless loop at the top of a script, which runs while it loads, is stopped as well.
+    const kb::script::PucLuaLoadResult atLoad = host.luaRuntime.LoadScript(kb::assets::AssetId{ 3604U }, "while true do end", "LoadForever.lua");
+    kb::tests::Require(!atLoad.succeeded && atLoad.error.find("execution budget exceeded") != std::string::npos,
+        "An endless loop in the code at the top of a script must fail the load with the budget diagnostic");
+    const kb::script::PucLuaLoadResult nested = host.luaRuntime.LoadScript(kb::assets::AssetId{ 3605U },
+        "local n = 0 for i = 1, 100000 do n = n + i end", "LoadHeavy.lua");
+    kb::tests::Require(!nested.succeeded, "Top-level work beyond the instruction budget must fail the load");
+}
+
+// A script that fails reports where: the file, the line and the message, with the whole path; the rest of the scene
+// goes on and the document still saves.
+void RunPucLuaErrorsNameFileAndLineTest() {
+    LuaSafetyHost host;
+    constexpr kb::assets::AssetId kBroken{ 3611U };
+    constexpr kb::assets::AssetId kHealthy{ 3612U };
+    kb::tests::Require(host.luaRuntime.LoadScript(kBroken, "function Tick(self, dt)\n    local x = 1\n    error('bad thing happened')\nend\n",
+                           "Assets/Scripts/Deep/Folder/Player.lua").succeeded, "The broken script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kHealthy, "function Tick(self, dt)\n    SetShared('other.ticks', (GetShared('other.ticks') or 0) + 1)\nend\n",
+                           "Assets/Scripts/Other.lua").succeeded, "The other script did not load");
+    host.Attach(kBroken);
+    host.Attach(kHealthy);
+    const kb::script::ScriptRuntimeExecutionResult result = host.Tick();
+    bool located = false;
+    for (const auto& diagnostic : result.diagnostics) {
+        located = located || (diagnostic.message.find("Assets/Scripts/Deep/Folder/Player.lua:3:") != std::string::npos &&
+                              diagnostic.message.find("bad thing happened") != std::string::npos);
+    }
+    kb::tests::Require(!result.Succeeded() && located, "A script error must name the whole file path, the line and the message");
+    kb::tests::Require(host.Shared("other.ticks") == 1, "The scripts next to a failing one must keep running");
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "21kb_script_error_scene.21kbscene";
+    kb::scene::SceneDocument document;
+    document.name = "After a script error";
+    document.guid = "scene:after-script-error";
+    kb::tests::Require(kb::scene::SceneDocumentService::Save(document, path), "A scene must still save after a script failed");
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+}
+
+// A reload that fails keeps the running script; a reload that works replaces it; hundreds of reloads do not grow
+// the Lua state or leave coroutines behind.
+void RunPucLuaReloadKeepsTheWorkingScriptTest() {
+    LuaSafetyHost host;
+    constexpr kb::assets::AssetId kAsset{ 3621U };
+    kb::tests::Require(host.luaRuntime.LoadScript(kAsset, "function Tick(self, dt) SetShared('reload.version', 1) end", "Reload.lua", 1U).succeeded,
+        "The first version did not load");
+    host.Attach(kAsset);
+    kb::tests::Require(host.Tick().Succeeded() && host.Shared("reload.version") == 1, "The first version must run");
+    const kb::script::PucLuaLoadResult runtimeError = host.luaRuntime.ReloadScript(kAsset, "error('boom at load')", "Reload.lua", 2U);
+    kb::tests::Require(!runtimeError.succeeded && runtimeError.error.find("Reload.lua:1:") != std::string::npos && host.luaRuntime.IsScriptCurrent(kAsset, 1U),
+        "An error in the code at the top of a script must fail the reload and keep the old script and its hash");
+    const kb::script::PucLuaLoadResult syntaxError = host.luaRuntime.ReloadScript(kAsset, "function Tick(self, dt) SetShared('reload.version', 2) ", "Reload.lua", 3U);
+    kb::tests::Require(!syntaxError.succeeded && host.luaRuntime.IsScriptCurrent(kAsset, 1U), "A syntax error must fail the reload and keep the old script");
+    kb::tests::Require(host.Tick().Succeeded() && host.Shared("reload.version") == 1, "After failed reloads the old version must still run");
+    std::size_t atTen = 0U;
+    for (std::uint64_t version = 10U; version < 210U; ++version) {
+        const std::string source = "local padding = {} for i = 1, 50 do padding[i] = i end\nfunction Tick(self, dt) SetShared('reload.version', " +
+            std::to_string(version) + ") end";
+        kb::tests::Require(host.luaRuntime.ReloadScript(kAsset, source, "Reload.lua", version).succeeded, "A valid reload must succeed");
+        kb::tests::Require(host.Tick().Succeeded() && host.Shared("reload.version") == static_cast<std::int64_t>(version), "A reloaded script must run its new code");
+        if (version == 19U) atTen = host.luaRuntime.LuaMemoryUsedBytes();
+    }
+    kb::tests::Require(host.luaRuntime.IsScriptCurrent(kAsset, 209U) && host.luaRuntime.SuspendedCoroutineCount() == 0U,
+        "After many reloads the last version must be current with no coroutine left");
+    kb::tests::Require(atTen > 0U && host.luaRuntime.LuaMemoryUsedBytes() < atTen * 3U + 256U * 1024U,
+        "Two hundred reloads must not make the Lua state grow without bound");
+}
+
+// A debugger that goes away must not leave the game paused: clearing the settings and the pause lets the script
+// finish on the next tick while the others never stopped.
+void RunPucLuaDebuggerDisconnectTest() {
+    LuaSafetyHost host;
+    constexpr kb::assets::AssetId kDebugged{ 3631U };
+    constexpr kb::assets::AssetId kTicker{ 3632U };
+    kb::tests::Require(host.luaRuntime.LoadScript(kDebugged, "function Tick(self, dt)\n    local a = 1\n    SetShared('disconnect.done', (GetShared('disconnect.done') or 0) + a)\nend\n",
+                           "Disconnect.lua").succeeded, "The debugged script did not load");
+    kb::tests::Require(host.luaRuntime.LoadScript(kTicker, "function Tick(self, dt) SetShared('disconnect.ticker', (GetShared('disconnect.ticker') or 0) + 1) end", "DisconnectTicker.lua").succeeded,
+        "The ticker script did not load");
+    host.Attach(kDebugged);
+    host.Attach(kTicker);
+    host.luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{
+        .breakpoints = { kb::script::PucLuaDebugBreakpoint{ .chunkName = "Disconnect.lua", .line = 3 } } });
+    kb::tests::Require(host.Tick().Succeeded() && host.luaRuntime.IsDebugPaused() && host.luaRuntime.SuspendedCoroutineCount() == 1U,
+        "The breakpoint must pause the script");
+    kb::tests::Require(host.Tick().Succeeded() && host.Shared("disconnect.ticker") == 2 && host.Shared("disconnect.done") == -1,
+        "A held pause must not stop the game loop or the other scripts");
+    // The client vanishes: no breakpoints, and the pause is released.
+    host.luaRuntime.SetDebugSettings(kb::script::PucLuaDebugSettings{});
+    host.luaRuntime.ResumeDebugExecution();
+    host.luaRuntime.ClearDebugPause();
+    kb::tests::Require(!host.luaRuntime.IsDebugPaused(), "Releasing the pause must clear the debugger state");
+    for (int tick = 0; tick < 3; ++tick) kb::tests::Require(host.Tick().Succeeded(), "The game loop must run on after the debugger went away");
+    kb::tests::Require(host.luaRuntime.SuspendedCoroutineCount() == 0U && !host.luaRuntime.IsDebugPaused() && host.Shared("disconnect.ticker") == 5 &&
+            host.Shared("disconnect.done") >= 1,
+        "After the debugger went away the script must run to the end and nothing may stay suspended");
+}
+
+
 // One Lua runtime runs every script of a host, so its allocations are capped:
 // a script that exhausts the cap fails as that script's error, and the other
 // scripts of the same runtime keep running on later ticks.
@@ -16866,6 +17032,10 @@ void RunScriptRuntimeTests() {
     RunPucLuaCoroutineGeneratorTest();
     RunPucLuaExecutionBudgetPolicyTest();
     RunPucLuaMemoryLimitTest();
+    RunPucLuaHostileScriptsTest();
+    RunPucLuaErrorsNameFileAndLineTest();
+    RunPucLuaReloadKeepsTheWorkingScriptTest();
+    RunPucLuaDebuggerDisconnectTest();
     RunPucLuaDestroyedYieldCleanupTest();
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();
     RunPucLuaDebuggerSuspendsAtBreakpointTest();
