@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <complex>
 #include <cstddef>
 #include <cstdlib>
 #include <iostream>
@@ -38,12 +39,12 @@ struct Graph {
         if (waveReady) ma_waveform_uninit(&wave);
         if (graphReady) ma_node_graph_uninit(&graph, nullptr);
     }
-    void Initialize(std::uint32_t count, std::uint32_t rate, double frequency) {
+    void Initialize(std::uint32_t count, std::uint32_t rate, double frequency, double amplitude = 0.1) {
         channels = count;
         const auto config = ma_node_graph_config_init(channels);
         graphReady = ma_node_graph_init(&config, nullptr, &graph) == MA_SUCCESS;
         Require(graphReady, "DSP test graph did not initialize");
-        const auto tone = ma_waveform_config_init(ma_format_f32, channels, rate, ma_waveform_type_sine, 0.1, frequency);
+        const auto tone = ma_waveform_config_init(ma_format_f32, channels, rate, ma_waveform_type_sine, amplitude, frequency);
         waveReady = ma_waveform_init(&tone, &wave) == MA_SUCCESS;
         Require(waveReady, "DSP test waveform did not initialize");
         const auto input = ma_data_source_node_config_init(&wave);
@@ -70,6 +71,16 @@ struct Graph {
 
 double ExpectedGain(const MiniaudioFilterDesc& filter, double rate, double frequency) {
     if (filter.bypass) return 1.0;
+    if (filter.kind == Kind::PeakingEqualizer) {
+        const double center = 2.0 * kPi * filter.cutoffHz / rate;
+        const double amplitude = std::pow(10.0, filter.gainDb / 40.0);
+        const double alpha = std::sin(center) / (2.0 * filter.quality);
+        const auto z = std::polar(1.0, -2.0 * kPi * frequency / rate);
+        const auto middle = -2.0 * std::cos(center) * z;
+        const auto numerator = 1.0 + alpha * amplitude + middle + (1.0 - alpha * amplitude) * z * z;
+        const auto denominator = 1.0 + alpha / amplitude + middle + (1.0 - alpha / amplitude) * z * z;
+        return std::abs(numerator / denominator);
+    }
     // Independent bilinear-transform response for a second-order Butterworth filter.
     const double ratio = std::tan(kPi * frequency / rate) / std::tan(kPi * filter.cutoffHz / rate);
     const double low = 1.0 / std::sqrt(1.0 + ratio * ratio * ratio * ratio);
@@ -78,14 +89,16 @@ double ExpectedGain(const MiniaudioFilterDesc& filter, double rate, double frequ
 
 void Response(std::span<const MiniaudioFilterDesc> filters, double frequency, std::uint32_t channels = 2U,
     std::uint32_t rate = 48000U) {
+    double gain = 1.0;
+    for (const auto& filter : filters) gain *= ExpectedGain(filter, rate, frequency);
+    // Reserve headroom for boost and repeated EQ stages; the primitive does not limit output.
+    const double amplitude = std::min(0.1, 0.25 / std::max(1.0, gain));
     Graph graph;
-    graph.Initialize(channels, rate, frequency);
+    graph.Initialize(channels, rate, frequency, amplitude);
     graph.Configure(filters, rate);
     Require(graph.chain.ActiveNodeCount() == static_cast<std::size_t>(std::count_if(filters.begin(), filters.end(),
         [](const auto& filter) { return !filter.bypass; })), "DSP bypass or repeated stages were lost");
-    double gain = 1.0;
-    for (const auto& filter : filters) gain *= ExpectedGain(filter, rate, frequency);
-    const double expected = 0.1 * gain / std::sqrt(2.0);
+    const double expected = amplitude * gain / std::sqrt(2.0);
     static_cast<void>(graph.Render());
     double rms = 0.0;
     for (std::size_t block = 0U; block < 4U; ++block) {
@@ -127,6 +140,12 @@ void InvalidEditsPreserveLiveGraph() {
     invalid[0].bypass = true;
     invalid[0].cutoffHz = -1.0;
     Require(graph.chain.Initialize(graph.graph, 48000U, invalid) == MA_INVALID_ARGS, "Bypass accepted invalid retained parameters");
+    invalid = original;
+    invalid[0].gainDb = 6.0;
+    Require(graph.chain.Initialize(graph.graph, 48000U, invalid) == MA_INVALID_ARGS, "Low-pass silently ignored an EQ gain");
+    invalid = original;
+    invalid[0].quality = 2.0;
+    Require(graph.chain.Initialize(graph.graph, 48000U, invalid) == MA_INVALID_ARGS, "Low-pass silently ignored an EQ Q value");
     Graph other;
     other.Initialize(1U, 48000U, 1000.0);
     Require(graph.chain.Attach(&graph.source, ma_node_graph_get_endpoint(&other.graph)) == MA_INVALID_ARGS
@@ -191,12 +210,13 @@ struct AllocationCounter {
     }
 };
 
-void AllocationFailurePreservesLiveGraph() {
+void AllocationFailurePreservesLiveGraph(bool equalizer = false) {
     AllocationCounter counter;
     const ma_allocation_callbacks allocator{&counter, &AllocationCounter::Allocate, &AllocationCounter::Reallocate, &AllocationCounter::Free};
     Graph graph;
     graph.Initialize(2U, 48000U, 1000.0);
-    const std::array original{MiniaudioFilterDesc{}};
+    const std::array original{MiniaudioFilterDesc{
+        .kind = equalizer ? Kind::PeakingEqualizer : Kind::LowPass, .gainDb = equalizer ? 6.0 : 0.0}};
     Require(graph.chain.Initialize(graph.graph, 48000U, original, &allocator) == MA_SUCCESS
         && graph.chain.Attach(&graph.source, ma_node_graph_get_endpoint(&graph.graph)) == MA_SUCCESS,
         "Counted DSP chain did not initialize");
@@ -205,7 +225,8 @@ void AllocationFailurePreservesLiveGraph() {
     const auto live = counter.live;
     const auto bytes = counter.bytes;
     Require(live > 0U && bytes > 0U, "DSP allocation callbacks did not observe real vendor allocations");
-    const std::array replacement{MiniaudioFilterDesc{}, MiniaudioFilterDesc{.kind = Kind::HighPass}, MiniaudioFilterDesc{}};
+    const std::array replacement{MiniaudioFilterDesc{}, MiniaudioFilterDesc{
+        .kind = equalizer ? Kind::PeakingEqualizer : Kind::HighPass, .gainDb = equalizer ? 6.0 : 0.0}, MiniaudioFilterDesc{}};
     MiniaudioFilterChain probe;
     const auto calls = counter.calls;
     Require(probe.Initialize(graph.graph, 48000U, replacement, &allocator) == MA_SUCCESS, "DSP allocation probe failed");
@@ -227,6 +248,127 @@ void AllocationFailurePreservesLiveGraph() {
     graph.chain.Reset();
     Require(counter.live == 0U && counter.bytes == 0U, "DSP reset leaked vendor allocations");
     std::cout << "Filter allocation rollback liveBefore=" << live << " vendorBytes=" << bytes << " peakVendorBytes=" << counter.peak << '\n';
+}
+
+void EqualizerResponses() {
+    for (const double gain : {-24.0, -12.0, -6.0, 0.0, 6.0, 12.0, 24.0}) {
+        const std::array filters{MiniaudioFilterDesc{.kind = Kind::PeakingEqualizer, .gainDb = gain}};
+        for (const double frequency : {100.0, 1000.0, 10000.0}) Response(filters, frequency);
+    }
+    for (const double quality : {0.1, 0.25, 1.0, 4.0, 16.0}) {
+        const std::array filters{MiniaudioFilterDesc{.kind = Kind::PeakingEqualizer, .gainDb = 12.0, .quality = quality}};
+        for (const double frequency : {500.0, 1000.0, 2000.0}) Response(filters, frequency);
+    }
+    const MiniaudioFilterDesc boost{.kind = Kind::PeakingEqualizer, .gainDb = 12.0};
+    const MiniaudioFilterDesc cut{.kind = Kind::PeakingEqualizer, .gainDb = -12.0};
+    Response(std::array{boost, boost}, 1000.0);
+    for (const double frequency : {100.0, 1000.0, 10000.0}) Response(std::array{boost, cut}, frequency);
+    for (const double frequency : {500.0, 1000.0, 2000.0}) {
+        Response(std::array{MiniaudioFilterDesc{}, boost}, frequency);
+        Response(std::array{boost, MiniaudioFilterDesc{}}, frequency);
+    }
+    Response(std::array{MiniaudioFilterDesc{.kind = Kind::PeakingEqualizer, .bypass = true, .gainDb = 24.0}}, 1000.0);
+    Response(std::array{cut}, 2000.0, 1U, 44100U);
+    Response(std::array{boost}, 1000.0, 8U, 192000U);
+
+    Graph graph;
+    graph.Initialize(2U, 48000U, 1000.0);
+    const std::array original{boost};
+    graph.Configure(original);
+    static_cast<void>(graph.Render());
+    const auto before = graph.Render();
+    const auto rejected = [&](const MiniaudioFilterDesc& invalid) {
+        const std::array filters{invalid};
+        Require(graph.chain.Initialize(graph.graph, 48000U, filters) == MA_INVALID_ARGS
+            && graph.chain.ActiveNodeCount() == 1U && std::abs(graph.Render() / before - 1.0) < 0.01,
+            "Invalid EQ edit changed the playing signal");
+    };
+    for (const double gain : {-24.1, 24.1, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
+        auto invalid = boost;
+        invalid.gainDb = gain;
+        rejected(invalid);
+    }
+    for (const double quality : {-1.0, 0.0, 0.099, 16.1, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
+        auto invalid = boost;
+        invalid.quality = quality;
+        rejected(invalid);
+    }
+    auto invalid = boost;
+    invalid.order = 1U;
+    rejected(invalid);
+    invalid = boost;
+    invalid.bypass = true;
+    invalid.gainDb = std::numeric_limits<double>::quiet_NaN();
+    rejected(invalid);
+}
+
+void BoundarySignalsRemainFinite() {
+    std::size_t refusals = 0U;
+    for (const std::uint32_t rate : {8000U, 192000U}) {
+        for (const double frequency : {1.0, 0.49 * rate}) {
+            for (auto filter : std::array{
+                MiniaudioFilterDesc{.order = 8U}, MiniaudioFilterDesc{.kind = Kind::HighPass, .order = 8U},
+                MiniaudioFilterDesc{.kind = Kind::PeakingEqualizer, .gainDb = 24.0, .quality = 0.1},
+                MiniaudioFilterDesc{.kind = Kind::PeakingEqualizer, .gainDb = 24.0, .quality = 16.0},
+                MiniaudioFilterDesc{.kind = Kind::PeakingEqualizer, .gainDb = -24.0, .quality = 0.1},
+                MiniaudioFilterDesc{.kind = Kind::PeakingEqualizer, .gainDb = -24.0, .quality = 16.0}}) {
+                Graph graph;
+                graph.Initialize(2U, rate, 1000.0, 0.001);
+                const std::array original{MiniaudioFilterDesc{}};
+                graph.Configure(original, rate);
+                static_cast<void>(graph.Render());
+                const auto before = graph.Render();
+                filter.cutoffHz = frequency;
+                const std::array filters{filter};
+                const auto result = graph.chain.Initialize(graph.graph, rate, filters);
+                if (result == MA_INVALID_ARGS) {
+                    ++refusals;
+                    Require(frequency == 1.0 && rate == 192000U && graph.chain.ActiveNodeCount() == 1U
+                        && std::abs(graph.Render() / before - 1.0) < 0.01,
+                        "Numerically unstable filter was not refused without changing the old signal");
+                    std::cout << "Filter boundary refused rate=" << rate << " Hz=" << frequency
+                        << " kind=" << static_cast<int>(filter.kind) << " gainDb=" << filter.gainDb << " Q=" << filter.quality << '\n';
+                    continue;
+                }
+                Require(result == MA_SUCCESS && graph.chain.Attach(&graph.source, ma_node_graph_get_endpoint(&graph.graph)) == MA_SUCCESS,
+                    "Boundary DSP graph did not initialize");
+                double rms = 0.0;
+                for (std::size_t block = 0U; block < 32U; ++block) {
+                    rms = graph.Render();
+                    if (rms >= 0.03) std::cout << "Filter boundary failure rate=" << rate << " Hz=" << frequency
+                        << " kind=" << static_cast<int>(filter.kind) << " block=" << block << " rms=" << rms << '\n';
+                    Require(rms < 0.03, "Boundary DSP parameters produced an unbounded signal");
+                }
+                std::cout << "Filter boundary rate=" << rate << " Hz=" << frequency << " kind=" << static_cast<int>(filter.kind)
+                    << " gainDb=" << filter.gainDb << " Q=" << filter.quality << " rms=" << rms << '\n';
+            }
+        }
+    }
+    Require(refusals > 0U, "Quantized unstable coefficients were never refused");
+}
+
+void UnstableConfigurationPreservesReferenceSignal() {
+    AllocationCounter counter;
+    const ma_allocation_callbacks allocator{&counter, &AllocationCounter::Allocate, &AllocationCounter::Reallocate, &AllocationCounter::Free};
+    Graph actual;
+    Graph reference;
+    actual.Initialize(2U, 192000U, 1.0, 0.001);
+    reference.Initialize(2U, 192000U, 1.0, 0.001);
+    const std::array original{MiniaudioFilterDesc{}};
+    actual.Configure(original, 192000U);
+    reference.Configure(original, 192000U);
+    const std::array unstable{MiniaudioFilterDesc{.cutoffHz = 1.0, .order = 8U}};
+    Require(actual.chain.Initialize(actual.graph, 192000U, unstable, &allocator) == MA_INVALID_ARGS
+        && actual.chain.ActiveNodeCount() == 1U && counter.live == 0U && counter.bytes == 0U,
+        "Known unstable filter replaced the old graph or leaked its candidate");
+    double maximumDifference = 0.0;
+    for (std::size_t block = 0U; block < 32U; ++block) {
+        const double difference = std::abs(actual.Render() - reference.Render());
+        maximumDifference = std::max(maximumDifference, difference);
+        Require(difference < 1e-9, "Refused unstable filter changed the original 1 Hz signal");
+    }
+    std::cout << "Filter stability refusal preserved reference maximumRmsDifference=" << maximumDifference
+        << " candidateLive=" << counter.live << " candidateBytes=" << counter.bytes << '\n';
 }
 
 } // namespace
@@ -251,6 +393,10 @@ int main() {
         Response(std::vector<MiniaudioFilterDesc>(16U), 1000.0);
         InvalidEditsPreserveLiveGraph();
         AllocationFailurePreservesLiveGraph();
+        AllocationFailurePreservesLiveGraph(true);
+        EqualizerResponses();
+        BoundarySignalsRemainFinite();
+        UnstableConfigurationPreservesReferenceSignal();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
