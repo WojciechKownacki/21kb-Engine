@@ -8,7 +8,7 @@ using it does not change any engine header. The existing `kb::network` types (ob
 descriptors, prediction helpers) are unchanged; phase 1 provides the layer under them.
 
 Phase 1 is the transport, sessions and handshake. Phase 2 (`Replication.hpp`, `Rpc.hpp`) adds RPC
-and state replication on top; see "Replication and RPC" below. Prediction and rollback are not done.
+and state replication on top; see "Replication and RPC" below. Prediction.hpp adds client prediction and interpolation; there is no rollback of other entities.
 
 ## Layers
 
