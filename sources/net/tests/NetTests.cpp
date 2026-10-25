@@ -446,6 +446,129 @@ void TestBadNetwork() {
     Require(hostSide->rejectedReplay + rig.client->Stats()->rejectedReplay > 0U, "duplicated packets were not detected");
 }
 
+void TestTwoClientsAndReconnectOnBadNetwork() {
+    LoopbackNetwork network(BadNetwork());
+    auto hostPort = network.CreateTransport(Endpoint::Loopback(7000));
+    auto portA = network.CreateTransport(Endpoint::Loopback(7101));
+    auto portB = network.CreateTransport(Endpoint::Loopback(7102));
+    auto portA2 = network.CreateTransport(Endpoint::Loopback(7103)); // where client A comes back from
+    StaticKeyTable keys;
+    keys.Set(42U, MakeKey(1U));
+    keys.Set(43U, MakeKey(2U));
+    Host host(*hostPort, HostConfig{}, keys);
+    ClientConfig config;
+    config.connectTimeoutMilliseconds = 30'000U;
+    auto clientA = std::make_unique<Client>(*portA, config, 42U, MakeKey(1U), Endpoint::Loopback(7000), 0U);
+    Client clientB(*portB, config, 43U, MakeKey(2U), Endpoint::Loopback(7000), 0U);
+
+    std::vector<std::vector<std::uint32_t>> received(2U); // per client, ids in arrival order
+    std::vector<std::uint32_t> receivedByA;
+    std::vector<std::uint32_t> receivedByB;
+    std::uint32_t sentA = 0U;
+    std::uint32_t sentB = 0U;
+    std::uint32_t hostToB = 0U;
+    bool reconnected = false;
+    bool replacedSeen = false;
+    std::uint64_t now = 0U;
+    const auto drain = [&] {
+        NetEvent event;
+        while (host.PollEvent(event)) {
+            if (event.type == NetEventType::Message) {
+                received[event.peer == 42U ? 0U : 1U].push_back(IdOf(event.message.data));
+            } else if (event.type == NetEventType::Disconnected && event.reason == DisconnectReason::Replaced) {
+                replacedSeen = true;
+            }
+        }
+        while (clientA != nullptr && clientA->PollEvent(event)) {
+        }
+        while (clientB.PollEvent(event)) {
+            if (event.type == NetEventType::Message) {
+                receivedByB.push_back(IdOf(event.message.data));
+            }
+        }
+    };
+    const auto step = [&] {
+        network.Advance(now);
+        host.Update(now);
+        if (clientA != nullptr) {
+            clientA->Update(now);
+        }
+        clientB.Update(now);
+        drain();
+    };
+
+    for (; now < 30'000U && !(clientA->State() == ClientState::Connected && clientB.State() == ClientState::Connected); now += 10U) {
+        step();
+    }
+    Require(clientA->State() == ClientState::Connected && clientB.State() == ClientState::Connected, "two clients did not connect over a bad network");
+
+    constexpr std::uint32_t kPerClient = 60U;
+    std::uint64_t reconnectAt = 0U;
+    for (const std::uint64_t limit = now + 120'000U; now < limit; now += 10U) {
+        // Client A sends the first half, then drops off and comes back from another address.
+        while (clientA != nullptr && sentA < kPerClient / 2U && clientA->Send(0U, Pattern(sentA, 300U)) == SendResult::Queued) {
+            ++sentA;
+        }
+        while (sentB < kPerClient && clientB.Send(0U, Pattern(sentB, 300U)) == SendResult::Queued) {
+            ++sentB;
+        }
+        while (hostToB < kPerClient && host.Send(43U, 0U, Pattern(hostToB, 300U)) == SendResult::Queued) {
+            ++hostToB;
+        }
+        if (clientA != nullptr && sentA == kPerClient / 2U && received[0].size() >= 10U) {
+            clientA.reset(); // the process is gone: no goodbye, the old session is left to be replaced
+            reconnectAt = now;
+            clientA = std::make_unique<Client>(*portA2, config, 42U, MakeKey(1U), Endpoint::Loopback(7000), now);
+            reconnected = true;
+            sentA = 1000U;
+        }
+        if (reconnected && clientA->State() == ClientState::Connected && sentA >= 1000U && sentA < 1000U + kPerClient / 2U) {
+            while (sentA < 1000U + kPerClient / 2U && clientA->Send(0U, Pattern(sentA, 300U)) == SendResult::Queued) {
+                ++sentA;
+            }
+        }
+        step();
+        const bool aDone = reconnected && sentA == 1000U + kPerClient / 2U && received[0].size() >= 10U &&
+            std::ranges::count_if(received[0], [](std::uint32_t id) { return id >= 1000U; }) == static_cast<std::ptrdiff_t>(kPerClient / 2U);
+        if (aDone && received[1].size() == kPerClient && receivedByB.size() == kPerClient) {
+            break;
+        }
+    }
+    Require(reconnected && replacedSeen, "the reconnect of client A was not seen as a replacement");
+
+    // Client B's streams are complete and in order both ways, whatever happened to A.
+    Require(received[1].size() == kPerClient && receivedByB.size() == kPerClient, "client B lost messages while A reconnected");
+    for (std::uint32_t index = 0U; index < kPerClient; ++index) {
+        Require(received[1][index] == index && receivedByB[index] == index, "client B's messages are out of order");
+    }
+    // Client A: what arrived before the crash is an unbroken prefix, and what was sent after the
+    // reconnect arrived complete and in order.
+    std::uint32_t expectedBefore = 0U;
+    std::uint32_t expectedAfter = 1000U;
+    for (const std::uint32_t id : received[0]) {
+        if (id < 1000U) {
+            Require(id == expectedBefore++, "client A's messages before the crash have a gap or repeat");
+        } else {
+            Require(id == expectedAfter++, "client A's messages after the reconnect have a gap or repeat");
+        }
+    }
+    Require(expectedAfter == 1000U + kPerClient / 2U, "client A's messages after the reconnect did not all arrive");
+    Require(host.ClientCount() == 2U, "the host holds a stale session after the reconnect");
+
+    // The report: what the bad network cost.
+    const LoopbackStats& link = network.Stats();
+    const SessionStats* statsB = host.ClientStats(43U);
+    Require(statsB != nullptr && clientB.Stats() != nullptr, "no statistics");
+    std::printf("  network report: simulated %llu ms, link sent %llu dropped %llu duplicated %llu reordered %llu; client B: rtt %u ms, %llu packets and %llu bytes sent,"
+                " %llu fragments retransmitted, %llu duplicates and %llu replays rejected; all traffic completed %llu ms after the reconnect started\n",
+        static_cast<unsigned long long>(now), static_cast<unsigned long long>(link.sent), static_cast<unsigned long long>(link.dropped),
+        static_cast<unsigned long long>(link.duplicated), static_cast<unsigned long long>(link.reordered), clientB.Stats()->smoothedRttMilliseconds,
+        static_cast<unsigned long long>(clientB.Stats()->packetsSent), static_cast<unsigned long long>(clientB.Stats()->bytesSent),
+        static_cast<unsigned long long>(clientB.Stats()->fragmentsRetransmitted), static_cast<unsigned long long>(statsB->duplicateFragments),
+        static_cast<unsigned long long>(statsB->rejectedReplay), static_cast<unsigned long long>(now - reconnectAt));
+    Require(clientB.Stats()->smoothedRttMilliseconds > 0U && link.dropped > 0U, "the report has no round trip time or no loss");
+}
+
 void TestHandshakeAuthentication() {
     // An attacker who does not know the key can obtain a Challenge, but a Response with a made-up MAC
     // is refused, whatever cookie it carries.
@@ -895,6 +1018,7 @@ int main() {
         { "hostile-input-session", &TestHostileInputIntoSession },
         { "hostile-input-host", &TestHostileInput },
         { "bad-network", &TestBadNetwork },
+        { "two-clients-reconnect", &TestTwoClientsAndReconnectOnBadNetwork },
         { "real-udp", &TestRealUdp },
     };
     int failures = 0;

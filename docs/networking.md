@@ -86,4 +86,6 @@ packet changed in turn), back pressure without loss, queue limits, the handshake
 unknown client, invented MAC, replayed Response from another address, short Connect), a flood from
 one peer, 20000 random and mutated datagrams into a host and 50000 into a session, disconnect and
 timeout, host capacity, a 30% loss, 15% duplication, 20% reordering network with 200 reliable
-messages each way, and a real UDP round trip on 127.0.0.1.
+messages each way, two clients on that network with one of them reconnecting from another address
+(which prints a report of loss, round trip time, retransmissions and rejected packets), and a real UDP
+round trip on 127.0.0.1.
