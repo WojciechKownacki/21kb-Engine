@@ -110,6 +110,8 @@ enum class InspectorSectionId : std::uint8_t {
     PostProcessFog,
     // The scene's post-process profile, shown on the scene's environment (World Backdrop) object.
     ScenePostProcess,
+    // A Mesh Renderer drawing a .kbmap2d tile map (the World 2D Map component).
+    World2DMap,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -602,6 +604,13 @@ enum class InspectorPropertyId : std::uint16_t {
     AudioMixerEffectRemove,
     AudioMixerEffectMoveUp,
     AudioMixerEffectMoveDown,
+    World2DMapOpenEditor,
+    World2DMapOrientation,
+    World2DMapView,
+    World2DMapSetUpView,
+    World2DMapVisible,
+    World2DMapLocked,
+    World2DMapCollision,
 };
 
 struct InspectorDynamicRowIdentity {

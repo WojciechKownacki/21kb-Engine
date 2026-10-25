@@ -4,6 +4,7 @@
 #include "localization/EditorLocalization.hpp"
 #include "platform/win32/EditorChoiceDialog.hpp"
 #include "platform/win32/EditorSceneDirtyPrompt.hpp"
+#include "platform/win32/EditorMap2DWindow.hpp"
 
 #include <string>
 
@@ -13,6 +14,7 @@ std::optional<EditorDirtySceneResolution> EditorSceneLifecycleGuard::ConfirmDirt
     HWND owner,
     EditorSceneContext& sceneContext,
     EditorSceneTransition transition) {
+    if (!EditorMap2DWindow::CloseAll(owner)) return std::nullopt;
     if (!sceneContext.SceneDocumentDirty()) {
         return EditorDirtySceneResolution::Save;
     }

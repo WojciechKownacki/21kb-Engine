@@ -225,6 +225,7 @@ void CollectNavGeometry(std::span<const kb::scene::ScenePrefabNodeDesc> nodes, c
             indices.clear();
             switch (collider.shape) {
             case kb::scene::ColliderShape::Box:
+            case kb::scene::ColliderShape::OneWayBox:
                 AppendBox(collider.center, collider.boxSize, vertices, indices);
                 break;
             case kb::scene::ColliderShape::Sphere:

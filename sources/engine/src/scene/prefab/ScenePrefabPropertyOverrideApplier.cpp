@@ -313,7 +313,7 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     }
     if (property.propertyPath == "collider.shape") {
         int value = 0;
-        if (!ParseNumber(property.value, value) || value < static_cast<int>(ColliderShape::Box) || value > static_cast<int>(ColliderShape::Mesh)) {
+        if (!ParseNumber(property.value, value) || value < static_cast<int>(ColliderShape::Box) || value > static_cast<int>(ColliderShape::OneWayBox)) {
             return false;
         }
         Ensure(node.components.collider).shape = static_cast<ColliderShape>(value);

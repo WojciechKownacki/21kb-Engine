@@ -51,6 +51,11 @@ scenario-local aliases.
 | `configure_physics_layers` | project-relative `path`, two distinct indices/names (`first_layer`, `first_name`, `second_layer`, `second_name`) and `interact`; writes the binary asset and sets the project-wide physics-layers reference; use `reload_scene` before Play Mode |
 | `set_startup_scene` | `path`: a scene's virtual path (`/Game/Scenes/Level1.21kbscene`); makes it the scene the game starts in, as the Startup map list in Build Game does. With `refused_with`, the path must be refused (not a scene of the project) |
 | `set_language` | `language`: an editor language code (`pl`, `ja`, `zh-Hans`, ...); the steps after it see the editor in that language, as after a choice in Editor Settings. `capture` with `"text_fits": true` then fails on any single-line text the panel cuts or ends with an ellipsis |
+| `map2d_editor` | Map `entity`, `checkpoint`, string-array `inputs`; optional `width`, `height` resize the canvas (omitting them preserves its previous size). Drives the production map editor and writes a PNG. Inputs include `click`, `dblclick`, `drag`, `move`, `wheel`, `key`, `search`, `category`, `palette`, `view flat\|wall`, `resize width height`, `order -1000..1000`, `import project-relative/path.png`, `discard`, and `tutorial`. Mouse/key inputs accept `ctrl`, `shift`, `alt`; `key s ctrl` saves map and scene. |
+| `map2d_layer_toggle` | Map `entity`, `field`: `visible`, `locked`, or `collision`. Clicks the production Inspector checkbox and checks the resulting ECS component value. |
+| `map2d_dock` | Map `entity`. Creates a hidden native host, docks the production map canvas at a known size, then verifies hiding it with its panel. |
+| `assert_map2d_camera` | Map `entity`; optional `orientation`: `flat` or `wall`. Verifies a primary orthographic map camera and its direction. |
+| `assert_map2d_collision` | Map `entity`, expected `boxes` count. Checks the generated solid colliders, including shared-map updates and Undo/Redo. |
 | `select_project_settings_category` | `category`: `inputs`, `graphics`, or `physics`; selects the visible Project Settings page before a panel capture |
 | `set_joint_connection` | `entity` (a Joint owner) and `connected_entity`; assigns the Joint's referenced entity and marks it modified for scene persistence |
 | `assert_joint_connection` | `entity` and `connected_entity`; verifies the Joint still targets that entity, including after scene reload |
@@ -103,7 +108,7 @@ scenario-local aliases.
 | `unload_asset` | asset alias or virtual path; force-loads then unloads the live `AssetManager` entry so a running system must reacquire it |
 | `import_asset` | `source` project-relative path, `destination` virtual folder; optional `skeletal`, `import_textures`, `import_materials`, and `combine_meshes` booleans |
 | `assert_mesh_thumbnail` | `asset` alias or virtual path; renders the production 128x128 geometry thumbnail and requires non-empty mesh statistics |
-| `create_entity` | `id`; optional `name` |
+| `create_entity` | `id`; optional `name`, Create menu `preset`. A map preset (`Map Top Down` or `Map Platformer`) also accepts `selected_id` for the selected Terrain layer; `id` refers to its Grid root. |
 | `create_mesh_entity` | `id`, `asset` alias or virtual path |
 | `create_particle_effect_entity` | `id`, `asset` alias or virtual path |
 | `assert_particle_dependency_navigation` | none; requires an open Particle Effect that has at least one dependency. Expands the collapsed Dependencies section through the production section header, clicks the first dependency row, and verifies the production `NavigateDependency` route reveals exactly that asset in the Asset Browser. |
@@ -117,6 +122,8 @@ scenario-local aliases.
 | `select_entity` | `entity` |
 | `assert_selected_entity` | `entity`; verifies the primary Hierarchy selection without mutating it |
   | `add_component` | `entity`, `component` |
+| `remove_component` | `entity`, `component`; supports SkeletonBinding, DeformedGeometry, and the actual Inspector remove buttons for World2DMap and MeshRenderer. |
+| `remember_mesh_renderer`, `assert_mesh_renderer_unchanged` | `entity`; remembers and compares the mesh, materials, render flags and visibility across map edits, Undo/Redo, scene reload and Play. |
   | `terrain_stamp` | Terrain `entity`, local `x`, `z`; optional `radius`, `strength`, `falloff`, `pressure`; commits one production Undo/Redo stroke |
   | `assert_terrain_height` | Terrain `entity`, local `x`, `z`, expected `value`; optional `tolerance` |
   | `configure_terrain`, `assert_terrain_configuration` | Terrain `entity`, `width`, `height`, `chunk_quads`, `lod_count`, `world_size_x`, `world_size_z`; configuration resamples through the production Undo/Redo path |
@@ -190,6 +197,7 @@ scenario-local aliases.
 | `capture_screenshot_matrix` | `panel`, `checkpoint`; captures `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, or `animator_editor` through production docked and floating renderers. Every invocation writes six checked BMPs: 1920x1080, 1366x768, and a 1280x720 logical client at 150% DPI (a 1920x1080 bitmap), each in both layouts. |
 | `verify_viewport_host_lifecycle` | none; renders the real native viewport child plus, when an Animator Controller asset is open, the Animator Editor preview surface (the shared host-surface mechanism keyed by `panel.id` used by all three animation editors). Verifies over every host surface registered for the window that minimize, application deactivation, DPI transition, resize/move, and removing the panel leave no viewport overlay visible over its host, and that an owned overlay popup (scene viewport toolbar dropdown) shown through the production paint path is hidden by the `WM_ACTIVATEAPP` deactivation path and restored by the repaint after reactivation. |
 | `capture_runtime` | `checkpoint`; optional `require_non_uniform`; requires Play Mode and writes a PNG from the production GPU readback path |
+| `assert_capture_color` | `checkpoint`, `color` `[r, g, b]`; optional `tolerance` per channel (default 16) and `min_pixels` (default 100); verifies that expected artwork is actually visible |
 | `capture_scene_viewport` | `checkpoint`; renders the Scene panel's viewport with its own camera and present settings (editor overlays included) on the GPU and reads it back to a PNG |
 | `assert_capture_color_difference` | `with`, `without` capture checkpoints, `color` `[r, g, b]` (0..255); optional `tolerance` per channel (default 48) and `min_pixels` (default 100); counts pixels that differ and show the color in `with` |
 | `assert_capture_difference` | `before`, `after` capture checkpoints; requires equal dimensions and at least 100 changed pixels |
@@ -247,3 +255,24 @@ driver overlays, and operating system file/colour dialogs require the
 corresponding real device or the existing visible-host editor suites. A
 scenario can assert whether those live backends are actually registered with
 `assert_backend`; device capability remains a separate runtime query.
+
+### Map settings and visual animation
+
+The `map2d_editor` driver uses the production docked settings forms through
+`settings surface|opacity|offset|parallax|scatter|atlas|size|position|order|stamp|text-data|number-data|flag-data|remove-data`.
+`field <zero-based index> <text>` edits a draft; `preset <index>`, `apply`, `cancel`
+and `reject` exercise presets, acceptance, cancellation and validation respectively.
+`remember-map` and `assert-map-unchanged` check atomicity and Undo without changing
+any map data. Fields accept both decimal separators.
+
+`animation-open` opens the visual atlas and timeline. Ordinary `click`, `key` and
+`time` inputs operate its preview, ordering and cancel behavior. Semantic inputs
+`animation-add <cell>`, `animation-select <index>`, `animation-move <-1|1>`,
+`animation-clear` and `animation-apply` use the same handlers. `settings animation-speed`
+opens its speed form. `assert_map2d_runtime` checks that the live provider has loaded
+the authored map; its optional `contains` field checks serialized live map data.
+
+`verify-native` in the map scenario verifies native edit controls, Enter and Undo,
+then resolves viewport pointer rays against rotated, scaled maps in both views.
+It creates only a hidden test host. `Map2DLightingScenario.json` checks real shadow
+draws and a visible difference between illuminated captures with and without occlusion.

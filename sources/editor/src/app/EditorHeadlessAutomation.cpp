@@ -3756,14 +3756,15 @@ bool EditorHeadlessAutomation::InspectorPointerDrag(
     return routed;
 }
 
-bool EditorHeadlessAutomation::InspectorClickRow(InspectorPropertyId property, int index, InspectorHitKind kind) {
+bool EditorHeadlessAutomation::InspectorClickRow(InspectorPropertyId property, int index, InspectorHitKind kind, InspectorSectionId section) {
     // Scrolled the way a person scrolls to a row below the panel's height.
     for (int offset = 0; offset <= 4000; offset += 150) {
         static_cast<void>(context_.Inspector().SetScrollOffset(offset, std::numeric_limits<int>::max()));
         for (int y = kInspectorContent.top + 1; y < kInspectorContent.bottom; y += 2) {
             for (int x = kInspectorContent.left + 8; x < kInspectorContent.right; x += 16) {
                 const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kInspectorContent, context_, x, y);
-                if (hit.property != property || hit.kind != kind || (index >= 0 && hit.index != index)) {
+                if (hit.property != property || hit.kind != kind || (index >= 0 && hit.index != index) ||
+                    (section != InspectorSectionId::None && hit.section != section)) {
                     continue;
                 }
                 const bool pressed = InspectorPointerDown(x, y);

@@ -50,6 +50,7 @@ public:
     [[nodiscard]] bool CommitTransaction();
     void CancelTransaction();
     [[nodiscard]] bool Execute(std::string label, Mutation mutation, EditorSceneHistoryCommand::AssetFile assetFile = {});
+    [[nodiscard]] bool Execute(std::unique_ptr<IEditorCommand> command);
 
 private:
     [[nodiscard]] std::vector<EditorHierarchyRow> HierarchyRows() const;

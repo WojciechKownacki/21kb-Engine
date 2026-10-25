@@ -25,6 +25,10 @@
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/GridComponent.hpp"
+#include "engine/scene/TilemapComponent.hpp"
+#include "engine/scene/TilemapRendererComponent.hpp"
+#include "engine/scene/TilemapColliderComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
@@ -465,6 +469,34 @@ void RegisterContentInstanceReflection(kb::ecs::World& world) {
     }));
 }
 
+void RegisterGridReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<GridComponent>("kb.scene.GridComponent", {
+        KB_ECS_FIELD(GridComponent, cellSize, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(GridComponent, floorHeight, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(GridComponent, wall, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterTilemapReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<TilemapComponent>("kb.scene.TilemapComponent", {
+        KB_ECS_FIELD(TilemapComponent, mapAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(TilemapComponent, locked, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterTilemapRendererReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<TilemapRendererComponent>("kb.scene.TilemapRendererComponent", {
+        KB_ECS_FIELD(TilemapRendererComponent, sortingOrder, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(TilemapRendererComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterTilemapColliderReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<TilemapColliderComponent>("kb.scene.TilemapColliderComponent", {
+        KB_ECS_FIELD(TilemapColliderComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
 void RegisterStreamFocusReflection(kb::ecs::World& world) {
     static_cast<void>(world.RegisterComponentReflection<StreamFocusComponent>("kb.scene.StreamFocusComponent", {
         KB_ECS_FIELD(StreamFocusComponent, innerRadius, kb::ecs::ComponentFieldType::Float32),
@@ -563,6 +595,10 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , regionShapeComponentId_(RegisterSceneComponent<RegionShapeComponent>(world, RegionShapeComponent::StableId))
     , guideCurveComponentId_(RegisterSceneComponent<GuideCurveComponent>(world, GuideCurveComponent::StableId))
     , contentInstanceComponentId_(RegisterSceneComponent<ContentInstanceComponent>(world, ContentInstanceComponent::StableId))
+    , gridComponentId_(RegisterSceneComponent<GridComponent>(world, GridComponent::StableId))
+    , tilemapComponentId_(RegisterSceneComponent<TilemapComponent>(world, TilemapComponent::StableId))
+    , tilemapRendererComponentId_(RegisterSceneComponent<TilemapRendererComponent>(world, TilemapRendererComponent::StableId))
+    , tilemapColliderComponentId_(RegisterSceneComponent<TilemapColliderComponent>(world, TilemapColliderComponent::StableId))
     , streamFocusComponentId_(RegisterSceneComponent<StreamFocusComponent>(world, StreamFocusComponent::StableId))
     , worldBackdropComponentId_(RegisterSceneComponent<WorldBackdropComponent>(world, WorldBackdropComponent::StableId))
     , ambientRadianceComponentId_(RegisterSceneComponent<AmbientRadianceComponent>(world, AmbientRadianceComponent::StableId))
@@ -596,6 +632,10 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterRegionShapeReflection(world);
     RegisterGuideCurveReflection(world);
     RegisterContentInstanceReflection(world);
+    RegisterGridReflection(world);
+    RegisterTilemapReflection(world);
+    RegisterTilemapRendererReflection(world);
+    RegisterTilemapColliderReflection(world);
     RegisterStreamFocusReflection(world);
     RegisterWorldBackdropReflection(world);
     RegisterAmbientRadianceReflection(world);
@@ -667,6 +707,10 @@ std::uint64_t SceneComponentRegistry::RegionShapeComponentId() const noexcept {
 }
 std::uint64_t SceneComponentRegistry::GuideCurveComponentId() const noexcept { return guideCurveComponentId_; }
 std::uint64_t SceneComponentRegistry::ContentInstanceComponentId() const noexcept { return contentInstanceComponentId_; }
+std::uint64_t SceneComponentRegistry::GridComponentId() const noexcept { return gridComponentId_; }
+std::uint64_t SceneComponentRegistry::TilemapComponentId() const noexcept { return tilemapComponentId_; }
+std::uint64_t SceneComponentRegistry::TilemapRendererComponentId() const noexcept { return tilemapRendererComponentId_; }
+std::uint64_t SceneComponentRegistry::TilemapColliderComponentId() const noexcept { return tilemapColliderComponentId_; }
 std::uint64_t SceneComponentRegistry::StreamFocusComponentId() const noexcept { return streamFocusComponentId_; }
 std::uint64_t SceneComponentRegistry::WorldBackdropComponentId() const noexcept { return worldBackdropComponentId_; }
 std::uint64_t SceneComponentRegistry::AmbientRadianceComponentId() const noexcept { return ambientRadianceComponentId_; }

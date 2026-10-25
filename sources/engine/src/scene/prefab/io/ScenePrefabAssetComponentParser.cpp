@@ -102,7 +102,7 @@ template <typename T>
     ColliderComponent collider;
     if (!ParseField(fields, "collider.shape", shape)
         || shape < static_cast<int>(ColliderShape::Box)
-        || shape > static_cast<int>(ColliderShape::Mesh)
+        || shape > static_cast<int>(ColliderShape::OneWayBox)
         || !ScenePrefabAssetFieldParser::ParseVec3(fields, "collider.center", collider.center)
         || !ScenePrefabAssetFieldParser::ParseVec3(fields, "collider.boxSize", collider.boxSize)
         || !ParseField(fields, "collider.radius", collider.radius)
@@ -725,6 +725,50 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseGrid(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "grid", present)) return false;
+    if (!present) return true;
+    GridComponent value{};
+    if (!ParseField(fields, "grid.cellSize", value.cellSize)) return false;
+    if (!ParseField(fields, "grid.floorHeight", value.floorHeight)) return false;
+    if (!ParseOptionalBool(fields, "grid.wall", value.wall)) return false;
+    components.grid = value;
+    return true;
+}
+
+[[nodiscard]] bool ParseTilemap(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "tilemap", present)) return false;
+    if (!present) return true;
+    TilemapComponent value{};
+    if (!ParseField(fields, "tilemap.mapAssetId", value.mapAssetId)) return false;
+    if (!ParseOptionalBool(fields, "tilemap.locked", value.locked)) return false;
+    components.tilemap = value;
+    return true;
+}
+
+[[nodiscard]] bool ParseTilemapRenderer(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "tilemapRenderer", present)) return false;
+    if (!present) return true;
+    TilemapRendererComponent value{};
+    if (!ParseField(fields, "tilemapRenderer.sortingOrder", value.sortingOrder)) return false;
+    if (!ParseOptionalBool(fields, "tilemapRenderer.enabled", value.enabled)) return false;
+    components.tilemapRenderer = value;
+    return true;
+}
+
+[[nodiscard]] bool ParseTilemapCollider(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "tilemapCollider", present)) return false;
+    if (!present) return true;
+    TilemapColliderComponent value{};
+    if (!ParseOptionalBool(fields, "tilemapCollider.enabled", value.enabled)) return false;
+    components.tilemapCollider = value;
+    return true;
+}
+
 } // namespace
 
 bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
@@ -738,6 +782,11 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseRegionShape(fields, components)
         && ParseGuideCurve(fields, components)
         && ParseContentInstance(fields, components)
+        && ParseGrid(fields, components)
+        && ParseTilemap(fields, components)
+        && ParseTilemapRenderer(fields, components)
+        && ParseTilemapCollider(fields, components)
+
         && ParseStreamFocus(fields, components)
         && ParseWorldBackdrop(fields, components)
         && ParseAmbientRadiance(fields, components)

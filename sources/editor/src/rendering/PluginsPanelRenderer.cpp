@@ -117,6 +117,7 @@ void DrawText(HDC dc, RECT rect, std::string_view text, COLORREF color, int poin
     if (plugin.id == "Rendering.21kbParticle") return EditorText("panel.particleEditor", "21kb Particle System");
     if (plugin.id == "Rendering.BasicLighting") return EditorText("plugins.basicLighting", "Basic Lighting");
     if (plugin.id == "Gameplay.AI") return EditorText("plugins.ai", "AI");
+    if (plugin.id == "World.Map2D") return EditorText("plugins.world2d", "World, 2D Map Editor");
     if (plugin.id == "Editor.Terrain") return EditorText("plugins.terrainEditor", "Terrain Editor");
     return plugin.displayName;
 }

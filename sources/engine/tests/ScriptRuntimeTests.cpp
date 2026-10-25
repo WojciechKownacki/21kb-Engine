@@ -12685,6 +12685,10 @@ void RunScriptAudioComponentPropertiesTest() {
 void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Generated Accessor Coverage" });
+    scene.Components().Grids().Set(object.Entity(), kb::scene::GridComponent{});
+    scene.Components().Tilemaps().Set(object.Entity(), kb::scene::TilemapComponent{ .mapAssetId = 19U });
+    scene.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{});
+    scene.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{});
     scene.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{});
     scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
     scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
@@ -12843,7 +12847,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // WorldBackdrop grew eleven procedural sky fields, and the older names of Line Renderer
     // (10), Trail Renderer (9) and Lens Flare (7) are accepted aliases: 628 -> 665.
     // Animator (5), DeformedGeometry (8), SocketAttachment (9), Combatant (26) and AIBrain (37) fields: 681 -> 766.
-    kb::tests::Require(fieldsChecked == 786U, "Script component API generated accessor coverage test did not exercise the expected total field count (786, including audio fields and the compatibility aliases)");
+    kb::tests::Require(fieldsChecked == 794U, "Script component API generated accessor coverage test did not exercise the expected total field count (794, including audio fields and the compatibility aliases)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12865,6 +12869,10 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
 void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "No Raw Pointer" });
+    scene.Components().Grids().Set(object.Entity(), kb::scene::GridComponent{});
+    scene.Components().Tilemaps().Set(object.Entity(), kb::scene::TilemapComponent{ .mapAssetId = 19U });
+    scene.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{});
+    scene.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{});
     scene.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{});
     scene.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{});
     scene.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{});
@@ -12932,7 +12940,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 786U, "LIB-082 raw-pointer audit did not exercise the expected total field count (786, including audio fields and the compatibility aliases)");
+    kb::tests::Require(propertiesChecked == 794U, "LIB-082 raw-pointer audit did not exercise the expected total field count (794, including audio fields and the compatibility aliases)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

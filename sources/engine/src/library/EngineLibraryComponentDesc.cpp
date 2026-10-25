@@ -163,6 +163,26 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
+            .name = "Grid",
+            .id = ComputeLibraryComponentId("Grid"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Tilemap",
+            .id = ComputeLibraryComponentId("Tilemap"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "TilemapRenderer",
+            .id = ComputeLibraryComponentId("TilemapRenderer"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "TilemapCollider",
+            .id = ComputeLibraryComponentId("TilemapCollider"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "ContentInstance",
             .id = ComputeLibraryComponentId("ContentInstance"),
             .serializable = true,

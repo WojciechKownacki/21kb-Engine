@@ -20,6 +20,7 @@ void RunEcsBatchHierarchyDepthTests();
 void RunScriptNativeHeaderReloadTest();
 void RunScriptAudioMixerTests();
 void RunPhysicsReplayOnlyTest();
+void RunPhysicsOneWayOnlyTest();
 void RunPhysicsStepSpikeBenchmark();
 void RunAgentsFrameBenchmark();
 void RunSceneUIBuildFrameProfile();
@@ -96,6 +97,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneUIBuildFrameProfile();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
+    } else if (suite == "physics-one-way") {
+        kb::tests::RunPhysicsOneWayOnlyTest();
     } else if (suite == "physics-replay") {
         kb::tests::RunPhysicsReplayOnlyTest();
     } else if (suite == "physics-step-spikes") {

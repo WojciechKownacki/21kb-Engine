@@ -26,8 +26,10 @@ namespace {
 constexpr std::string_view k3DObject = "3D Object";
 constexpr std::string_view kLight = "Light";
 
-constexpr std::array<SceneCreateItem, 17> kItems{ {
+constexpr std::array<SceneCreateItem, 19> kItems{ {
     { "Empty", "Create Empty", "Entity", {}, "Ctrl+Shift+N" },
+    { "Map Top Down", "Map — Top Down", "Map", "2D Object", {} },
+    { "Map Platformer", "Map — Platformer", "Map", "2D Object", {} },
     { "Cube", "Cube", "Cube", k3DObject, "1 m" },
     { "Sphere", "Sphere", "Sphere", k3DObject, "1 m" },
     { "Capsule", "Capsule", "Capsule", k3DObject, "2 m" },
@@ -56,6 +58,7 @@ constexpr std::array<SceneCreateItem, 17> kItems{ {
 
 // The components an item is made of, in the ids of SceneComponentAuthoring.
 [[nodiscard]] std::vector<std::string_view> OwnComponents(std::string_view id) {
+    if (id == "Map Top Down" || id == "Map Platformer") return { "Grid" };
     if (kb::assets::FindBuiltInShape(id) != nullptr) return { "MeshRenderer" };
     if (LightKindOf(id).has_value()) return { "Light" };
     if (id == "Camera") return { "Camera" };

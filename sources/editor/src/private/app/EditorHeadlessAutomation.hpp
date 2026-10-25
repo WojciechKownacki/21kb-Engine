@@ -169,7 +169,8 @@ public:
     [[nodiscard]] bool InspectorKey(std::uintptr_t key);
     // Presses the Inspector row the panel itself hit-tests as `property` (and `index`, -1 for any)
     // with a hit of `kind`: the click a person makes on that row, wherever the layout puts it.
-    [[nodiscard]] bool InspectorClickRow(InspectorPropertyId property, int index, InspectorHitKind kind);
+    [[nodiscard]] bool InspectorClickRow(InspectorPropertyId property, int index, InspectorHitKind kind,
+        InspectorSectionId section = InspectorSectionId::None);
 
     [[nodiscard]] bool CaptureInspector(
         std::string_view checkpoint);

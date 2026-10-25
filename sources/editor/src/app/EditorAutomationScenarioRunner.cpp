@@ -50,7 +50,9 @@
 #include "engine/project/ProjectDescriptorWriter.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTilemapRuntime.hpp"
 #include "engine/platform/UserStorage.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
@@ -102,7 +104,11 @@
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
+#include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/SceneObject.hpp"
+#include "scene/EditorMap2DService.hpp"
 #include "scene/EditorTerrainService.hpp"
+#include "platform/win32/EditorMap2DWindow.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include <Windows.h>
@@ -169,6 +175,7 @@ struct ScenarioState {
     std::filesystem::path fixtureRoot;
     std::unordered_map<std::string, EntityAlias> entities;
     std::unordered_map<std::string, kb::assets::AssetId> assets;
+    std::unordered_map<std::string, kb::scene::MeshRendererComponent> rememberedMeshes;
     std::unordered_map<std::string, std::uint32_t> materialNodes;
 };
 
@@ -448,6 +455,9 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     }
     if (component == "TerrainEditor") {
         return EditorTerrainService::IsTerrainEntity(scene, entity);
+    }
+    if (component == "World2DMap") {
+        return EditorMap2DService::IsMapEntity(scene, entity);
     }
     if (const kb::scene::UIComponentDescriptor* descriptor =
             kb::scene::FindUIComponentDescriptor(component);
@@ -2302,12 +2312,14 @@ ReadScriptValue(
     if (*operation == "create_entity") {
         const auto alias = StringMember(step, "id", error);
         const auto name = StringMember(step, "name", error, false);
+        const auto preset = StringMember(step, "preset", error, false);
+        const auto selectedAlias = StringMember(step, "selected_id", error, false);
         if (!alias) return { false, error };
         if (state.entities.contains(*alias)) {
             return { false, "entity alias already exists" };
         }
         const kb::scene::SceneEntity entity =
-            state.context.CreateHierarchyObject();
+            state.context.CreateMenuObject(preset.value_or("Empty"));
         if (!entity.IsValid()) {
             return { false, "entity creation failed" };
         }
@@ -2319,6 +2331,10 @@ ReadScriptValue(
             EntityAlias{
                 .entity = entity,
                 .name = state.context.Scene().Entities().Name(entity) });
+        if (selectedAlias) {
+            const auto selected = state.context.SelectedEntity();
+            state.entities.emplace(*selectedAlias, EntityAlias{ .entity = selected, .name = state.context.Scene().Entities().Name(selected) });
+        }
         return { true, *alias + '=' + std::to_string(entity.Id()) };
     }
 
@@ -2665,6 +2681,13 @@ ReadScriptValue(
         if (!state.context.Scene().Entities().IsAlive(entity)) {
             return { false, "entity alias is not alive" };
         }
+        if (*component == "World2DMap" || *component == "MeshRenderer") {
+            state.context.SelectEntity(entity);
+            const auto section = *component == "World2DMap" ? InspectorSectionId::World2DMap : InspectorSectionId::MeshRenderer;
+            const bool clicked = state.automation.InspectorClickRow(InspectorPropertyId::ComponentRemove, -1,
+                InspectorHitKind::ComponentMenuButton, section);
+            return { clicked && !HasAuthoredComponent(state.context.Scene(), entity, *component), *component };
+        }
         if (*component == "SkeletonBinding") {
             return { state.context.RemoveSkeletonBindingFromEntity(entity), *component };
         }
@@ -2672,6 +2695,26 @@ ReadScriptValue(
             return { state.context.RemoveDeformedGeometryFromEntity(entity), *component };
         }
         return { false, "component cannot be removed by this operation" };
+    }
+
+    if (*operation == "remember_mesh_renderer" || *operation == "assert_mesh_renderer_unchanged") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return {false, error};
+        const auto* mesh = std::as_const(state.context.Scene()).Components().MeshRenderers().TryGet(ResolveEntity(state, *alias));
+        if (!mesh) return {false, "mesh renderer is missing"};
+        if (*operation == "remember_mesh_renderer") {
+            state.rememberedMeshes[*alias] = *mesh;
+            return {true, "remembered authored mesh renderer"};
+        }
+        const auto found = state.rememberedMeshes.find(*alias);
+        if (found == state.rememberedMeshes.end()) return {false, "mesh renderer was not remembered"};
+        const auto& saved = found->second;
+        const bool same = mesh->meshAssetId == saved.meshAssetId && mesh->materialAssetId == saved.materialAssetId &&
+            mesh->materialSlotAssetIds == saved.materialSlotAssetIds && mesh->materialSlotOverrideCount == saved.materialSlotOverrideCount &&
+            mesh->castsShadow == saved.castsShadow && mesh->receivesShadow == saved.receivesShadow && mesh->layer == saved.layer &&
+            mesh->materialInstanceHandle == saved.materialInstanceHandle && mesh->previewHidden == saved.previewHidden &&
+            mesh->shadowOnly == saved.shadowOnly && mesh->transient == saved.transient;
+        return {same, same ? "authored mesh renderer remains unchanged and visible" : "authored mesh renderer changed"};
     }
 
     if (*operation == "terrain_stamp") {
@@ -4980,6 +5023,127 @@ ReadScriptValue(
                  "material_preview:" + *checkpoint };
     }
 
+    if (*operation == "map2d_layer_toggle") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto field = StringMember(step, "field", error);
+        if (!alias || !field) return { false, error };
+        const auto entity = ResolveEntity(state, *alias);
+        state.context.SelectEntity(entity);
+        const bool lock = *field == "locked";
+        const bool visible = *field == "visible";
+        const auto property = lock ? InspectorPropertyId::World2DMapLocked : visible ? InspectorPropertyId::World2DMapVisible : InspectorPropertyId::World2DMapCollision;
+        const auto component = lock ? "Tilemap" : visible ? "TilemapRenderer" : "TilemapCollider";
+        const auto key = lock ? "locked" : "enabled";
+        const auto before = kb::script::ScriptSceneComponentApi::GetProperty(state.context.Scene(), entity, component, key);
+        if (!before.succeeded || !state.automation.InspectorClickRow(property, -1, InspectorHitKind::BoolField)) return { false, "layer checkbox could not be clicked" };
+        const auto after = kb::script::ScriptSceneComponentApi::GetProperty(state.context.Scene(), entity, component, key);
+        return { after.succeeded && before.value.AsBool() != after.value.AsBool(), "layer checkbox changed ECS state" };
+    }
+    if (*operation == "map2d_dock") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        state.context.SelectEntity(ResolveEntity(state, *alias));
+        HWND host = CreateWindowExW(0, L"STATIC", L"Tilemap docking test", WS_POPUP | WS_CLIPCHILDREN,
+            0, 0, 1100, 800, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (!host) return { false, "docking host could not be created" };
+        const RECT bounds{ 20, 40, 920, 740 };
+        EditorMap2DWindow::SyncDocked(host, bounds, state.context);
+        HWND child = GetWindow(host, GW_CHILD);
+        RECT size{};
+        const bool docked = child && GetParent(child) == host && (GetWindowLongPtrW(child, GWL_STYLE) & WS_CHILD) &&
+            GetClientRect(child, &size) && size.right == 900 && size.bottom == 700;
+        EditorMap2DWindow::HideDocked(host);
+        const bool hidden = child && !(GetWindowLongPtrW(child, GWL_STYLE) & WS_VISIBLE);
+        DestroyWindow(host);
+        return { docked && hidden, "native map canvas docks and hides with its panel" };
+    }
+    if (*operation == "map2d_editor") {
+        // The World 2D Map Editor of an entity's map driven by "inputs" (EditorMap2DWindow::Drive)
+        // and drawn to screenshots/<checkpoint>.png; its strokes reach the scene unsaved.
+        const auto alias = StringMember(step, "entity", error);
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        const JsonValue* inputs = Member(step, "inputs", JsonValue::Kind::Array, error);
+        const double width = NumberMember(step, "width", error, false).value_or(0.0);
+        const double height = NumberMember(step, "height", error, false).value_or(0.0);
+        if (!alias || !checkpoint || inputs == nullptr || !error.empty()) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        std::vector<std::string> lines;
+        for (std::size_t index = 0U; index < inputs->Size(); ++index) lines.emplace_back(inputs->At(index)->AsString());
+        std::string failure;
+        const bool driven = EditorMap2DWindow::Drive(state.context, entity, lines,
+            state.automation.ArtifactRoot() / "screenshots" / (*checkpoint + ".png"), static_cast<int>(width), static_cast<int>(height), &failure);
+        return { driven, driven ? "map2d:" + *checkpoint : failure };
+    }
+
+    if (*operation == "assert_map2d_runtime") {
+        const auto alias = StringMember(step,"entity",error);
+        if (!alias) return {false,error};
+        const auto entity = ResolveEntity(state,*alias);
+        const auto* runtime = state.context.Scene().Runtime().Tilemaps();
+        if (!runtime) {
+            std::string detail = "tilemap runtime is not attached";
+            for (const auto& diagnostic : state.context.Scene().ModuleDiagnostics()) detail += "; " + diagnostic;
+            return {false,detail};
+        }
+        const auto* map = runtime->Map(entity);
+        const auto expected = StringMember(step,"contains",error,false);
+        if (!map || !error.empty()) return {false,error.empty() ? "runtime has no entity map" : error};
+        const auto text = kb::assets::Map2DAssetIO::Write(*map);
+        return {!expected || text.find(*expected)!=std::string::npos,"live tilemap data matches the authored sequence"};
+    }
+
+    if (*operation == "assert_map2d_collision") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto expected = UInt32Member(step, "boxes", error);
+        if (!alias || !expected) return { false, error };
+        kb::scene::Scene& scene = state.context.Scene();
+        const auto entity = ResolveEntity(state, *alias);
+        if (!scene.Entities().IsAlive(entity)) return { false, "map entity is not alive" };
+        std::size_t count = 0U;
+        for (const auto& group : scene.Entities().Object(entity).Children()) {
+            if (group.Name() != "Map Collision") continue;
+            for (const auto& child : group.Children()) {
+                const auto* collider = scene.Components().Colliders().TryGet(child.Entity());
+                if (collider == nullptr || collider->shape != kb::scene::ColliderShape::Box || collider->trigger) {
+                    return { false, "map collision must contain solid boxes" };
+                }
+                ++count;
+            }
+        }
+        return { count == *expected, "map collision boxes: " + std::to_string(count) };
+    }
+
+    if (*operation == "assert_map2d_camera") {
+        // The map's Map Camera: primary, orthographic, looking straight down at the map (or straight
+        // at a wall map along +Z); the message reports where it is.
+        const auto alias = StringMember(step, "entity", error);
+        const auto orientation = StringMember(step, "orientation", error, false);
+        if (!alias || !error.empty()) return { false, error };
+        if (orientation && *orientation != "flat" && *orientation != "wall") return { false, "orientation must be flat or wall" };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        kb::scene::Scene& scene = state.context.Scene();
+        if (!scene.Entities().IsAlive(entity)) return { false, "map entity is not alive" };
+        for (const kb::scene::SceneObject& child : scene.Entities().Object(entity).Children()) {
+            if (child.Name() != "Map Camera") continue;
+            const kb::scene::CameraComponent* lens = scene.Components().Cameras().TryGet(child.Entity());
+            const kb::scene::TransformComponent& placed = scene.Transforms().Get(child.Entity());
+            const kb::scene::Vec3 position = placed.worldDirty ? placed.localPosition : placed.worldPosition;
+            const kb::scene::Quat q = placed.worldDirty ? placed.localRotation : placed.worldRotation;
+            const float forwardY = 2.0F * (q.y * q.z - q.w * q.x);
+            const float forwardZ = 1.0F - 2.0F * (q.x * q.x + q.y * q.y);
+            std::ostringstream report;
+            report << "position " << position.x << ' ' << position.y << ' ' << position.z << " forward.y " << forwardY
+                   << " forward.z " << forwardZ << " ortho " << (lens != nullptr ? lens->orthographicHeight : 0.0F)
+                   << " play camera " << (state.context.PlayCameraEntity() == child.Entity() ? "yes" : "no");
+            const bool direction = !orientation ? (forwardY < -0.99F || forwardZ > 0.99F) :
+                *orientation == "flat" ? forwardY < -0.99F : forwardZ > 0.99F;
+            const bool ok = lens != nullptr && lens->primary && lens->projection == kb::scene::CameraProjection::Orthographic && direction &&
+                (!state.context.HasPlayModeSceneSession() || state.context.PlayCameraEntity() == child.Entity());
+            return { ok, report.str() };
+        }
+        return { false, "the map has no Map Camera" };
+    }
+
     if (*operation == "capture_scene_viewport") {
         // The Scene panel's viewport as the GPU renders it in edit mode (its camera, its
         // overlays such as the world cell grid), read back to a PNG.
@@ -5027,6 +5191,26 @@ ReadScriptValue(
         }
         return { matching >= minimum, "changed pixels: " + std::to_string(changed) + ", in the color: " + std::to_string(matching) +
             " (minimum " + std::to_string(minimum) + ")" };
+    }
+
+    if (*operation == "assert_capture_color") {
+        const auto checkpoint = StringMember(step, "checkpoint", error);
+        const auto* color = Member(step, "color", JsonValue::Kind::Array, error);
+        const auto minimum = UInt32Member(step, "min_pixels", error, false).value_or(100U);
+        const auto tolerance = NumberMember(step, "tolerance", error, false).value_or(16.0);
+        if (!checkpoint || !color || color->Size() != 3U || !error.empty()) return {false, "color must be [r, g, b]"};
+        HeroIconGdiplusRuntime::EnsureStarted();
+        Gdiplus::Bitmap captured((state.automation.ArtifactRoot() / "screenshots" / (*checkpoint + ".png")).wstring().c_str());
+        if (captured.GetLastStatus() != Gdiplus::Ok) return {false, "capture is not readable"};
+        std::size_t matching = 0;
+        for (UINT y = 0; y < captured.GetHeight(); ++y) for (UINT x = 0; x < captured.GetWidth(); ++x) {
+            Gdiplus::Color pixel{};
+            if (captured.GetPixel(x, y, &pixel) != Gdiplus::Ok) return {false, "capture pixel read failed"};
+            if (std::fabs(pixel.GetR() - color->At(0)->AsNumber()) <= tolerance &&
+                std::fabs(pixel.GetG() - color->At(1)->AsNumber()) <= tolerance &&
+                std::fabs(pixel.GetB() - color->At(2)->AsNumber()) <= tolerance) ++matching;
+        }
+        return {matching >= minimum, "matching pixels: " + std::to_string(matching) + " (minimum " + std::to_string(minimum) + ")"};
     }
 
     if (*operation == "capture_runtime") {

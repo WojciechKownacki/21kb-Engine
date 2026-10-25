@@ -178,6 +178,31 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                  show --project <dir> --entity <Name>
                e.g. a goblin pack: entity add --name Goblin --create Capsule; ai make --entity Goblin
                --preset Melee --health 60 --ability1 /Game/Abilities/Slash.kbability
+)"
+R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): what the editor's World 2D
+               Map component and Map Editor window do - grounds with automatic borders (Remere's Map
+               Editor style), sprites as items or grounds, floors -50..50, a Map Camera for Play.
+                 new --project <dir> --name <Entity> [--scene <path>] [--size 64x64]
+                     [--orientation flat|wall] [--view 15x11]   (map file, Mesh Renderer, Map Camera)
+                 ground new --project <dir> --name Grass --texture "/Game/2D Map Sprites/terrain.png"
+                     [--cell-size 32] [--z 30] [--tiles 25] [--island 16] [--hole 19]
+                     [--border n=<cell>,cse=<cell>,...]   (island: top-left sprite of a 3x3 island,
+                     hole: of a 2x2 hole; a higher --z borders onto lower grounds and empty tiles)
+                 ground set --project <dir> --name <Name> (same options) | ground list --project <dir>
+                 object new --project <dir> --name Oak --texture "/Game/2D Map Sprites/Nature/trees.png"
+                     --cell <top-left sprite> [--size 2x2]   (a tree, a house: placed in one click)
+                 palette --project <dir>   (categories = folders of Assets/2D Map Sprites)
+                 paint --project <dir> --map <path> --at x,y[,floor] [--to x,y] [--size n]
+                     (--ground <Name> | --object <Name> | --sprite <texture> --cell <n> [--cell-size 32]
+                     [--as-ground]) [--no-borders]
+                 fill --project <dir> --map <path> --ground <Name> --at x,y[,floor]
+                 erase --project <dir> --map <path> --at x,y[,floor] [--to x,y] [--items]
+                 block|unblock --project <dir> --map <path> --at x,y[,floor] [--to x,y]
+                 borderize --project <dir> --map <path> [--floor n]
+                 set --project <dir> --map <path> [--size WxH] [--orientation flat|wall] [--view WxH]
+                 view --project <dir> --entity <Name>   (update the Map Camera and painted collision)
+                 info --project <dir> --map <path>
+               Sprite sheets go into Assets/2D Map Sprites/<Category>; cells count row by row from 0.
   vfx-new      Create a particle effect (.kbvfx) as the editor's New Particle Effect.
                  --project <dir> --name <Name> [--folder Assets/Particles] [--set key=value ...]
   vfx-show     Print a particle effect: every key=value of its file.
@@ -345,7 +370,8 @@ void PrintUsage(std::ostream& output) {
     for (const auto part : kUsageParts) output << part;
 }
 
-constexpr std::array<std::string_view, 5> kFlagNames{ "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu" };
+constexpr std::array<std::string_view, 8> kFlagNames{
+    "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--as-ground", "--no-borders", "--items" };
 
 } // namespace
 
@@ -426,6 +452,11 @@ int Dispatch(int argc, char** argv) {
     if (command == "ai") {
         return kb::cli::RunAiCommand(arguments, io);
     }
+#if KB_CLI_RENDERER
+    if (command == "map2d") {
+        return kb::cli::RunMap2DCommand(arguments, io);
+    }
+#endif
     if (command == "api") {
         return kb::cli::RunApiCommand(arguments, io);
     }

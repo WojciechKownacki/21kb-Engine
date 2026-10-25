@@ -1,4 +1,5 @@
 #include "scene/asset/io/SceneAssetComponentCodec.hpp"
+#include "engine/scene/SceneDocument.hpp"
 
 #include "engine/scene/SceneDocument.hpp"
 
@@ -63,6 +64,11 @@ enum SceneNodeComponentBits : std::uint64_t {
       SocketAttachmentBit = 1ULL << 39U,
       CombatantBit = 1ULL << 40U,
       AIBrainBit = 1ULL << 41U,
+      GridBit = 1ULL << 42U,
+      TilemapBit = 1ULL << 43U,
+      TilemapRendererBit = 1ULL << 44U,
+      TilemapColliderBit = 1ULL << 45U,
+
 };
 
 constexpr std::uint64_t KnownComponentBits = CameraBit |
@@ -82,7 +88,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -130,6 +136,10 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.socketAttachment.has_value(), SocketAttachmentBit);
     include(components.combatant.has_value(), CombatantBit);
     include(components.aiBrain.has_value(), AIBrainBit);
+    include(components.grid.has_value(), GridBit);
+    include(components.tilemap.has_value(), TilemapBit);
+    include(components.tilemapRenderer.has_value(), TilemapRendererBit);
+    include(components.tilemapCollider.has_value(), TilemapColliderBit);
     return componentBits;
 }
 
@@ -604,6 +614,34 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!ok || !IsAIBrainComponentValid(brain)) return false;
         output.aiBrain = brain;
     }
+    if ((componentBits & GridBit) != 0U) {
+        GridComponent value{};
+        if (fileVersion < SceneDocument::TilemapFileVersion) return false;
+        if (!input.ReadFloat(value.cellSize)) return false;
+        if (!input.ReadFloat(value.floorHeight)) return false;
+        if (!input.ReadBool(value.wall)) return false;
+        output.grid = value;
+    }
+    if ((componentBits & TilemapBit) != 0U) {
+        TilemapComponent value{};
+        if (fileVersion < SceneDocument::TilemapFileVersion) return false;
+        if (!input.ReadUInt64(value.mapAssetId)) return false;
+        if (!input.ReadBool(value.locked)) return false;
+        output.tilemap = value;
+    }
+    if ((componentBits & TilemapRendererBit) != 0U) {
+        TilemapRendererComponent value{};
+        if (fileVersion < SceneDocument::TilemapFileVersion) return false;
+        if (!input.ReadInt32(value.sortingOrder)) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        output.tilemapRenderer = value;
+    }
+    if ((componentBits & TilemapColliderBit) != 0U) {
+        TilemapColliderComponent value{};
+        if (fileVersion < SceneDocument::TilemapFileVersion) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        output.tilemapCollider = value;
+    }
     return true;
 }
 
@@ -949,6 +987,27 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         }
         SceneAssetBinaryIO::WriteBool(output, brain.enabled);
     }
+    if (components.grid.has_value()) {
+        const auto& value = *components.grid;
+        SceneAssetBinaryIO::WriteFloat(output, value.cellSize);
+        SceneAssetBinaryIO::WriteFloat(output, value.floorHeight);
+        SceneAssetBinaryIO::WriteBool(output, value.wall);
+    }
+    if (components.tilemap.has_value()) {
+        const auto& value = *components.tilemap;
+        SceneAssetBinaryIO::WriteUInt64(output, value.mapAssetId);
+        SceneAssetBinaryIO::WriteBool(output, value.locked);
+    }
+    if (components.tilemapRenderer.has_value()) {
+        const auto& value = *components.tilemapRenderer;
+        SceneAssetBinaryIO::WriteInt32(output, value.sortingOrder);
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+    }
+    if (components.tilemapCollider.has_value()) {
+        const auto& value = *components.tilemapCollider;
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+    }
+
 }
 
 } // namespace kb::scene

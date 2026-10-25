@@ -165,6 +165,30 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         }
     }
 
+    output << "grid=" << (components.grid.has_value() ? 1 : 0) << '\n';
+    if (components.grid.has_value()) {
+        const auto& value = *components.grid;
+        output << "grid.cellSize=" << value.cellSize << '\n';
+        output << "grid.floorHeight=" << value.floorHeight << '\n';
+        output << "grid.wall=" << value.wall << '\n';
+    }
+    output << "tilemap=" << (components.tilemap.has_value() ? 1 : 0) << '\n';
+    if (components.tilemap.has_value()) {
+        const auto& value = *components.tilemap;
+        output << "tilemap.mapAssetId=" << value.mapAssetId << '\n';
+        output << "tilemap.locked=" << value.locked << '\n';
+    }
+    output << "tilemapRenderer=" << (components.tilemapRenderer.has_value() ? 1 : 0) << '\n';
+    if (components.tilemapRenderer.has_value()) {
+        const auto& value = *components.tilemapRenderer;
+        output << "tilemapRenderer.sortingOrder=" << value.sortingOrder << '\n';
+        output << "tilemapRenderer.enabled=" << value.enabled << '\n';
+    }
+    output << "tilemapCollider=" << (components.tilemapCollider.has_value() ? 1 : 0) << '\n';
+    if (components.tilemapCollider.has_value()) {
+        const auto& value = *components.tilemapCollider;
+        output << "tilemapCollider.enabled=" << value.enabled << '\n';
+    }
     output << "contentInstance=" << (components.contentInstance.has_value() ? 1 : 0) << '\n';
     if (components.contentInstance.has_value()) {
         const ContentInstanceComponent& content = *components.contentInstance;

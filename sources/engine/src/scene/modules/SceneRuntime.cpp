@@ -13,6 +13,9 @@
 
 namespace kb::scene {
 
+SceneTilemapRuntime* SceneRuntime::Tilemaps() const noexcept { return SceneAccess::State(scene_).tilemapRuntime; }
+void SceneRuntime::SetTilemapRuntime(SceneTilemapRuntime* runtime) noexcept { SceneAccess::State(scene_).tilemapRuntime = runtime; }
+
 SceneRuntimeQueries::SceneRuntimeQueries(const Scene& scene) noexcept
     : scene_(scene) {}
 

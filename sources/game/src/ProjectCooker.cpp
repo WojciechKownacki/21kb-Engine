@@ -11,6 +11,7 @@
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/assets/TerrainAssetIO.hpp"
+#include "engine/assets/Map2DAsset.hpp"
 #include "engine/assets/bake/AssetPackWriter.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
 #include "engine/assets/bake/RuntimeAssetManifest.hpp"
@@ -2755,7 +2756,8 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
                 });
                 ++result.textureArtifactCount;
             }
-        } else if (IsMeshAsset(metadata) && entry.sourceExtension != kb::assets::kTerrainAssetExtension) {
+        } else if (IsMeshAsset(metadata) && entry.sourceExtension != kb::assets::kTerrainAssetExtension &&
+                   entry.sourceExtension != kb::assets::kMap2DAssetExtension) {
             kb::render::RenderMeshAssetLoader loader;
             const kb::assets::AssetLoadResult loaded = loader.Load(kb::assets::AssetLoadRequest{
                 .metadata = metadata,
@@ -2781,9 +2783,12 @@ ProjectCookResult CookProject(const ProjectCookRequest& input, std::ostream& dia
             });
             ++result.meshArtifactCount;
         } else {
-            // Terrain heights, holes and layer weights are its compact runtime representation.
-            if (IsMeshAsset(metadata) && !kb::assets::TerrainAssetIO::Load(fileBytes, &error)) {
+            // Preserve editable runtime data for procedural terrain and tilemap chunks.
+            if (entry.sourceExtension == kb::assets::kTerrainAssetExtension && !kb::assets::TerrainAssetIO::Load(fileBytes, &error)) {
                 return Failure("terrain could not be validated for cooking: " + virtualPath + "\n" + error);
+            }
+            if (entry.sourceExtension == kb::assets::kMap2DAssetExtension && !kb::assets::Map2DAssetIO::Load(fileBytes, &error)) {
+                return Failure("tilemap could not be validated for cooking: " + virtualPath + "\n" + error);
             }
             asset_bake::AssetBakeDigest digest{};
             const std::string sourceSettings = metadata.type + ":" + entry.sourceExtension;

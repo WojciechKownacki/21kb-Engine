@@ -124,6 +124,8 @@
 #include "scene/EditorSceneHierarchyActions.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
+#include "Map2DView.hpp"
+#include "scene/EditorMap2DService.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "scene/EditorSceneObjectEditCommands.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
@@ -457,6 +459,8 @@ void EditorSceneContext::StartUntitledBasicScene() {
 }
 
 EditorSceneContext::~EditorSceneContext() {
+    if (scene_) EditorMap2DService::ClearPreviews(*scene_);
+    if (documentScene_ && scene_ != documentScene_.get()) EditorMap2DService::ClearPreviews(*documentScene_);
     ClearBuildGameSigningPasswords();
     // Waits for an import that is running; one that has not started is dropped.
     assetImportLane_.reset();
@@ -2519,6 +2523,32 @@ kb::scene::SceneEntity EditorSceneContext::CreateMenuObject(std::string_view id,
                 return false;
             }
             created = result.entity;
+            if (item->id == "Map Top Down" || item->id == "Map Platformer") {
+                const bool wall = item->id == "Map Platformer";
+                scene_->Components().Grids().Set(created, { .wall = wall });
+                constexpr std::array<std::string_view, 4U> names{ "Background", "Terrain", "Objects", "Foreground" };
+                kb::scene::SceneEntity terrain{};
+                for (std::size_t index = 0; index < names.size(); ++index) {
+                    const auto layer = scene_->Entities().CreateEntity(kb::scene::SceneObjectDesc{
+                        .name = std::string{ names[index] }, .parent = scene_->Entities().Object(created) });
+                    if (!EditorMap2DService::Create(*scene_, layer, EditorProjectPaths::AssetsRoot(), &error)) return false;
+                    const auto mapId = scene_->Components().Tilemaps().TryGet(layer)->mapAssetId;
+                    auto map = kb::assets::MakeEmptyMap2DAsset();
+                    map.orientation = wall ? kb::assets::Map2DOrientation::Wall : kb::assets::Map2DOrientation::Flat;
+                    map.background = index == 1U;
+                    kb::world2d::SetUpMap2DComponents(*scene_, layer, mapId, map);
+                    scene_->Components().TilemapRenderers().Set(layer, { .sortingOrder = static_cast<std::int32_t>(index) - 1 });
+                    scene_->Components().TilemapColliders().Set(layer, { .enabled = index == 1U });
+                    if (!EditorMap2DService::Publish(*scene_, kb::assets::AssetId{ mapId }, map, true, &error)) return false;
+                    if (index == 1U) terrain = layer;
+                }
+                auto map = kb::assets::MakeEmptyMap2DAsset();
+                map.orientation = wall ? kb::assets::Map2DOrientation::Wall : kb::assets::Map2DOrientation::Flat;
+                if (!kb::world2d::SetUpMap2DView(*scene_, created, map, EditorProjectPaths::AssetsRoot(), nullptr, &error)) return false;
+                hierarchyExpansion_.SetExpanded(created, true);
+                SelectEntity(terrain);
+                return true;
+            }
             for (auto ancestor = scene_->Hierarchy().Parent(created); ancestor.IsValid(); ancestor = scene_->Hierarchy().Parent(ancestor))
                 hierarchyExpansion_.SetExpanded(ancestor, true);
             SelectEntity(created);
@@ -4150,6 +4180,43 @@ bool EditorSceneContext::SetUIAnchorPreset(kb::scene::SceneEntity entity, int pr
     });
 }
 
+bool EditorSceneContext::SetUpMap2DView(kb::scene::SceneEntity mapEntity, const kb::assets::Map2DAsset& map) {
+    std::string error;
+    kb::world2d::Map2DViewResult view{};
+    const bool committed = ExecuteSceneCommand("Set Up 2D View", [this, mapEntity, &map, &error, &view]() {
+        return kb::world2d::SetUpMap2DView(*scene_, mapEntity, map, EditorProjectPaths::AssetsRoot(), &view, &error);
+    });
+    if (!committed) {
+        console_.Warning("World 2D", error.empty() ? "The 2D view could not be set up." : error);
+        return false;
+    }
+    console_.Info("World 2D", std::string{ view.cameraCreated ? "Added" : "Updated" } + " the Map Camera: Play shows " +
+        std::to_string(map.viewWidth) + " x " + std::to_string(map.viewHeight) + " tiles from above.");
+    return true;
+}
+
+bool EditorSceneContext::SwitchOnDefaultPlugin(std::string_view pluginId, std::string_view notice) {
+    auto plugin = std::ranges::find_if(project_.plugins, [pluginId](const kb::project::ProjectPluginReference& reference) {
+        return reference.name == pluginId;
+    });
+    if (plugin == project_.plugins.end()) {
+        project_.plugins.push_back(kb::project::ProjectPluginReference{
+            .name = std::string{ pluginId },
+            .binaryPath = EditorPluginCatalog::PersistentBinaryPath(pluginId),
+            .enabled = true,
+        });
+    } else {
+        plugin->enabled = true;
+    }
+    if (!SaveProjectDescriptor()) {
+        console_.Error("Plugins", "The " + std::string{ pluginId } + " plugin could not be added to the project.");
+        return false;
+    }
+    plugins_.MarkPendingReload();
+    console_.Info("Plugins", std::string{ notice });
+    return true;
+}
+
 bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId) {
     if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
         console_.Warning("Inspector", "Component add ignored for invalid entity.");
@@ -4190,6 +4257,34 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         console_.Info("Terrain", "Created a chunked 129 x 129 terrain with four LOD levels.");
         return true;
     }
+    if (componentId == "World2DMap") {
+        if (!IsProjectPluginEnabled("World.Map2D") &&
+            !SwitchOnDefaultPlugin("World.Map2D", "The World, 2D Map Editor plugin was switched on for this project.")) {
+            return false;
+        }
+        std::string error;
+        bool created = false;
+        kb::world2d::Map2DViewResult view{};
+        const bool committed = ExecuteSceneCommand("Add World 2D Map", [this, entity, &error, &created, &view]() {
+            created = EditorMap2DService::Create(*scene_, entity, EditorProjectPaths::AssetsRoot(), &error);
+            // Play looks at the map from above straight away; the camera can be moved or removed.
+            if (created) {
+                static_cast<void>(kb::world2d::SetUpMap2DView(
+                    *scene_, entity, kb::assets::MakeEmptyMap2DAsset(), EditorProjectPaths::AssetsRoot(), &view, &error));
+            }
+            return created;
+        });
+        if (!committed || !created) {
+            console_.Warning("World 2D", error.empty() ? "World 2D Map could not be created." : error);
+            return false;
+        }
+        SelectEntity(entity);
+        static_cast<void>(FrameSelectedEntitiesInViewport());
+        console_.Info("World 2D", std::string{ "Created an empty 64 x 64 map with a Map Camera looking down on it" } +
+            (view.profileAssigned ? " and pixel-exact image settings" : "") +
+            ". Put sprite sheets into Assets/2D Map Sprites and press Open Map Editor in the Inspector.");
+        return true;
+    }
     // Every other component: one table shared with kb_cli and automation.
     const kb::scene::SceneComponentKind* kind = kb::scene::SceneComponentAuthoring::Find(componentId);
     if (kind == nullptr) {
@@ -4203,25 +4298,10 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
     }
     // Plugins on by default are switched on by asking for what they provide (an AI Brain turns
     // Gameplay.AI on in a project made before it existed); the others are the project's choice.
-    if (!kb::scene::SceneComponentAuthoring::PluginEnabled(project_, *kind) && kind->requiredPlugin == "Gameplay.AI") {
-        auto plugin = std::ranges::find_if(project_.plugins, [kind](const kb::project::ProjectPluginReference& reference) {
-            return reference.name == kind->requiredPlugin;
-        });
-        if (plugin == project_.plugins.end()) {
-            project_.plugins.push_back(kb::project::ProjectPluginReference{
-                .name = std::string{ kind->requiredPlugin },
-                .binaryPath = EditorPluginCatalog::PersistentBinaryPath(kind->requiredPlugin),
-                .enabled = true,
-            });
-        } else {
-            plugin->enabled = true;
-        }
-        if (!SaveProjectDescriptor()) {
-            console_.Error("Plugins", "The AI plugin could not be added to the project.");
-            return false;
-        }
-        plugins_.MarkPendingReload();
-        console_.Info("Plugins", "The AI plugin was switched on for this project; brains think once the scene is reloaded or played.");
+    if (!kb::scene::SceneComponentAuthoring::PluginEnabled(project_, *kind) && kind->requiredPlugin == "Gameplay.AI" &&
+        !SwitchOnDefaultPlugin(kind->requiredPlugin,
+            "The AI plugin was switched on for this project; brains think once the scene is reloaded or played.")) {
+        return false;
     }
     if (!kb::scene::SceneComponentAuthoring::PluginEnabled(project_, *kind)) {
         console_.Warning("Plugins", "Enable the " + std::string{ kind->requiredPlugin } +
@@ -5557,6 +5637,10 @@ EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
 
 bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bool()> mutation, EditorSceneHistoryCommand::AssetFile assetFile) {
     return SceneCommands().Execute(std::move(label), std::move(mutation), std::move(assetFile));
+}
+
+bool EditorSceneContext::ExecuteSceneCommand(std::unique_ptr<IEditorCommand> command) {
+    return SceneCommands().Execute(std::move(command));
 }
 
 void EditorSceneContext::RemapRecreatedEntities(std::span<const kb::scene::SceneEntityRemap> recreated) {

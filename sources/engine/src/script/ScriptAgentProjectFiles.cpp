@@ -144,6 +144,38 @@ sightings) and `scene.Animators()`. A combatant's script receives its fights as 
 details in `event.args` (`other`, `amount`, `damageType`, `ability`): `OnDamaged`, `OnHealed`,
 `OnDeath`, `OnRevived`, `OnAbilityUsed`, `OnEnemySpotted`, `OnEnemyLost`.
 
+)md"
+R"md(## 2D tile maps from the command line
+
+A World 2D Map (plugin "World, 2D Map Editor", on by default) is a tile map in the style of
+Remere's Map Editor: grounds with automatic borders, sprites as items, floors -50..50 (0 is the
+ground floor). In the editor: Add Component > World 2D Map, then Open Map Editor. The same from
+here, one `kb_cli` call per line:
+
+```
+# The map entity: a .kbmap2d file, its Mesh Renderer and a Map Camera (orthographic, from above,
+# framing the client box) that Play looks through. --orientation wall hangs it like a picture.
+kb_cli map2d new --project . --name World --size 64x64 --view 15x11
+# Sprite sheets (PNG, cells row by row from 0) go into Assets/2D Map Sprites/<Category>: every
+# folder is a palette category (Ground, Nature, Houses...).
+# A ground with its twelve edge pieces from a 3x3 island and a 2x2 hole of the sheet; a higher
+# --z draws its edges onto lower grounds and empty tiles.
+kb_cli map2d ground new --project . --name Grass --texture "/Game/2D Map Sprites/Ground/terrain.png" --island 16 --hole 19 --z 30
+kb_cli map2d ground new --project . --name Dirt --texture "/Game/2D Map Sprites/Ground/terrain.png" --tiles 0,1 --weights 3,1 --z 10
+# An object of several tiles (a tree, a house), placed in one click with its bottom middle tile on --at.
+kb_cli map2d object new --project . --name Oak --texture "/Game/2D Map Sprites/Nature/trees.png" --cell 0 --size 2x2
+kb_cli map2d palette --project .
+kb_cli map2d fill --project . --map /Game/Maps/World.kbmap2d --ground Dirt --at 0,0
+kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --ground Grass --at 10,10 --to 20,14
+kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --object Oak --at 14,12
+kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --sprite "/Game/2D Map Sprites/Nature/trees.png" --cell 7 --at 12,12
+kb_cli map2d paint --project . --map /Game/Maps/World.kbmap2d --ground Grass --at 5,5,1   # floor 1
+kb_cli map2d info --project . --map /Game/Maps/World.kbmap2d
+```
+
+Tile (x, y) of a flat map lies at X = x + 0.5 - width/2, Z = height/2 - y - 0.5 (in tiles, row 0
+north at +Z) relative to its entity; floor z is z * 3 m up.
+
 ## Verifying your work (always do this before finishing)
 
 ```

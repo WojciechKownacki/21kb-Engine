@@ -1,11 +1,21 @@
 #include "app/scene_viewport/EditorSceneViewportSelectionController.hpp"
 
 #if defined(_WIN32)
+#include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include <algorithm>
 #include <vector>
 
 namespace kb::editor {
 namespace {
+
+kb::scene::SceneEntity AuthoredEntity(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    auto result = entity;
+    for (auto ancestor = entity; ancestor.IsValid(); ancestor = scene.Hierarchy().Parent(ancestor)) {
+        if (const auto* renderer = scene.Components().MeshRenderers().TryGet(ancestor); renderer && renderer->transient) result = scene.Hierarchy().Parent(ancestor);
+    }
+    return result;
+}
 
 [[nodiscard]] bool Contains(std::span<const kb::scene::SceneEntity> entities, kb::scene::SceneEntity entity) noexcept {
     return std::ranges::find(entities, entity) != entities.end();
@@ -17,6 +27,7 @@ void EditorSceneViewportSelectionController::ApplyClick(
     EditorSceneContext& sceneContext,
     kb::scene::SceneEntity entity,
     EditorSceneViewportSelectionMode mode) {
+    entity = AuthoredEntity(sceneContext.Scene(), entity);
     if (mode == EditorSceneViewportSelectionMode::Replace) {
         if (entity.IsValid()) {
             sceneContext.SelectEntity(entity);
@@ -45,6 +56,12 @@ void EditorSceneViewportSelectionController::ApplyBox(
     EditorSceneContext& sceneContext,
     std::span<const kb::scene::SceneEntity> entities,
     EditorSceneViewportSelectionMode mode) {
+    std::vector<kb::scene::SceneEntity> authored;
+    for (const auto entity : entities) {
+        const auto owner = AuthoredEntity(sceneContext.Scene(), entity);
+        if (owner.IsValid() && std::ranges::find(authored, owner) == authored.end()) authored.push_back(owner);
+    }
+    entities = authored;
     if (mode == EditorSceneViewportSelectionMode::Replace) {
         if (entities.empty()) {
             sceneContext.ClearHierarchySelection();

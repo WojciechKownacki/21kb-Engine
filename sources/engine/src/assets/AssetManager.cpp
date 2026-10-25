@@ -14,6 +14,7 @@
 #include "assets/AssetRegistrySnapshotCache.hpp"
 
 #include <string>
+#include <algorithm>
 #include <exception>
 #include <system_error>
 #include <unordered_set>
@@ -125,6 +126,40 @@ bool AssetManager::RegisterAsset(AssetMetadata metadata) {
     return changed;
 }
 
+bool AssetManager::RegisterGeneratedAsset(AssetMetadata metadata) {
+    lastError_.clear();
+    const std::string path = NormalizeAssetPath(metadata.virtualPath);
+    if (!metadata.id.IsValid() || metadata.type.empty() || !path.starts_with("/Runtime/") ||
+        !metadata.physicalPath.empty() || !HasLoaderForType(metadata.type)) {
+        lastError_ = "Generated assets require a loader, an id and a file-less /Runtime/ path";
+        return false;
+    }
+    const bool owned = std::find(generatedAssets_.begin(), generatedAssets_.end(), metadata.id) != generatedAssets_.end();
+    const auto* existing = registry_.Find(metadata.id);
+    if ((!owned && registry_.Find(metadata.id) != nullptr) ||
+        (owned && existing != nullptr && (existing->type != metadata.type || NormalizeAssetPath(existing->virtualPath) != path)) ||
+        (registry_.FindByPath(metadata.virtualPath) != nullptr && registry_.FindByPath(metadata.virtualPath)->id != metadata.id)) {
+        lastError_ = "A generated asset cannot replace another asset";
+        return false;
+    }
+    const AssetId id = metadata.id;
+    if (!registry_.Upsert(std::move(metadata))) return false;
+    if (!owned) generatedAssets_.push_back(id);
+    static_cast<void>(Unload(id));
+    ++revision_;
+    return true;
+}
+
+bool AssetManager::ReleaseGeneratedAsset(AssetId id) {
+    const auto found = std::find(generatedAssets_.begin(), generatedAssets_.end(), id);
+    if (found == generatedAssets_.end()) return false;
+    static_cast<void>(Unload(id));
+    generatedAssets_.erase(found);
+    const bool removed = registry_.Remove(id);
+    if (removed) ++revision_;
+    return removed;
+}
+
 bool AssetManager::MountRuntimePack(std::shared_ptr<bake::RuntimeAssetPack> pack) {
     lastError_.clear();
     if (pack == nullptr || !pack->IsMounted()) {
@@ -160,6 +195,7 @@ bool AssetManager::MountRuntimePack(std::shared_ptr<bake::RuntimeAssetPack> pack
     asyncLoadGenerations_.clear();
     cache_.clear();
     registry_.Clear();
+    generatedAssets_.clear();
     mounts_.Clear();
     for (AssetMetadata& metadata : packaged) {
         if (!registry_.Upsert(std::move(metadata))) {
@@ -954,6 +990,7 @@ void AssetManager::Clear() noexcept {
     asyncLoadGenerations_.clear();
     cache_.clear();
     registry_.Clear();
+    generatedAssets_.clear();
     mounts_.Clear();
     runtimePack_.reset();
     loaders_.clear();

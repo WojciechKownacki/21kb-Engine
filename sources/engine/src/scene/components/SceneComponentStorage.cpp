@@ -20,6 +20,10 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , regionShapes_(world, components.RegionShapeComponentId())
     , guideCurves_(world, components.GuideCurveComponentId())
     , contentInstances_(world, components.ContentInstanceComponentId())
+    , grids_(world, components.GridComponentId())
+    , tilemaps_(world, components.TilemapComponentId())
+    , tilemapRenderers_(world, components.TilemapRendererComponentId())
+    , tilemapColliders_(world, components.TilemapColliderComponentId())
     , streamFocuses_(world, components.StreamFocusComponentId())
     , worldBackdrops_(world, components.WorldBackdropComponentId())
     , ambientRadiances_(world, components.AmbientRadianceComponentId())
@@ -157,7 +161,15 @@ SceneRegionShapeComponentStore& SceneComponentStorage::RegionShapes() noexcept {
 const SceneGuideCurveComponentStore& SceneComponentStorage::GuideCurves() const noexcept { return guideCurves_; }
 SceneGuideCurveComponentStore& SceneComponentStorage::GuideCurves() noexcept { return guideCurves_; }
 const SceneContentInstanceComponentStore& SceneComponentStorage::ContentInstances() const noexcept { return contentInstances_; }
+const SceneGridComponentStore& SceneComponentStorage::Grids() const noexcept { return grids_; }
+const SceneTilemapComponentStore& SceneComponentStorage::Tilemaps() const noexcept { return tilemaps_; }
+const SceneTilemapRendererComponentStore& SceneComponentStorage::TilemapRenderers() const noexcept { return tilemapRenderers_; }
+const SceneTilemapColliderComponentStore& SceneComponentStorage::TilemapColliders() const noexcept { return tilemapColliders_; }
 SceneContentInstanceComponentStore& SceneComponentStorage::ContentInstances() noexcept { return contentInstances_; }
+SceneGridComponentStore& SceneComponentStorage::Grids() noexcept { return grids_; }
+SceneTilemapComponentStore& SceneComponentStorage::Tilemaps() noexcept { return tilemaps_; }
+SceneTilemapRendererComponentStore& SceneComponentStorage::TilemapRenderers() noexcept { return tilemapRenderers_; }
+SceneTilemapColliderComponentStore& SceneComponentStorage::TilemapColliders() noexcept { return tilemapColliders_; }
 const SceneStreamFocusComponentStore& SceneComponentStorage::StreamFocuses() const noexcept { return streamFocuses_; }
 SceneStreamFocusComponentStore& SceneComponentStorage::StreamFocuses() noexcept { return streamFocuses_; }
 const SceneWorldBackdropComponentStore& SceneComponentStorage::WorldBackdrops() const noexcept { return worldBackdrops_; }

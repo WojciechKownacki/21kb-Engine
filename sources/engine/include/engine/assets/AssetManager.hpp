@@ -87,6 +87,10 @@ public:
 
     [[nodiscard]] bool RegisterLoader(std::unique_ptr<IAssetLoader> loader);
     [[nodiscard]] bool RegisterAsset(AssetMetadata metadata);
+    // File-less derived resources owned by a runtime system. They cannot overwrite authored
+    // assets, including immutable package entries. The owner releases them when it detaches.
+    [[nodiscard]] bool RegisterGeneratedAsset(AssetMetadata metadata);
+    [[nodiscard]] bool ReleaseGeneratedAsset(AssetId id);
     // Enters immutable packaged-runtime mode and transactionally rebuilds the registry from
     // the validated manifest. Packaged mode never resolves a physical path or falls back to
     // discovery; loader requests retain shared ownership of this exact pack.
@@ -373,6 +377,7 @@ private:
     AssetRegistry registry_;
     std::unique_ptr<AssetRegistrySnapshotCache> dependencySnapshots_;
     std::shared_ptr<bake::RuntimeAssetPack> runtimePack_;
+    std::vector<AssetId> generatedAssets_;
     std::vector<std::unique_ptr<IAssetLoader>> loaders_;
     std::unordered_map<std::uint64_t, CachedAsset> cache_;
     mutable std::mutex loaderExecutionMutex_;

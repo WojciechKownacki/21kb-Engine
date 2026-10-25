@@ -68,6 +68,8 @@ void AppendSeparator(HMENU menu) {
 // The Create menu in the editor language. The engine's SceneCreateMenu keeps the English rows kb_cli shows;
 // a row the engine adds later keeps its English label until it gets an entry here.
 [[nodiscard]] std::string_view CreateItemLabel(const kb::scene::SceneCreateItem& item) {
+    if (item.id == "Map Top Down") return EditorText("map2d.createTopDown", "Map - Top Down");
+    if (item.id == "Map Platformer") return EditorText("map2d.createPlatformer", "Map - Platformer");
     if (item.id == "Empty") return EditorText("hierarchy.create.empty", "Create Empty");
     if (item.id == "Cube") return EditorText("hierarchy.create.cube", "Cube");
     if (item.id == "Sphere") return EditorText("hierarchy.create.sphere", "Sphere");
@@ -89,6 +91,7 @@ void AppendSeparator(HMENU menu) {
 }
 
 [[nodiscard]] std::string_view CreateSubmenuLabel(std::string_view submenu) {
+    if (submenu == "2D Object") return EditorText("map2d.createSubmenu", "2D Object");
     if (submenu == "3D Object") return EditorText("hierarchy.create.submenu.objects3D", "3D Object");
     if (submenu == "Light") return EditorText("hierarchy.create.submenu.light", "Light");
     if (submenu == "Effects") return EditorText("hierarchy.create.submenu.effects", "Effects");
@@ -230,7 +233,7 @@ bool EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(UINT command, Edit
 
 EditorRightButtonDownRouter::EditorRightButtonDownRouter(
     HWND mainWindow,
-    const EditorDockModel& dockModel,
+    EditorDockModel& dockModel,
     const EditorFloatingWindowManager& floatingWindows,
     EditorSceneContext& sceneContext,
     EditorSceneBgfxViewport& sceneViewport,
@@ -368,6 +371,11 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         }
         const UINT command = ShowHierarchySystemMenu(messageWindow, x, y);
         if (ExecuteHierarchyMenuCommand(command, sceneContext_, entity)) {
+            const auto items = kb::scene::SceneCreateMenu::Items();
+            if (command >= kHierarchyMenuCreateItem && command < kHierarchyMenuCreateItem + items.size()) {
+                const auto id = items[command - kHierarchyMenuCreateItem].id;
+                if (id == "Map Top Down" || id == "Map Platformer") static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::TilemapEditor, DockArea::Center));
+            }
             sceneViewport_.RequestPresent();
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);

@@ -406,6 +406,42 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             },
         },
         LibraryComponentInspectorDesc{
+            .componentName = "Grid",
+            .displayName = "Grid",
+            .category = "2D",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "cellSize", "Cell Size", "Size of a tile in scene units." },
+                LibraryComponentInspectorFieldDesc{ "floorHeight", "Floor Height", "Distance between map floors in scene units." },
+                LibraryComponentInspectorFieldDesc{ "wall", "Side View", "Use a vertical plane for a platformer, or a horizontal plane for a top-down map." },
+            },
+        },
+        LibraryComponentInspectorDesc{
+            .componentName = "Tilemap",
+            .displayName = "Tilemap",
+            .category = "2D",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "mapAssetId", "Map", "Source map asset; each entity owns an independent copy during Play." },
+                LibraryComponentInspectorFieldDesc{ "locked", "Lock Painting", "Prevent painting this layer in the editor." },
+            },
+        },
+        LibraryComponentInspectorDesc{
+            .componentName = "TilemapRenderer",
+            .displayName = "Tilemap Renderer",
+            .category = "2D",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "sortingOrder", "Layer Order", "Higher values draw in front; rendered values are limited to -1000 through 1000." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Visible", "Draw the layer's tiles." },
+            },
+        },
+        LibraryComponentInspectorDesc{
+            .componentName = "TilemapCollider",
+            .displayName = "Tilemap Collider",
+            .category = "2D",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "enabled", "Collision", "Build solid collision from this layer's blocked cells." },
+            },
+        },
+        LibraryComponentInspectorDesc{
             .componentName = "ContentInstance",
             .displayName = "Content Instance",
             .category = "Scene",

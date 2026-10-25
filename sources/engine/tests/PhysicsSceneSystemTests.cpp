@@ -5,6 +5,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/assets/CollisionMeshAsset.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
@@ -74,6 +75,67 @@ namespace {
 #else
     return std::getenv("KB_TEST_TRACE") != nullptr;
 #endif
+}
+
+void RunOneWayPlatformTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) return;
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back({ .name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true });
+    kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    const auto platform = scene.Entities().CreateObject({ .name = "OneWayPlatform", .transform = {.localPosition = {0,2,0}} });
+    scene.Components().Colliders().Set(platform.Entity(), {.shape = kb::scene::ColliderShape::OneWayBox, .boxSize = {10,0.1F,6}});
+    const auto ground = scene.Entities().CreateObject({ .name = "Ground", .transform = {.localPosition = {0,-0.5F,0}} });
+    scene.Components().Colliders().Set(ground.Entity(), {.boxSize = {10,1,6}});
+    const auto body = scene.Entities().CreateObject({ .name = "JumpingBox", .transform = {.localPosition = {-2,0.5F,0}} });
+    scene.Components().Colliders().Set(body.Entity(), {.boxSize = {0.5F,0.5F,0.5F}});
+    scene.Components().Rigidbodies().Set(body.Entity(), {.bodyType = kb::scene::RigidbodyBodyType::Dynamic, .linearVelocity = {0,9,0}});
+    const auto character = scene.Entities().CreateObject({ .name = "JumpingCharacter", .transform = {.localPosition = {2,0.9F,0}} });
+    scene.Components().CharacterControllers().Set(character.Entity(), {.radius = 0.3F, .height = 1.8F});
+    for (unsigned i = 0; i < 6; ++i) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    kb::tests::Require(kb::scene::PhysicsBackend::CharacterJump(scene, character.Entity(), 9), "Character can jump toward a one-way platform");
+    float maxBody = 0, maxCharacter = 0;
+    for (unsigned i = 0; i < 180; ++i) {
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        maxBody = std::max(maxBody, scene.Transforms().Get(body).localPosition.y);
+        maxCharacter = std::max(maxCharacter, scene.Transforms().Get(character).localPosition.y);
+    }
+    const float bodyY = scene.Transforms().Get(body).localPosition.y, characterY = scene.Transforms().Get(character).localPosition.y;
+    kb::tests::Require(maxBody > 3.0F && maxCharacter > 3.5F, "Bodies and characters pass upward through one-way platforms");
+    if (!(bodyY > 2.25F && bodyY < 2.4F && characterY > 2.85F && characterY < 3.1F)) std::cerr << "One-way landing: body=" << bodyY << " character=" << characterY << " peaks=" << maxBody << "," << maxCharacter << '\n';
+    kb::tests::Require(bodyY > 2.25F && bodyY < 2.4F && characterY > 2.85F && characterY < 3.1F,
+        "Bodies and characters land on one-way platforms from above");
+    kb::tests::Require(scene.Runtime().DrainSceneSystemErrors().empty(), "One-way platform simulation has no system errors");
+}
+
+void RunGeneratedCollisionMeshRemovalTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) return;
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back({ .name = "Physics.Jolt", .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH, .enabled = true });
+    kb::scene::Scene scene{std::move(descriptor)};
+    kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
+    const auto body = scene.Entities().CreateObject({.name = "MovingBody", .transform = {.localPosition = {10,5,0}}});
+    scene.Components().Colliders().Set(body.Entity(), {});
+    scene.Components().Rigidbodies().Set(body.Entity(), {.bodyType = kb::scene::RigidbodyBodyType::Dynamic});
+    auto& manager = scene.Assets().Manager();
+    for (unsigned cycle = 0; cycle < 3; ++cycle) {
+        const auto path = "/Runtime/TestCollision/" + std::to_string(cycle);
+        const auto id = kb::assets::MakeAssetId(path);
+        auto mesh = std::make_shared<kb::assets::CollisionMeshAsset>();
+        mesh->positions = {{-2,0,-2},{2,0,2},{2,0,-2}}; mesh->indices = {0,1,2};
+        kb::tests::Require(manager.RegisterGeneratedAsset({.id = id, .type = "CollisionMesh", .virtualPath = path, .contentHash = cycle + 1U}) &&
+            manager.PublishRuntimeAsset(id, mesh), "Publish generated collision geometry");
+        const auto floor = scene.Entities().CreateObject({.name = "GeneratedFloor"});
+        scene.Components().Colliders().Set(floor.Entity(), {.shape = kb::scene::ColliderShape::Mesh, .meshAssetId = id.value});
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        kb::tests::Require(scene.Runtime().DrainSceneSystemErrors().empty(), "Generated collision geometry loads in physics");
+        scene.Entities().Destroy(floor);
+        kb::tests::Require(manager.ReleaseGeneratedAsset(id), "Release retired collision geometry");
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        kb::tests::Require(scene.Runtime().DrainSceneSystemErrors().empty(), "Removing a generated mesh does not reload its retired physics cache");
+    }
 }
 
 void RunPhysicsSceneSystemFallingBodyTest() {
@@ -3036,6 +3098,8 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsLayersAssetIOTest();
     RunPhysicsDebugDrawTest();
     RunPhysicsIdenticalReplayTest();
+    RunOneWayPlatformTest();
+    RunGeneratedCollisionMeshRemovalTest();
     RunPhysicsSceneSystemFallingBodyTest();
     RunPhysicsPersistentSleeperTransitionTest();
     RunPhysicsSleepingContactAndDampingTest();
@@ -3043,6 +3107,8 @@ void RunPhysicsSceneSystemTests() {
     RunPhysicsTorqueJointDriveTest();
     RunPhysicsPipelinedStepEquivalenceTest();
 }
+
+void RunPhysicsOneWayOnlyTest() { RunOneWayPlatformTest(); RunGeneratedCollisionMeshRemovalTest(); }
 
 void RunPhysicsReplayOnlyTest() {
     RunPhysicsIdenticalReplayTest();

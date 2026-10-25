@@ -1034,6 +1034,16 @@ def _collect_windows_symbols(
     return tuple(symbols)
 
 
+def _windows_provider_path(build_root: Path, configuration: str, game_directory: Path, target: str) -> Path:
+    directory = "world_2d" if target == "kb_world2d_plugin" else target.removeprefix("kb_").removesuffix("_plugin")
+    expected = f"{target}.dll"
+    for candidate in (build_root / directory / configuration / expected,
+                      build_root / directory / expected, game_directory / expected):
+        if candidate.is_file():
+            return candidate.resolve(strict=True)
+    raise PackagingError(f"Windows player provider was not produced: {expected}")
+
+
 def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Path, job: Path) -> StageResult:
     configuration = CONFIGURATIONS[args.configuration]
     plugin_targets = (
@@ -1042,6 +1052,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
         "kb_basic_lighting_plugin",
         "kb_ai_plugin",
         "kb_21kb_particle_plugin",
+        "kb_world2d_plugin",
     )
     _build_targets(cmake, args.build_root, configuration, ("kb_game", *plugin_targets), args.engine_root)
     game = _build_tool_path(args.build_root, configuration, "kb_game")
@@ -1071,15 +1082,7 @@ def _stage_windows(args: argparse.Namespace, cmake: Path, pack: Path, stage: Pat
     plugin_paths: list[Path] = []
     for target in plugin_targets:
         expected = f"{target}.dll"
-        candidates = [
-            args.build_root / target.removeprefix("kb_").removesuffix("_plugin") / configuration / expected,
-            args.build_root / target.removeprefix("kb_").removesuffix("_plugin") / expected,
-            args.build_root / "21kb_particle" / configuration / expected,
-            game.parent / expected,
-        ]
-        plugin = next((path.resolve(strict=True) for path in candidates if path.is_file()), None)
-        if plugin is None:
-            raise PackagingError(f"Windows player provider was not produced: {expected}")
+        plugin = _windows_provider_path(args.build_root, configuration, game.parent, target)
         shutil.copy2(plugin, stage / expected)
         built[stage / expected] = plugin
         plugin_paths.append(plugin)

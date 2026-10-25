@@ -1,3 +1,4 @@
+#include "platform/win32/EditorMap2DWindow.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 
 #if defined(_WIN32)
@@ -639,6 +640,7 @@ void AppendNavigationMesh(
             });
         }
     }
+    for (const auto& line : EditorMap2DWindow::SceneBrushLines(sceneContext, origin)) lines.push_back({.from = {line.from.x,line.from.y,line.from.z}, .to = {line.to.x,line.to.y,line.to.z}, .color = {line.color.x,line.color.y,line.color.z}, .alpha = line.alpha});
     AppendTerrainBrushRing(sceneContext, origin, lines);
     AppendWorldPartitionGrid(sceneContext, origin, lines);
     AppendNavigationMesh(sceneContext, origin, lines);
@@ -763,7 +765,7 @@ void AppendNavigationMesh(
     const bool terrainEditing = terrainTool.editingEnabled &&
         terrainTool.mode != EditorTerrainToolMode::Select &&
         EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected);
-    if (!terrainEditing && selected.IsValid() && sceneContext.Scene().Entities().IsAlive(selected)) {
+    if (!terrainEditing && !EditorMap2DWindow::ScenePainting(sceneContext) && selected.IsValid() && sceneContext.Scene().Entities().IsAlive(selected)) {
         if (const std::optional<kb::math::DVec3> pivot = EditorSceneSelectionPivot::ResolvePrecise(sceneContext.Scene(), sceneContext.SelectedHierarchyEntities(), selected)) {
             const kb::scene::Vec3 target = kb::math::RelativeTo(*pivot, viewportCamera.ViewportOrigin());
             gizmo.visible = true;

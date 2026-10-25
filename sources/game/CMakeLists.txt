@@ -99,6 +99,7 @@ if(NOT WIN32 AND (KB_BUILD_PACKAGED_GAME_HOST OR (ANDROID AND KB_BUILD_ANDROID_H
             ${CMAKE_SOURCE_DIR}/sources/plugins/basic_lighting
             ${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle
             ${CMAKE_SOURCE_DIR}/sources/plugins/ai
+            ${CMAKE_SOURCE_DIR}/sources/plugins/world_2d
     )
     target_compile_definitions(kb_packaged_game_host_core PRIVATE
         "KB_GAME_TARGET_PROFILE_ID=\"${KB_GAME_TARGET_PROFILE_ID}\""
@@ -111,6 +112,7 @@ if(NOT WIN32 AND (KB_BUILD_PACKAGED_GAME_HOST OR (ANDROID AND KB_BUILD_ANDROID_H
             kb_basic_lighting_plugin
             kb_21kb_particle_plugin
             kb_ai_plugin
+            kb_world2d_plugin
     )
     set_target_properties(kb_packaged_game_host_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
     kb_apply_quality_gates(kb_packaged_game_host_core)
@@ -154,6 +156,7 @@ if(ANDROID AND KB_BUILD_ANDROID_HOST)
         ${CMAKE_SOURCE_DIR}/sources/plugins/basic_lighting
         ${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle
         ${CMAKE_SOURCE_DIR}/sources/plugins/ai
+        ${CMAKE_SOURCE_DIR}/sources/plugins/world_2d
     )
 
     # GameActivity enters native code through JNI, so the object defining this

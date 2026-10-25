@@ -20,6 +20,14 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/GridComponent.hpp"
+#include "engine/scene/SceneGridComponents.hpp"
+#include "engine/scene/TilemapComponent.hpp"
+#include "engine/scene/SceneTilemapComponents.hpp"
+#include "engine/scene/TilemapRendererComponent.hpp"
+#include "engine/scene/SceneTilemapRendererComponents.hpp"
+#include "engine/scene/TilemapColliderComponent.hpp"
+#include "engine/scene/SceneTilemapColliderComponents.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -261,7 +269,7 @@ struct ComponentAccess {
             KB_ASSERT_NOT_POINTER(static_cast<const Component*>(component)->field); \
             return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
-            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::ColliderShape::Mesh)) { return false; } \
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::ColliderShape::OneWayBox)) { return false; } \
             static_cast<Component*>(component)->field = static_cast<kb::scene::ColliderShape>(value.AsInt()); \
             return true; \
         } }
@@ -301,7 +309,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 43> kComponentNames{
+constexpr std::array<std::string_view, 47> kComponentNames{
     "AudioSource",
     "AudioListener",
     "Transform",
@@ -321,6 +329,10 @@ constexpr std::array<std::string_view, 43> kComponentNames{
     "Tags",
     "RegionShape",
     "GuideCurve",
+    "Grid",
+    "Tilemap",
+    "TilemapRenderer",
+    "TilemapCollider",
     "ContentInstance",
     "StreamFocus",
     "WorldBackdrop",
@@ -381,6 +393,26 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kGuideCurvePropertyDes
     ScriptSceneComponentPropertyDesc{ "interpolation", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "closed", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kGridPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "cellSize", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "floorHeight", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "wall", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 2> kTilemapPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "mapAssetId", ScriptValueType::Hash, true },
+    ScriptSceneComponentPropertyDesc{ "locked", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 2> kTilemapRendererPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "sortingOrder", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTilemapColliderPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kContentInstancePropertyDescs{
@@ -1397,6 +1429,29 @@ constexpr std::array<FieldBinding, 4> kGuideCurveFields{
     KB_BOOL(kb::scene::GuideCurveComponent, enabled),
 };
 
+constexpr std::array<FieldBinding, 3> kGridFields{
+    FieldBinding{ "cellSize", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::GridComponent*>(component)->cellSize }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() <= 0.0F || value.AsFloat() > 1000000.0F) return false; static_cast<kb::scene::GridComponent*>(component)->cellSize = value.AsFloat(); return true; } },
+    FieldBinding{ "floorHeight", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::GridComponent*>(component)->floorHeight }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() < 0.0F || value.AsFloat() > 1000000.0F) return false; static_cast<kb::scene::GridComponent*>(component)->floorHeight = value.AsFloat(); return true; } },
+    KB_BOOL(kb::scene::GridComponent, wall),
+};
+
+constexpr std::array<FieldBinding, 2> kTilemapFields{
+    FieldBinding{ "mapAssetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::TilemapComponent*>(component)->mapAssetId, ScriptValueType::Hash }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::TilemapComponent*>(component)->mapAssetId = value.AsUInt64(); return true; } },
+    KB_BOOL(kb::scene::TilemapComponent, locked),
+};
+
+constexpr std::array<FieldBinding, 2> kTilemapRendererFields{
+    KB_INT(kb::scene::TilemapRendererComponent, sortingOrder),
+    KB_BOOL(kb::scene::TilemapRendererComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 1> kTilemapColliderFields{
+    KB_BOOL(kb::scene::TilemapColliderComponent, enabled),
+};
+
 constexpr std::array<FieldBinding, 4> kContentInstanceFields{
     FieldBinding{ "assetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::ContentInstanceComponent*>(component)->assetId, ScriptValueType::Hash }; },
         [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::ContentInstanceComponent*>(component)->assetId = value.AsUInt64(); return true; } },
@@ -1685,6 +1740,10 @@ void MarkNavLinkModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity)
 void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tags().MarkModified(entity); }
 void MarkRegionShapeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionShapes().MarkModified(entity); }
 void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().GuideCurves().MarkModified(entity); }
+void MarkGridModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Grids().MarkModified(entity); }
+void MarkTilemapModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tilemaps().MarkModified(entity); }
+void MarkTilemapRendererModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().TilemapRenderers().MarkModified(entity); }
+void MarkTilemapColliderModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().TilemapColliders().MarkModified(entity); }
 void MarkContentInstanceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ContentInstances().MarkModified(entity); }
 void MarkStreamFocusModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().StreamFocuses().MarkModified(entity); }
 void MarkWorldBackdropModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().WorldBackdrops().MarkModified(entity); }
@@ -1800,6 +1859,22 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
         kb::scene::GuideCurveComponent* component = scene.Components().GuideCurves().TryGet(entity);
         return ComponentAccess{ component, component, kGuideCurveFields, &MarkGuideCurveModified };
     }
+    if (componentName == "Grid") {
+        auto* component = scene.Components().Grids().TryGet(entity);
+        return ComponentAccess{ component, component, kGridFields, &MarkGridModified };
+    }
+    if (componentName == "Tilemap") {
+        auto* component = scene.Components().Tilemaps().TryGet(entity);
+        return ComponentAccess{ component, component, kTilemapFields, &MarkTilemapModified };
+    }
+    if (componentName == "TilemapRenderer") {
+        auto* component = scene.Components().TilemapRenderers().TryGet(entity);
+        return ComponentAccess{ component, component, kTilemapRendererFields, &MarkTilemapRendererModified };
+    }
+    if (componentName == "TilemapCollider") {
+        auto* component = scene.Components().TilemapColliders().TryGet(entity);
+        return ComponentAccess{ component, component, kTilemapColliderFields, &MarkTilemapColliderModified };
+    }
     if (componentName == "ContentInstance") {
         kb::scene::ContentInstanceComponent* component = scene.Components().ContentInstances().TryGet(entity);
         return ComponentAccess{ component, component, kContentInstanceFields, &MarkContentInstanceModified };
@@ -1896,6 +1971,10 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
         return kRegionShapePropertyDescs;
     }
     if (componentName == "GuideCurve") return kGuideCurvePropertyDescs;
+    if (componentName == "Grid") return kGridPropertyDescs;
+    if (componentName == "Tilemap") return kTilemapPropertyDescs;
+    if (componentName == "TilemapRenderer") return kTilemapRendererPropertyDescs;
+    if (componentName == "TilemapCollider") return kTilemapColliderPropertyDescs;
     if (componentName == "ContentInstance") return kContentInstancePropertyDescs;
     if (componentName == "StreamFocus") return kStreamFocusPropertyDescs;
     if (componentName == "WorldBackdrop") return kWorldBackdropPropertyDescs;

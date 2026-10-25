@@ -716,6 +716,16 @@ int RunGame(const GameOptions& options) {
         if (renderStats.droppedInstanceCount != 0U) {
             reportError("renderer dropped instances from the frame");
         }
+        if (renderStats.HasMissingResources()) {
+            reportError("renderer has missing resources: mesh bindings=" + std::to_string(renderStats.missingMeshBindingCount) +
+                " meshes=" + std::to_string(renderStats.missingMeshResourceCount) +
+                " vertex formats=" + std::to_string(renderStats.unsupportedMeshVertexFormatCount) +
+                " material bindings=" + std::to_string(renderStats.missingMaterialBindingCount) +
+                " materials=" + std::to_string(renderStats.missingMaterialResourceCount) +
+                " texture bindings=" + std::to_string(renderStats.missingTextureBindingCount) +
+                " textures=" + std::to_string(renderStats.missingTextureResourceCount) +
+                " texture dimensions=" + std::to_string(renderStats.textureDimensionMismatchCount));
+        }
         if (renderErrors) {
             for (const auto& event : renderer.LastSceneDiagnostics().events) {
                 if (event.severity != kb::render::SceneRenderDiagnosticSeverity::Info) {

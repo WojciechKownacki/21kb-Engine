@@ -23,6 +23,10 @@
 #include "engine/scene/SceneRegionShapeComponents.hpp"
 #include "engine/scene/SceneGuideCurveComponents.hpp"
 #include "engine/scene/SceneContentInstanceComponents.hpp"
+#include "engine/scene/SceneGridComponents.hpp"
+#include "engine/scene/SceneTilemapComponents.hpp"
+#include "engine/scene/SceneTilemapRendererComponents.hpp"
+#include "engine/scene/SceneTilemapColliderComponents.hpp"
 #include "engine/scene/SceneStreamFocusComponents.hpp"
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneAmbientRadianceComponents.hpp"
@@ -64,6 +68,10 @@ public:
     [[nodiscard]] SceneRegionShapeComponents RegionShapes() const noexcept;
     [[nodiscard]] SceneGuideCurveComponents GuideCurves() const noexcept;
     [[nodiscard]] SceneContentInstanceComponents ContentInstances() const noexcept;
+    [[nodiscard]] SceneGridComponents Grids() const noexcept;
+    [[nodiscard]] SceneTilemapComponents Tilemaps() const noexcept;
+    [[nodiscard]] SceneTilemapRendererComponents TilemapRenderers() const noexcept;
+    [[nodiscard]] SceneTilemapColliderComponents TilemapColliders() const noexcept;
     [[nodiscard]] SceneStreamFocusComponents StreamFocuses() const noexcept;
     [[nodiscard]] SceneWorldBackdropComponents WorldBackdrops() const noexcept;
     [[nodiscard]] SceneAmbientRadianceComponents AmbientRadiances() const noexcept;

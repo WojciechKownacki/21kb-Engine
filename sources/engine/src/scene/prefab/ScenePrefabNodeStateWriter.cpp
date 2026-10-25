@@ -98,6 +98,14 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool Equals(const GridComponent& lhs, const GridComponent& rhs) noexcept { return lhs == rhs; }
+
+[[nodiscard]] bool Equals(const TilemapComponent& lhs, const TilemapComponent& rhs) noexcept { return lhs == rhs; }
+
+[[nodiscard]] bool Equals(const TilemapRendererComponent& lhs, const TilemapRendererComponent& rhs) noexcept { return lhs == rhs; }
+
+[[nodiscard]] bool Equals(const TilemapColliderComponent& lhs, const TilemapColliderComponent& rhs) noexcept { return lhs == rhs; }
+
 [[nodiscard]] bool Equals(const ContentInstanceComponent& lhs, const ContentInstanceComponent& rhs) noexcept {
     return lhs.assetId == rhs.assetId && lhs.kind == rhs.kind && lhs.lifetime == rhs.lifetime && lhs.active == rhs.active;
 }
@@ -316,6 +324,11 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , regionShapes(scene.Components().RegionShapes())
     , guideCurves(scene.Components().GuideCurves())
     , contentInstances(scene.Components().ContentInstances())
+    , grids(scene.Components().Grids())
+    , tilemaps(scene.Components().Tilemaps())
+    , tilemapRenderers(scene.Components().TilemapRenderers())
+    , tilemapColliders(scene.Components().TilemapColliders())
+
     , streamFocuses(scene.Components().StreamFocuses())
     , worldBackdrops(scene.Components().WorldBackdrops())
     , ambientRadiances(scene.Components().AmbientRadiances())
@@ -406,6 +419,11 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     WriteOptionalComponent(context.guideCurves, entity, node.components.guideCurve);
     WriteOptionalComponent(context.contentInstances, entity, node.components.contentInstance);
+    WriteOptionalComponent(context.grids, entity, node.components.grid);
+    WriteOptionalComponent(context.tilemaps, entity, node.components.tilemap);
+    WriteOptionalComponent(context.tilemapRenderers, entity, node.components.tilemapRenderer);
+    WriteOptionalComponent(context.tilemapColliders, entity, node.components.tilemapCollider);
+
     WriteOptionalComponent(context.streamFocuses, entity, node.components.streamFocus);
     WriteOptionalComponent(context.worldBackdrops, entity, node.components.worldBackdrop);
     WriteOptionalComponent(context.ambientRadiances, entity, node.components.ambientRadiance);

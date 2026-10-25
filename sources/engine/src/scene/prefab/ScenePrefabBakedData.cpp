@@ -45,6 +45,18 @@ namespace {
     if (components.contentInstance.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::ContentInstance);
     }
+    if (components.grid.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Grid);
+    }
+    if (components.tilemap.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Tilemap);
+    }
+    if (components.tilemapRenderer.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::TilemapRenderer);
+    }
+    if (components.tilemapCollider.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::TilemapCollider);
+    }
     if (components.streamFocus.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::StreamFocus);
     }
@@ -175,6 +187,18 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.contentInstance.has_value()) {
             archetype.contentInstances.push_back(*node.components.contentInstance);
+        }
+        if (node.components.grid.has_value()) {
+            archetype.grids.push_back(*node.components.grid);
+        }
+        if (node.components.tilemap.has_value()) {
+            archetype.tilemaps.push_back(*node.components.tilemap);
+        }
+        if (node.components.tilemapRenderer.has_value()) {
+            archetype.tilemapRenderers.push_back(*node.components.tilemapRenderer);
+        }
+        if (node.components.tilemapCollider.has_value()) {
+            archetype.tilemapColliders.push_back(*node.components.tilemapCollider);
         }
         if (node.components.streamFocus.has_value()) {
             archetype.streamFocuses.push_back(*node.components.streamFocus);

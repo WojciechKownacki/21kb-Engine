@@ -138,6 +138,7 @@ SceneRenderMeshInstance RenderSceneMeshInstanceBuilder::Build(const MeshRenderPr
         .previousSkinningPalette = mesh.previousSkinningPalette,
         .castsShadow = mesh.castsShadow,
         .receivesShadow = mesh.receivesShadow,
+        .shadowOnly = mesh.shadowOnly,
         .layer = mesh.layer,
         .detailSwitchGroupId = mesh.detailSwitchGroupId,
         .detailSwitchMinimumLod = mesh.detailSwitchMinimumLod,

@@ -248,6 +248,7 @@ void RunModuleInstallCoversAllDomainsTest() {
         "Save.SetInt",
         "Timeline.Create",
         "Navigation.FindPath",
+        "Map2D.PaintGround",
     };
     for (const char* const name : kExpectedFunctions) {
         kb::tests::Require(
@@ -267,7 +268,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 26U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == kb::library::EngineLibraryModule::Catalog().size(), "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -279,7 +280,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Gameplay", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation" };
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Gameplay", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation", "Map2D" };
     kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must list every domain module");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
@@ -2732,6 +2733,10 @@ void RunEngineLibraryComponentRegistryTest() {
     // Save+Load with its real field values and cross-entity references.
     kb::scene::Scene source;
     const kb::scene::SceneObject object = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistrySubject" });
+    source.Components().Grids().Set(object.Entity(), kb::scene::GridComponent{ .cellSize = 2.0F, .floorHeight = 4.0F, .wall = true });
+    source.Components().Tilemaps().Set(object.Entity(), kb::scene::TilemapComponent{ .mapAssetId = 101U, .locked = true });
+    source.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{ .sortingOrder = 5, .enabled = false });
+    source.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{ .enabled = false });
     source.Components().Visibility().Set(object.Entity(), kb::scene::VisibilityComponent{ .mask = 0x0000000FU, .visible = false });
     source.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 55.0F });
     source.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{ .intensity = 3.0F });
@@ -2876,6 +2881,15 @@ void RunEngineLibraryComponentRegistryTest() {
     }
     kb::tests::Require(restored.IsValid() && restoredJointTarget.IsValid() && restoredPortalSource.IsValid() && restoredPortalTarget.IsValid(),
         "Engine21kbLibrary component registry round-trip must identify all cross-root references by persisted names");
+
+    kb::tests::Require(target.Components().Grids().Has(restored) &&
+        *target.Components().Grids().TryGet(restored) == *source.Components().Grids().TryGet(object.Entity()), "Grid fields survive the library serialization contract");
+    kb::tests::Require(target.Components().Tilemaps().Has(restored) &&
+        *target.Components().Tilemaps().TryGet(restored) == *source.Components().Tilemaps().TryGet(object.Entity()), "Tilemap fields survive the library serialization contract");
+    kb::tests::Require(target.Components().TilemapRenderers().Has(restored) &&
+        *target.Components().TilemapRenderers().TryGet(restored) == *source.Components().TilemapRenderers().TryGet(object.Entity()), "Tilemap renderer fields survive the library serialization contract");
+    kb::tests::Require(target.Components().TilemapColliders().Has(restored) &&
+        *target.Components().TilemapColliders().TryGet(restored) == *source.Components().TilemapColliders().TryGet(object.Entity()), "Tilemap collider fields survive the library serialization contract");
 
     kb::tests::Require(target.Components().Cameras().Has(restored), "Engine21kbLibrary component registry: Camera is marked serializable=true and must survive a save/load round trip");
     kb::tests::Require(target.Components().Lights().Has(restored), "Engine21kbLibrary component registry: Light is marked serializable=true and must survive a save/load round trip");
@@ -3373,7 +3387,7 @@ void RunComponentInspectorDescCatalogTest() {
     // Particle Effect contributes nine authoring and playback fields.
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
-    kb::tests::Require(fieldsChecked == 766U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (766, including the collision mesh and the compatibility aliases) across all components");
+    kb::tests::Require(fieldsChecked == 774U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (774, including the collision mesh and the compatibility aliases) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

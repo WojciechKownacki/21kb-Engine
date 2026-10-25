@@ -370,6 +370,16 @@ class PackageGameTests(unittest.TestCase):
             self.assertEqual("7", command[command.index("--pack-compression-level") + 1])
             self.assertEqual(job / "cook" / "Game.kbpack", pack)
 
+    def test_windows_package_finds_tilemap_provider_in_cmake_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_text:
+            root = Path(temporary_text)
+            for configuration in ("", "Release"):
+                plugin = root / "world_2d" / configuration / "kb_world2d_plugin.dll"
+                plugin.parent.mkdir(parents=True, exist_ok=True)
+                plugin.write_bytes(b"MZ")
+                self.assertEqual(plugin.resolve(), package_game._windows_provider_path(
+                    root, "Release", root / "bin", "kb_world2d_plugin"))
+
     @staticmethod
     def _signing_args(root: Path, **overrides: object) -> argparse.Namespace:
         values: dict[str, object] = {
@@ -1923,7 +1933,7 @@ class PackageGameTests(unittest.TestCase):
                 package_game._sign_with_pfx_signer(signer, pfx, "wrong-" + password, [unsigned], None, root)
 
     def test_windows_images_are_signed_after_every_binary_edit(self) -> None:
-        plugins = ("kb_physics_jolt_plugin", "kb_audio_miniaudio_plugin", "kb_basic_lighting_plugin", "kb_ai_plugin", "kb_21kb_particle_plugin")
+        plugins = ("kb_physics_jolt_plugin", "kb_audio_miniaudio_plugin", "kb_basic_lighting_plugin", "kb_ai_plugin", "kb_21kb_particle_plugin", "kb_world2d_plugin")
         with tempfile.TemporaryDirectory() as temporary_text:
             root = Path(temporary_text)
             built = root / "build" / "bin"

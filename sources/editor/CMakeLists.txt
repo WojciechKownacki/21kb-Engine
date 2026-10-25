@@ -450,6 +450,8 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorModalMessageLoop.hpp
     src/private/platform/win32/EditorNewSceneDialog.hpp
     src/private/platform/win32/EditorTextEntryDialog.hpp
+    src/private/platform/win32/EditorMap2DForm.hpp
+    src/private/platform/win32/EditorMap2DWindow.hpp
     src/private/platform/win32/EditorModalWindowScope.hpp
     src/private/rendering/EditorMaterialThumbnailService.hpp
     src/private/rendering/EditorParticleThumbnailService.hpp
@@ -646,6 +648,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneMaterialAssetActions.hpp
     src/private/scene/EditorSceneMeshAssetActions.hpp
     src/private/scene/EditorTerrainService.hpp
+    src/private/scene/EditorMap2DService.hpp
     src/private/scene/EditorSceneObjectEditCommands.hpp
     src/private/scene/EditorSceneObjectEditTypes.hpp
     src/private/scene/EditorScenePrefabActions.hpp
@@ -703,6 +706,8 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorTagNameDialog.cpp
     src/platform/win32/EditorNewSceneDialog.cpp
     src/platform/win32/EditorTextEntryDialog.cpp
+    src/platform/win32/EditorMap2DForm.cpp
+    src/platform/win32/EditorMap2DWindow.cpp
     src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp
     src/platform/win32/EditorSceneFileDialog.cpp
@@ -914,6 +919,8 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneMaterialAssetActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp
     src/scene/EditorTerrainService.cpp
+    src/scene/EditorMap2DService.cpp
+    src/scene/EditorMap2DPreview.cpp
     src/scene/EditorSceneObjectEditCommands.cpp
     src/scene/EditorScenePrefabActions.cpp
     src/scene/EditorSceneSelectionPivot.cpp
@@ -1028,6 +1035,19 @@ add_custom_command(
 add_custom_target(kb_editor_localization DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_localization.stamp")
 add_dependencies(kb_editor kb_editor_localization)
 
+# The World 2D Map Editor's tutorial pictures, copied like the language catalogs.
+file(GLOB KB_EDITOR_MAP2D_CONTENT CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Map2D/*")
+add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_map2d_content.stamp"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Map2D"
+        "${KB_EDITOR_RUNTIME_DIR}/Content/EditorShell/Map2D"
+    COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_map2d_content.stamp"
+    DEPENDS ${KB_EDITOR_MAP2D_CONTENT}
+    VERBATIM)
+add_custom_target(kb_editor_map2d_content DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor_map2d_content.stamp")
+add_dependencies(kb_editor kb_editor_map2d_content)
+
 add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kb_editor>" "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor.exe"
@@ -1079,6 +1099,7 @@ target_link_libraries(kb_editor
         kb_engine
         kb_renderer
         kb_terrain_editor_core
+        kb_world2d_core
         kb_21kb_particle_editor_core
 )
 
@@ -1136,6 +1157,19 @@ endif()
 
 if(TARGET kb_terrain_editor_plugin)
     add_dependencies(kb_editor kb_terrain_editor_plugin)
+endif()
+
+if(TARGET kb_world2d_plugin)
+    add_dependencies(kb_editor kb_world2d_plugin)
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        set(KB_WORLD2D_EDITOR_PLUGIN_PATH "$<TARGET_FILE:kb_world2d_plugin>")
+    else()
+        set(KB_WORLD2D_EDITOR_PLUGIN_PATH "")
+    endif()
+    target_compile_definitions(kb_editor
+        PRIVATE
+            "KB_WORLD2D_PLUGIN_PATH=\"${KB_WORLD2D_EDITOR_PLUGIN_PATH}\""
+    )
 endif()
 
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus ole32 dwmapi msimg32 comdlg32 shell32 xinput)
@@ -1604,6 +1638,41 @@ if(BUILD_TESTING)
             --selftest-task
             "SELFTEST-002-External-Scenario"
     )
+    add_test(
+        NAME kb_editor_map2d_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DAutomationScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Map2D")
+    set_tests_properties(kb_editor_map2d_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d" TIMEOUT 180)
+    add_test(NAME kb_editor_map2d_component
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DComponentScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Map2D-Component")
+    set_tests_properties(kb_editor_map2d_component PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;headless;map2d" TIMEOUT 180)
+    add_test(NAME kb_editor_map2d_lighting
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DLightingScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Map2D-Lighting")
+    set_tests_properties(kb_editor_map2d_lighting PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;map2d;rendering" TIMEOUT 180)
+    if(TARGET kb_game AND TARGET kb_cooker AND KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        add_test(NAME kb_editor_map2d_packaged
+            COMMAND ${CMAKE_COMMAND}
+                "-DEDITOR=$<TARGET_FILE:kb_editor>"
+                "-DCOOKER=$<TARGET_FILE:kb_cooker>"
+                "-DPLAYER=$<TARGET_FILE:kb_game>"
+                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
+                "-DENGINE_ROOT=${CMAKE_SOURCE_DIR}"
+                "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DPackagedSmoke.cmake")
+        set_tests_properties(kb_editor_map2d_packaged PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;packaging;map2d" TIMEOUT 240)
+    endif()
     set_tests_properties(
         kb_editor_headless_automation_scenario
         PROPERTIES

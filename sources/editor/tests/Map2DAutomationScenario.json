@@ -1,0 +1,974 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "steps": [
+    {
+      "op": "configure_runtime_rendering",
+      "width": 960,
+      "height": 540
+    },
+    {
+      "op": "create_scene",
+      "name": "MapSample",
+      "template": "Empty"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/map2d/Tiles.png",
+      "destination": "Assets/2D Map Sprites/Nature/Tiles.png"
+    },
+    {
+      "op": "write_file",
+      "path": "Assets/2D Map Sprites/Nature/Ground.kbtileset",
+      "content": "21kb-tileset 1\nground \"Grass\" 20 32 \"/Game/2D Map Sprites/Nature/Tiles.png\"\ntiles 0\nborder n=1 e=1 s=1 w=1 cnw=2 cne=2 cse=2 csw=2 dnw=3 dne=3 dse=3 dsw=3\n"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "create_entity",
+      "id": "map",
+      "name": "World"
+    },
+    {
+      "op": "add_component",
+      "entity": "map",
+      "component": "World2DMap"
+    },
+    {
+      "op": "assert_map2d_camera",
+      "entity": "map"
+    },
+    {
+      "op": "set_language",
+      "language": "pl"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "empty",
+      "width": 1100,
+      "height": 700,
+      "inputs": []
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "painted",
+      "width": 1100,
+      "height": 700,
+      "inputs": [
+        "click 25 185",
+        "drag 560 280 720 280",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World.kbmap2d",
+      "contains": "b=0:"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "autoborder",
+      "inputs": [
+        "search Grass",
+        "dblclick 25 185",
+        "click 500 225",
+        "click 80 185"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/2D Map Sprites/Nature/Ground.kbtileset",
+      "contains": "cse=1"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "autoborder-restored",
+      "inputs": [
+        "click 500 225",
+        "click 130 185"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/2D Map Sprites/Nature/Ground.kbtileset",
+      "contains": "cse=2"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "collision",
+      "inputs": [
+        "key escape",
+        "key c",
+        "drag 560 280 720 280",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World.kbmap2d",
+      "contains": "collision "
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "collision-undone",
+      "inputs": [
+        "key z ctrl"
+      ]
+    },
+    {
+      "op": "assert_map2d_collision",
+      "entity": "map",
+      "boxes": 0
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "collision-redone",
+      "inputs": [
+        "key z ctrl shift",
+        "key s ctrl",
+        "key c"
+      ]
+    },
+    {
+      "op": "assert_map2d_collision",
+      "entity": "map",
+      "boxes": 1
+    },
+    {
+      "op": "duplicate_entity",
+      "entity": "map",
+      "id": "mapCopy",
+      "name": "MapCopy"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "resized",
+      "inputs": [
+        "resize 8 8",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World.kbmap2d",
+      "contains": "size 8 8"
+    },
+    {
+      "op": "assert_map2d_collision",
+      "entity": "mapCopy",
+      "boxes": 0
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "resize-undone",
+      "inputs": [
+        "key z ctrl",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_map2d_collision",
+      "entity": "mapCopy",
+      "boxes": 1
+    },
+    {
+      "op": "delete_entity",
+      "entity": "mapCopy"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World.kbmap2d",
+      "contains": "collision "
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "side-view",
+      "inputs": [
+        "view wall",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_map2d_camera",
+      "entity": "map"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World.kbmap2d",
+      "contains": "orientation wall"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "view-undone",
+      "inputs": [
+        "key z ctrl",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World.kbmap2d",
+      "contains": "orientation flat"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "discarded",
+      "inputs": [
+        "view wall",
+        "resize 8 8",
+        "discard"
+      ]
+    },
+    {
+      "op": "assert_map2d_camera",
+      "entity": "map",
+      "orientation": "flat"
+    },
+    {
+      "op": "assert_map2d_collision",
+      "entity": "map",
+      "boxes": 1
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/map2d/Tiles.png",
+      "destination": "Source/Imported.png"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "imported",
+      "inputs": [
+        "import Source/Imported.png"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/2D Map Sprites/Imported/Imported.png",
+      "min_size": 100
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "map",
+      "checkpoint": "palette",
+      "inputs": [
+        "click 60 65"
+      ]
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/MapSample.21kbscene"
+    },
+    {
+      "op": "set_startup_scene",
+      "path": "/Game/Scenes/MapSample.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "assert_backend",
+      "backend": "physics",
+      "available": true
+    },
+    {
+      "op": "step",
+      "frames": 3
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World.kbmap2d",
+      "contains": "collision "
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 3
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "create_entity",
+      "id": "layered",
+      "name": "LayeredMap",
+      "preset": "Map Top Down",
+      "selected_id": "terrain"
+    },
+    {
+      "op": "assert_component",
+      "entity": "layered",
+      "component": "Grid"
+    },
+    {
+      "op": "assert_component",
+      "entity": "terrain",
+      "component": "Grid"
+    },
+    {
+      "op": "assert_component",
+      "entity": "terrain",
+      "component": "Tilemap"
+    },
+    {
+      "op": "assert_component",
+      "entity": "terrain",
+      "component": "TilemapRenderer"
+    },
+    {
+      "op": "assert_component",
+      "entity": "terrain",
+      "component": "TilemapCollider"
+    },
+    {
+      "op": "assert_map2d_camera",
+      "entity": "layered",
+      "orientation": "flat"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "layered",
+      "width": 1100,
+      "height": 700,
+      "inputs": [
+        "click 25 185",
+        "drag 560 280 720 280",
+        "order 7"
+      ]
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "layered-platformer",
+      "inputs": [
+        "view wall"
+      ]
+    },
+    {
+      "op": "assert_map2d_camera",
+      "entity": "layered",
+      "orientation": "wall"
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_map2d_camera",
+      "entity": "layered",
+      "orientation": "flat"
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/LayeredMap.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 3
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "narrow",
+      "width": 700,
+      "height": 650,
+      "inputs": []
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "discard-layers-before",
+      "inputs": [
+        "view wall"
+      ]
+    },
+    {
+      "op": "assert_property",
+      "entity": "layered",
+      "component": "Grid",
+      "property": "wall",
+      "value": true
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "discard-layers-after",
+      "inputs": [
+        "discard"
+      ]
+    },
+    {
+      "op": "assert_property",
+      "entity": "layered",
+      "component": "Grid",
+      "property": "wall",
+      "value": false
+    },
+    {
+      "op": "assert_property",
+      "entity": "terrain",
+      "component": "Grid",
+      "property": "wall",
+      "value": false
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_property",
+      "entity": "terrain",
+      "component": "Grid",
+      "property": "wall",
+      "value": true
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert_property",
+      "entity": "layered",
+      "component": "Grid",
+      "property": "wall",
+      "value": false
+    },
+    {
+      "op": "map2d_layer_toggle",
+      "entity": "terrain",
+      "field": "locked"
+    },
+    {
+      "op": "map2d_layer_toggle",
+      "entity": "terrain",
+      "field": "locked"
+    },
+    {
+      "op": "map2d_layer_toggle",
+      "entity": "terrain",
+      "field": "visible"
+    },
+    {
+      "op": "map2d_layer_toggle",
+      "entity": "terrain",
+      "field": "visible"
+    },
+    {
+      "op": "map2d_layer_toggle",
+      "entity": "terrain",
+      "field": "collision"
+    },
+    {
+      "op": "map2d_layer_toggle",
+      "entity": "terrain",
+      "field": "collision"
+    },
+    {
+      "op": "map2d_dock",
+      "entity": "terrain"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "narrow-autoborder",
+      "inputs": [
+        "dblclick 25 225"
+      ]
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "platformer-ready",
+      "inputs": [
+        "key escape",
+        "view wall",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_map2d_camera",
+      "entity": "layered",
+      "orientation": "wall"
+    },
+    {
+      "op": "set_startup_scene",
+      "path": "/Game/Scenes/LayeredMap.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 3
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "create_entity",
+      "id": "decoration",
+      "name": "Decoration"
+    },
+    {
+      "op": "create_prefab",
+      "entity": "decoration",
+      "path": "Assets/Prefabs/Decoration.kbprefab"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "advanced-tiles",
+      "width": 1100,
+      "height": 700,
+      "inputs": [
+        "key f5",
+        "resize 32 16",
+        "pick g:Grass",
+        "place 12 5",
+        "select 12 5 12 5",
+        "animate 4 6",
+        "transform rotate",
+        "transform flipX",
+        "data surface stone",
+        "collision 2",
+        "collision-default",
+        "sort-y 1",
+        "occlusion 1",
+        "time 0.3",
+        "stamp PlatformPiece",
+        "pick stamp:/Game/2D Map Stamps/PlatformPiece.kbmap2d",
+        "place 16 6",
+        "pick prefab:/Game/Prefabs/Decoration.kbprefab",
+        "place 18 6",
+        "select 10 9 13 9",
+        "collision 4",
+        "select 15 9 15 9",
+        "collision 5 0 1 0.5 0 1 1",
+        "key c",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "surface-form",
+      "width": 700,
+      "height": 650,
+      "inputs": [
+        "select 12 5 12 5",
+        "remember-map",
+        "settings surface",
+        "field 0 0,25",
+        "field 1 2",
+        "reject",
+        "assert-map-unchanged"
+      ]
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "surface-applied",
+      "inputs": [
+        "field 1 0,8",
+        "apply",
+        "key z ctrl",
+        "assert-map-unchanged",
+        "settings offset",
+        "field 0 0,5",
+        "field 1 -0,5",
+        "cancel",
+        "assert-map-unchanged",
+        "settings opacity",
+        "field 0 101",
+        "reject",
+        "field 0 50",
+        "apply",
+        "key z ctrl",
+        "assert-map-unchanged",
+        "settings parallax",
+        "preset 1",
+        "apply",
+        "key z ctrl",
+        "assert-map-unchanged",
+        "settings scatter",
+        "preset 0",
+        "apply",
+        "settings scatter",
+        "preset 2",
+        "apply"
+      ]
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "native-interaction",
+      "inputs": [
+        "verify-native"
+      ]
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "animation-picker",
+      "width": 700,
+      "height": 650,
+      "inputs": [
+        "animation-open",
+        "animation-clear",
+        "click 275 365",
+        "click 387 365",
+        "click 331 365",
+        "click 443 365",
+        "animation-select 1",
+        "key right",
+        "key left",
+        "time 0.2"
+      ]
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "animation-speed",
+      "inputs": [
+        "settings animation-speed",
+        "field 0 7,5"
+      ]
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "animation-applied",
+      "inputs": [
+        "apply",
+        "animation-apply",
+        "settings stamp",
+        "field 0 AnimatedPattern",
+        "apply",
+        "key z ctrl",
+        "assert-map-unchanged",
+        "key y ctrl",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/LayeredMap.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 30
+    },
+    {
+      "op": "assert_map2d_runtime",
+      "entity": "terrain",
+      "contains": "frames 0 0 0 2 1 3"
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "animation-custom-play",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_color",
+      "checkpoint": "animation-custom-play",
+      "color": [
+        128,
+        80,
+        46
+      ],
+      "tolerance": 20,
+      "min_pixels": 1000
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "animation-restored",
+      "inputs": [
+        "animation-open",
+        "animation-clear",
+        "animation-add 0",
+        "animation-add 1",
+        "animation-add 2",
+        "animation-add 3",
+        "settings animation-speed",
+        "field 0 6",
+        "apply",
+        "animation-apply",
+        "assert-map-unchanged",
+        "animation-open",
+        "animation-clear",
+        "key escape",
+        "assert-map-unchanged",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/2D Map Stamps/AnimatedPattern.kbmap2d",
+      "contains": "frames 0 0 0 2 1 3"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/2D Map Stamps/AnimatedPattern.kbmap2d",
+      "contains": "definition 0 0 7.5"
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/LayeredMap.21kbscene"
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/2D Map Stamps/PlatformPiece.kbmap2d",
+      "contains": "frames 0 0 0 1 2 3"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 20
+    },
+    {
+      "op": "assert_no_errors"
+    },
+    {
+      "op": "assert_map2d_camera",
+      "entity": "layered",
+      "orientation": "wall"
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "advanced-play",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_color",
+      "checkpoint": "advanced-play",
+      "color": [
+        65,
+        135,
+        180
+      ],
+      "tolerance": 20,
+      "min_pixels": 4000
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "advanced-undo",
+      "inputs": [
+        "select 10 9 13 9",
+        "collision 0",
+        "key z ctrl",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/LayeredMap.21kbscene"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/map2d/Tiles.png",
+      "destination": "Assets/Atlas.png"
+    },
+    {
+      "op": "discover_assets"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "rectangular-atlas",
+      "inputs": [
+        "key c",
+        "key f5",
+        "layout /Game/Atlas.png 32 32 0 0",
+        "settings atlas",
+        "field 0 14",
+        "field 1 30",
+        "field 2 1",
+        "field 3 2",
+        "apply",
+        "pick p:/Game/Atlas.png#14#0",
+        "place 20 5",
+        "select 20 5 20 5",
+        "settings opacity",
+        "field 0 65",
+        "apply",
+        "scene-paint",
+        "pick g:Grass",
+        "scene-local 0 8 0 1",
+        "scene-local 1 8 0 0",
+        "scene-finish",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World 3.kbmap2d",
+      "contains": "layout 1 30 1 2 128 64"
+    },
+    {
+      "op": "duplicate_entity",
+      "entity": "terrain",
+      "id": "terrain_copy",
+      "name": "Independent Layer"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain_copy",
+      "checkpoint": "independent-map",
+      "inputs": [
+        "unique"
+      ]
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain_copy",
+      "checkpoint": "independent-edit",
+      "inputs": [
+        "select 22 8 22 8",
+        "data independent true",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "assert_file",
+      "path": "Assets/Maps/World 3 Copy 1.kbmap2d",
+      "contains": "696e646570656e64656e74"
+    },
+    {
+      "op": "delete_entity",
+      "entity": "terrain_copy"
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/LayeredMap.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 20
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "atlas-opacity-play",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_color",
+      "checkpoint": "atlas-opacity-play",
+      "color": [
+        60,
+        95,
+        42
+      ],
+      "tolerance": 20,
+      "min_pixels": 1000
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "map2d_editor",
+      "entity": "terrain",
+      "checkpoint": "export-animation",
+      "inputs": [
+        "select 12 5 12 5",
+        "animation-open",
+        "animation-clear",
+        "animation-add 0",
+        "animation-add 2",
+        "animation-add 1",
+        "animation-add 3",
+        "settings animation-speed",
+        "field 0 7.5",
+        "apply",
+        "animation-apply",
+        "key s ctrl"
+      ]
+    },
+    {
+      "op": "save_scene",
+      "path": "Assets/Scenes/LayeredMap.21kbscene"
+    },
+    {
+      "op": "play"
+    },
+    {
+      "op": "step",
+      "frames": 30
+    },
+    {
+      "op": "assert_map2d_runtime",
+      "entity": "terrain",
+      "contains": "frames 0 0 0 2 1 3"
+    },
+    {
+      "op": "capture_runtime",
+      "checkpoint": "export-animation-play",
+      "require_non_uniform": true
+    },
+    {
+      "op": "assert_capture_color",
+      "checkpoint": "export-animation-play",
+      "color": [
+        128,
+        80,
+        46
+      ],
+      "tolerance": 20,
+      "min_pixels": 1000
+    },
+    {
+      "op": "stop"
+    },
+    {
+      "op": "assert_no_errors"
+    }
+  ]
+}

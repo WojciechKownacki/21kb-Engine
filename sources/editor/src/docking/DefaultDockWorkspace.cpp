@@ -24,6 +24,7 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
     case DockPanelKind::ParticleEditor: return std::string{ EditorText("panel.particleEditor", "21kb Particle System") };
     case DockPanelKind::EditorSettings: return std::string{ EditorText("panel.editorSettings", "Editor Settings") };
     case DockPanelKind::BuildGame: return std::string{ EditorText("panel.buildGame", "Build Game") };
+    case DockPanelKind::TilemapEditor: return std::string{ EditorText("panel.tilemap", "2D Map") };
     case DockPanelKind::Generic: break;
     }
     return {};
@@ -32,6 +33,7 @@ std::string DefaultDockWorkspace::PanelTitle(DockPanelKind kind) {
 // Each panel starts with its own title; Editor Settings gives them the new one when the language changes.
 std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
     return {
+        DockPanel{ .id = 17, .kind = DockPanelKind::TilemapEditor, .title = PanelTitle(DockPanelKind::TilemapEditor), .area = DockArea::Center, .visible = false, .floatingRect = DockRect{ 152, 144, 1180, 720 } },
         DockPanel{ .id = 1, .kind = DockPanelKind::Hierarchy, .title = PanelTitle(DockPanelKind::Hierarchy), .area = DockArea::Left, .floatingRect = DockRect{ 96, 96, 360, 520 } },
         DockPanel{ .id = 2, .kind = DockPanelKind::Scene, .title = PanelTitle(DockPanelKind::Scene), .area = DockArea::Center, .floatingRect = DockRect{ 128, 128, 720, 520 } },
         DockPanel{ .id = 4, .kind = DockPanelKind::Inspector, .title = PanelTitle(DockPanelKind::Inspector), .area = DockArea::Right, .floatingRect = DockRect{ 112, 112, 380, 560 } },

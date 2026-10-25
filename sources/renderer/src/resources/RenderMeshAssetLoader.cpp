@@ -1,4 +1,5 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/BuiltInShapes.hpp"
 #include "kb/render/resources/ShapeMeshes.hpp"
 
@@ -10,6 +11,7 @@
 #include "kb/render/bake/MeshBaker.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderMeshSourceImport.hpp"
+#include "kb/render/resources/RenderMap2DMeshBuilder.hpp"
 #include "kb/render/resources/RenderTerrainMeshBuilder.hpp"
 #include "engine/assets/TerrainAssetIO.hpp"
 #include "resources/RenderMeshAssetFinalizer.hpp"
@@ -527,7 +529,7 @@ std::type_index RenderMeshAssetLoader::PayloadType() const noexcept {
 }
 
 std::vector<std::string> RenderMeshAssetLoader::Extensions() const {
-    return { ".obj", ".gltf", ".glb", ".fbx", ".kbterrain", std::string{ kb::assets::kBuiltInShapeExtension },
+    return { ".obj", ".gltf", ".glb", ".fbx", ".kbterrain", std::string{ kb::assets::kMap2DAssetExtension }, std::string{ kb::assets::kBuiltInShapeExtension },
         std::string{ kb::assets::bake::kAssetPackFileExtension } };
 }
 
@@ -540,6 +542,25 @@ std::vector<kb::assets::AssetId> RenderMeshAssetLoader::DiscoverDependencies(
     const kb::assets::AssetRegistry&) const {
     const auto extension = metadata.sourceExtension.empty()
         ? metadata.physicalPath.extension().string() : metadata.sourceExtension;
+    if (LowerExtensionText(extension) == kb::assets::kMap2DAssetExtension) {
+        const auto map = kb::assets::Map2DAssetIO::Load(metadata.physicalPath);
+        if (!map) return {};
+        std::vector<kb::assets::AssetId> dependencies;
+        for (const kb::assets::Map2DSheet& sheet : map->sheets) {
+            const kb::assets::AssetId id{ RenderMap2DMeshBuilder::MaterialAssetId(sheet.material) };
+            if (id.IsValid() && std::ranges::find(dependencies, id) == dependencies.end()) dependencies.push_back(id);
+            // Lit and tinted tiles use embedded materials, including maps without a material file.
+            const auto texture = kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath(kb::assets::Utf8Path(sheet.texture)) + ":RenderTexture");
+            if (std::ranges::find(dependencies, texture) == dependencies.end()) dependencies.push_back(texture);
+        }
+        for (const auto& [key, tile] : map->tiles) {
+            static_cast<void>(key);
+            if (tile.prefab.empty()) continue;
+            const auto id = kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath(kb::assets::Utf8Path(tile.prefab)) + ":ScenePrefab");
+            if (std::ranges::find(dependencies, id) == dependencies.end()) dependencies.push_back(id);
+        }
+        return dependencies;
+    }
     if (LowerExtensionText(extension) != kb::assets::kTerrainAssetExtension) return {};
     const auto terrain = kb::assets::TerrainAssetIO::Load(metadata.physicalPath);
     if (!terrain) return {};
@@ -565,6 +586,11 @@ namespace {
         if (!request.ReadSourceBytes(bytes, packagedError)) return { {}, std::move(packagedError) };
         const auto terrain = kb::assets::TerrainAssetIO::Load(bytes, &packagedError);
         if (terrain) mesh = RenderTerrainMeshBuilder::Build(*terrain);
+    } else if (extension == kb::assets::kMap2DAssetExtension) {
+        std::vector<std::uint8_t> bytes;
+        if (!request.ReadSourceBytes(bytes, packagedError)) return { {}, std::move(packagedError) };
+        const auto map = kb::assets::Map2DAssetIO::Load(bytes, &packagedError);
+        if (map) mesh = RenderMap2DMeshBuilder::Build(*map);
     } else if (request.IsPackaged()) {
         mesh = LoadBakedMeshPayload(request, packagedError);
     } else if (const kb::assets::BuiltInShapeDesc* shape = kb::assets::FindBuiltInShape(request.metadata);

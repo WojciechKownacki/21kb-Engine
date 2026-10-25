@@ -37,6 +37,10 @@ struct MeshRendererComponent {
     // set (nonzero), this WINS over materialAssetId/materialSlotAssetIds -
     // see EcsRenderSceneSynchronizer::SyncMesh's resolution order.
     std::uint64_t materialInstanceHandle = 0U;
+    // Disposable visuals created by editor/runtime systems. Not serialized as authored components.
+    bool shadowOnly = false;
+    bool transient = false;
+    bool previewHidden = false;
 };
 
 [[nodiscard]] constexpr bool IsMeshRendererComponentValid(const MeshRendererComponent& value) noexcept {

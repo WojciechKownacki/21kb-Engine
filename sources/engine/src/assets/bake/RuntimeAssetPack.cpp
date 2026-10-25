@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/TerrainAsset.hpp"
+#include "engine/assets/Map2DAsset.hpp"
 
 #include <algorithm>
 #include <array>
@@ -54,7 +55,7 @@ namespace {
         }
     }
     if (asset.type == "RenderMesh") {
-        if (asset.sourceExtension == kTerrainAssetExtension) {
+        if (asset.sourceExtension == kTerrainAssetExtension || asset.sourceExtension == kMap2DAssetExtension) {
             return sourceCount == 1U && asset.artifacts.size() == 1U;
         }
         return meshCount == 1U && asset.artifacts.size() == 1U;

@@ -31,6 +31,7 @@ add_library(kb_engine STATIC
     include/engine/assets/AssetId.hpp
     include/engine/assets/AssetKind.hpp
     include/engine/assets/AssetImportCatalog.hpp
+    include/engine/assets/Map2DAsset.hpp
     include/engine/assets/TerrainAsset.hpp
     include/engine/assets/CollisionMeshAsset.hpp
     include/engine/assets/TerrainAssetIO.hpp
@@ -374,7 +375,15 @@ add_library(kb_engine STATIC
       include/engine/scene/SceneGuideCurveQueries.hpp
       include/engine/scene/GuideCurveComponent.hpp
         include/engine/scene/ContentInstanceComponent.hpp
+        include/engine/scene/GridComponent.hpp
+        include/engine/scene/TilemapComponent.hpp
+        include/engine/scene/TilemapRendererComponent.hpp
+        include/engine/scene/TilemapColliderComponent.hpp
         include/engine/scene/SceneContentInstanceComponents.hpp
+        include/engine/scene/SceneGridComponents.hpp
+        include/engine/scene/SceneTilemapComponents.hpp
+        include/engine/scene/SceneTilemapRendererComponents.hpp
+        include/engine/scene/SceneTilemapColliderComponents.hpp
         include/engine/scene/StreamFocusComponent.hpp
         include/engine/scene/SceneStreamFocusComponents.hpp
         include/engine/scene/WorldBackdropComponent.hpp
@@ -580,6 +589,7 @@ add_library(kb_engine STATIC
     src/assets/AssetFileSystem.cpp
     src/assets/AssetFolderOperations.cpp
     src/assets/AssetImportCatalog.cpp
+    src/assets/Map2DAsset.cpp
     src/assets/TerrainAsset.cpp
     src/assets/CollisionMeshAsset.cpp
     src/assets/TerrainAssetIO.cpp
@@ -893,7 +903,15 @@ add_library(kb_engine STATIC
       src/scene/components/SceneGuideCurveQueries.cpp
       src/scene/components/SceneGuideCurveStorage.cpp
         src/scene/components/SceneContentInstanceApi.cpp
+        src/scene/components/SceneGridApi.cpp
+        src/scene/components/SceneTilemapApi.cpp
+        src/scene/components/SceneTilemapRendererApi.cpp
+        src/scene/components/SceneTilemapColliderApi.cpp
         src/scene/components/SceneContentInstanceStorage.cpp
+        src/scene/components/SceneGridStorage.cpp
+        src/scene/components/SceneTilemapStorage.cpp
+        src/scene/components/SceneTilemapRendererStorage.cpp
+        src/scene/components/SceneTilemapColliderStorage.cpp
         src/scene/components/SceneStreamFocusApi.cpp
         src/scene/components/SceneStreamFocusStorage.cpp
         src/scene/components/SceneWorldBackdropApi.cpp
@@ -997,6 +1015,10 @@ add_library(kb_engine STATIC
       src/scene/modules/components/SceneRegionShapeModule.cpp
       src/scene/modules/components/SceneGuideCurveModule.cpp
         src/scene/modules/components/SceneContentInstanceModule.cpp
+        src/scene/modules/components/SceneGridModule.cpp
+        src/scene/modules/components/SceneTilemapModule.cpp
+        src/scene/modules/components/SceneTilemapRendererModule.cpp
+        src/scene/modules/components/SceneTilemapColliderModule.cpp
         src/scene/modules/components/SceneStreamFocusModule.cpp
       src/scene/systems/ContentInstanceSceneSystem.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
@@ -1200,6 +1222,8 @@ add_library(kb_engine STATIC
     src/script/ScriptTimelineApi.cpp
     src/script/ScriptPostProcessApi.cpp
     src/script/ScriptNavigationApi.cpp
+    src/script/ScriptMap2DApi.cpp
+    src/assets/Map2DNavigation.cpp
     src/script/ScriptPhysicsApi.cpp
     src/script/ScriptRendererApi.cpp
     src/script/ScriptLifecycle.cpp
@@ -1297,6 +1321,10 @@ add_library(kb_engine STATIC
       src/private/scene/components/SceneRegionShapeComponentStore.hpp
       src/private/scene/components/SceneGuideCurveComponentStore.hpp
         src/private/scene/components/SceneContentInstanceComponentStore.hpp
+        src/private/scene/components/SceneGridComponentStore.hpp
+        src/private/scene/components/SceneTilemapComponentStore.hpp
+        src/private/scene/components/SceneTilemapRendererComponentStore.hpp
+        src/private/scene/components/SceneTilemapColliderComponentStore.hpp
         src/private/scene/components/SceneStreamFocusComponentStore.hpp
         src/private/scene/components/SceneWorldBackdropComponentStore.hpp
         src/private/scene/components/SceneAmbientRadianceComponentStore.hpp

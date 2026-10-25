@@ -542,6 +542,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
             CaptureFixedStepStart(scene, state);
             state.lastRuntimeFixedCaptureStartNanoseconds += nanosecondsSince(captureStart);
             state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PreSimulation);
+            state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds, SceneFixedUpdatePhase::PrepareSimulation);
             // FixedTick may flush structural/component commands, including
             // local transform changes. Publish hierarchy-derived world poses
             // before the physics plugin synchronizes its bodies.

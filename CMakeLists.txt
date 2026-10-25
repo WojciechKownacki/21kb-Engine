@@ -675,6 +675,8 @@ if(KB_BUILD_RENDERER)
     endif()
     # The terrain editor imports heightmaps through bimg_decode, which comes with the renderer.
     add_subdirectory(sources/plugins/terrain_editor terrain_editor)
+    # World 2D maps draw through the renderer's mesh loader and write its materials.
+    add_subdirectory(sources/plugins/world_2d world_2d)
     add_subdirectory(sources/game game)
     add_subdirectory(samples/render_smoke render_smoke)
     add_subdirectory(samples/standalone_player standalone_player)

@@ -24,6 +24,10 @@
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/GridComponent.hpp"
+#include "engine/scene/TilemapComponent.hpp"
+#include "engine/scene/TilemapRendererComponent.hpp"
+#include "engine/scene/TilemapColliderComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
@@ -87,7 +91,15 @@ public:
     [[nodiscard]] static bool HasGuideCurve(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const GuideCurveComponent* TryGetGuideCurve(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasContentInstance(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasGrid(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasTilemap(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasTilemapRenderer(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasTilemapCollider(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const ContentInstanceComponent* TryGetContentInstance(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const GridComponent* TryGetGrid(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const TilemapComponent* TryGetTilemap(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const TilemapRendererComponent* TryGetTilemapRenderer(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const TilemapColliderComponent* TryGetTilemapCollider(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasStreamFocus(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const StreamFocusComponent* TryGetStreamFocus(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasWorldBackdrop(const Scene& scene, SceneEntity entity) noexcept;

@@ -60,7 +60,9 @@ struct SceneDocument {
     // v49: SocketAttachment holds an object at a socket or bone of the character above it.
     //      Combatant persists health, mana, resistances, team, senses and ability slots.
     //      AIBrain persists the AI preset and its rules.
-    static constexpr std::uint32_t CurrentFileVersion = 49U;
+    static constexpr std::uint32_t TilemapFileVersion = 50U;
+    static constexpr std::uint32_t OneWayColliderFileVersion = 51U;
+    static constexpr std::uint32_t CurrentFileVersion = 51U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;

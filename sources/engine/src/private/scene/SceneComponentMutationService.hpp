@@ -24,6 +24,10 @@
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/GridComponent.hpp"
+#include "engine/scene/TilemapComponent.hpp"
+#include "engine/scene/TilemapRendererComponent.hpp"
+#include "engine/scene/TilemapColliderComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
@@ -112,9 +116,25 @@ public:
     static void RemoveGuideCurve(Scene& scene, SceneEntity entity) noexcept;
     static void MarkGuideCurveModified(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static ContentInstanceComponent* TryGetContentInstance(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static GridComponent* TryGetGrid(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static TilemapComponent* TryGetTilemap(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static TilemapRendererComponent* TryGetTilemapRenderer(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static TilemapColliderComponent* TryGetTilemapCollider(Scene& scene, SceneEntity entity) noexcept;
     static void SetContentInstance(Scene& scene, SceneEntity entity, const ContentInstanceComponent& component);
+    static void SetGrid(Scene& scene, SceneEntity entity, const GridComponent& component);
+    static void SetTilemap(Scene& scene, SceneEntity entity, const TilemapComponent& component);
+    static void SetTilemapRenderer(Scene& scene, SceneEntity entity, const TilemapRendererComponent& component);
+    static void SetTilemapCollider(Scene& scene, SceneEntity entity, const TilemapColliderComponent& component);
     static void RemoveContentInstance(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveGrid(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveTilemap(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveTilemapRenderer(Scene& scene, SceneEntity entity) noexcept;
+    static void RemoveTilemapCollider(Scene& scene, SceneEntity entity) noexcept;
     static void MarkContentInstanceModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkGridModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkTilemapModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkTilemapRendererModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkTilemapColliderModified(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static StreamFocusComponent* TryGetStreamFocus(Scene& scene, SceneEntity entity) noexcept;
     static void SetStreamFocus(Scene& scene, SceneEntity entity, const StreamFocusComponent& component);
     static void RemoveStreamFocus(Scene& scene, SceneEntity entity) noexcept;

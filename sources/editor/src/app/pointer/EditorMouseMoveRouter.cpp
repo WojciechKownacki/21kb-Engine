@@ -1,4 +1,5 @@
 #include "app/pointer/EditorMouseMoveRouter.hpp"
+#include "platform/win32/EditorMap2DWindow.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
@@ -177,6 +178,17 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
 
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (sceneCamera.HandlePointerMove(messageWindow, x, y)) {
+        return;
+    }
+
+    if (!leftButtonDown && EditorMap2DWindow::ScenePainting(sceneContext_)) {
+        static_cast<void>(EditorMap2DWindow::PaintScenePointer(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, false));
+        sceneViewport_.RequestPresent();
+    }
+    if (EditorMap2DWindow::SceneStrokeActive(sceneContext_)) {
+        if (leftButtonDown) static_cast<void>(EditorMap2DWindow::PaintScenePointer(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, false));
+        else { EditorMap2DWindow::FinishSceneStroke(sceneContext_); ReleaseCapture(); }
+        sceneViewport_.RequestPresent();
         return;
     }
 

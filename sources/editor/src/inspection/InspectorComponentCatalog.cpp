@@ -17,6 +17,7 @@ namespace {
         InspectorComponentTile{ .id = "MeshRenderer", .category = "Rendering", .label = "Mesh Renderer", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Particle Effect", .category = "Rendering", .label = "Particle Effect", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "TerrainEditor", .category = "World", .label = "Terrain Editor", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "World2DMap", .category = "World", .label = "World 2D Map", .icon = HeroIconKind::RectangleGroup },
         InspectorComponentTile{ .id = "WorldBackdrop", .category = "Rendering", .label = "World Backdrop", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "Ambient Radiance", .category = "Rendering", .label = "Ambient Radiance", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "Detail Switch", .category = "Rendering", .label = "Detail Switch", .icon = HeroIconKind::Cube },
@@ -164,6 +165,7 @@ std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile
     if (tile.id == "MeshRenderer") return std::string{ EditorText("component.meshRenderer", "Mesh Renderer") };
     if (tile.id == "Particle Effect") return std::string{ EditorText("component.particleEffect", "Particle Effect") };
     if (tile.id == "TerrainEditor") return std::string{ EditorText("component.terrainEditor", "Terrain Editor") };
+    if (tile.id == "World2DMap") return std::string{ EditorText("component.world2dMap", "World 2D Map") };
     if (tile.id == "WorldBackdrop") return std::string{ EditorText("component.worldBackdrop", "World Backdrop") };
     if (tile.id == "Ambient Radiance") return std::string{ EditorText("component.ambientRadiance", "Ambient Radiance") };
     if (tile.id == "Detail Switch") return std::string{ EditorText("component.detailSwitch", "Detail Switch") };
@@ -224,6 +226,7 @@ std::string_view InspectorComponentCatalog::CategoryLabel(std::string_view categ
 
 std::string_view InspectorComponentCatalog::RequiredPluginId(std::string_view componentId) noexcept {
     if (componentId == "TerrainEditor") return "Editor.Terrain"; // editor-only component
+    if (componentId == "World2DMap") return "World.Map2D";
     // Every scene component's plugin lives in the engine table the CLI uses too.
     const kb::scene::SceneComponentKind* kind = kb::scene::SceneComponentAuthoring::Find(componentId);
     return kind == nullptr ? std::string_view{} : kind->requiredPlugin;

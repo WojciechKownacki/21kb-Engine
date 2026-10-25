@@ -2,6 +2,7 @@
 #include "localization/EditorLocalization.hpp"
 #include "app/pointer/EditorLeftButtonDownRouter.hpp"
 #include "app/EditorKeyState.hpp"
+#include "platform/win32/EditorMap2DWindow.hpp"
 
 #include "rendering/BuildGamePanelRenderer.hpp"
 #include "rendering/BuildGamePanelModel.hpp"
@@ -37,6 +38,8 @@
 #include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
@@ -53,6 +56,7 @@
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
+#include "platform/win32/EditorTextEntryDialog.hpp"
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
@@ -77,6 +81,7 @@
 #include <cmath>
 #include <commdlg.h>
 #include <cstdint>
+#include <sstream>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -450,6 +455,67 @@ EditorLeftButtonDownRouter::EditorLeftButtonDownRouter(
     , shellInteraction_(shellInteraction)
     , pointerDrag_(pointerDrag)
     , metrics_(metrics) {}
+
+void EditorLeftButtonDownRouter::HandleWorld2DMapClick(InspectorPropertyId property) {
+    const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+    EditorSceneBgfxViewport& viewport = sceneViewport_;
+    const HWND window = mainWindow_;
+    if (property == InspectorPropertyId::World2DMapOpenEditor) {
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::TilemapEditor, DockArea::Center));
+        static_cast<void>(EditorMap2DWindow::Open(mainWindow_, sceneContext_, entity, [&viewport, window]() {
+            viewport.RequestPresent();
+            InvalidateRect(window, nullptr, FALSE);
+        }));
+        return;
+    }
+    // The Client Box row: the sizes 2D games show, or one typed in.
+    const std::optional<kb::assets::Map2DAsset> map = EditorMap2DWindow::CurrentMap(sceneContext_, entity);
+    if (!map.has_value()) {
+        sceneContext_.Console().Warning("World 2D", "The map file could not be read.");
+        return;
+    }
+    HMENU menu = CreatePopupMenu();
+    const std::array<std::pair<std::uint32_t, std::uint32_t>, 6U> sizes{ { { 15U, 11U }, { 15U, 10U }, { 17U, 13U }, { 20U, 15U }, { 24U, 14U }, { 32U, 18U } } };
+    for (std::size_t index = 0U; index < sizes.size(); ++index) {
+        const std::wstring label = std::to_wstring(sizes[index].first) + L" \u00D7 " + std::to_wstring(sizes[index].second) +
+            (index == 0U ? L" tiles (Tibia client)" : L" tiles");
+        AppendMenuW(menu, MF_STRING | (map->viewWidth == sizes[index].first && map->viewHeight == sizes[index].second ? MF_CHECKED : 0U),
+            1U + index, label.c_str());
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0U, nullptr);
+    AppendMenuW(menu, MF_STRING, 100U, L"Other size...");
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    const UINT command = static_cast<UINT>(TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0, mainWindow_, nullptr));
+    DestroyMenu(menu);
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    if (command >= 1U && command <= sizes.size()) {
+        width = sizes[command - 1U].first;
+        height = sizes[command - 1U].second;
+    } else if (command == 100U) {
+        const std::optional<std::string> text = EditorTextEntryDialog::Show(mainWindow_, EditorTextEntryDialogDescriptor{
+            .title = "Client Box", .label = "Width x height",
+            .value = std::to_string(map->viewWidth) + " x " + std::to_string(map->viewHeight),
+            .hint = "The tiles a player sees at once (1..255 each way)", .acceptLabel = "Apply" });
+        if (!text.has_value()) return;
+        std::string clean = *text;
+        std::ranges::replace_if(clean, [](char character) { return character == 'x' || character == 'X' || character == ','; }, ' ');
+        std::istringstream input{ clean };
+        if (!(input >> width >> height) || width == 0U || height == 0U || width > 255U || height > 255U) return;
+    } else {
+        return;
+    }
+    std::string error;
+    if (!EditorMap2DWindow::EditSettings(sceneContext_, entity, [width, height](kb::assets::Map2DAsset& target) {
+            target.viewWidth = width;
+            target.viewHeight = height;
+        }, &error)) {
+        sceneContext_.Console().Warning("World 2D", error.empty() ? "The client box could not be changed." : error);
+        return;
+    }
+    viewport.RequestPresent();
+}
 
 void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     const EditorProjectFilesDeleteConfirmOverlayController deleteConfirm(messageWindow, sceneContext_);
@@ -1546,6 +1612,12 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
 
+        if (EditorMap2DWindow::PaintScenePointer(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, true)) {
+            if (EditorMap2DWindow::SceneStrokeActive(sceneContext_)) SetCapture(messageWindow);
+            sceneViewport_.RequestPresent();
+            return;
+        }
+
         if (EditorTerrainViewportInteraction::SelectAt(
                 messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
             sceneContext_.AssetBrowser().FocusSelection(false);
@@ -1774,6 +1846,12 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 static_cast<void>(InspectorSceneAudioInteraction::Apply(sceneContext_, *command));
                 sceneViewport_.RequestPresent();
             }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (hit.section == InspectorSectionId::World2DMap &&
+            (hit.property == InspectorPropertyId::World2DMapOpenEditor || hit.property == InspectorPropertyId::World2DMapView)) {
+            HandleWorld2DMapClick(hit.property);
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
         }

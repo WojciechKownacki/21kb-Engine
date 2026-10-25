@@ -8,6 +8,7 @@
 #include "JoltPhysicsModule.hpp"
 #include "MiniaudioModule.hpp"
 #include "ParticleModule.hpp"
+#include "World2DModule.hpp"
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/script/ScriptModule.hpp"
 
@@ -59,6 +60,9 @@ bool CreatePackagedRuntimeModules(
             break;
         case PackagedRuntimeModuleKind::AI:
             candidate.modules.push_back(std::make_unique<kb::ai_plugin::AIModule>());
+            break;
+        case PackagedRuntimeModuleKind::World2D:
+            candidate.modules.push_back(std::make_unique<kb::world2d::World2DModule>());
             break;
         }
     }

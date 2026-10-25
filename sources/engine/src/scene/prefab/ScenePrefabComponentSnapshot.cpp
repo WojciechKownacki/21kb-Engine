@@ -71,6 +71,18 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const ContentInstanceComponent* content = sceneComponents.ContentInstances().TryGet(entity)) {
         components.contentInstance = *content;
     }
+    if (const GridComponent* content = sceneComponents.Grids().TryGet(entity)) {
+        components.grid = *content;
+    }
+    if (const TilemapComponent* content = sceneComponents.Tilemaps().TryGet(entity)) {
+        components.tilemap = *content;
+    }
+    if (const TilemapRendererComponent* content = sceneComponents.TilemapRenderers().TryGet(entity)) {
+        components.tilemapRenderer = *content;
+    }
+    if (const TilemapColliderComponent* content = sceneComponents.TilemapColliders().TryGet(entity)) {
+        components.tilemapCollider = *content;
+    }
     if (const StreamFocusComponent* focus = sceneComponents.StreamFocuses().TryGet(entity)) {
         components.streamFocus = *focus;
     }

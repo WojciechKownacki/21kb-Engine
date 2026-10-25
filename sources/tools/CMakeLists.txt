@@ -36,7 +36,9 @@ if(KB_BUILD_RENDERER)
         src/CliPostProcessCommands.cpp
         src/CliParticleCommands.cpp
         src/CliParticleProfileCommand.cpp
+        src/CliMap2DCommands.cpp
         src/private/CliMaterialShared.hpp)
+    target_link_libraries(kb_cli_core PUBLIC kb_world2d_core)
 endif()
 
 kb_apply_quality_gates(kb_cli_core)

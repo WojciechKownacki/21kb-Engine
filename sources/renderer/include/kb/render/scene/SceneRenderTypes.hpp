@@ -193,6 +193,7 @@ struct SceneRenderMeshInstance {
     std::uint16_t depthBucket = 0;
     bool castsShadow = true;
     bool receivesShadow = true;
+    bool shadowOnly = false;
     // LIB-136: which render layer this mesh belongs to, checked against the drawing
     // camera's SceneRenderCamera::cullingMask. Bit 0 set by default, matching
     // MeshRendererComponent::layer's default ("Default" layer).

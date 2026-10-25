@@ -1,4 +1,6 @@
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "scene/EditorMap2DService.hpp"
+#include "Map2DView.hpp"
 #include "app/EditorKeyState.hpp"
 #include "rendering/EditorPanelStyle.hpp"
 #include "inspection/InspectorAudioMixerAssetInteraction.hpp"
@@ -52,6 +54,7 @@
 #include "rendering/InspectorAudioMixerAssetView.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/transform_edit/EditorTransformProperty.hpp"
+#include "platform/win32/EditorMap2DWindow.hpp"
 #include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
@@ -3187,6 +3190,61 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
 
 } // namespace
 
+namespace {
+
+// Orientation flips the map between a table top and a picture on a wall; Set Up 2D View makes the
+// Map Camera. The rows that open a window (Map Editor, client box sizes) are the pointer router's.
+[[nodiscard]] bool HandleWorld2DMapClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    sceneContext.Inspector().EndTextEdit();
+    if (hit.property == InspectorPropertyId::World2DMapVisible || hit.property == InspectorPropertyId::World2DMapLocked ||
+        hit.property == InspectorPropertyId::World2DMapCollision) {
+        return sceneContext.ExecuteSceneCommand("Change Tilemap Layer", [&]() {
+            const auto map = EditorMap2DWindow::CurrentMap(sceneContext, entity);
+            const auto* metadata = EditorMap2DService::MapMetadata(sceneContext.Scene(), entity);
+            if (!map || !metadata) return false;
+            const auto id = metadata->id;
+            auto& scene = sceneContext.Scene();
+            kb::world2d::SetUpMap2DComponents(scene, entity, id.value, *map);
+            if (hit.property == InspectorPropertyId::World2DMapLocked) {
+                auto component = *scene.Components().Tilemaps().TryGet(entity);
+                component.locked = !component.locked;
+                scene.Components().Tilemaps().Set(entity, component);
+            } else if (hit.property == InspectorPropertyId::World2DMapVisible) {
+                auto component = *scene.Components().TilemapRenderers().TryGet(entity);
+                component.enabled = !component.enabled;
+                scene.Components().TilemapRenderers().Set(entity, component);
+            } else {
+                auto component = *scene.Components().TilemapColliders().TryGet(entity);
+                component.enabled = !component.enabled;
+                scene.Components().TilemapColliders().Set(entity, component);
+                auto collision = *map;
+                if (!component.enabled) collision.tiles.clear();
+                if (!kb::world2d::SetUpMap2DCollision(scene, entity, collision)) return false;
+            }
+            return true;
+        });
+    }
+    if (hit.property == InspectorPropertyId::World2DMapSetUpView) {
+        if (const std::optional<kb::assets::Map2DAsset> map = EditorMap2DWindow::CurrentMap(sceneContext, entity); map.has_value()) {
+            static_cast<void>(sceneContext.SetUpMap2DView(entity, *map));
+        }
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::World2DMapOrientation) {
+        std::string error;
+        if (!EditorMap2DWindow::EditSettings(sceneContext, entity, [](kb::assets::Map2DAsset& map) {
+                map.orientation = map.orientation == kb::assets::Map2DOrientation::Wall
+                    ? kb::assets::Map2DOrientation::Flat : kb::assets::Map2DOrientation::Wall;
+            }, &error)) {
+            sceneContext.Console().Warning("World 2D", error.empty() ? "The orientation could not be changed." : error);
+        }
+        return true;
+    }
+    return hit.kind != InspectorHitKind::None;
+}
+
+} // namespace
+
 bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
     if (hit.kind == InspectorHitKind::None) {
         sceneContext.Inspector().EndTextEdit();
@@ -3249,6 +3307,20 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 tool.brushMenuOpen = false;
                 tool.brushShapeMenuOpen = false;
                 static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::World2DMap) {
+                static_cast<void>(sceneContext.ExecuteSceneCommand("Remove Tilemap", [&]() {
+                    auto& scene = sceneContext.Scene();
+                    auto map = EditorMap2DWindow::CurrentMap(sceneContext, entity);
+                    if (map) {
+                        map->tiles.clear();
+                        if (!kb::world2d::SetUpMap2DCollision(scene, entity, *map)) return false;
+                    }
+                    scene.Components().Tilemaps().Remove(entity);
+                    scene.Components().TilemapRenderers().Remove(entity);
+                    scene.Components().TilemapColliders().Remove(entity);
+                    if (EditorMap2DService::IsMapMeshRenderer(scene, entity)) scene.Components().MeshRenderers().Remove(entity);
+                    return true;
+                }));
             } else if (hit.section == InspectorSectionId::MeshRenderer) {
                 static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Camera) {
@@ -3604,6 +3676,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::Terrain) {
         return HandleTerrainClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::World2DMap) {
+        return HandleWorld2DMapClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::MeshRenderer) {
         return HandleMeshRendererClick(sceneContext, entity, hit);

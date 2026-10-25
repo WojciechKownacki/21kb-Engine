@@ -16,6 +16,13 @@
 #include "engine/gameplay/AbilityAsset.hpp"
 #include "engine/project/ProjectCreator.hpp"
 #include "engine/scene/AIBrainComponent.hpp"
+#if KB_CLI_RENDERER
+#include "Map2DEditing.hpp"
+#include "Map2DView.hpp"
+#include "engine/assets/AssetId.hpp"
+#include "engine/assets/Map2DAsset.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
+#endif
 #include "engine/scene/CombatantComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/Navigation.hpp"
@@ -910,7 +917,7 @@ constexpr std::string_view kAiUsage =
 }
 
 // Projects made before Gameplay.AI existed get it, as new projects have it.
-[[nodiscard]] bool EnsureAiPlugin(const ArgumentList& arguments, CommandIo io) {
+[[nodiscard]] bool EnsureDefaultPlugin(const ArgumentList& arguments, std::string_view pluginName, CommandIo io) {
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
         io.err << "error: --project <dir> is required\n";
@@ -928,26 +935,174 @@ constexpr std::string_view kAiUsage =
         return false;
     }
     for (kb::project::ProjectPluginReference& plugin : loaded.descriptor.plugins) {
-        if (plugin.name != "Gameplay.AI") continue;
+        if (plugin.name != pluginName) continue;
         if (plugin.enabled) return true;
         plugin.enabled = true;
         if (!kb::project::ProjectManager::SaveProject(projectFile, loaded.descriptor)) {
             io.err << "error: the project descriptor could not be written\n";
             return false;
         }
-        io.out << "enabled the Gameplay.AI plugin in the project\n";
+        io.out << "enabled the " << pluginName << " plugin in the project\n";
         return true;
     }
     for (const kb::project::ProjectPluginReference& plugin : kb::project::ProjectCreator::DefaultDescriptor().plugins) {
-        if (plugin.name == "Gameplay.AI") loaded.descriptor.plugins.push_back(plugin);
+        if (plugin.name == pluginName) loaded.descriptor.plugins.push_back(plugin);
     }
     if (!kb::project::ProjectManager::SaveProject(projectFile, loaded.descriptor)) {
         io.err << "error: the project descriptor could not be written\n";
         return false;
     }
-    io.out << "added the Gameplay.AI plugin to the project\n";
+    io.out << "added the " << pluginName << " plugin to the project\n";
     return true;
 }
+
+[[nodiscard]] bool EnsureAiPlugin(const ArgumentList& arguments, CommandIo io) {
+    return EnsureDefaultPlugin(arguments, "Gameplay.AI", io);
+}
+
+#if KB_CLI_RENDERER
+[[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>> ParseTileSize(std::string_view text) {
+    const std::size_t separator = text.find_first_of("xX,");
+    if (separator == std::string_view::npos) return std::nullopt;
+    const std::string_view first = text.substr(0U, separator);
+    const std::string_view second = text.substr(separator + 1U);
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    const auto a = std::from_chars(first.data(), first.data() + first.size(), width);
+    const auto b = std::from_chars(second.data(), second.data() + second.size(), height);
+    if (a.ec != std::errc{} || b.ec != std::errc{} || a.ptr != first.data() + first.size() || b.ptr != second.data() + second.size() ||
+        width == 0U || height == 0U) {
+        return std::nullopt;
+    }
+    return std::pair{ width, height };
+}
+
+[[nodiscard]] std::filesystem::path ProjectAssetsRoot(const ArgumentList& arguments) {
+    std::string error;
+    const std::filesystem::path projectFile =
+        kb::project::ProjectManager::FindProjectFile(Utf8Path(arguments.Option("--project").value_or("")), error);
+    return projectFile.empty() ? std::filesystem::path{} : std::filesystem::absolute(projectFile.parent_path() / "Assets").lexically_normal();
+}
+
+// map2d new: a World 2D Map entity (its map file, its Mesh Renderer, its Map Camera), as the
+// editor's Add Component > World 2D Map makes it.
+[[nodiscard]] int Map2DNew(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> name = arguments.Option("--name");
+    if (!name.has_value() || name->empty()) {
+        io.err << "error: map2d new requires --name <Entity>\n";
+        return 1;
+    }
+    kb::assets::Map2DAsset map = kb::assets::MakeEmptyMap2DAsset();
+    if (const std::optional<std::string> size = arguments.Option("--size"); size.has_value()) {
+        const auto parsed = ParseTileSize(*size);
+        if (!parsed.has_value() || parsed->first > kb::assets::Map2DAsset::MaximumSize || parsed->second > kb::assets::Map2DAsset::MaximumSize) {
+            io.err << "error: --size takes <width>x<height> in tiles (up to 4096)\n";
+            return 1;
+        }
+        map.width = parsed->first;
+        map.height = parsed->second;
+    }
+    if (const std::optional<std::string> view = arguments.Option("--view"); view.has_value()) {
+        const auto parsed = ParseTileSize(*view);
+        if (!parsed.has_value() || parsed->first > 255U || parsed->second > 255U) {
+            io.err << "error: --view takes <width>x<height> in tiles (the client box, e.g. 15x11)\n";
+            return 1;
+        }
+        map.viewWidth = parsed->first;
+        map.viewHeight = parsed->second;
+    }
+    if (const std::optional<std::string> orientation = arguments.Option("--orientation"); orientation.has_value()) {
+        if (*orientation != "flat" && *orientation != "wall") {
+            io.err << "error: --orientation takes flat or wall\n";
+            return 1;
+        }
+        map.orientation = *orientation == "wall" ? kb::assets::Map2DOrientation::Wall : kb::assets::Map2DOrientation::Flat;
+    }
+    if (!EnsureDefaultPlugin(arguments, "World.Map2D", io)) return 1;
+    std::optional<SceneSession> session = OpenScene(arguments, io);
+    if (!session.has_value()) return 1;
+    kb::scene::Scene& scene = *session->scene;
+    if (!NameFreeUnder(scene, kb::scene::SceneEntity{}, *name)) {
+        io.err << "error: an entity named '" << *name << "' already exists at the scene root. Pass another --name.\n";
+        return 1;
+    }
+    const std::filesystem::path assetsRoot = ProjectAssetsRoot(arguments);
+    const std::filesystem::path file = assetsRoot / "Maps" / Utf8Path(*name + std::string{ kb::assets::kMap2DAssetExtension });
+    std::error_code fileError;
+    if (std::filesystem::exists(file, fileError)) {
+        io.err << "error: the map " << file.generic_string() << " already exists\n";
+        return 1;
+    }
+    std::string error;
+    if (!kb::assets::Map2DAssetIO::Save(file, map, &error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    std::filesystem::create_directories(assetsRoot / Utf8Path(kb::world2d::kMap2DSpritesFolder), fileError);
+    // The id asset discovery gives the map (the editor's renderer loads it as a render mesh).
+    const std::string virtualPath = kb::world2d::Map2DVirtualPath(assetsRoot, file);
+    const kb::assets::AssetId mapId = kb::assets::MakeAssetId(
+        kb::assets::NormalizeAssetPath(std::filesystem::path{ virtualPath }) + ":" + std::string{ kb::assets::kMap2DAssetType });
+    kb::scene::SceneObjectDesc desc{};
+    desc.name = *name;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(std::move(desc));
+    kb::world2d::SetUpMap2DComponents(scene, entity, mapId.value, map);
+    kb::world2d::Map2DViewResult view{};
+    if (!kb::world2d::SetUpMap2DView(scene, entity, map, assetsRoot, &view, &error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    io.out << "map: " << virtualPath << " (" << map.width << " x " << map.height << " tiles, "
+           << kb::assets::Map2DOrientationName(map.orientation) << ", client box " << map.viewWidth << " x " << map.viewHeight << ")\n"
+           << "Map Camera: orthographic, primary for Play" << (view.profileAssigned ? "; scene profile /Game/Maps/PP_Map2D.kbppfx" : "") << '\n'
+           << "Put sprite sheets into Assets/" << kb::world2d::kMap2DSpritesFolder << ", then paint: kb_cli map2d paint --map " << virtualPath << '\n';
+    return Saved(*session, "added World 2D Map '" + *name + "'", io);
+}
+
+// map2d view: the Map Camera of a map entity, made again for the map's current settings.
+[[nodiscard]] int Map2DView(const ArgumentList& arguments, CommandIo io) {
+    const std::optional<std::string> name = arguments.Option("--entity");
+    if (!name.has_value()) {
+        io.err << "error: map2d view requires --entity <Name>\n";
+        return 1;
+    }
+    std::optional<SceneSession> session = OpenScene(arguments, io);
+    if (!session.has_value()) return 1;
+    kb::scene::Scene& scene = *session->scene;
+    const std::optional<kb::scene::SceneEntity> entity = FindEntity(scene, *name, io);
+    if (!entity.has_value()) return 1;
+    const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(*entity);
+    const std::filesystem::path assetsRoot = ProjectAssetsRoot(arguments);
+    // The map file whose id the Mesh Renderer draws.
+    std::filesystem::path mapFile;
+    std::error_code walkError;
+    for (std::filesystem::recursive_directory_iterator it{ assetsRoot, walkError }, end; renderer != nullptr && !walkError && it != end; it.increment(walkError)) {
+        if (it->path().extension() != kb::assets::kMap2DAssetExtension) continue;
+        const std::string virtualPath = kb::world2d::Map2DVirtualPath(assetsRoot, it->path());
+        if (kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath(std::filesystem::path{ virtualPath }) + ":" +
+                std::string{ kb::assets::kMap2DAssetType }).value == renderer->meshAssetId) {
+            mapFile = it->path();
+            break;
+        }
+    }
+    std::string error;
+    const std::optional<kb::assets::Map2DAsset> map = mapFile.empty() ? std::nullopt : kb::assets::Map2DAssetIO::Load(mapFile, &error);
+    if (!map.has_value()) {
+        io.err << "error: '" << *name << "' is not a World 2D Map" << (error.empty() ? std::string{} : ": " + error) << '\n';
+        return 1;
+    }
+    kb::world2d::Map2DViewResult view{};
+    if (!kb::world2d::SetUpMap2DView(scene, *entity, *map, assetsRoot, &view, &error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    if (!kb::world2d::SetUpMap2DCollision(scene, *entity, *map, nullptr, &error)) {
+        io.err << "error: " << error << '\n';
+        return 1;
+    }
+    return Saved(*session, std::string{ view.cameraCreated ? "added" : "updated" } + " the Map Camera of '" + *name + "'", io);
+}
+#endif
 
 [[nodiscard]] std::string AbilityName(kb::scene::Scene& scene, const kb::scene::CombatantComponent* combatant, float slot) {
     const int index = static_cast<int>(slot) - 1;
@@ -1157,6 +1312,15 @@ void ListNames(const std::array<std::string_view, Count>& names, std::ostream& o
 }
 
 } // namespace
+
+#if KB_CLI_RENDERER
+int RunMap2DSceneCommand(std::string_view action, const ArgumentList& arguments, CommandIo io) {
+    if (action == "new") return Map2DNew(arguments, io);
+    if (action == "view") return Map2DView(arguments, io);
+    io.err << "error: map2d scene actions are new and view\n";
+    return 1;
+}
+#endif
 
 int RunEntityCommand(const ArgumentList& arguments, CommandIo io) {
     const std::vector<std::string>& positionals = arguments.Positionals();

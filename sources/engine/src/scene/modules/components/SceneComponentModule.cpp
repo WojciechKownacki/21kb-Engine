@@ -58,6 +58,10 @@ SceneRegionShapeComponentQueries SceneComponentQueries::RegionShapes() const noe
 }
 SceneGuideCurveComponentQueries SceneComponentQueries::GuideCurves() const noexcept { return SceneGuideCurveComponentQueries{ scene_ }; }
 SceneContentInstanceComponentQueries SceneComponentQueries::ContentInstances() const noexcept { return SceneContentInstanceComponentQueries{ scene_ }; }
+SceneGridComponentQueries SceneComponentQueries::Grids() const noexcept { return SceneGridComponentQueries{ scene_ }; }
+SceneTilemapComponentQueries SceneComponentQueries::Tilemaps() const noexcept { return SceneTilemapComponentQueries{ scene_ }; }
+SceneTilemapRendererComponentQueries SceneComponentQueries::TilemapRenderers() const noexcept { return SceneTilemapRendererComponentQueries{ scene_ }; }
+SceneTilemapColliderComponentQueries SceneComponentQueries::TilemapColliders() const noexcept { return SceneTilemapColliderComponentQueries{ scene_ }; }
 SceneStreamFocusComponentQueries SceneComponentQueries::StreamFocuses() const noexcept { return SceneStreamFocusComponentQueries{ scene_ }; }
 SceneWorldBackdropComponentQueries SceneComponentQueries::WorldBackdrops() const noexcept { return SceneWorldBackdropComponentQueries{ scene_ }; }
 SceneAmbientRadianceComponentQueries SceneComponentQueries::AmbientRadiances() const noexcept { return SceneAmbientRadianceComponentQueries{ scene_ }; }
@@ -166,6 +170,10 @@ SceneRegionShapeComponents SceneComponents::RegionShapes() const noexcept {
 }
 SceneGuideCurveComponents SceneComponents::GuideCurves() const noexcept { return SceneGuideCurveComponents{ scene_ }; }
 SceneContentInstanceComponents SceneComponents::ContentInstances() const noexcept { return SceneContentInstanceComponents{ scene_ }; }
+SceneGridComponents SceneComponents::Grids() const noexcept { return SceneGridComponents{ scene_ }; }
+SceneTilemapComponents SceneComponents::Tilemaps() const noexcept { return SceneTilemapComponents{ scene_ }; }
+SceneTilemapRendererComponents SceneComponents::TilemapRenderers() const noexcept { return SceneTilemapRendererComponents{ scene_ }; }
+SceneTilemapColliderComponents SceneComponents::TilemapColliders() const noexcept { return SceneTilemapColliderComponents{ scene_ }; }
 SceneStreamFocusComponents SceneComponents::StreamFocuses() const noexcept { return SceneStreamFocusComponents{ scene_ }; }
 SceneWorldBackdropComponents SceneComponents::WorldBackdrops() const noexcept { return SceneWorldBackdropComponents{ scene_ }; }
 SceneAmbientRadianceComponents SceneComponents::AmbientRadiances() const noexcept { return SceneAmbientRadianceComponents{ scene_ }; }

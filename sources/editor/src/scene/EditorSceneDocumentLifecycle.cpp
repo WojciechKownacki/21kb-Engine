@@ -1,4 +1,5 @@
 #include "scene/EditorSceneContext.hpp"
+#include "platform/win32/EditorMap2DWindow.hpp"
 
 #include "app/EditorPlayModeSceneSession.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
@@ -30,6 +31,7 @@
 #include "engine/scene/SceneTemplates.hpp"
 #include "scene/EditorPlayCameraResolver.hpp"
 #include "scene/EditorSceneDocumentAssetLoaders.hpp"
+#include "scene/EditorMap2DService.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -208,6 +210,11 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     if (RejectWhilePrefabEditing()) {
         return false;
     }
+#if defined(_WIN32)
+    if (!EditorMap2DWindow::SaveAll(*this)) return false;
+    EditorMap2DWindow::FinishSceneStroke(*this);
+#endif
+    EditorMap2DService::ClearPreviews(*scene_);
     static_cast<void>(CommitHierarchyRename());
     inspector_.EndTextEdit();
     static_cast<void>(CommitActiveTransformEdit());
@@ -409,6 +416,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
     EditorSceneAudioSettingsService::PrepareDocument(*nextScene);
 
     ReleaseRenderedSceneResources();
+    if (documentScene_) EditorMap2DService::ClearPreviews(*documentScene_);
     documentScene_ = std::move(nextScene);
     scene_ = documentScene_.get();
     AdvanceSceneDocumentGeneration();
@@ -686,6 +694,9 @@ bool EditorSceneContext::SaveSceneToPath(const std::filesystem::path& path) {
     if (RejectWhilePrefabEditing()) {
         return false;
     }
+#if defined(_WIN32)
+    if (!EditorMap2DWindow::SaveAll(*this)) return false;
+#endif
     if (worldPartition_.IsOpen()) {
         if (!path.empty() && path != currentScenePath_) {
             console_.Warning("World", "A world is saved as its object files; Save As is not available while a world is open.");

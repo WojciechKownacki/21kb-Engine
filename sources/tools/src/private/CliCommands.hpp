@@ -16,6 +16,9 @@ namespace kb::cli {
 [[nodiscard]] int RunSkeletonCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAbilityCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAiCommand(const ArgumentList& arguments, CommandIo io);
+// World 2D maps: new/view work on a scene (CliEntityCommands.cpp), the rest on map and tileset files.
+[[nodiscard]] int RunMap2DCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunMap2DSceneCommand(std::string_view action, const ArgumentList& arguments, CommandIo io);
 // Places a baked navigation mesh in the scene of --project/--scene (once), as the editor's Bake does.
 [[nodiscard]] bool PlaceSceneNavMesh(const ArgumentList& arguments, const std::filesystem::path& navMesh, CommandIo io);
 [[nodiscard]] int RunApiCheckCommand(const ArgumentList& arguments, CommandIo io);

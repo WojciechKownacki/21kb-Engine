@@ -20,6 +20,7 @@
 #include "engine/script/ScriptParticleSystemApi.hpp"
 #include "engine/script/ScriptPostProcessApi.hpp"
 #include "engine/script/ScriptNavigationApi.hpp"
+#include "engine/script/ScriptMap2DApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRendererApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -310,6 +311,11 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Navigation",
             .ownerRuntime = "kb::scene::SceneNavigation",
             .Register = &kb::script::ScriptNavigationApi::Register,
+        },
+        LibraryModuleDesc{
+            .name = "Map2D",
+            .ownerRuntime = "kb::scene::SceneTilemapRuntime",
+            .Register = &kb::script::ScriptMap2DApi::Register,
         },
     };
     return kCatalog;

@@ -75,6 +75,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/RenderMeshAssetBuilder.hpp
     include/kb/render/resources/RenderMeshSourceImport.hpp
     include/kb/render/resources/SkeletalMeshRenderResourceBuilder.hpp
+    include/kb/render/resources/RenderMap2DMeshBuilder.hpp
     include/kb/render/resources/RenderTerrainMeshBuilder.hpp
     include/kb/render/resources/RenderMeshAssetLoader.hpp
     include/kb/render/resources/RenderResourceRegistry.hpp
@@ -247,6 +248,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshAssetFinalizer.cpp
     src/resources/RenderMeshAssetFinalizer.hpp
     src/resources/RenderMeshAssetBuilder.cpp
+    src/resources/RenderMap2DMeshBuilder.cpp
     src/resources/RenderTerrainMeshBuilder.cpp
     src/resources/RenderMeshFbxImporter.cpp
     src/resources/RenderMeshFbxImporter.hpp
