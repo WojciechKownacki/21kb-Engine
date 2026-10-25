@@ -101,6 +101,12 @@ public:
         return {};
     }
     [[nodiscard]] virtual AssetLoadResult Load(const AssetLoadRequest& request) = 0;
+    // The asset manager runs loaders one at a time unless a loader says otherwise. Return true only when Load() and
+    // ValidateRuntimeDependencies() touch no state shared between calls (no static or member data that is written, no
+    // non-thread-safe library); the manager then lets several loads of this loader run at once.
+    [[nodiscard]] virtual bool AllowsConcurrentLoad() const noexcept {
+        return false;
+    }
     [[nodiscard]] virtual std::vector<AssetId> DiscoverDependencies(const AssetMetadata& metadata, const AssetRegistry& registry) const {
         static_cast<void>(metadata);
         static_cast<void>(registry);

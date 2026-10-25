@@ -6,6 +6,7 @@
 #include "engine/assets/AssetMountTable.hpp"
 #include "engine/assets/IAssetLoader.hpp"
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -226,6 +227,18 @@ public:
     }
 
     [[nodiscard]] bool RequestLoadAsync(AssetId id, AssetUnloadPolicy policy = AssetUnloadPolicy::Retain);
+    // How many asynchronous loads of this manager may run at once (default 1). A loader that does not return true
+    // from AllowsConcurrentLoad() still runs one load at a time whatever the number. Only valid before the first
+    // asynchronous request; returns false afterwards or for 0.
+    [[nodiscard]] bool SetAsyncLoadConcurrency(std::uint32_t concurrency) noexcept;
+    // Profile of the asynchronous loads so far: how many ran under the loader mutex, how many ran without it, and the
+    // most that ran at the same moment.
+    struct AsyncLoadConcurrencyStats {
+        std::uint64_t serializedLoads = 0U;
+        std::uint64_t concurrentLoads = 0U;
+        std::uint32_t peakSimultaneousLoads = 0U;
+    };
+    [[nodiscard]] AsyncLoadConcurrencyStats AsyncLoadConcurrency() const noexcept;
     void PumpAsyncLoads();
     [[nodiscard]] AsyncAssetLoadStatus AsyncLoadStatus(AssetId id) const noexcept;
     [[nodiscard]] std::string AsyncLoadError(AssetId id) const;
@@ -385,6 +398,11 @@ private:
     std::unordered_map<std::uint64_t, std::string> asyncLoadErrors_;
     std::unordered_map<std::uint64_t, std::uint64_t> asyncLoadGenerations_;
     std::unique_ptr<streaming::BackgroundLane> asyncLane_;
+    std::uint32_t asyncConcurrency_ = 1U;
+    std::atomic<std::uint64_t> serializedLoads_{ 0U };
+    std::atomic<std::uint64_t> concurrentLoads_{ 0U };
+    std::atomic<std::uint32_t> activeLoads_{ 0U };
+    std::atomic<std::uint32_t> peakActiveLoads_{ 0U };
     mutable std::string lastError_;
     std::uint64_t revision_ = 1;
     mutable std::uint64_t cachedVirtualFoldersRevision_ = 0;

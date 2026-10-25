@@ -651,7 +651,8 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
 
 void AssetManager::QueueAsyncLoad(AsyncLoadJob job) {
     if (asyncLane_ == nullptr) {
-        asyncLane_ = std::make_unique<streaming::BackgroundLane>(streaming::BackgroundLoadService::Shared());
+        asyncLane_ = std::make_unique<streaming::BackgroundLane>(
+            streaming::BackgroundLoadService::Shared(), streaming::BackgroundJobClass::Load, asyncConcurrency_);
     }
     // The lane is closed (cancelled and waited for) before this manager goes, so the job may
     // use it. PrepareAsyncLoad reports every failure through the job's prepared state.
@@ -659,6 +660,22 @@ void AssetManager::QueueAsyncLoad(AsyncLoadJob job) {
         PrepareAsyncLoad(std::move(job));
         return true;
     }));
+}
+
+bool AssetManager::SetAsyncLoadConcurrency(std::uint32_t concurrency) noexcept {
+    if (concurrency == 0U || asyncLane_ != nullptr) {
+        return false;
+    }
+    asyncConcurrency_ = concurrency;
+    return true;
+}
+
+AssetManager::AsyncLoadConcurrencyStats AssetManager::AsyncLoadConcurrency() const noexcept {
+    return AsyncLoadConcurrencyStats{
+        .serializedLoads = serializedLoads_.load(std::memory_order_relaxed),
+        .concurrentLoads = concurrentLoads_.load(std::memory_order_relaxed),
+        .peakSimultaneousLoads = peakActiveLoads_.load(std::memory_order_relaxed),
+    };
 }
 
 void AssetManager::StopAsyncLoads() noexcept {
@@ -730,7 +747,24 @@ void AssetManager::RestartAsyncLoads() {
 void AssetManager::PrepareAsyncLoad(AsyncLoadJob job) noexcept {
     AsyncPreparedAsset prepared;
     try {
-        std::scoped_lock lock{ loaderExecutionMutex_ };
+        std::unique_lock lock{ loaderExecutionMutex_, std::defer_lock };
+        if (!job.loader->AllowsConcurrentLoad()) {
+            lock.lock();
+            serializedLoads_.fetch_add(1U, std::memory_order_relaxed);
+        } else {
+            concurrentLoads_.fetch_add(1U, std::memory_order_relaxed);
+        }
+        // Counted while the loader runs, so the peak is what really ran at the same moment.
+        struct ActiveLoad {
+            AssetManager& manager;
+            explicit ActiveLoad(AssetManager& owner) noexcept : manager(owner) {
+                const std::uint32_t now = manager.activeLoads_.fetch_add(1U, std::memory_order_acq_rel) + 1U;
+                std::uint32_t peak = manager.peakActiveLoads_.load(std::memory_order_relaxed);
+                while (now > peak && !manager.peakActiveLoads_.compare_exchange_weak(peak, now, std::memory_order_relaxed)) {
+                }
+            }
+            ~ActiveLoad() { manager.activeLoads_.fetch_sub(1U, std::memory_order_acq_rel); }
+        } activeLoad{ *this };
         const AssetLoadRequest request{
             .metadata = job.metadata,
             .resolvedPath = job.resolvedPath,
