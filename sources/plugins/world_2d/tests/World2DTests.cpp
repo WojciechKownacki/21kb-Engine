@@ -37,6 +37,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <variant>
 
 namespace {
 
@@ -686,6 +688,186 @@ int main() {
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
         std::printf("map2d large map %ux%u edit sequence %lld ms\n", kSide, kSide, static_cast<long long>(elapsed.count()));
         Require(elapsed < std::chrono::seconds(5), "editing a large map must stay inside its time budget");
+    }
+    // Typed tile data: every type survives the file exactly, a cell beats the defaults of its graphics, the top
+    // graphic beats the ground, old files still load, and data the loader cannot trust is refused, not repaired.
+    {
+        using kb::assets::Map2DValue;
+        auto map = kb::assets::MakeEmptyMap2DAsset(8, 8);
+        map.sheets.push_back({ .texture = "/Game/Sprites/ground.png", .material = "/Game/Maps/Materials/Data.kbmat", .cellSize = 16, .columns = 4, .rows = 2 });
+        auto& groundDefaults = map.sheets[0].definitions[0].properties;
+        groundDefaults["surface"] = std::string("stone");
+        groundDefaults["weight"] = std::int64_t{ 3 };
+        groundDefaults["slippery"] = false;
+        map.sheets[0].definitions[1].properties["surface"] = std::string("moss");
+        auto& tile = map.tiles[Map2DTileKey(2, 3, 0)];
+        tile.ground = { .sheet = 0, .cell = 0 };
+        tile.items.push_back({ .sheet = 0, .cell = 1 });
+        tile.properties["weight"] = std::int64_t{ 7 };
+        tile.properties["ratio"] = 3.0;
+        tile.properties["label"] = std::string("7");
+        tile.properties["lowest"] = std::numeric_limits<std::int64_t>::min();
+        tile.properties["highest"] = std::numeric_limits<std::int64_t>::max();
+        tile.properties["quote"] = std::string("a \"b\"\n\tc");
+        tile.properties["off"] = false;
+        const auto read = [&](const char* name) { return kb::assets::Map2DCellProperty(map, tile, name); };
+        Require(read("weight") == Map2DValue{ std::int64_t{ 7 } }, "a cell's own data beats the graphic's default");
+        Require(read("surface") == Map2DValue{ std::string("moss") }, "the top graphic's default beats the ground's");
+        Require(read("slippery") == Map2DValue{ false }, "a default that nothing above overrides comes from the ground");
+        Require(!read("missing").has_value(), "data that exists nowhere is absent");
+
+        std::string error;
+        Require(kb::assets::IsMap2DAssetValid(map, &error), error.c_str());
+        const std::string text = kb::assets::Map2DAssetIO::Write(map);
+        const auto loaded = kb::assets::Map2DAssetIO::Parse(text, &error);
+        Require(loaded.has_value() && loaded->tiles == map.tiles && loaded->sheets == map.sheets, "typed data must survive the file");
+        const auto& back = loaded->tiles.begin()->second.properties;
+        Require(std::holds_alternative<double>(back.at("ratio")) && std::holds_alternative<std::string>(back.at("label")) &&
+                std::holds_alternative<bool>(back.at("off")) && std::holds_alternative<std::int64_t>(back.at("weight")) &&
+                std::get<std::int64_t>(back.at("lowest")) == std::numeric_limits<std::int64_t>::min() &&
+                std::get<std::int64_t>(back.at("highest")) == std::numeric_limits<std::int64_t>::max() &&
+                std::get<std::string>(back.at("quote")) == "a \"b\"\n\tc",
+            "a double 3.0 stays a double, the string \"7\" stays a string, 64 bit integers and control characters are exact");
+
+        const auto refused = [&](const auto& change) {
+            auto copy = map;
+            change(copy);
+            return !kb::assets::IsMap2DAssetValid(copy);
+        };
+        Require(!refused([](auto&) {}), "the untouched map is valid");
+        Require(refused([](auto& m) { m.tiles.begin()->second.properties[""] = true; }), "data needs a name");
+        Require(refused([](auto& m) { m.tiles.begin()->second.properties[std::string(129U, 'k')] = true; }), "a data name is at most 128 characters");
+        Require(refused([](auto& m) {
+            for (int index = 0; index < 64; ++index) m.tiles.begin()->second.properties["extra" + std::to_string(index)] = true;
+        }), "a cell holds at most 64 values");
+        Require(refused([](auto& m) { m.tiles.begin()->second.properties["bad"] = std::numeric_limits<double>::quiet_NaN(); }), "NaN data is refused");
+        Require(refused([](auto& m) { m.tiles.begin()->second.properties["bad"] = std::numeric_limits<double>::infinity(); }), "infinite data is refused");
+        Require(refused([](auto& m) { m.tiles.begin()->second.properties["bad"] = std::string(4097U, 'x'); }), "text over 4096 characters is refused");
+        Require(refused([](auto& m) { m.sheets[0].definitions[0].properties["bad"] = std::numeric_limits<double>::quiet_NaN(); }),
+            "a graphic's default data is checked like a cell's");
+        Require(refused([](auto& m) { m.sheets[0].definitions[9].properties["late"] = true; }), "a default for a graphic outside the sheet is refused");
+
+        const auto replaced = [&](const std::string& from, const std::string& to) {
+            std::string edited = text;
+            const std::size_t at = edited.find(from);
+            Require(at != std::string::npos, "the saved text must hold the line a corruption test edits");
+            edited.replace(at, from.size(), to);
+            return kb::assets::Map2DAssetIO::Parse(edited).has_value();
+        };
+        Require(replaced(" int 776569676874 7\n", " int 776569676874 7\n"), "an unchanged edit still loads");
+        Require(!replaced(" int 776569676874 7\n", " quad 776569676874 7\n"), "an unknown data type is refused");
+        Require(!replaced(" int 776569676874 7\n", " int 776569676874 7x\n"), "an integer with trailing text is refused");
+        Require(!replaced(" int 776569676874 7\n", " int 776569676874 99999999999999999999\n"), "an integer over 64 bits is refused");
+        Require(!replaced(" float 726174696f 3\n", " float 726174696f nan\n"), "a NaN number is refused");
+        Require(!replaced(" string 6c6162656c 37\n", " string 6c6162656c 3\n"), "text with an odd number of hex digits is refused");
+
+        // Version 1 files have none of the later fields; they load with the defaults, a newer version is refused.
+        const std::string v1 = "21kb-map2d 1\nsize 4 4\nsheet 16 4 2 \"/Game/Sprites/ground.png\" \"/Game/Maps/Materials/Data.kbmat\"\nt 1 1 0 g=0:1\n";
+        const auto old = kb::assets::Map2DAssetIO::Parse(v1, &error);
+        Require(old.has_value() && old->width == 4U && old->tileSize == 1.0F && old->orientation == kb::assets::Map2DOrientation::Flat &&
+                old->parallaxX == 1.0F && !old->sortByY && Tile(*old, 1U, 1U) != nullptr && Tile(*old, 1U, 1U)->ground.cell == 1U &&
+                Tile(*old, 1U, 1U)->properties.empty() && old->sheets[0].definitions.empty(),
+            "a version 1 map must load with the defaults of the newer fields");
+        std::string future = v1;
+        future.replace(future.find("map2d 1"), 7U, "map2d 3");
+        Require(!kb::assets::Map2DAssetIO::Parse(future).has_value(), "a map of a newer version than this build is refused");
+    }
+    // Animated graphics: every clip runs on its own frames and speed, loops, keeps the sprite's turn, flip, tint and
+    // offset, survives the file, and time that is not a number never picks a frame.
+    {
+        auto map = kb::assets::MakeEmptyMap2DAsset(8, 8);
+        map.sheets.push_back({ .texture = "/Game/Sprites/ground.png", .material = "/Game/Maps/Materials/Clips.kbmat", .cellSize = 16, .columns = 4, .rows = 2 });
+        auto& threeFrames = map.sheets[0].definitions[0];
+        threeFrames.frames = { 0, 1, 2 };
+        threeFrames.framesPerSecond = 4.0F;
+        auto& twoFrames = map.sheets[0].definitions[3];
+        twoFrames.frames = { 5, 6 };
+        twoFrames.framesPerSecond = 2.0F;
+        auto& shifted = map.sheets[0].definitions[4];
+        shifted.frames = { 6, 7 };
+        shifted.framesPerSecond = 1.0F;
+        const auto cellAt = [&](std::uint32_t cell, double seconds) {
+            return kb::assets::Map2DAnimatedSprite(map, { .sheet = 0, .cell = cell }, seconds).cell;
+        };
+        Require(cellAt(0, 0.0) == 0U && cellAt(0, 0.249) == 0U && cellAt(0, 0.25) == 1U && cellAt(0, 0.5) == 2U,
+            "a clip steps through its frames at its speed");
+        Require(cellAt(0, 0.75) == 0U && cellAt(0, 1.0) == 1U && cellAt(0, 3.0) == 0U && cellAt(0, 1.0e6) == 1U,
+            "a clip loops");
+        Require(cellAt(3, 0.0) == 5U && cellAt(3, 0.49) == 5U && cellAt(3, 0.5) == 6U && cellAt(3, 1.0) == 5U,
+            "another clip keeps its own frames and speed");
+        Require(cellAt(7, 5.0) == 7U && cellAt(2, 5.0) == 2U, "a graphic without a clip never changes");
+        Require(cellAt(4, -1.0) == 6U && cellAt(4, std::numeric_limits<double>::quiet_NaN()) == 4U &&
+                cellAt(4, std::numeric_limits<double>::infinity()) == 4U,
+            "negative time shows the first frame; time that is not a number leaves the sprite alone");
+        const kb::assets::Map2DSprite turned{ .sheet = 0, .cell = 0, .rotation = 3, .flipX = true, .flipY = true, .tint = 0x11223344U,
+            .offsetX = 0.25F, .offsetY = -0.5F };
+        kb::assets::Map2DSprite expected = turned;
+        expected.cell = 2U;
+        Require(kb::assets::Map2DAnimatedSprite(map, turned, 0.5) == expected, "an animated frame keeps the sprite's turn, flip, tint and offset");
+
+        std::string error;
+        const auto loaded = kb::assets::Map2DAssetIO::Parse(kb::assets::Map2DAssetIO::Write(map), &error);
+        Require(loaded.has_value() && loaded->sheets == map.sheets, "clips must survive the file");
+        for (double seconds : { 0.0, 0.3, 0.6, 0.9, 1.7 }) {
+            for (std::uint32_t cell : { 0U, 3U, 4U }) {
+                Require(kb::assets::Map2DAnimatedSprite(*loaded, { .sheet = 0, .cell = cell }, seconds) ==
+                        kb::assets::Map2DAnimatedSprite(map, { .sheet = 0, .cell = cell }, seconds), "a reloaded clip plays the same");
+            }
+        }
+        const auto refused = [&](const auto& change) {
+            auto copy = map;
+            change(copy);
+            return !kb::assets::IsMap2DAssetValid(copy);
+        };
+        Require(!refused([](auto&) {}), "the untouched clips are valid");
+        Require(refused([](auto& m) { m.sheets[0].definitions[0].frames.push_back(8U); }), "a frame outside the sheet is refused");
+        Require(refused([](auto& m) { m.sheets[0].definitions[0].framesPerSecond = 0.0F; }), "a clip needs a speed");
+        Require(refused([](auto& m) { m.sheets[0].definitions[0].framesPerSecond = std::numeric_limits<float>::quiet_NaN(); }), "a NaN speed is refused");
+        Require(refused([](auto& m) { m.sheets[0].definitions[0].framesPerSecond = 241.0F; }), "a clip over 240 frames per second is refused");
+        Require(refused([](auto& m) { m.sheets[0].definitions[0].frames.assign(257U, 1U); }), "a clip of more than 256 frames is refused");
+        Require(!refused([](auto& m) { m.sheets[0].definitions[0].frames.assign(256U, 1U); }), "a clip of 256 frames is valid");
+    }
+    // At runtime a clip rebuilds only the chunk it is drawn in, and only when its frame changes: a paused scene
+    // (no time passing) rebuilds nothing, a loop shows the first frame again, and Play starts every clip over.
+    {
+        kb::scene::Scene scene;
+        auto& manager = scene.Assets().Manager();
+        Require(manager.Mounts().Mount("Game", assets), "mount clip assets");
+        Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()), "register clip renderer");
+        auto map = kb::assets::MakeEmptyMap2DAsset(32U, 32U);
+        map.background = false;
+        map.sheets.push_back({ .texture = "/Game/Sprites/ground.png", .material = "/Game/Maps/Materials/Test.kbmat", .columns = 4, .rows = 2 });
+        map.sheets[0].definitions[0].frames = { 0, 1, 2 };
+        map.sheets[0].definitions[0].framesPerSecond = 4.0F;
+        map.tiles[Map2DTileKey(1U, 1U, 0)].ground = { .sheet = 0, .cell = 0 };
+        map.tiles[Map2DTileKey(20U, 20U, 0)].ground = { .sheet = 0, .cell = 5 };
+        const auto file = root / "Clips.kbmap2d";
+        Require(kb::assets::Map2DAssetIO::Save(file, map), "save the clip map");
+        const kb::assets::AssetId source{ 8123U };
+        Require(manager.RegisterAsset({ .id = source, .type = "RenderMesh", .virtualPath = "/Game/Clips.kbmap2d", .physicalPath = file, .contentHash = 1U }),
+            "register the clip map");
+        const auto owner = scene.Entities().CreateEntity({ .name = "Clips" });
+        kb::world2d::SetUpMap2DComponents(scene, owner, source.value, map);
+        auto system = std::make_unique<kb::world2d::Map2DRuntime>();
+        auto* runtime = system.get();
+        static_cast<void>(scene.Runtime().AddSceneSystem(std::move(system)));
+        const auto step = [&](float seconds) {
+            static_cast<void>(scene.Runtime().Update(seconds));
+            Require(scene.Runtime().DrainSceneSystemErrors().empty(), "the clip map runs without errors");
+            return runtime->RebuiltChunksLastUpdate();
+        };
+        Require(step(0.0F) == 2U, "both chunks are built when Play starts");
+        Require(step(0.3F) == 1U, "a clip's frame change rebuilds only the chunk it is drawn in");
+        Require(step(0.0F) == 0U, "no time passing (a pause) rebuilds nothing");
+        Require(step(0.1F) == 0U, "time inside the same frame rebuilds nothing");
+        Require(step(0.2F) == 1U, "the next frame rebuilds its chunk");
+        Require(step(0.2F) == 1U, "the loop shows the first frame again");
+        scene.Runtime().SetPlaying(false);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        scene.Runtime().SetPlaying(true);
+        Require(step(0.0F) == 2U, "Play builds the map again");
+        Require(step(0.1F) == 0U, "Play starts every clip over: 0.1 s is still the first frame, as it was not after 0.8 s");
+        Require(step(0.2F) == 1U, "and the clip then advances on its own time");
     }
     std::filesystem::remove_all(root);
     std::puts("kb_world2d_tests passed");
