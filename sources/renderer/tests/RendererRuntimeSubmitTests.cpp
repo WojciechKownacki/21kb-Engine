@@ -7116,6 +7116,109 @@ void RunRendererRendersScreenSpaceAmbientOcclusionTest() {
     Require(farOn > farOff * 0.98, "AO test: open floor must stay unoccluded");
 }
 
+// Exponential height fog in the deferred lighting pass. A wall straight ahead is seen through the fog at a known
+// distance: the fog thins the surface toward its colour with the distance and the density, a height base below the
+// camera thins it and one above thickens it, zero density changes nothing, an enormous density leaves only the fog
+// colour, and the picture keeps its proportions when the target is resized. Volumetric fog adds the light that a
+// point light scatters in the fog.
+void RunRendererRendersFogTest() {
+    const auto wall = [](float z) {
+        return std::vector<SsBox>{ { { 0.0F, 2.0F, z + 0.5F }, { 80.0F, 80.0F, 1.0F } } };
+    };
+    const bx::Vec3 eye{ 0.0F, 2.0F, -5.0F };
+    const auto centre = [](const std::vector<std::uint8_t>& pixels, std::uint16_t size) {
+        const int half = size / 2;
+        return MeanBrightness(pixels, size, half - 4, half - 4, half + 4, half + 4);
+    };
+    const auto render = [&](float wallZ, std::uint16_t size, const std::function<void(SceneRenderLightingConfig&)>& setup,
+                            const std::vector<kb::scene::Vec3>& lights = {}) {
+        SceneRenderLightingConfig lighting{};
+        setup(lighting);
+        return centre(RenderScreenSpaceScene(wall(wallZ), lights, eye, bx::Vec3{ 0.0F, 2.0F, wallZ }, 30.0F, lighting, 8, size), size);
+    };
+    // A nearly flat fog (the falloff is clamped by the shader, so the density stays what was asked for), black so
+    // that only the light that reaches the camera through it is left.
+    const auto thin = [](float density) {
+        return [density](SceneRenderLightingConfig& lighting) {
+            lighting.fogEnabled = true;
+            lighting.fogDensity = density;
+            lighting.fogHeightFalloff = 0.0001F;
+            lighting.fogBaseHeight = 0.0F;
+            lighting.fogColor = { 0.0F, 0.0F, 0.0F };
+        };
+    };
+    constexpr std::uint16_t kSize = 64U;
+    const double clear = render(10.0F, kSize, [](SceneRenderLightingConfig&) {});
+    const double nearFog = render(10.0F, kSize, thin(0.04F));
+    const double farFog = render(30.0F, kSize, thin(0.04F));
+    const double clearFar = render(30.0F, kSize, [](SceneRenderLightingConfig&) {});
+    std::fprintf(stderr, "fog_pixels clear=%.1f near=%.1f far=%.1f clear_far=%.1f%c", clear, nearFog, farFog, clearFar, 10);
+    Require(clear > 30.0 && std::abs(clear - clearFar) < 3.0, "Fog test: the lit wall must be visible and the same at both distances without fog");
+    Require(nearFog < clear * 0.9, "Fog test: a wall seen through fog must be dimmer than without it");
+    Require(farFog < nearFog * 0.8 && farFog > 0.0, "Fog test: a farther wall must be fogged more");
+    // Beer-Lambert: the wall is 15 m and 35 m from the eye, so a density of 0.04 leaves exp(-0.6) = 0.549 and
+    // exp(-1.4) = 0.247 of its light (the display encoding is linear here).
+    Require(std::abs(nearFog / clear - std::exp(-0.6)) < 0.03, "Fog test: the transmittance 15 m through the fog is wrong");
+    Require(std::abs(farFog / clear - std::exp(-1.4)) < 0.03, "Fog test: the transmittance 35 m through the fog is wrong");
+
+    const double zero = render(10.0F, kSize, thin(0.0F));
+    Require(std::abs(zero - clear) < 1.5, "Fog test: zero density must change nothing");
+
+    // An enormous density leaves only the fog colour, whatever stands behind it.
+    const auto dense = [](float colour) {
+        return [colour](SceneRenderLightingConfig& lighting) {
+            lighting.fogEnabled = true;
+            lighting.fogDensity = 1000.0F;
+            lighting.fogHeightFalloff = 0.0001F;
+            lighting.fogColor = { colour, colour, colour };
+        };
+    };
+    const double denseBlackNear = render(10.0F, kSize, dense(0.0F));
+    const double denseBlackFar = render(30.0F, kSize, dense(0.0F));
+    const double denseWhiteNear = render(10.0F, kSize, dense(1.0F));
+    const double denseWhiteFar = render(30.0F, kSize, dense(1.0F));
+    std::fprintf(stderr, "fog_dense black=%.1f/%.1f white=%.1f/%.1f%c", denseBlackNear, denseBlackFar, denseWhiteNear, denseWhiteFar, 10);
+    Require(denseBlackNear < 3.0 && denseBlackFar < 3.0, "Fog test: a dense black fog must hide the wall completely");
+    Require(denseWhiteNear > clear * 1.5 && std::abs(denseWhiteNear - denseWhiteFar) < 3.0,
+        "Fog test: a dense white fog must show only its colour, at any distance, brighter than the wall");
+
+    // The height base: the fog is thinner where the camera is above the base and thicker where it is below.
+    const auto based = [](float base) {
+        return [base](SceneRenderLightingConfig& lighting) {
+            lighting.fogEnabled = true;
+            lighting.fogDensity = 0.04F;
+            lighting.fogHeightFalloff = 0.2F;
+            lighting.fogBaseHeight = base;
+            lighting.fogColor = { 0.0F, 0.0F, 0.0F };
+        };
+    };
+    const double thinAbove = render(20.0F, kSize, based(-10.0F));
+    const double thickBelow = render(20.0F, kSize, based(10.0F));
+    std::fprintf(stderr, "fog_height base-10=%.1f base+10=%.1f%c", thinAbove, thickBelow, 10);
+    Require(thinAbove > thickBelow * 1.5, "Fog test: fog must be thicker near its base height than far above it");
+
+    // A different resolution sees the same fog.
+    const double clearLarge = render(10.0F, 96U, [](SceneRenderLightingConfig&) {});
+    const double fogLarge = render(10.0F, 96U, thin(0.04F));
+    Require(std::abs(fogLarge / clearLarge - nearFog / clear) < 0.08, "Fog test: the fog must not change with the resolution of the target");
+
+    // Volumetric fog: a point light in front of the wall scatters light in the fog, so the fog is not black.
+    const std::vector<kb::scene::Vec3> lamp{ { 0.0F, 4.0F, 2.0F } };
+    const auto fogWithLight = [&](bool volumetric) {
+        return render(30.0F, kSize, [volumetric](SceneRenderLightingConfig& lighting) {
+            lighting.fogEnabled = true;
+            lighting.fogDensity = 0.05F;
+            lighting.fogHeightFalloff = 0.0001F;
+            lighting.fogColor = { 0.0F, 0.0F, 0.0F };
+            lighting.volumetricFogEnabled = volumetric;
+        }, lamp);
+    };
+    const double lampPlain = fogWithLight(false);
+    const double lampVolumetric = fogWithLight(true);
+    std::fprintf(stderr, "fog_volumetric plain=%.1f volumetric=%.1f%c", lampPlain, lampVolumetric, 10);
+    Require(lampVolumetric > lampPlain + 1.0, "Fog test: volumetric fog must add the light that the lamp scatters in it");
+}
+
 // A glossy floor in front of a lit red wall must show the wall's reflection once screen-space
 // reflections are on: the floor region where the mirror image of the wall appears turns red.
 void RunRendererRendersScreenSpaceReflectionsTest() {
@@ -8864,6 +8967,7 @@ void RunRendererScreenSpaceEffectTests() {
     RunRendererSmoothsScreenSpaceGiOverTimeTest();
     RunRendererRendersScreenSpaceAmbientOcclusionTest();
     RunRendererRendersScreenSpaceReflectionsTest();
+    RunRendererRendersFogTest();
     RunRendererRendersVoxelGiFromOffscreenObjectsTest();
     RunRendererShadowsVoxelGiBounceTest();
     RunVoxelGridFollowsMeshGeometryTest();

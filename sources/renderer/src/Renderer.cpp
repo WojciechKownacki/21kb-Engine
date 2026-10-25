@@ -1160,7 +1160,9 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
     const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath) ||
         effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal || backdropRequiresDeferredPass ||
         // Screen-space GI, ambient occlusion and reflections read the G-buffer, so they imply the deferred path.
-        UsesScreenSpaceEffects(effectiveLightingConfig);
+        // Fog is applied by the deferred lighting pass too: without this a profile that turns fog on would be
+        // ignored without a word on the forward path.
+        UsesScreenSpaceEffects(effectiveLightingConfig) || effectiveLightingConfig.fogEnabled;
     RenderMaterialGraphBuildContext runtimeGraphContext = desc.materialGraphContext;
     runtimeGraphContext.shadingPath = deferredLighting
         ? RenderMaterialGraphShadingPath::Deferred
