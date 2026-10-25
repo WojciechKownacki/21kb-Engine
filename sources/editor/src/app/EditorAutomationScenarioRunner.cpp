@@ -12,6 +12,9 @@
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
+#include "docking/EditorDockModel.hpp"
+#include "kb/editor/docking/DockTypes.hpp"
+#include "kb/editor/theme/EditorTheme.hpp"
 #include "app/EditorPlayModeState.hpp"
 #include "engine/scene/SceneTemplates.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -177,6 +180,9 @@ struct ScenarioState {
     std::unordered_map<std::string, kb::assets::AssetId> assets;
     std::unordered_map<std::string, kb::scene::MeshRendererComponent> rememberedMeshes;
     std::unordered_map<std::string, std::uint32_t> materialNodes;
+    // The dock workspace the workspace_* steps arrange, and the layouts saved by name.
+    EditorDockModel dock;
+    std::unordered_map<std::string, std::string> savedWorkspaces;
 };
 
 class ScopedProjectFile final {
@@ -1183,6 +1189,165 @@ ReadScriptValue(
     return std::nullopt;
 }
 
+// The editor's dock workspace as a scenario can drive it: float and close panels, save the arrangement under a name or
+// into a project file, reset to the default, restore a saved one, and check which panels are visible, hidden or
+// floating, and that every visible docked panel still has a place at the given window sizes.
+[[nodiscard]] const DockPanel* FindPanelByTitle(const EditorDockModel& dock, std::string_view title) {
+    for (const DockPanel& panel : dock.Queries().Panels()) {
+        if (panel.title == title) return &panel;
+    }
+    return nullptr;
+}
+
+[[nodiscard]] bool StringArrayMember(
+    const JsonValue& step, std::string_view name, std::vector<std::string>& output, std::string& error) {
+    const JsonValue* array = step.Find(name);
+    if (array == nullptr) return true;
+    if (array->GetKind() != JsonValue::Kind::Array) {
+        error = "'" + std::string{ name } + "' must be an array of panel titles";
+        return false;
+    }
+    for (std::size_t index = 0U; index < array->Size(); ++index) {
+        const JsonValue* item = array->At(index);
+        if (item == nullptr || item->GetKind() != JsonValue::Kind::String) {
+            error = "'" + std::string{ name } + "' must hold only strings";
+            return false;
+        }
+        output.push_back(item->AsString());
+    }
+    return true;
+}
+
+[[nodiscard]] std::optional<StepOutcome> ExecuteWorkspaceStep(
+    ScenarioState& state, const JsonValue& step, std::string_view operation) {
+    std::string error;
+    if (operation == "workspace_float" || operation == "workspace_close") {
+        const auto title = StringMember(step, "panel", error);
+        if (!title) return StepOutcome{ false, error };
+        const DockPanel* panel = FindPanelByTitle(state.dock, *title);
+        if (panel == nullptr) return StepOutcome{ false, "no panel titled '" + *title + "'" };
+        const std::uint32_t id = panel->id;
+        if (operation == "workspace_close") {
+            return StepOutcome{ state.dock.Commands().ClosePanel(id), "closed " + *title };
+        }
+        const int x = static_cast<int>(NumberMember(step, "x", error, false).value_or(220.0));
+        const int y = static_cast<int>(NumberMember(step, "y", error, false).value_or(180.0));
+        const int width = static_cast<int>(NumberMember(step, "width", error, false).value_or(900.0));
+        const int height = static_cast<int>(NumberMember(step, "height", error, false).value_or(640.0));
+        if (!error.empty()) return StepOutcome{ false, error };
+        state.dock.Commands().UndockPanel(id, DockRect{ x, y, width, height });
+        const DockPanel* floated = state.dock.Queries().FindPanel(id);
+        return StepOutcome{ floated != nullptr && floated->area == DockArea::Floating, "floated " + *title };
+    }
+    if (operation == "workspace_save") {
+        const auto slot = StringMember(step, "slot", error);
+        const auto file = StringMember(step, "file", error, false);
+        if (!slot) return StepOutcome{ false, error };
+        error.clear();
+        const std::string text = state.dock.Commands().SerializeWorkspace();
+        state.savedWorkspaces[*slot] = text;
+        if (file) {
+            const auto resolved = ResolveProjectPath(*file, error);
+            if (!resolved) return StepOutcome{ false, error };
+            std::error_code fileError;
+            std::filesystem::create_directories(resolved->parent_path(), fileError);
+            std::ofstream output(*resolved, std::ios::binary | std::ios::trunc);
+            output << text << '\n';
+            if (!output.good()) return StepOutcome{ false, "the layout file could not be written" };
+        }
+        return StepOutcome{ !text.empty(), "saved '" + *slot + "' (" + std::to_string(text.size()) + " bytes)" };
+    }
+    if (operation == "workspace_reset") {
+        state.dock.Commands().ResetWorkspace();
+        return StepOutcome{ true, "default workspace restored" };
+    }
+    if (operation == "workspace_restore") {
+        const auto slot = StringMember(step, "slot", error, false);
+        const auto file = StringMember(step, "file", error, false);
+        if (!error.empty()) return StepOutcome{ false, error };
+        std::string text;
+        if (slot) {
+            const auto saved = state.savedWorkspaces.find(*slot);
+            if (saved == state.savedWorkspaces.end()) return StepOutcome{ false, "no saved layout named '" + *slot + "'" };
+            text = saved->second;
+        } else if (file) {
+            const auto resolved = ResolveProjectPath(*file, error);
+            if (!resolved) return StepOutcome{ false, error };
+            text = ReadText(*resolved, error);
+            if (!error.empty()) return StepOutcome{ false, error };
+            while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
+        } else {
+            return StepOutcome{ false, "restore needs 'slot' or 'file'" };
+        }
+        const bool restored = state.dock.Commands().RestoreWorkspace(text);
+        return StepOutcome{ restored, restored ? "layout restored" : "the layout text was refused" };
+    }
+    if (operation == "assert_workspace") {
+        std::vector<std::string> visible;
+        std::vector<std::string> hidden;
+        std::vector<std::string> floating;
+        if (!StringArrayMember(step, "visible", visible, error) || !StringArrayMember(step, "hidden", hidden, error) ||
+            !StringArrayMember(step, "floating", floating, error)) {
+            return StepOutcome{ false, error };
+        }
+        const auto sameAs = StringMember(step, "same_as_slot", error, false);
+        const auto differsFrom = StringMember(step, "differs_from_slot", error, false);
+        const auto fitsWidth = UInt32Member(step, "fits_width", error, false);
+        const auto fitsHeight = UInt32Member(step, "fits_height", error, false);
+        if (!error.empty()) return StepOutcome{ false, error };
+        for (const std::string& title : visible) {
+            const DockPanel* panel = FindPanelByTitle(state.dock, title);
+            if (panel == nullptr || !panel->visible) return StepOutcome{ false, "'" + title + "' should be visible" };
+        }
+        for (const std::string& title : hidden) {
+            const DockPanel* panel = FindPanelByTitle(state.dock, title);
+            if (panel == nullptr || panel->visible) return StepOutcome{ false, "'" + title + "' should be hidden" };
+        }
+        for (const std::string& title : floating) {
+            const DockPanel* panel = FindPanelByTitle(state.dock, title);
+            if (panel == nullptr || panel->area != DockArea::Floating || !panel->visible) {
+                return StepOutcome{ false, "'" + title + "' should be floating" };
+            }
+        }
+        const std::string current = state.dock.Commands().SerializeWorkspace();
+        if (sameAs) {
+            const auto saved = state.savedWorkspaces.find(*sameAs);
+            if (saved == state.savedWorkspaces.end() || saved->second != current) {
+                return StepOutcome{ false, "the layout differs from '" + *sameAs + "'" };
+            }
+        }
+        if (differsFrom) {
+            const auto saved = state.savedWorkspaces.find(*differsFrom);
+            if (saved == state.savedWorkspaces.end() || saved->second == current) {
+                return StepOutcome{ false, "the layout should differ from '" + *differsFrom + "'" };
+            }
+        }
+        std::size_t placed = 0U;
+        if (fitsWidth && fitsHeight) {
+            // A resize or a change of screen must not lose a panel: each visible docked panel has a frame in the layout.
+            const EditorMetrics metrics{};
+            const DockLayout layout = state.dock.Queries().BuildLayout(
+                static_cast<int>(*fitsWidth), static_cast<int>(*fitsHeight), metrics.menuHeight, metrics.toolbarHeight,
+                metrics.tabStripHeight, metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize);
+            for (const DockPanel& panel : state.dock.Queries().Panels()) {
+                if (!panel.visible || panel.area == DockArea::Floating) continue;
+                const bool found = std::ranges::any_of(layout.panels, [&](const DockPanelLayout& entry) { return entry.panelId == panel.id; });
+                if (!found) return StepOutcome{ false, "'" + panel.title + "' has no place at " + std::to_string(*fitsWidth) + "x" + std::to_string(*fitsHeight) };
+                ++placed;
+            }
+        }
+        return StepOutcome{ true, "panels=" + std::to_string(state.dock.Queries().Panels().size()) + " placed=" + std::to_string(placed) };
+    }
+    return std::nullopt;
+}
+
+// Steps that put data in place outside the editor's own controls (a file written or copied into the project). They are
+// listed in the report so a scenario that needs many of them shows how much the authoring path leaves undone.
+[[nodiscard]] bool IsWorkaroundOperation(std::string_view operation) noexcept {
+    return operation == "copy_fixture" || operation == "write_file" || operation == "touch" || operation == "write_pcm_wave" ||
+        operation == "copy_asset";
+}
+
 [[nodiscard]] StepOutcome ExecuteStep(
     ScenarioState& state, const JsonValue& step) {
     std::string error;
@@ -1196,6 +1361,9 @@ ReadScriptValue(
     }
     if (std::optional<StepOutcome> navigation = ExecuteNavigationStep(state, step, *operation)) {
         return *navigation;
+    }
+    if (std::optional<StepOutcome> workspace = ExecuteWorkspaceStep(state, step, *operation)) {
+        return *workspace;
     }
     if (std::optional<StepOutcome> postProcess = ExecutePostProcessStep(state, step, *operation)) {
         return *postProcess;
@@ -5712,6 +5880,12 @@ int EditorAutomationScenarioRunner::Run(
     }
 
     std::vector<std::string> reportLines;
+    // Objective measures of the authoring path, counted from the steps themselves: what was done, what was only
+    // checked, what failed, and which steps prepared data outside the editor's own controls.
+    std::size_t actionCount = 0U;
+    std::size_t assertionCount = 0U;
+    std::size_t failureCount = 0U;
+    std::vector<std::string> workaroundOperations;
     bool passed = true;
     {
         EditorSceneContext context;
@@ -5739,6 +5913,13 @@ int EditorAutomationScenarioRunner::Run(
                 line << " - " << outcome.detail;
             }
             reportLines.push_back(line.str());
+            if (operationName.rfind("assert_", 0U) == 0U || operationName.rfind("verify_", 0U) == 0U) {
+                ++assertionCount;
+            } else {
+                ++actionCount;
+            }
+            if (!outcome.succeeded) ++failureCount;
+            if (IsWorkaroundOperation(operationName)) workaroundOperations.push_back(operationName);
             state.automation.Trace(
                 "scenario_step", outcome.succeeded,
                 std::to_string(index + 1U) + ':' + operationName);
@@ -5780,6 +5961,15 @@ int EditorAutomationScenarioRunner::Run(
     reportJson << "{\"schema\":\"21kb.editor-automation-report/v1\",\"result\":\""
                << (passed ? "PASS" : "FAIL")
                << "\",\"stepsExecuted\":" << reportLines.size()
+               << ",\"metrics\":{\"actions\":" << actionCount
+               << ",\"assertions\":" << assertionCount
+               << ",\"failures\":" << failureCount
+               << ",\"workarounds\":" << workaroundOperations.size()
+               << ",\"workaroundOperations\":[";
+    for (std::size_t index = 0U; index < workaroundOperations.size(); ++index) {
+        reportJson << (index == 0U ? "" : ",") << '"' << workaroundOperations[index] << '"';
+    }
+    reportJson << "],\"basis\":\"counted by the runner from the steps of this scenario; an automated run, not a study with people\"}"
                << "}\n";
     std::ofstream manifestJson(
         absoluteArtifacts / "artifact-manifest.json",

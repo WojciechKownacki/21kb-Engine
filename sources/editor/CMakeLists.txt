@@ -1634,6 +1634,15 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-New-Scene")
     set_tests_properties(kb_editor_new_scene_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;scene" TIMEOUT 180)
+    # The dock workspace from the command line: float and close panels, save the arrangement to a file, reset to the default,
+    # restore the file, and check at several window sizes that no panel is lost.
+    add_test(NAME kb_editor_workspace_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/HeadlessWorkspaceScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-Workspace")
+    set_tests_properties(kb_editor_workspace_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;docking" TIMEOUT 180)
     # Every editor language, one after another: each panel's texts fit where they are drawn.
     add_test(NAME kb_editor_languages_headless
         COMMAND $<TARGET_FILE:kb_editor>
