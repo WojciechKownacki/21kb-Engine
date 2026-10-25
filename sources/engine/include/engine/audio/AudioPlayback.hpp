@@ -112,6 +112,7 @@ enum class AudioDeviceStatus : std::uint8_t {
     Uninitialized,
     NoPlaybackDevice,
     PlaybackAvailable,
+    PlaybackSuspended,
 };
 
 enum class AudioSourceControlStatus : std::uint8_t {

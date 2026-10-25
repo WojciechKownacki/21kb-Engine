@@ -93,6 +93,8 @@ def run_cases(args, root, report, origin):
         require(not before["activation"]["ever"], "Fresh page already has user activation")
         require(before["contexts"] and all(c["state"] == "suspended" for c in before["contexts"]),
             "Expected browser activation to gate the actual audio context: " + str(before))
+        require(not initial["available"] and initial["deviceStatus"] == 4,
+            "Native audio must report suspended output before activation: " + str(initial))
         reference = None
         for clicks, sounding, label in [(1, True, "play"), (2, False, "pause"),
                 (3, True, "resume"), (4, False, "stop"), (5, True, "play again")]:
@@ -108,9 +110,20 @@ def run_cases(args, root, report, origin):
         events = case.client.evaluate("kbMouseEvents")
         require(len([e for e in events if e["type"] == "click"]) == 5 and all(e["trusted"] for e in events),
             "Audio transport must come from trusted browser input: " + str(events))
+        # Inject an interruption through the standard API after activation. This
+        # does not unlock audio or qualify recovery from an OS/device interruption.
+        case.client.call("Runtime.evaluate", expression="kbAudioReadback.contexts[0].suspend()", awaitPromise=True)
+        suspended_at = time.monotonic()
+        count = case.audio()["count"]
+        case.wait("native reports interrupted output and retains source intent",
+            lambda state: not state["available"] and state["deviceStatus"] == 4 and state["playing"])
+        require(case.audio()["count"] == count, "Output continued after context suspension")
+        report["suspensionDetectionMs"] = (time.monotonic() - suspended_at) * 1000
+        require(report["suspensionDetectionMs"] < 1500, "Native audio suspension diagnostic arrived too late")
         case.blue_button("audio-transport-native-ui")
         report["coverage"] = dict(nativeMixerPcm=True, trustedActivation=True, pauseResumeStop=True,
-            physicalSpeaker=False, deviceRouting=False, backgroundInterruption=False)
+            suspendedOutputStatus=True, injectedContextSuspension=True,
+            physicalSpeaker=False, deviceRouting=False, backgroundInterruption=False, interruptionRecovery=False)
 
 
 if __name__ == "__main__":

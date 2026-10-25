@@ -4,6 +4,10 @@
 
 #include <miniaudio.h>
 
+#if defined(__EMSCRIPTEN__)
+#include <atomic>
+#endif
+
 namespace kb::audio_miniaudio {
 
 class MiniaudioEngine final {
@@ -25,6 +29,10 @@ public:
     [[nodiscard]] ma_engine& Native() noexcept;
 
 private:
+#if defined(__EMSCRIPTEN__)
+    static void ObserveOutput(void* user, float* frames, ma_uint64 frameCount) noexcept;
+    std::atomic<double> outputActiveUntilMs_{0.0};
+#endif
     ma_engine engine_{};
     bool initialized_ = false;
     bool playbackAvailable_ = false;

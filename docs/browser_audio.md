@@ -30,7 +30,19 @@ pause/stop blocks. GPU rendering uses bgfx. This verifies delivery to WebAudio,
 not physical speaker output, acoustic latency or device routing. It does not
 qualify mobile browsers, AudioWorklet, background interruption or route changes.
 
-The current native `Audio.DeviceStatus` can report playback available while
-the browser context is suspended awaiting its first gesture. The report records
-both native status and actual context state; activation-aware native diagnostics
-remain to be implemented and verified.
+`Audio.DeviceStatus` returns `PlaybackSuspended` (4), with `available=false`,
+when a started browser device has not produced output callbacks yet, or its
+callbacks have stopped. Existing status values 0 through 3 retain their values.
+The backend observes miniaudio's public `onProcess` callback; it neither reads
+private JavaScript device state nor takes over browser activation. Recent output
+counts as available for at least 250 ms, or four callback blocks if longer, to
+allow callback jitter. This is output-activity detection with that bounded
+delay, not an immediate query of the browser context state.
+
+The source transport remains valid while output is suspended, preserving
+queued or autoplay intent. The scenario requires the native suspended status
+before the first gesture, then actual PCM and available status after activation.
+After replay, it explicitly calls the standard context `suspend()` API as an
+interruption injection and requires suspended native status, no further output
+callbacks and retained playing intent. This checks diagnostics for a controlled
+interruption; OS interruption and automatic recovery remain unverified.

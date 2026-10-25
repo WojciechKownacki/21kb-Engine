@@ -74,7 +74,7 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Audio.ResumeSource", "Resumes the audio source assigned to an entity and returns its transport status." },
     { "Audio.StopSource", "Stops the audio source assigned to an entity and returns its transport status." },
     { "Audio.IsSourcePlaying", "Returns the playback and transport status of an entity audio source." },
-    { "Audio.DeviceStatus", "Returns the current audio playback device status." },
+    { "Audio.DeviceStatus", "Returns the current audio playback device status, including suspended browser output awaiting activation or callbacks." },
     { "Audio.Reinitialize", "Restarts the audio playback backend and returns the resulting device status." },
     { "Audio.SetListenerLocalUser", "Selects which local user's audio listeners participate in runtime playback." },
     { "Audio.ListenerLocalUser", "Returns the local user currently selected for audio listener playback." },
