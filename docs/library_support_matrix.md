@@ -9,7 +9,7 @@ when the two disagree.
 | CI job | Runner | Build | Scope | CI targets |
 | --- | --- | --- | --- | --- |
 | Windows MSVC | `windows-2025-vs2026` | Visual Studio 2026, Release, editor and renderer on, strict first-party warnings | Engine, renderer, Win32 editor, game host, CLI; Native, Lua and Visual Graph frontends | Complete default build graph: all configured executables and providers |
-| Windows MSVC ASan | `windows-2025-vs2026` | Visual Studio 2026, Debug, AddressSanitizer | Engine UI and hierarchy boundaries, renderer, particle runtime, read batches and process lifetimes | `kb_engine_tests`, `kb_21kb_particle_snapshot_tests`, `kb_21kb_particle_cpu_backend_tests`, `kb_21kb_particle_editor_tests`, `kb_21kb_particle_renderer_tests`, `kb_renderer_tests`, `kb_ecs_query_shutdown_tests`, `kb_background_read_tests`, `kb_test_process_error_tests` |
+| Windows MSVC ASan | `windows-2025-vs2026` | Visual Studio 2026, Debug, AddressSanitizer | Engine UI and hierarchy boundaries, renderer, particle runtime, read batches and process lifetimes | `kb_engine_tests`, `kb_editor_tests`, `kb_21kb_particle_snapshot_tests`, `kb_21kb_particle_cpu_backend_tests`, `kb_21kb_particle_editor_tests`, `kb_21kb_particle_renderer_tests`, `kb_renderer_tests`, `kb_ecs_query_shutdown_tests`, `kb_background_read_tests`, `kb_test_process_error_tests` |
 | Linux GCC ASan UBSan | `ubuntu-24.04` | Unix Makefiles, Debug, editor and renderer off, ASan and UBSan | Headless engine runtime; Native, Lua and Visual Graph frontends | Complete default build graph: all configured executables and providers |
 
 The Windows MSVC job also runs the script API compatibility check

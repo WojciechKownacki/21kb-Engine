@@ -68,6 +68,17 @@ The audio implementation compiles this existing bundled decoder for Ogg Vorbis.
 Its original source and embedded license remain intact. The game distribution
 manifest includes its attribution and selected license.
 
+## Verblib
+
+- Source: `third_party/miniaudio/extras/nodes/ma_reverb_node/verblib.h` (version 0.5)
+- Author: Philip Bennefall
+- License: Unlicense or MIT No Attribution, at your option
+- License file: `third_party/licenses/verblib-0.5.txt`
+
+The audio reverb effect uses this reverb implementation bundled with miniaudio's extra
+nodes. Its source and embedded license remain intact, and the game distribution
+manifest includes its attribution and license text.
+
 ## ufbx
 
 - Repository: https://github.com/ufbx/ufbx
