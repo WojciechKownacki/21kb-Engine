@@ -1,3 +1,4 @@
+#include "Map2DCollision.hpp"
 #include "Map2DEditing.hpp"
 #include "Map2DTileset.hpp"
 #include "Map2DView.hpp"
@@ -38,6 +39,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <set>
 #include <variant>
 
 namespace {
@@ -868,6 +870,260 @@ int main() {
         Require(step(0.0F) == 2U, "Play builds the map again");
         Require(step(0.1F) == 0U, "Play starts every clip over: 0.1 s is still the first frame, as it was not after 0.8 s");
         Require(step(0.2F) == 1U, "and the clip then advances on its own time");
+    }
+    // Prefab cells at scale: thousands of instances appear once per cell, are never duplicated by painting the
+    // same cell again or changing its other data, vanish with the cell, and Stop releases every one of them.
+    {
+        using namespace kb::scene;
+        using kb::assets::Map2DTile;
+        Scene scene;
+        auto& manager = scene.Assets().Manager();
+        Require(manager.Mounts().Mount("Game", assets), "mount prefab cell assets");
+        Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()), "register prefab cell renderer");
+        const auto prefabSource = scene.Entities().CreateObject({ .name = "Marker" });
+        Require(scene.Prefabs().CreateAsset(prefabSource, "Marker", assets / "Marker.kbprefab").IsValid(), "save the marker prefab");
+        scene.Entities().Destroy(prefabSource.Entity());
+        static_cast<void>(scene.Assets().Discover());
+        constexpr std::uint32_t kSide = 64U;
+        auto map = kb::assets::MakeEmptyMap2DAsset(kSide, kSide);
+        map.background = false;
+        map.sheets.push_back({ .texture = "/Game/Sprites/ground.png", .material = "/Game/Maps/Materials/Test.kbmat", .columns = 4, .rows = 2 });
+        // A ground tile in every 16 cell chunk, so that the chunks exist before the prefabs are counted.
+        for (std::uint32_t chunkY = 0U; chunkY < kSide / 16U; ++chunkY) for (std::uint32_t chunkX = 0U; chunkX < kSide / 16U; ++chunkX) {
+            map.tiles[Map2DTileKey(chunkX * 16U, chunkY * 16U, 0)].ground = { .sheet = 0, .cell = 0 };
+        }
+        const auto file = root / "Markers.kbmap2d";
+        Require(kb::assets::Map2DAssetIO::Save(file, map), "save the prefab cell map");
+        const kb::assets::AssetId source{ 8456U };
+        Require(manager.RegisterAsset({ .id = source, .type = "RenderMesh", .virtualPath = "/Game/Markers.kbmap2d", .physicalPath = file, .contentHash = 1U }),
+            "register the prefab cell map");
+        const auto owner = scene.Entities().CreateEntity({ .name = "Markers" });
+        kb::world2d::SetUpMap2DComponents(scene, owner, source.value, map);
+        auto system = std::make_unique<kb::world2d::Map2DRuntime>();
+        auto* runtime = system.get();
+        static_cast<void>(scene.Runtime().AddSceneSystem(std::move(system)));
+        const auto step = [&]() {
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            Require(scene.Runtime().DrainSceneSystemErrors().empty(), "prefab cells run without errors");
+        };
+        const std::size_t beforePlay = scene.Entities().Count();
+        step();
+        const std::size_t withChunks = scene.Entities().Count();
+        Require(withChunks > beforePlay, "Play builds the chunk entities");
+
+        // Sets the prefab (or none) of every cell in rows [first, end) except the chunk anchors.
+        const auto mark = [&](std::uint32_t first, std::uint32_t end, const std::string& prefab) {
+            std::size_t cells = 0U;
+            for (std::uint32_t y = first; y < end; ++y) for (std::uint32_t x = 0U; x < kSide; ++x) {
+                if (x % 16U == 0U && y % 16U == 0U) continue;
+                Map2DTile tile = runtime->Tile(owner, x, y).value_or(Map2DTile{});
+                tile.prefab = prefab;
+                std::string error;
+                Require(runtime->SetTile(owner, x, y, 0, tile, &error), error.c_str());
+                ++cells;
+            }
+            return cells;
+        };
+        const std::string marker = "/Game/Marker.kbprefab";
+        const auto started = std::chrono::steady_clock::now();
+        const std::size_t marked = mark(0U, kSide, marker);
+        Require(marked == 4080U, "every cell but the chunk anchors gets a prefab");
+        step();
+        Require(scene.Entities().Count() - withChunks == marked, "one instance per prefab cell");
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
+        std::printf("map2d %zu prefab cells %lld ms\n", marked, static_cast<long long>(elapsed.count()));
+        Require(elapsed < std::chrono::seconds(30), "thousands of prefab cells stay inside their time budget");
+
+        static_cast<void>(mark(0U, kSide, marker));
+        step();
+        Require(scene.Entities().Count() - withChunks == marked && runtime->RebuiltChunksLastUpdate() == 0U,
+            "painting a cell with the prefab it already has changes nothing and creates no duplicate");
+        for (std::uint32_t x = 1U; x < 16U; ++x) {
+            Map2DTile tile = *runtime->Tile(owner, x, 5U);
+            tile.properties["visited"] = true;
+            Require(runtime->SetTile(owner, x, 5U, 0, tile), "set data on a prefab cell");
+        }
+        step();
+        Require(scene.Entities().Count() - withChunks == marked, "changing a prefab cell's data keeps its single instance");
+
+        const std::size_t cleared = mark(0U, 8U, "");
+        step();
+        Require(scene.Entities().Count() - withChunks == marked - cleared, "clearing the prefab of cells removes exactly their instances");
+        Require(runtime->Tile(owner, 3U, 5U).has_value() && runtime->Tile(owner, 3U, 5U)->properties.contains("visited"),
+            "clearing a prefab keeps the rest of the cell");
+        static_cast<void>(mark(0U, 8U, marker));
+        step();
+        Require(scene.Entities().Count() - withChunks == marked, "painting them again restores one instance each");
+
+        static_cast<void>(mark(0U, kSide, ""));
+        step();
+        Require(scene.Entities().Count() == withChunks, "erasing every prefab leaves no instance behind");
+        static_cast<void>(mark(0U, 3U, marker));
+        step();
+        Require(scene.Entities().Count() > withChunks, "the instances are back");
+        scene.Runtime().SetPlaying(false);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(scene.Entities().Count() == beforePlay, "Stop releases every chunk and every prefab instance");
+        scene.Runtime().SetPlaying(true);
+        step();
+        Require(scene.Entities().Count() == withChunks, "the next Play starts from the authored map, which has no prefab cells");
+    }
+    // Tile collision: neighbouring equal shapes join into boxes that cover exactly the solid cells, different
+    // shapes, floors and one-way ledges stay apart, and every box sits where its cells are.
+    {
+        using kb::assets::Map2DCollisionKind;
+        kb::scene::Scene scene;
+        const auto owner = scene.Entities().CreateEntity({ .name = "Shapes" });
+        const auto build = [&](const Map2DAsset& map, std::vector<kb::assets::AssetId>* meshes = nullptr) {
+            std::vector<kb::scene::ColliderComponent> colliders;
+            std::string error;
+            Require(kb::world2d::BuildMap2DCollision(scene, owner, map, colliders, meshes, &error), error.c_str());
+            return colliders;
+        };
+        const auto newMap = [](kb::assets::Map2DOrientation orientation) {
+            auto map = kb::assets::MakeEmptyMap2DAsset(8U, 8U);
+            map.orientation = orientation;
+            map.background = false;
+            return map;
+        };
+        struct Cells { int x0, y0, x1, y1; };
+        // The cells (x0..x1, y0..y1 exclusive; row 0 on top) a flat map's collider covers.
+        const auto covered = [](const Map2DAsset& map, const kb::scene::ColliderComponent& collider) {
+            const float size = map.tileSize;
+            const auto round = [](float value) { return static_cast<int>(std::lround(value)); };
+            return Cells{ round(collider.center.x / size + static_cast<float>(map.width) * 0.5F - collider.boxSize.x / size * 0.5F),
+                round(static_cast<float>(map.height) * 0.5F - collider.center.z / size - collider.boxSize.z / size * 0.5F),
+                round(collider.center.x / size + static_cast<float>(map.width) * 0.5F + collider.boxSize.x / size * 0.5F),
+                round(static_cast<float>(map.height) * 0.5F - collider.center.z / size + collider.boxSize.z / size * 0.5F) };
+        };
+
+        // A pattern with gaps, bars and a block: the boxes tile the solid cells exactly, with no overlap.
+        {
+            auto map = newMap(kb::assets::Map2DOrientation::Flat);
+            std::set<std::pair<int, int>> solid;
+            for (int y = 0; y < 8; ++y) for (int x = 0; x < 8; ++x) {
+                if ((x * 7 + y * 3) % 5 < 3 || (x >= 2 && x <= 4 && y >= 2 && y <= 4)) {
+                    map.tiles[Map2DTileKey(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), 0)].solid = true;
+                    solid.insert({ x, y });
+                }
+            }
+            const auto colliders = build(map);
+            std::set<std::pair<int, int>> seen;
+            for (const auto& collider : colliders) {
+                Require(collider.shape == kb::scene::ColliderShape::Box, "solid cells become boxes");
+                const Cells cells = covered(map, collider);
+                for (int y = cells.y0; y < cells.y1; ++y) for (int x = cells.x0; x < cells.x1; ++x) {
+                    Require(seen.insert({ x, y }).second, "no two collision boxes overlap");
+                }
+            }
+            Require(seen == solid, "the boxes cover exactly the solid cells");
+            Require(colliders.size() < solid.size(), "neighbouring solid cells join into larger boxes");
+        }
+        // A 2 x 2 block is one box, placed on the right cells; a lifted floor lifts its box and stays apart.
+        {
+            auto map = newMap(kb::assets::Map2DOrientation::Flat);
+            for (std::uint32_t y = 1U; y < 3U; ++y) for (std::uint32_t x = 1U; x < 3U; ++x) map.tiles[Map2DTileKey(x, y, 0)].solid = true;
+            map.tiles[Map2DTileKey(1U, 3U, 1)].solid = true;
+            const auto colliders = build(map);
+            Require(colliders.size() == 2U, "a block is one box and another floor's cell is its own box");
+            const auto block = std::ranges::find_if(colliders, [](const auto& collider) { return collider.boxSize.x > 1.5F; });
+            Require(block != colliders.end(), "the block's box is two cells wide");
+            Require(std::abs(block->center.x - -2.0F) < 0.0001F && std::abs(block->center.z - 2.0F) < 0.0001F &&
+                    std::abs(block->center.y - 0.5F) < 0.0001F && std::abs(block->boxSize.x - 2.0F) < 0.0001F &&
+                    std::abs(block->boxSize.z - 2.0F) < 0.0001F && std::abs(block->boxSize.y - 1.0F) < 0.0001F,
+                "a 2 x 2 block's box is two cells square, one cell high, centred over its cells");
+            const auto lifted = std::ranges::find_if(colliders, [](const auto& collider) { return collider.boxSize.x < 1.5F; });
+            Require(std::abs(lifted->center.y - 3.5F) < 0.0001F, "a cell on floor 1 stands one floor height higher");
+        }
+        // Shapes that differ in any property do not join.
+        {
+            auto map = newMap(kb::assets::Map2DOrientation::Flat);
+            map.tiles[Map2DTileKey(1U, 1U, 0)].solid = true;
+            map.tiles[Map2DTileKey(2U, 1U, 0)].collision = kb::assets::Map2DCollision{ .kind = Map2DCollisionKind::Solid, .friction = 0.1F };
+            map.tiles[Map2DTileKey(3U, 1U, 0)].collision = kb::assets::Map2DCollision{ .kind = Map2DCollisionKind::Solid, .trigger = true };
+            map.tiles[Map2DTileKey(4U, 1U, 0)].collision = kb::assets::Map2DCollision{ .kind = Map2DCollisionKind::Solid, .trigger = true };
+            const auto colliders = build(map);
+            Require(colliders.size() == 3U, "different friction or trigger flags keep neighbouring cells apart; equal ones join");
+            const auto trigger = std::ranges::find_if(colliders, [](const auto& collider) { return collider.trigger; });
+            Require(trigger != colliders.end() && trigger->boxSize.x > 1.5F, "equal triggers join into one trigger box");
+            const auto slippery = std::ranges::find_if(colliders, [](const auto& collider) { return collider.friction < 0.2F; });
+            Require(slippery != colliders.end() && std::abs(slippery->friction - 0.1F) < 0.0001F, "the friction of a cell reaches its box");
+        }
+        // One-way ledges join along a row, not down a column, and stop bodies on their top face only.
+        {
+            auto map = newMap(kb::assets::Map2DOrientation::Flat);
+            for (std::uint32_t x = 1U; x < 4U; ++x) map.tiles[Map2DTileKey(x, 2U, 0)].collision = kb::assets::Map2DCollision{ .kind = Map2DCollisionKind::OneWay };
+            map.tiles[Map2DTileKey(1U, 3U, 0)].collision = kb::assets::Map2DCollision{ .kind = Map2DCollisionKind::OneWay };
+            map.tiles[Map2DTileKey(6U, 6U, 0)].solid = true;
+            const auto colliders = build(map);
+            Require(colliders.size() == 3U, "a ledge of three cells is one collider, the cell below it another, a solid cell its own");
+            for (const auto& collider : colliders) {
+                if (collider.shape != kb::scene::ColliderShape::OneWayBox) continue;
+                Require(std::abs(collider.center.y + collider.boxSize.y * 0.5F - 1.0F) < 0.0001F && collider.boxSize.y < 0.1F,
+                    "a ledge is a thin slab whose top face is the top of its cell");
+            }
+            Require(std::ranges::count_if(colliders, [](const auto& collider) { return collider.shape == kb::scene::ColliderShape::OneWayBox; }) == 2,
+                "two ledge colliders");
+        }
+        // Wall maps stand the tile plane upright: rows count down from the top of the map.
+        {
+            auto map = newMap(kb::assets::Map2DOrientation::Wall);
+            map.tiles[Map2DTileKey(3U, 6U, 0)].solid = true;
+            map.tiles[Map2DTileKey(4U, 6U, 0)].solid = true;
+            const auto colliders = build(map);
+            Require(colliders.size() == 1U, "two neighbouring cells of a wall map join");
+            Require(std::abs(colliders[0].center.x) < 0.0001F && std::abs(colliders[0].center.y - 1.5F) < 0.0001F &&
+                    std::abs(colliders[0].boxSize.x - 2.0F) < 0.0001F && std::abs(colliders[0].boxSize.y - 1.0F) < 0.0001F &&
+                    std::abs(colliders[0].boxSize.z - 1.0F) < 0.0001F,
+                "a wall map's box stands on row 6 of 8: its middle is 1.5 above the bottom");
+        }
+        // Slopes: the mesh is closed and faces outward, its sloped face looks up and away from the solid side,
+        // equal slopes share one mesh, and a slope never joins a solid cell next to it.
+        for (const bool wall : { true, false }) {
+            for (const bool up : { true, false }) {
+                auto map = newMap(wall ? kb::assets::Map2DOrientation::Wall : kb::assets::Map2DOrientation::Flat);
+                const auto slope = up ? Map2DCollisionKind::SlopeUp : Map2DCollisionKind::SlopeDown;
+                map.tiles[Map2DTileKey(2U, 3U, 0)].collision = kb::assets::Map2DCollision{ .kind = slope };
+                map.tiles[Map2DTileKey(3U, 3U, 0)].collision = kb::assets::Map2DCollision{ .kind = slope };
+                map.tiles[Map2DTileKey(4U, 3U, 0)].solid = true;
+                std::vector<kb::assets::AssetId> meshes;
+                const auto colliders = build(map, &meshes);
+                Require(colliders.size() == 3U && meshes.size() == 1U, "two slopes and a solid cell are three colliders using one shared slope mesh");
+                const auto first = std::ranges::find_if(colliders, [](const auto& collider) { return collider.shape == kb::scene::ColliderShape::Mesh; });
+                Require(first != colliders.end() && first->meshAssetId != 0U && std::ranges::count_if(colliders, [&](const auto& collider) {
+                    return collider.shape == kb::scene::ColliderShape::Mesh && collider.meshAssetId == first->meshAssetId; }) == 2,
+                    "equal slopes share one mesh");
+                const auto mesh = scene.Assets().Manager().AcquireLoaded<kb::assets::CollisionMeshAsset>(meshes.front());
+                Require(mesh.IsLoaded(), "the slope mesh is published");
+                const auto& positions = mesh->positions;
+                const auto& indices = mesh->indices;
+                // Directions: in a wall map the plane is X/Y and the thickness Z; in a flat map X/Z and Y.
+                const auto lateral = [&](const kb::math::Vec3& p) { return p.x; };
+                const auto vertical = [&](const kb::math::Vec3& p) { return wall ? p.y : p.z; };
+                float volume = 0.0F;
+                float best = -2.0F;
+                for (std::size_t index = 0U; index + 2U < indices.size(); index += 3U) {
+                    const auto& a = positions[indices[index]];
+                    const auto& b = positions[indices[index + 1U]];
+                    const auto& c = positions[indices[index + 2U]];
+                    const kb::math::Vec3 ab{ b.x - a.x, b.y - a.y, b.z - a.z };
+                    const kb::math::Vec3 ac{ c.x - a.x, c.y - a.y, c.z - a.z };
+                    const kb::math::Vec3 cross{ ab.y * ac.z - ab.z * ac.y, ab.z * ac.x - ab.x * ac.z, ab.x * ac.y - ab.y * ac.x };
+                    volume += (a.x * cross.x + a.y * cross.y + a.z * cross.z) / 6.0F;
+                    // The sloped face: all three corners on the line through the cell's corners, whatever the thickness.
+                    const float expectedRise = up ? 1.0F : -1.0F;
+                    const auto onLine = [&](const kb::math::Vec3& p) { return std::abs(vertical(p) - expectedRise * lateral(p)) < 0.0001F; };
+                    if (!(onLine(a) && onLine(b) && onLine(c))) continue;
+                    const float length = std::sqrt(cross.x * cross.x + cross.y * cross.y + cross.z * cross.z);
+                    const float normalLateral = cross.x / length;
+                    const float normalVertical = (wall ? cross.y : cross.z) / length;
+                    // Up and away from the solid side: SlopeUp rises to the right (normal leans left), SlopeDown leans right.
+                    best = std::max(best, normalVertical * 0.7071F + normalLateral * (up ? -0.7071F : 0.7071F));
+                }
+                Require(std::abs(volume - 0.5F) < 0.0001F, "the slope mesh is closed, faces outward and is half a cell");
+                Require(best > 0.999F, "the sloped face looks up and away from the solid side");
+            }
+        }
     }
     std::filesystem::remove_all(root);
     std::puts("kb_world2d_tests passed");
