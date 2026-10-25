@@ -436,6 +436,69 @@ void TestHierarchicalTransformsAndMaskHitTesting() {
         "Hit testing must reject a point inside the mask bounds but outside its transformed quad");
 }
 
+// Masks inside masks: a descendant is clipped by every mask above it, so only the overlap of the two takes presses,
+// and the overlap follows the canvas when the screen it is scaled to changes size.
+void TestNestedMasksClipToTheirOverlap() {
+    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
+    kb::scene::UIComponentSet canvasComponents = CanvasComponents();
+    canvasComponents.canvasScaler->scaleMode = kb::scene::UICanvasScaleMode::ScaleWithScreenSize;
+    canvasComponents.canvasScaler->referenceResolution = {200.0F, 200.0F};
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, canvasComponents);
+    kb::scene::UIComponentSet outerComponents;
+    outerComponents.rectTransform = Rect(20.0F, 20.0F, 100.0F, 100.0F);
+    outerComponents.mask.emplace();
+    const kb::scene::SceneObject outer = AddUI(scene, canvas, outerComponents);
+    kb::scene::UIComponentSet innerComponents;
+    innerComponents.rectTransform = Rect(60.0F, 60.0F, 100.0F, 100.0F);
+    innerComponents.mask.emplace();
+    const kb::scene::SceneObject inner = AddUI(scene, outer, innerComponents);
+    kb::scene::UIComponentSet leafComponents;
+    leafComponents.rectTransform = Rect(-100.0F, -100.0F, 400.0F, 400.0F);
+    leafComponents.selectable.emplace();
+    const kb::scene::SceneObject leaf = AddUI(scene, inner, leafComponents);
+
+    // The masks overlap in the square from 80 to 120 in canvas units.
+    for (const float scale : {1.0F, 2.0F, 0.5F}) {
+        const float side = 200.0F * scale;
+        kb::tests::Require(scene.UI().Update(side, side, {}, 0.016F), "The nested mask frame must build");
+        const kb::scene::SceneUIFrameElement* leafFrame = FindElement(scene.UI().Frame(), leaf.Entity());
+        kb::tests::Require(leafFrame != nullptr && leafFrame->clipQuads.size() == 2U,
+            "A descendant of two masks must carry both mask quads");
+        kb::tests::Require(scene.UI().HitTest({100.0F * scale, 100.0F * scale}) == leaf.Entity(),
+            "A press inside both masks must reach the descendant");
+        kb::tests::Require(!scene.UI().HitTest({50.0F * scale, 50.0F * scale}).IsValid(),
+            "A press inside the outer mask only must not reach the descendant");
+        kb::tests::Require(!scene.UI().HitTest({150.0F * scale, 150.0F * scale}).IsValid(),
+            "A press inside the inner mask only must not reach the descendant");
+        kb::tests::Require(!scene.UI().HitTest({121.0F * scale, 100.0F * scale}).IsValid() && scene.UI().HitTest({119.0F * scale, 100.0F * scale}) == leaf.Entity(),
+            "The overlap must end exactly where the outer mask ends, at every scale");
+    }
+
+    // A turned mask inside a straight one: the corners of the turned mask's bounding box are inside the outer mask
+    // and inside the box, but outside the turned quad, and take no press; its middle does.
+    kb::scene::Scene turned{kb::scene::SceneMode::PrefabPrivate};
+    const kb::scene::SceneObject turnedCanvas = AddUI(turned, {}, CanvasComponents());
+    kb::scene::UIComponentSet straightComponents;
+    straightComponents.rectTransform = Rect(0.0F, 0.0F, 200.0F, 200.0F);
+    straightComponents.mask.emplace();
+    const kb::scene::SceneObject straight = AddUI(turned, turnedCanvas, straightComponents);
+    kb::scene::UIComponentSet diamondComponents;
+    diamondComponents.rectTransform = Rect(50.0F, 50.0F, 100.0F, 100.0F);
+    diamondComponents.rectTransform->rotationDegrees = 45.0F;
+    diamondComponents.mask.emplace();
+    const kb::scene::SceneObject diamond = AddUI(turned, straight, diamondComponents);
+    kb::scene::UIComponentSet coverComponents;
+    coverComponents.rectTransform = Rect(-100.0F, -100.0F, 400.0F, 400.0F);
+    coverComponents.selectable.emplace();
+    const kb::scene::SceneObject cover = AddUI(turned, diamond, coverComponents);
+    kb::tests::Require(turned.UI().Update(200.0F, 200.0F, {}, 0.016F), "The turned mask frame must build");
+    kb::tests::Require(turned.UI().HitTest({100.0F, 100.0F}) == cover.Entity(), "The middle of a turned mask takes presses");
+    kb::tests::Require(!turned.UI().HitTest({160.0F, 160.0F}).IsValid() && !turned.UI().HitTest({40.0F, 160.0F}).IsValid(),
+        "The corners of a turned mask's bounding box take no press");
+    kb::tests::Require(turned.UI().HitTest({100.0F, 40.0F}) == cover.Entity() || turned.UI().HitTest({100.0F, 45.0F}) == cover.Entity(),
+        "The tip of a turned mask takes presses");
+}
+
 template <typename Component, typename Mutation>
 void RequireInvalidFramePayload(Mutation mutate, std::string_view componentName) {
     kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
@@ -2174,6 +2237,7 @@ void RunSceneUITests() {
     TestFrameNextToMillionRootsIsCheap();
     TestInputFieldEditsGraphemeClusters();
     TestResponsiveMenuKeepsEveryControlReachable();
+    TestNestedMasksClipToTheirOverlap();
     RunUITextLineBreakingTests();
 }
 
