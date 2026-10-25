@@ -5,6 +5,63 @@ movement and attach a follow camera"*, and the AI agent writes the Lua scripts, 
 them into the scene, and checks that they work. The engine ships a small tool,
 `kb_cli`, that makes this possible.
 
+## Which language to start with
+
+**Start with Lua.** It is the language the templates, the API reference, the agent tools and the
+examples are written for; scripts are plain text files, a mistake is reported with its file and line
+and never needs a rebuild, and the packaged game runs them in the same sandbox as the editor. C++
+(`script-new --language cpp`) and Visual Graph are options for when a project needs them: C++ for
+code that must be as fast as the engine and can use any library, with a toolchain to install and a
+module to build; Visual Graph for logic drawn as nodes. Nothing in the engine requires them.
+
+A first game from the template, with every step available to `kb_cli`:
+
+1. `kb_cli init-agent --project <dir>` writes `PlayerController.lua` (moves the object from the input
+   actions) and `Projectile.lua`.
+2. `kb_cli scene-attach` puts the controller on the player; `kb_cli validate` checks the script.
+3. `kb_cli run --frames 120` plays the scene without a window and reports script errors; the tests of
+   the engine run the same template with a key held and check that the Transform moves.
+4. Scripts read input with `Input.*`, move bodies with `Physics.*`, show and read widgets with `UI.*`
+   and keep progress with `Save.Write` / `Save.Read` (a save slot per name, atomic, with a size limit,
+   see `release_security.md`).
+5. Export is done by the editor's Build Game command or the packaging scripts; the packaged game uses
+   the same scripts and the same save files.
+
+## What a script is allowed to do
+
+Lua scripts run in a sandbox. A script gets its own copy of `assert`, `error`, `ipairs`, `pairs`,
+`pcall`, `select`, `tonumber`, `tostring`, `type` and the `coroutine`, `table`, `string`, `math` and
+`utf8` libraries. There is no `os`, `io`, `debug` or `package`, and `load`, `loadfile`, `dofile`,
+`require` and `collectgarbage` do not exist; text chunks only. The only files a script can reach are its
+own save slots (through `Save.*`, with a quota), and the only network access is the `Net.*` API. A
+script cannot start a process.
+
+Limits, per behaviour call: the instruction budget (`luaInstructionsPerBehaviour`; also applied to the
+code at the top of a script while it loads, so a loop there fails the load) and a memory cap per Lua
+runtime (256 MiB by default). A script that exceeds a limit fails with a diagnostic naming the limit and
+the script; the shipped hosts then disable that behaviour (`disableFailingBehaviours`), and the other
+scripts keep running. The instruction budget is off until a host sets it; there is no wall-clock limit.
+
+**Native C++ scripts and plugins are not sandboxed.** They run inside the game process with all of its
+rights and can do anything the game can. Load them only from projects and mods you trust; the engine
+checks their hash against the release manifest in a packaged game but does not isolate them.
+
+## Hot reload
+
+Reloading a Lua script runs the new code in a fresh environment and swaps it in only if that works: a
+syntax error, or an error in the code at the top of the script, keeps the running version (its hash
+stays current) and reports the error with file and line. A successful reload is a restart of that
+script, not a migration: its lifecycle starts again (Created, Ready) and values kept in the old
+environment are gone; shared values (`SetShared`), saves and scene data stay. Repeated reloads release
+the old environments and coroutines (tested with 200 reloads).
+
+## Debugging
+
+The Lua runtime can pause a script at a breakpoint, step into, over and out, continue, and show the call
+stack and locals. A paused script is suspended, not blocking: the game loop and the other scripts keep
+running. When the debugger goes away, clear its settings and resume, and the script runs to the end.
+There is no evaluate command and no `kb_cli` debug session yet.
+
 ## Setup
 
 **Once per machine** — build the tool and add it to `PATH`:
