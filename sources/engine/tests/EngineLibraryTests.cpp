@@ -2654,6 +2654,69 @@ void RunFunctionDeprecationWiringTest() {
     kb::tests::Require(!danglingResult.succeeded, "Engine21kbLibrary deprecation wiring test must reject a deprecation declared for a nonexistent function");
 }
 
+// A module that cannot finish registering (its registration budget is too small), one with capability but no Register
+// function, and one that audits a function it never registered each fail the install with a diagnostic naming the module;
+// the startup report calls the allocation figure what it is.
+void RunModuleInstallFaultsAreReportedTest() {
+    const auto registerOne = [](kb::script::ScriptRuntimeHost& host) {
+        return host.RegisterFunction(kb::script::ScriptFunctionDesc{
+            .signature = { .name = "Faulty.One", .description = "A function a module registers." },
+            .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+            } });
+    };
+    const auto registerMany = [](kb::script::ScriptRuntimeHost& host) {
+        for (int index = 0; index < 100000; ++index) {
+            const bool registered = host.RegisterFunction(kb::script::ScriptFunctionDesc{
+                .signature = { .name = "Faulty.Bulk" + std::to_string(index), .description = "A function a module registers." },
+                .callback = [](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument>) {
+                    return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+                } });
+            if (!registered) return false;
+        }
+        return true;
+    };
+    const auto hasDiagnostic = [](const kb::library::EngineLibraryModuleResult& result, const std::string& text) {
+        return std::ranges::any_of(result.diagnostics, [&](const std::string& line) { return line.find(text) != std::string::npos; });
+    };
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        const std::vector<kb::library::LibraryModuleDesc> modules{
+            // Registers until the registry has to grow, which is charged to the budget of 1 byte and refused.
+            kb::library::LibraryModuleDesc{ .name = "TinyBudget", .Register = registerMany, .registrationAllocationBudgetBytes = 1U },
+        };
+        const kb::library::EngineLibraryModuleResult result = kb::library::EngineLibraryModule::InstallModules(host, modules);
+        kb::tests::Require(!result.succeeded && hasDiagnostic(result, "TinyBudget"), "a module over its registration budget must fail the install and be named");
+        kb::tests::Require(result.report.size() == 1U && !result.report[0].installed &&
+                result.report[0].registrationAllocationTelemetry.rejectedAllocationCount > 0U,
+            "the report must show the rejected registration allocation");
+        const std::string text = kb::library::FormatStartupReport(result.report);
+        kb::tests::Require(text.find("registration-alloc=") != std::string::npos && text.find("runtime memory, CPU or GPU") != std::string::npos,
+            "the startup report must say the allocation figure covers registration only");
+    }
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        const std::vector<kb::library::LibraryModuleDesc> modules{ kb::library::LibraryModuleDesc{ .name = "NoRegister" } };
+        const kb::library::EngineLibraryModuleResult result = kb::library::EngineLibraryModule::InstallModules(host, modules);
+        kb::tests::Require(!result.succeeded && hasDiagnostic(result, "module 'NoRegister' has capability but no Register function"),
+            "a module with capability and no Register function must fail with its own diagnostic");
+    }
+    {
+        kb::scene::Scene scene;
+        kb::script::ScriptRuntimeHost host{ scene };
+        const std::vector<kb::library::LibraryModuleDesc> modules{
+            kb::library::LibraryModuleDesc{ .name = "Faulty", .Register = registerOne,
+                .functions = { kb::library::LibraryFunctionDesc{ .canonicalName = "Faulty.One" }, kb::library::LibraryFunctionDesc{ .canonicalName = "Faulty.Never" } } },
+        };
+        const kb::library::EngineLibraryModuleResult result = kb::library::EngineLibraryModule::InstallModules(host, modules);
+        kb::tests::Require(!result.succeeded && hasDiagnostic(result, "module 'Faulty' audits 'Faulty.Never', but Register() did not register it"),
+            "an audited function that was never registered must fail the install");
+        kb::tests::Require(!hasDiagnostic(result, "Faulty.One"), "the audited function that was registered must not be reported");
+    }
+}
+
 // LIB-026: a function's id must depend only on its canonical name, not on
 // where it lands in ScriptFunctionRegistry::Functions() or which
 // ScriptRuntimeHost instance registered it.
@@ -5714,6 +5777,7 @@ void RunEngineLibraryTests() {
     RunApiCompatibilityComparisonTest();
     RunDeprecationTest();
     RunFunctionDeprecationWiringTest();
+    RunModuleInstallFaultsAreReportedTest();
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
     RunVisibilityGateResolutionTest();

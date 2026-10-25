@@ -3457,6 +3457,61 @@ void RunMcpCommandTests() {
     Require(Contains(responses[8], "Input.IsPressed") && Contains(responses[8], "\"isError\":false"), "mcp api_reference call failed");
 }
 
+// Over MCP an unknown tool, a call without its required arguments and a path that leaves the project are refused as tool
+// errors that say why, and every tool tools/list offers is a tool the server can dispatch.
+void RunMcpCommandRefusalTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    const auto call = [](int id, const std::string& name, const std::string& arguments) {
+        return R"({"jsonrpc":"2.0","id":)" + std::to_string(id) + R"(,"method":"tools/call","params":{"name":")" + name +
+            R"(","arguments":)" + arguments + "}}\n";
+    };
+    std::string input = R"({"jsonrpc":"2.0","id":1,"method":"tools/list"})" + std::string{ "\n" };
+    input += call(2, "no_such_tool", "{}");
+    input += call(3, "scene_attach", "{}");
+    input += call(4, "scene_list", R"({"scene":"../outside.21kbscene"})");
+    input += call(5, "validate_script", "{}");
+    std::istringstream in{ input };
+    std::ostringstream out;
+    std::ostringstream err;
+    const std::vector<std::string> raw{ "--project", root };
+    const kb::cli::ArgumentList arguments{ raw, kFlagNames };
+    Require(kb::cli::RunMcpCommand(arguments, in, kb::cli::CommandIo{ .out = out, .err = err }) == 0, "mcp server exited with an error");
+    std::vector<std::string> responses;
+    std::istringstream lines{ out.str() };
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (!line.empty()) responses.push_back(line);
+    }
+    Require(responses.size() == 5U, "mcp refusal response count is wrong");
+    Require(Contains(responses[1], "\"isError\":true") && Contains(responses[1], "unknown tool: no_such_tool"), "mcp must refuse an unknown tool by name");
+    Require(Contains(responses[2], "\"isError\":true"), "mcp must refuse scene_attach without its node and script");
+    Require(Contains(responses[3], "\"isError\":true") && Contains(responses[3], "outside the project"), "mcp must refuse a scene outside the project");
+    Require(Contains(responses[4], "\"isError\":true"), "mcp must refuse validate_script without its path");
+
+    // Every tool the list offers is dispatched: calling it without arguments may fail, but never as an unknown tool.
+    JsonValue listed;
+    std::string parseError;
+    Require(JsonValue::Parse(responses[0], listed, parseError), "mcp tools/list is not JSON");
+    const JsonValue* result = listed.Find("result");
+    const JsonValue* tools = result != nullptr ? result->Find("tools") : nullptr;
+    Require(tools != nullptr && tools->Size() >= 6U, "mcp tools/list must offer the tools");
+    std::string probes;
+    std::vector<std::string> names;
+    for (std::size_t index = 0; index < tools->Size(); ++index) {
+        const JsonValue* tool = tools->At(index);
+        const JsonValue* name = tool != nullptr ? tool->Find("name") : nullptr;
+        Require(name != nullptr, "an mcp tool has no name");
+        names.push_back(name->AsString());
+        probes += call(static_cast<int>(index) + 1, names.back(), "{}");
+    }
+    std::istringstream probeIn{ probes };
+    std::ostringstream probeOut;
+    std::ostringstream probeErr;
+    Require(kb::cli::RunMcpCommand(arguments, probeIn, kb::cli::CommandIo{ .out = probeOut, .err = probeErr }) == 0, "mcp probe run failed");
+    Require(probeOut.str().find("unknown tool") == std::string::npos, "tools/list offers a tool the server cannot dispatch");
+}
+
 void RunAudioMixerCommandTests() {
     const auto parent = TestRoot() / "audio_mixer";
     std::error_code error;
@@ -4390,6 +4445,7 @@ int main(int argc, char** argv) {
     RunApiCommandTests();
     RunApiCheckCommandTests();
     RunMcpCommandTests();
+    RunMcpCommandRefusalTests();
     RunKeyAndPackCommandTests();
     RunWorldCommandTests();
     RunNavMeshCommandTests();

@@ -385,13 +385,29 @@ EngineLibraryModuleResult EngineLibraryModule::InstallModules(kb::script::Script
         host.Functions().SetRegistrationAllocationTelemetry(&entry.registrationAllocationTelemetry);
         const bool registered = module.Register != nullptr && module.Register(host);
         host.Functions().SetRegistrationAllocationTelemetry(nullptr);
-        if (!registered) {
+        if (module.Register == nullptr) {
+            entry.installed = false;
+            entry.reason = "the module has capability but no Register function";
+            result.succeeded = false;
+            result.diagnostics.emplace_back("module '" + module.name + "' has capability but no Register function");
+        } else if (!registered) {
             entry.installed = false;
             entry.reason = "script API could not be fully registered";
             result.succeeded = false;
             result.diagnostics.emplace_back(module.name + " script API could not be fully registered");
         } else {
             entry.installed = true;
+            // A function the catalog audits has to exist once Register() has run; an audit entry without a
+            // registered function would pass every metadata check while describing nothing callable.
+            for (const LibraryFunctionDesc& function : module.functions) {
+                if (host.Functions().FindSignature(function.canonicalName) == nullptr) {
+                    entry.installed = false;
+                    entry.reason = "an audited function was not registered";
+                    result.succeeded = false;
+                    result.diagnostics.emplace_back(
+                        "module '" + module.name + "' audits '" + function.canonicalName + "', but Register() did not register it");
+                }
+            }
             // LIB-025: apply each audited function's declared deprecation
             // (if any) to the now-registered ScriptFunctionRegistry entry —
             // the one place kb::library is allowed to reach into a
@@ -420,6 +436,8 @@ EngineLibraryModuleResult EngineLibraryModule::InstallModules(kb::script::Script
 
 std::string FormatStartupReport(const std::vector<EngineLibraryModuleReportEntry>& report) {
     std::string text = "kb::library startup report (" + std::to_string(report.size()) + " module" + (report.size() == 1U ? "" : "s") + "):\n";
+    text += "  (registration-alloc counts only what the script function registry allocated while a module registered its"
+            " functions; it says nothing about runtime memory, CPU or GPU use)\n";
     for (const EngineLibraryModuleReportEntry& entry : report) {
         text += "  ";
         text += entry.installed ? "[installed] " : "[disabled]  ";
@@ -433,7 +451,7 @@ std::string FormatStartupReport(const std::vector<EngineLibraryModuleReportEntry
         text += " (";
         text += entry.ownerRuntime;
         text += ')';
-        text += " alloc=";
+        text += " registration-alloc=";
         text += std::to_string(entry.registrationAllocationTelemetry.used);
         text += '/';
         text += std::to_string(entry.registrationAllocationTelemetry.budget);

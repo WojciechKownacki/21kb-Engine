@@ -152,6 +152,12 @@ if(BUILD_TESTING)
         set_tests_properties(kb_cli_renderer_info PROPERTIES LABELS "tools;gpu" TIMEOUT 300)
     endif()
 
+    # The committed script API baseline: a removed or changed function fails here as well as in CI, so a breaking change
+    # shows up in a local ctest run. An intentional change updates the baseline with --update-baseline in the same commit.
+    add_test(NAME kb_cli_api_check_committed_baseline COMMAND kb_cli api-check
+        --baseline "${PROJECT_SOURCE_DIR}/tests/api_baseline/script_api.json")
+    set_tests_properties(kb_cli_api_check_committed_baseline PROPERTIES LABELS "tools" TIMEOUT 120)
+
     kb_apply_quality_gates(kb_cli_tests)
 
     if(WIN32 AND KB_BUILD_PROVIDER_MODULES_AS_DLL)

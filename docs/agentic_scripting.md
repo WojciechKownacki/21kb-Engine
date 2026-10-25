@@ -164,6 +164,12 @@ More commands, each with its options in `kb_cli help`:
 | `kb_cli physics-layers` | show or edit the layer collision matrix |
 | `kb_cli lighting-quality` | show or set the shadow and global illumination quality |
 
+## Script API stability
+
+`kb_cli api-check --baseline tests/api_baseline/script_api.json` compares the script API (functions, pins, components) with the committed baseline. 
+A removed function or a changed pin is a breaking change and fails with exit code 1, in CI and in the `kb_cli_api_check_committed_baseline` test. 
+An added function or component is reported as additive and passes. The baseline changes only on purpose: run the same command with `--update-baseline` and commit the file together with the change that needs it.
+
 ## Scripting `kb_cli` without a person at the keyboard
 
 Every command runs without prompts: all input comes from its options, and `kb_cli help`
