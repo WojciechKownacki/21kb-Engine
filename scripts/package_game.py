@@ -2245,6 +2245,28 @@ def _launch(args: argparse.Namespace) -> None:
         _launch_linux(args)
 
 
+def _source_state(engine_root: Path) -> dict[str, str]:
+    """Which engine commit the package was built from and whether the tree had changes the commit does not hold.
+
+    "unknown" means git could not answer (no git, not a work tree); it is recorded, never guessed.
+    """
+    def git(*arguments: str) -> str | None:
+        try:
+            completed = subprocess.run(
+                ("git", "-C", str(engine_root), *arguments),
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return completed.stdout.strip() if completed.returncode == 0 else None
+
+    commit = git("rev-parse", "--verify", "HEAD")
+    status = git("status", "--porcelain", "--untracked-files=no")
+    if commit is None or status is None:
+        return {"gitCommit": "unknown", "treeState": "unknown"}
+    return {"gitCommit": commit, "treeState": "dirty" if status else "clean"}
+
+
 def _receipt(
     args: argparse.Namespace,
     project_fingerprint: str,
@@ -2271,6 +2293,7 @@ def _receipt(
             "projectSha256": project_fingerprint,
             "engineSha256": engine_fingerprint,
         },
+        "source": _source_state(args.engine_root),
         "tools": [tool_fingerprint(path) for path in unique_tools],
     }
 

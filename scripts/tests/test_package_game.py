@@ -2162,5 +2162,43 @@ class PackageGameTests(unittest.TestCase):
             with self.assertRaisesRegex(PackagingError, "license file is missing"):
                 package_game._stage_licenses(args, root / "stage")
 
+class SourceStateTests(unittest.TestCase):
+    """The receipt names the engine commit and says whether the tree matched it."""
+
+    def _git(self, root: Path, *arguments: str) -> None:
+        subprocess.run(
+            ("git", "-C", str(root), "-c", "user.name=test", "-c", "user.email=test@example.invalid", *arguments),
+            check=True, capture_output=True,
+        )
+
+    def test_clean_dirty_and_unknown_trees_are_told_apart(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is not installed")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "engine"
+            root.mkdir()
+            self._git(root, "init", "-q")
+            (root / "file.txt").write_text("one" + chr(10), encoding="utf-8")
+            self._git(root, "add", "file.txt")
+            self._git(root, "commit", "-q", "-m", "first")
+            head = subprocess.run(("git", "-C", str(root), "rev-parse", "HEAD"), check=True, capture_output=True, text=True).stdout.strip()
+            clean = package_game._source_state(root)
+            self.assertEqual({"gitCommit": head, "treeState": "clean"}, clean)
+            (root / "file.txt").write_text("two" + chr(10), encoding="utf-8")
+            dirty = package_game._source_state(root)
+            self.assertEqual({"gitCommit": head, "treeState": "dirty"}, dirty)
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual({"gitCommit": "unknown", "treeState": "unknown"}, package_game._source_state(Path(directory)))
+
+    def test_receipt_carries_the_source_state(self) -> None:
+        arguments = argparse.Namespace(
+            target=next(iter(package_game.TARGETS)), configuration="Release", product_name="P", publisher="Q",
+            version="1.0.0", executable_name="Game", engine_root=SCRIPTS.parent,
+        )
+        with mock.patch.object(package_game, "_source_state", return_value={"gitCommit": "a" * 40, "treeState": "clean"}):
+            receipt = package_game._receipt(arguments, "0" * 64, "1" * 64, ())
+        self.assertEqual({"gitCommit": "a" * 40, "treeState": "clean"}, receipt["source"])
+
+
 if __name__ == "__main__":
     unittest.main()
