@@ -1103,6 +1103,166 @@ void TestMultiGamepadMapping() {
     Require(!subsystem.IsActionPressed("Jump0"), "Gamepad 1's button press must not trigger Jump0 (gamepad 0)");
 }
 
+
+// A subsystem with the given actions and contexts, resolving them by id.
+struct TestInputWorld {
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions;
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts;
+    InputSubsystem subsystem;
+    void Install() {
+        subsystem.SetResolvers(
+            [this](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+                const auto found = actions.find(id);
+                return found != actions.end() ? found->second : nullptr;
+            },
+            [this](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+                const auto found = contexts.find(id);
+                return found != contexts.end() ? found->second : nullptr;
+            });
+    }
+};
+
+// A menu opened over gameplay while a key is held: the gameplay action stops at once and nothing is left pressed, the
+// menu action takes the key, and closing the menu hands the still-held key back to gameplay.
+void TestContextSwitchWithAHeldKeyLeavesNothingStuck() {
+    TestInputWorld world;
+    world.actions = { { 1U, MakeAction("Jump", InputActionValueType::Bool, true) }, { 2U, MakeAction("Confirm", InputActionValueType::Bool, true) } };
+    auto gameplay = std::make_shared<InputMappingContextAsset>();
+    gameplay->mappings.push_back(InputKeyMapping{ .actionId = 1U, .key = InputKey::Space });
+    auto menu = std::make_shared<InputMappingContextAsset>();
+    menu->mappings.push_back(InputKeyMapping{ .actionId = 2U, .key = InputKey::Space });
+    world.contexts = { { 10U, gameplay }, { 20U, menu } };
+    world.Install();
+    InputSubsystem& input = world.subsystem;
+    Require(input.AddMappingContext(10U, InputContextPriority::Gameplay), "The gameplay context must resolve");
+
+    input.MutableDeviceState().SetKeyDown(InputKey::Space, true);
+    input.Evaluate(0.016F);
+    Require(input.IsActionPressed("Jump") && input.WasActionStarted("Jump"), "Jump must start when Space goes down");
+    Require(input.AddMappingContext(20U, InputContextPriority::UI), "The menu context must resolve");
+    input.Evaluate(0.016F);
+    Require(!input.IsActionPressed("Jump") && input.WasActionCompleted("Jump") && input.IsActionPressed("Confirm"),
+        "Opening a menu over a held key must end the gameplay action and give the key to the menu");
+    input.Evaluate(0.016F);
+    Require(!input.IsActionPressed("Jump") && !input.WasActionCompleted("Jump"), "A gameplay action ended by a menu must end only once");
+    input.RemoveMappingContext(20U);
+    input.Evaluate(0.016F);
+    Require(input.IsActionPressed("Jump") && !input.IsActionPressed("Confirm"), "Closing the menu must give the held key back to gameplay");
+    input.MutableDeviceState().Reset();
+    input.Evaluate(0.016F);
+    Require(!input.IsActionPressed("Jump") && !input.IsActionPressed("Confirm"), "A released key must leave no action pressed");
+}
+
+// A binding to an action that does not exist is ignored without harm, and an analog stick bound to a yes/no action
+// presses it past a threshold while an axis action gets the value.
+void TestInvalidAndAnalogBindingsAreHandled() {
+    TestInputWorld world;
+    world.actions = { { 1U, MakeAction("Fire", InputActionValueType::Bool, false) }, { 2U, MakeAction("Steer", InputActionValueType::Axis1D, false) } };
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{ .actionId = 99U, .key = InputKey::Q });
+    context->mappings.push_back(InputKeyMapping{ .actionId = 1U, .key = InputKey::GamepadLeftStickX });
+    context->mappings.push_back(InputKeyMapping{ .actionId = 2U, .key = InputKey::GamepadLeftStickX });
+    world.contexts = { { 10U, context } };
+    world.Install();
+    InputSubsystem& input = world.subsystem;
+    Require(input.AddMappingContext(10U, 0), "A context with an unresolved binding must still resolve");
+    input.MutableDeviceState().SetKeyDown(InputKey::Q, true);
+    input.Evaluate(0.016F);
+    Require(!input.IsActionPressed("Fire"), "A binding to a missing action must change nothing");
+    input.MutableDeviceState().Reset();
+    input.MutableDeviceState().SetAnalog(InputKey::GamepadLeftStickX, 0.9F);
+    input.Evaluate(0.016F);
+    Require(input.IsActionPressed("Fire") && NearlyEqual(input.GetActionValue("Steer").AsAxis1D(), 0.9F),
+        "A stick pushed far must press a yes/no action and give an axis action its value");
+    input.MutableDeviceState().Reset();
+    input.MutableDeviceState().SetAnalog(InputKey::GamepadLeftStickX, 0.05F);
+    input.Evaluate(0.016F);
+    Require(!input.IsActionPressed("Fire"), "A stick barely moved must not press a yes/no action");
+}
+
+// A rebinding of a gamepad button saved in a profile works in a fresh subsystem, on that pad only.
+void TestGamepadRebindSurvivesARestart() {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "21kb_input_pad_rebind.21kbrebind";
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    const std::vector<InputRebindOverride> saved{ InputRebindOverride{ .bindingId = 7U, .key = InputKey::GamepadFaceTop, .gamepadIndex = 1U } };
+    Require(WriteRebindProfile(path, saved), "The pad rebinding must be written");
+    const auto loadSubsystem = [&](TestInputWorld& world) {
+        world.actions = { { 1U, MakeAction("Jump", InputActionValueType::Bool, true) } };
+        auto context = std::make_shared<InputMappingContextAsset>();
+        context->mappings.push_back(InputKeyMapping{ .bindingId = 7U, .actionId = 1U, .key = InputKey::GamepadFaceBottom, .gamepadIndex = 1U });
+        world.contexts = { { 10U, context } };
+        world.Install();
+        Require(world.subsystem.AddMappingContext(10U, 0), "The pad context must resolve");
+    };
+    TestInputWorld before;
+    loadSubsystem(before);
+    before.subsystem.MutableDeviceState().SetKeyDown(InputKey::GamepadFaceBottom, true, 1U);
+    before.subsystem.Evaluate(0.016F);
+    Require(before.subsystem.IsActionPressed("Jump"), "Before the profile the original button must jump");
+    TestInputWorld after;
+    loadSubsystem(after);
+    const InputAssetLoadResult<std::vector<InputRebindOverride>> profile = ReadRebindProfile(path);
+    Require(profile.succeeded && after.subsystem.SetRebindProfile(10U, profile.asset), "The saved profile must load into a new subsystem");
+    after.subsystem.MutableDeviceState().SetKeyDown(InputKey::GamepadFaceBottom, true, 1U);
+    after.subsystem.Evaluate(0.016F);
+    Require(!after.subsystem.IsActionPressed("Jump"), "After the profile the old button must not jump");
+    after.subsystem.MutableDeviceState().Reset();
+    after.subsystem.MutableDeviceState().SetKeyDown(InputKey::GamepadFaceTop, true, 0U);
+    after.subsystem.Evaluate(0.016F);
+    Require(!after.subsystem.IsActionPressed("Jump"), "The new button of another pad must not jump");
+    after.subsystem.MutableDeviceState().Reset();
+    after.subsystem.MutableDeviceState().SetKeyDown(InputKey::GamepadFaceTop, true, 1U);
+    after.subsystem.Evaluate(0.016F);
+    Require(after.subsystem.IsActionPressed("Jump"), "The new button of the rebound pad must jump");
+    // Resetting to the defaults restores the original button.
+    Require(after.subsystem.SetRebindProfile(10U, std::span<const InputRebindOverride>{}), "An empty profile must reset the bindings");
+    after.subsystem.MutableDeviceState().Reset();
+    after.subsystem.MutableDeviceState().SetKeyDown(InputKey::GamepadFaceBottom, true, 1U);
+    after.subsystem.Evaluate(0.016F);
+    Require(after.subsystem.IsActionPressed("Jump"), "A reset must give the original button back");
+    std::filesystem::remove(path, error);
+}
+
+// A recording of another version or of no known kind is refused with a clear reason and never half-replayed.
+void TestInputRecordingRefusesUnknownVersionsAndMagic() {
+    InputDeviceState device;
+    device.SetKeyDown(InputKey::W, true);
+    InputRecording recording;
+    recording.push_back(CaptureInputFrame(device, 0.016F));
+    const std::vector<std::uint8_t> bytes = EncodeInputRecording(recording);
+    Require(DecodeInputRecording(bytes).succeeded, "A freshly encoded recording must decode");
+    Require(bytes.size() > 12U, "The encoded recording must have a header");
+    for (const std::uint32_t version : { 0U, 1U, 2U, 6U, 99U, 0xFFFFFFFFU }) {
+        std::vector<std::uint8_t> patched = bytes;
+        for (int byte = 0; byte < 4; ++byte) patched[8U + static_cast<std::size_t>(byte)] = static_cast<std::uint8_t>(version >> (8 * byte));
+        const InputAssetLoadResult<InputRecording> result = DecodeInputRecording(patched);
+        Require(!result.succeeded && result.error.find("Unsupported input recording version") != std::string::npos,
+            "A recording of an unsupported version must be refused with its reason");
+    }
+    std::vector<std::uint8_t> badMagic = bytes;
+    badMagic[0] = static_cast<std::uint8_t>(badMagic[0] ^ 0x5AU);
+    const InputAssetLoadResult<InputRecording> magic = DecodeInputRecording(badMagic);
+    Require(!magic.succeeded && magic.error.find("magic") != std::string::npos, "A file that is not a recording must be refused by its magic");
+    Require(!DecodeInputRecording(std::span<const std::uint8_t>{ bytes.data(), bytes.size() / 2U }).succeeded &&
+            !DecodeInputRecording(std::span<const std::uint8_t>{}).succeeded,
+        "A truncated or empty recording must be refused");
+    // Replay depends on the recorded frame durations and key states alone: the same recording gives the same actions.
+    TestInputWorld first;
+    TestInputWorld second;
+    for (TestInputWorld* world : { &first, &second }) {
+        world->actions = { { 1U, MakeAction("Go", InputActionValueType::Bool, true) } };
+        auto context = std::make_shared<InputMappingContextAsset>();
+        context->mappings.push_back(InputKeyMapping{ .actionId = 1U, .key = InputKey::W });
+        world->contexts = { { 10U, context } };
+        world->Install();
+        Require(world->subsystem.AddMappingContext(10U, 0), "The replay context must resolve");
+        ApplyInputFrame(world->subsystem.MutableDeviceState(), recording.front());
+        world->subsystem.Evaluate(recording.front().deltaSeconds);
+    }
+    Require(first.subsystem.IsActionPressed("Go") && second.subsystem.IsActionPressed("Go"), "A recording must replay the same actions in separate subsystems");
+}
+
 } // namespace
 
 void RunInputTests() {
@@ -1118,6 +1278,10 @@ void RunInputTests() {
     TestTouchPoints();
     TestTextInputDeviceStateAndEncoding();
     TestMultiGamepadMapping();
+    TestContextSwitchWithAHeldKeyLeavesNothingStuck();
+    TestInvalidAndAnalogBindingsAreHandled();
+    TestGamepadRebindSurvivesARestart();
+    TestInputRecordingRefusesUnknownVersionsAndMagic();
     TestPointerPosition();
     TestNamedContextPriorityBands();
     TestRebindConflictDetection();
