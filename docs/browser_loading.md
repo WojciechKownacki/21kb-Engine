@@ -99,6 +99,14 @@ known-length response. These samples demonstrate removal of the retained
 response copy, rather than a reduction of all memory counters or a mobile
 memory guarantee.
 
+Browser scenario reports retain the context version and renderer identifier
+observed at the first shader compilation, including when startup later fails.
+Each context records whether that identifier denotes hardware. A software
+renderer remains a test failure, and this startup observation alone does not
+prove a successful draw. It helps distinguish an unavailable hardware context
+from a failure after successful hardware rendering without querying a hung
+context during cleanup.
+
 For single-threaded Web builds, the shared load service dispatches one queued
 job or read through each browser event-loop callback. Texture mip streaming
 uses that service and continues uploading through bgfx. Priorities,

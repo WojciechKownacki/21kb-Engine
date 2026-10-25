@@ -27,6 +27,33 @@ from run_packaged_runtime_tests import RuntimeClient, require
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
 from png_readback import read_png
 
+SOFTWARE_RENDERERS = ["swiftshader", "llvmpipe", "softpipe", "microsoft basic", "warp", "software"]
+GRAPHICS_MARKER = "21kb-browser-graphics "
+
+
+def graphics_contexts(events):
+    contexts = []
+    for event in events:
+        if event.get("method") != "Runtime.consoleAPICalled":
+            continue
+        for argument in event["params"].get("args", []):
+            value = argument.get("value")
+            if not isinstance(value, str) or not value.startswith(GRAPHICS_MARKER):
+                continue
+            try:
+                context = json.loads(value[len(GRAPHICS_MARKER):])
+            except json.JSONDecodeError:
+                context = None
+            if not isinstance(context, dict):
+                contexts.append(dict(diagnostic="Invalid graphics context observation", hardwareIdentified=False))
+                continue
+            renderer = context.get("renderer")
+            context["hardwareIdentified"] = bool(context.get("rendererAvailable") and
+                isinstance(renderer, str) and renderer and not any(
+                    word in renderer.lower() for word in SOFTWARE_RENDERERS))
+            contexts.append(context)
+    return contexts
+
 
 def author_fixture(args, root):
     project = root / "Sample"
@@ -121,6 +148,11 @@ WebGL2RenderingContext.prototype.compileShader = function(shader) {
             renderer:ext ? this.getParameter(ext.UNMASKED_RENDERER_WEBGL) : this.getParameter(this.RENDERER),
             shaders:[]
         };
+        console.info('21kb-browser-graphics ' + JSON.stringify({
+            phase:'first-shader',timeMs:performance.now(),
+            version:kbTouchGraphics.version,renderer:kbTouchGraphics.renderer,
+            rendererAvailable:kbTouchGraphics.rendererAvailable
+        }));
     }
     compile.call(this, shader);
     window.kbTouchGraphics.shaders.push({
@@ -204,7 +236,7 @@ class TouchScenario:
         require(value and not value["lost"] and "WebGL 2.0" in value["version"],
             "The actual WebGL2 context is missing: " + str(value))
         require(value["rendererAvailable"] and not any(word in value["renderer"].lower()
-            for word in ["swiftshader", "llvmpipe", "softpipe", "microsoft basic", "warp", "software"]),
+            for word in SOFTWARE_RENDERERS),
             "This test requires an identifiable hardware GPU: " + str(value))
         require(value["shaders"] and all(shader["compiled"] for shader in value["shaders"]),
             "Actual host shader compilation failed: " + str(value))
@@ -446,6 +478,7 @@ def main(*, fixture=author_fixture, scenario_type=TouchScenario,
                     (root / "states.json").write_text(json.dumps(scenario.states(), indent=2), encoding="utf-8")
                 except Exception:
                     pass
+            report["graphicsContexts"] = graphics_contexts(client.events)
             (root / "events.json").write_text(json.dumps(client.events, indent=2), encoding="utf-8")
             try:
                 client.call("Browser.close")

@@ -20,7 +20,7 @@ import time
 import traceback
 import urllib.request
 
-from run_game_touch_tests import OBSERVER, RuntimeClient, TouchScenario, require
+from run_game_touch_tests import OBSERVER, RuntimeClient, TouchScenario, graphics_contexts, require
 
 
 def author_fixture(args, root, *, script_name="StorageFlow", script_source=None, configure=None):
@@ -145,6 +145,8 @@ class BrowserSession:
                     json.dumps(self.scenario.states(), indent=2), encoding="utf-8")
             except Exception:
                 pass
+            self.report.setdefault("graphicsContexts", []).append(dict(session=self.label,
+                contexts=graphics_contexts(self.client.events)))
             (self.root / (self.label + "-events.json")).write_text(
                 json.dumps(self.client.events, indent=2), encoding="utf-8")
             try:
