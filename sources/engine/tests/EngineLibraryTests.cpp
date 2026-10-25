@@ -5359,6 +5359,49 @@ void RunGameInstanceLifetimeTest() {
     kb::tests::Require(profiler.scopes == expectedProfilerSamples &&
         profiler.timelineEvents == expectedProfilerSamples && profiler.allocations == expectedProfilerSamples,
         "Profiler counters must respect the build's enabled state");
+    {
+        // Regions are measured and paired (also across an exception), nested depth is kept, and
+        // long sessions stay bounded; an inactive profiler records nothing.
+        kb::core::ProfilerCounters measured{ true };
+        {
+            auto outer = measured.BeginScope("outer");
+            {
+                auto inner = measured.BeginScope("inner");
+                kb::tests::Require(measured.OpenRegions() == 2U, "Profiler must count open nested regions");
+            }
+            try {
+                auto thrown = measured.BeginScope("thrown");
+                throw 1;
+            } catch (int) {
+            }
+            measured.Timeline("instant");
+        }
+        const auto& events = measured.TimelineEvents();
+        kb::tests::Require(measured.OpenRegions() == 0U && events.size() == 4U &&
+            events[0].name == "inner" && events[0].depth == 1U &&
+            events[1].name == "thrown" && events[1].depth == 1U &&
+            events[2].name == "instant" && events[2].depth == 1U && events[2].durationNanoseconds == 0U &&
+            events[3].name == "outer" && events[3].depth == 0U,
+            "Profiler regions must be paired in end order with their nesting depth, including after an exception");
+        kb::tests::Require(events[3].timestampNanoseconds <= events[0].timestampNanoseconds &&
+            events[3].durationNanoseconds >= events[0].durationNanoseconds,
+            "Profiler outer region must start no later than, and last at least as long as, a nested region");
+        for (int index = 0; index < 5000; ++index) {
+            measured.Timeline("flood");
+        }
+        for (int index = 0; index < 300; ++index) {
+            measured.Counter("counter" + std::to_string(index), static_cast<std::uint64_t>(index));
+        }
+        kb::tests::Require(measured.TimelineEvents().size() == kb::core::ProfilerCounters::MaxTimelineEvents() &&
+            measured.DroppedTimelineEvents() == 5004U - kb::core::ProfilerCounters::MaxTimelineEvents() &&
+            measured.Counters().size() == kb::core::ProfilerCounters::MaxCounters() &&
+            measured.DroppedCounters() == 300U - kb::core::ProfilerCounters::MaxCounters(),
+            "Profiler timeline and counters must stop growing at their limit and count what was dropped");
+        kb::core::ProfilerCounters inactive{ false };
+        { auto region = inactive.BeginScope("ignored"); inactive.Counter("ignored", 1U); inactive.Timeline("ignored"); }
+        kb::tests::Require(inactive.TimelineEvents().empty() && inactive.Counters().empty() && inactive.OpenRegions() == 0U &&
+            inactive.scopes == 0U, "An inactive profiler must record nothing");
+    }
     if constexpr (kb::core::DebugDrawBuffer::Enabled()) {
     kb::core::DebugDrawBuffer draw{5U}; kb::tests::Require(draw.DrawLine({},{1.0F,0.0F,0.0F},1.0F,3U)&&draw.DrawRay({},{0.0F,1.0F,0.0F},1.0F,3U)&&draw.DrawBox({},{1.0F,1.0F,1.0F},1.0F,3U)&&draw.DrawSphere({},1.0F,1.0F,3U)&&draw.DrawText({},"probe",1.0F,3U)&&draw.Commands().size()==5U&&draw.Commands().back().text=="probe"&&!draw.DrawLine({},{},1.0F,3U),"Debug draw buffer did not retain bounded commands"); draw.Advance(1.0F); kb::tests::Require(draw.Commands().empty(),"Debug draw duration did not expire commands");
     } else {
