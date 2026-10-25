@@ -627,6 +627,39 @@ int main() {
             }
         }
     }
+    // The last graphic of a sheet samples exactly its own cell, half a texel inside, for square and
+    // rectangular cells, with and without margin, spacing and spare image area.
+    {
+        struct Atlas { std::uint32_t cellSize, cellHeight, columns, rows, margin, spacing, imageWidth, imageHeight; };
+        for (const Atlas atlas : { Atlas{ 16, 0, 4, 2, 0, 0, 0, 0 }, Atlas{ 16, 24, 4, 2, 2, 1, 71, 53 }, Atlas{ 32, 0, 3, 3, 1, 2, 0, 0 },
+                Atlas{ 10, 15, 5, 3, 0, 1, 60, 50 } }) {
+            auto map = kb::assets::MakeEmptyMap2DAsset(4, 4);
+            map.sheets.push_back({ .texture = "/Game/Sprites/ground.png", .material = "/Game/Maps/Materials/Atlas.kbmat", .cellSize = atlas.cellSize,
+                .columns = atlas.columns, .rows = atlas.rows, .cellHeight = atlas.cellHeight, .margin = atlas.margin, .spacing = atlas.spacing,
+                .imageWidth = atlas.imageWidth, .imageHeight = atlas.imageHeight });
+            const std::uint32_t last = atlas.columns * atlas.rows - 1U;
+            map.tiles[Map2DTileKey(1, 1, 0)].ground = { .sheet = 0, .cell = last };
+            const auto mesh = kb::render::RenderMap2DMeshBuilder::Build(map);
+            Require(mesh && mesh->sections.size() == 2U, "an atlas map builds its sheet section");
+            const auto& sheet = map.sheets[0];
+            const std::uint32_t height = atlas.cellHeight ? atlas.cellHeight : atlas.cellSize;
+            const float left = static_cast<float>(atlas.margin + (last % atlas.columns) * (atlas.cellSize + atlas.spacing));
+            const float top = static_cast<float>(atlas.margin + (last / atlas.columns) * (height + atlas.spacing));
+            const float width = static_cast<float>(sheet.ImageWidth()), imageHeight = static_cast<float>(sheet.ImageHeight());
+            const float expected[4] = { (left + 0.5F) / width, (top + 0.5F) / imageHeight,
+                (left + static_cast<float>(atlas.cellSize) - 0.5F) / width, (top + static_cast<float>(height) - 0.5F) / imageHeight };
+            float lowU = 2.0F, lowV = 2.0F, highU = -1.0F, highV = -1.0F;
+            const auto& section = mesh->sections[1];
+            for (std::uint32_t vertex = section.vertexStart; vertex < section.vertexStart + section.vertexCount; ++vertex) {
+                const auto& corner = mesh->tangentVertices[vertex];
+                lowU = std::min(lowU, corner.u); highU = std::max(highU, corner.u);
+                lowV = std::min(lowV, corner.v); highV = std::max(highV, corner.v);
+            }
+            Require(std::abs(lowU - expected[0]) < 0.00001F && std::abs(lowV - expected[1]) < 0.00001F &&
+                    std::abs(highU - expected[2]) < 0.00001F && std::abs(highV - expected[3]) < 0.00001F && highU <= 1.0F && highV <= 1.0F,
+                "the last graphic of an atlas must sample only its own cell");
+        }
+    }
     // A large map: a fill, a stroke across a 16 cell chunk seam, undo and redo keep every tile,
     // and the whole sequence stays inside a generous time budget.
     {
