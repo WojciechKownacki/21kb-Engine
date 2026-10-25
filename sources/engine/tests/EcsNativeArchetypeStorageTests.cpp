@@ -11,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <stdexcept>
 #include <vector>
 
@@ -719,6 +720,125 @@ void RunStructuralChurnOccupancyTest() {
     const double occupancy = static_cast<double>(stats.liveEntities) / static_cast<double>(stats.capacity);
     kb::tests::Require(occupancy > 0.85, "structural churn left occupancy below the 85% compaction target");
     kb::tests::Require(stats.sparseChunks <= 1U, "structural churn left more than the tail chunk sparse");
+}
+
+void RunLongChurnWithStaleHandlesTest() {
+    // Long create/destroy/migrate sequence checked against a reference model: every live handle keeps
+    // its data across swap-delete compaction, chunk moves and index reuse, and a handle of a destroyed
+    // entity never becomes alive again (the slot comes back with a new generation).
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB;
+    config.reserveEntities = 256;
+    kb::ecs::NativeArchetypeStorage storage{ config };
+
+    struct Model {
+        kb::ecs::Entity entity;
+        float position = 0.0F;
+        bool hasVelocity = false;
+        float velocity = 0.0F;
+    };
+    std::vector<Model> live;
+    std::vector<kb::ecs::Entity> graveyard;
+    std::uint64_t state = 0xD1B54A32192ED03ULL;
+    const auto nextRandom = [&state]() noexcept {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        return state;
+    };
+    const auto verify = [&](const Model& model) {
+        kb::tests::Require(storage.IsAlive(model.entity), "churn lost a live entity");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(storage, model.entity, kPositionId).x, model.position),
+            "churn corrupted a position after compaction or migration");
+        const void* velocity = storage.TryGetComponentData(model.entity, kVelocityId);
+        kb::tests::Require((velocity != nullptr) == model.hasVelocity, "churn migration left the velocity column out of sync");
+        if (model.hasVelocity) {
+            kb::tests::Require(kb::tests::NearlyEqual(static_cast<const Velocity*>(velocity)->x, model.velocity),
+                "churn corrupted a velocity after migration");
+        }
+    };
+
+    float serial = 1.0F;
+    for (std::size_t step = 0U; step < 30000U; ++step) {
+        const std::uint64_t action = nextRandom() % 10U;
+        if (live.empty() || action < 4U) {
+            Position position{ .x = serial, .y = 0.0F };
+            const std::array components{ kb::ecs::NativeComponentValue{ .type = ComponentType<Position>(kPositionId), .data = &position } };
+            const kb::ecs::Entity entity = storage.CreateEntity(components);
+            for (const kb::ecs::Entity& dead : graveyard) {
+                kb::tests::Require(dead != entity, "churn handed out the handle of a destroyed entity again");
+            }
+            live.push_back(Model{ .entity = entity, .position = serial });
+            serial += 1.0F;
+        } else if (action < 6U) {
+            const std::size_t victim = static_cast<std::size_t>(nextRandom() % live.size());
+            const kb::ecs::Entity entity = live[victim].entity;
+            storage.DestroyEntity(entity);
+            graveyard.push_back(entity);
+            live[victim] = live.back();
+            live.pop_back();
+            if (graveyard.size() > 512U) {
+                graveyard.erase(graveyard.begin());
+            }
+        } else if (action < 8U) {
+            Model& model = live[static_cast<std::size_t>(nextRandom() % live.size())];
+            if (!model.hasVelocity) {
+                Velocity velocity{ .x = serial, .y = 0.0F };
+                const std::array components{ kb::ecs::NativeComponentValue{ .type = ComponentType<Velocity>(kVelocityId), .data = &velocity } };
+                storage.AddComponents(model.entity, components);
+                model.hasVelocity = true;
+                model.velocity = serial;
+                serial += 1.0F;
+            } else {
+                const std::array removed{ kVelocityId };
+                storage.RemoveComponents(model.entity, removed);
+                model.hasVelocity = false;
+            }
+        } else {
+            Model& model = live[static_cast<std::size_t>(nextRandom() % live.size())];
+            Position position{ .x = serial, .y = 1.0F };
+            storage.SetComponent(model.entity, kPositionId, &position, sizeof(position));
+            model.position = serial;
+            serial += 1.0F;
+        }
+
+        if (step % 97U == 0U) {
+            for (const kb::ecs::Entity& dead : graveyard) {
+                kb::tests::Require(!storage.IsAlive(dead), "a destroyed entity became alive again");
+                kb::tests::Require(storage.TryGetComponentData(dead, kPositionId) == nullptr &&
+                        storage.TryGetMutableComponentData(dead, kPositionId) == nullptr,
+                    "a stale handle still resolved component data");
+            }
+        }
+        if (step % 1009U == 0U) {
+            for (const Model& model : live) {
+                verify(model);
+            }
+        }
+    }
+    for (const Model& model : live) {
+        verify(model);
+    }
+    // The slots of destroyed entities must really have been reused, otherwise the test proves nothing.
+    std::size_t reusedSlots = 0U;
+    for (const kb::ecs::Entity& dead : graveyard) {
+        for (const Model& model : live) {
+            if ((dead.Id() & 0xFFFFFFFFULL) == (model.entity.Id() & 0xFFFFFFFFULL) && dead != model.entity) {
+                ++reusedSlots;
+            }
+        }
+    }
+    kb::tests::Require(reusedSlots > 0U, "churn never reused an entity index, so generations were not exercised");
+    kb::tests::Require(storage.Stats().liveEntities == live.size(), "churn live entity accounting drifted from the reference model");
+    kb::tests::Require(!graveyard.empty(), "churn destroyed no entity");
+    const kb::ecs::Entity oldest = graveyard.front();
+    bool threw = false;
+    try {
+        static_cast<void>(storage.ComponentData(oldest, kPositionId));
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    kb::tests::Require(threw, "reading a component through a stale handle did not fail");
 }
 
 void RunMultiComponentMigrationTest() {
@@ -2470,6 +2590,7 @@ void RunEcsNativeArchetypeStorageTests() {
     RunSwapDeleteAndGenerationTest();
     RunMoveLastCompactionAcrossChunksTest();
     RunStructuralChurnOccupancyTest();
+    RunLongChurnWithStaleHandlesTest();
     RunArchetypeSignatureMatchingTest();
     RunManyArchetypeLookupTest();
     RunStorageClassDistinguishesArchetypesTest();
