@@ -118,6 +118,52 @@ scene in the editor and press Play.
 | `kb_cli run --project <dir> --scene <path> --frames <n>` | run a scene without the editor and report errors |
 | `kb_cli batch --project <dir> --file <list> [--dry-run]` | run many commands as one all-or-nothing transaction, or preview their changes |
 
+More commands, each with its options in `kb_cli help`:
+
+| Command | Purpose |
+|---|---|
+| `kb_cli new` | create a project in a new or empty folder (Basic or Empty startup scene) |
+| `kb_cli scene-new` | create a scene from a template |
+| `kb_cli entity` | add or remove a scene entity |
+| `kb_cli component` | add, set or remove a component of an entity |
+| `kb_cli schema` | list components and their properties |
+| `kb_cli api-check` | compare the script API against a committed baseline and fail on breaking changes |
+| `kb_cli material-new` | create a material with its values set at once |
+| `kb_cli material-set` | change values of a material |
+| `kb_cli material-show` | print the values of a material |
+| `kb_cli material-graph` | edit a material graph node by node |
+| `kb_cli material-instance-new` | create a material instance with overrides |
+| `kb_cli material-instance-set` | change or clear overrides of a material instance |
+| `kb_cli material-instance-show` | print a material instance and its effective values |
+| `kb_cli post-process-new` | create a post-process profile |
+| `kb_cli post-process-set` | change values of a post-process profile |
+| `kb_cli scene-post-process` | give a scene its post-process profile |
+| `kb_cli audio-mixer` | create, edit and assign an audio bus graph |
+| `kb_cli animator` | build an animator controller |
+| `kb_cli skeleton` | read a character skeleton and edit its sockets |
+| `kb_cli ability` | create and edit combat abilities |
+| `kb_cli ai` | give an object a combatant and an AI brain from a preset |
+| `kb_cli map2d` | create and edit 2D tile maps |
+| `kb_cli vfx-new` | create a particle effect |
+| `kb_cli vfx-show` | print a particle effect |
+| `kb_cli vfx-set` | change values of a particle effect |
+| `kb_cli vfx-emitter-add` | add an emitter to a particle effect |
+| `kb_cli vfx-emitter-remove` | remove an emitter from a particle effect |
+| `kb_cli vfx-module-add` | add a module to an emitter |
+| `kb_cli vfx-module-remove` | remove a module from an emitter |
+| `kb_cli vfx-profile` | profile an isolated particle effect on a hidden GPU host (Windows) |
+| `kb_cli renderer-info` | print the graphics backend a hidden host selects, as JSON (Windows) |
+| `kb_cli import` | import external source assets into the project |
+| `kb_cli import-preset-new` | create an import preset |
+| `kb_cli mcp` | serve the commands as MCP tools over stdio |
+| `kb_cli keys` | generate release signing keys and print public keys |
+| `kb_cli pack` | sign, verify, inspect, recompress, split and patch asset packs |
+| `kb_cli release` | sign or verify the manifest of a finished release directory |
+| `kb_cli world` | convert a scene into a partitioned world or build its streaming cells |
+| `kb_cli navmesh` | bake a scene navigation mesh or describe a baked one |
+| `kb_cli physics-layers` | show or edit the layer collision matrix |
+| `kb_cli lighting-quality` | show or set the shadow and global illumination quality |
+
 ## Scripting `kb_cli` without a person at the keyboard
 
 Every command runs without prompts: all input comes from its options, and `kb_cli help`

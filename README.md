@@ -46,7 +46,7 @@ side by side or detach into their own windows, with Undo and Redo for every scen
 and Play Mode in place.
 
 **Components by category.** Add Component groups what the engine offers into Animation,
-Audio, Navigation, Physics, Rendering, Scene, User Widget and World, with search.
+Audio, Gameplay, Navigation, Physics, Rendering, Scene, User Widget and World, with search.
 
 **Dedicated editors** for materials, particles, skeletal meshes, animation clips, animator
 state machines, scripts and game builds.
