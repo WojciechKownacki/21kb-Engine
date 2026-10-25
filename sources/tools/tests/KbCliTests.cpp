@@ -34,6 +34,7 @@
 #include "engine/world/WorldObjectFile.hpp"
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
+#include "engine/audio/AudioMixerAssetIO.hpp"
 #if KB_CLI_RENDERER
 #include "RendererAssertionPolicy.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
@@ -3418,6 +3419,94 @@ void RunMcpCommandTests() {
     Require(Contains(responses[4], "created /Game/Data/Player.21kb") && Contains(responses[4], "\"isError\":false"), "mcp import_asset call failed");
 }
 
+void RunAudioMixerCommandTests() {
+    const auto parent = TestRoot() / "audio_mixer";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand,
+        {"--parent", parent.string(), "--name", "Sample", "--template", "Empty"}).exitCode == 0,
+        "audio mixer project could not be created");
+    const auto root = parent / "Sample";
+    const auto mixerFile = root / "Assets/Audio/Main.kbmixer";
+    const auto sceneFile = root / "Assets/Scenes/Main.21kbscene";
+    const auto run = [&](std::vector<std::string> arguments) {
+        arguments.insert(arguments.end(), {"--project", root.string()});
+        return Run(&kb::cli::RunAudioMixerCommand, std::move(arguments));
+    };
+    const auto bytes = [](const std::filesystem::path& path) {
+        std::ifstream input{path, std::ios::binary};
+        Require(input.is_open(), "audio mixer fixture could not be read");
+        return std::string{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    };
+    auto result = run({"new", "--name", "Main", "--bus", "Output", "--bus", "Effects.Main",
+        "--set", "Effects.Main.parent=Output", "--set", "Output.volume=0.5", "--set", "Effects.Main.volume=0.25"});
+    Require(result.exitCode == 0, "audio mixer creation failed: " + result.output);
+    auto loaded = kb::audio::AudioMixerAssetIO::Load(mixerFile);
+    Require(loaded && loaded->buses.size() == 2U && loaded->FindBus("Output")->volume == 0.5F
+        && loaded->FindBus("Effects.Main")->parentBus == "Output"
+        && loaded->FindBus("Effects.Main")->volume == 0.25F, "audio mixer graph did not round trip");
+    result = run({"show", "--mixer", "/Game/Audio/Main.kbmixer"});
+    Require(result.exitCode == 0 && Contains(result.output, "bus Effects.Main parent=Output volume=0.25 mute=false"),
+        "audio mixer inspection did not show the saved graph");
+    const auto original = bytes(mixerFile);
+    for (const auto& invalid : std::vector<std::vector<std::string>>{
+        {"new", "--name", "Main"},
+        {"set", "--set", "Output.parent=Effects.Main"},
+        {"set", "--bus", "Output"},
+        {"set", "--set", "Output.parent=Missing"},
+        {"set", "--set", "Output.volume=nan"},
+        {"set", "--set", "Output.volume=inf"},
+        {"set", "--set", "Output.volume=-1"},
+        {"set", "--set", "Output.volume=1e100"},
+        {"set", "--set", "Output.mute=yes"},
+        {"set", "--set", "Output.unknown=1"},
+        {"set", "--set", "Output.volume=0.75", "--set", "Missing.mute=true"},
+        {"set", "--remove-bus", "Output"},
+        {"set", "--remove-bus", "Missing"},
+        {"set", "--unknown", "value"}, {"set"}, {"unknown"}}) {
+        auto arguments = invalid;
+        arguments.insert(arguments.end(), {"--mixer", "/Game/Audio/Main.kbmixer"});
+        Require(run(std::move(arguments)).exitCode != 0 && bytes(mixerFile) == original,
+            "a rejected mixer operation changed the saved graph");
+    }
+    Require(run({"new", "--name", "Outside", "--folder", "../Outside"}).exitCode != 0,
+        "mixer authoring escaped the project assets");
+    const auto outside = parent / "Outside.kbmixer";
+    Require(kb::audio::AudioMixerAssetIO::Save(outside, *loaded), "outside mixer fixture failed");
+    Require(run({"show", "--mixer", outside.string()}).exitCode != 0,
+        "mixer lookup escaped the project assets");
+    loaded->snapshots.push_back({.name = "Quiet", .busVolumes = {{.bus = "Effects.Main", .volume = 0.1F}}});
+    Require(kb::audio::AudioMixerAssetIO::Save(mixerFile, *loaded), "mixer snapshot fixture failed");
+    result = run({"set", "--mixer", "Assets/Audio/Main.kbmixer", "--bus", "Transient",
+        "--set", "Output.mute=1", "--set", "Effects.Main.volume=0.5"});
+    Require(result.exitCode == 0, "mixer edit failed: " + result.output);
+    loaded = kb::audio::AudioMixerAssetIO::Load(mixerFile);
+    Require(loaded && loaded->FindBus("Output")->mute && loaded->FindBus("Effects.Main")->volume == 0.5F
+        && loaded->FindSnapshot("Quiet") && loaded->FindSnapshot("Quiet")->busVolumes[0].volume == 0.1F,
+        "mixer edit lost bus parameters or snapshot data");
+    Require(run({"set", "--mixer", "/Game/Audio/Main.kbmixer", "--remove-bus", "Transient",
+        "--set", "Output.mute=false"}).exitCode == 0, "unused mixer bus removal failed");
+    Require(run({"assign", "--mixer", "/Game/Audio/Main.kbmixer", "--snapshot", "Quiet"}).exitCode == 0,
+        "mixer snapshot assignment failed");
+    auto scene = kb::scene::SceneDocumentService::Load(sceneFile);
+    Require(scene.succeeded && scene.document.audioMixerAssetId ==
+        kb::assets::MakeAssetId("/Game/Audio/Main.kbmixer:AudioMixer").value
+        && scene.document.audioMixerSnapshot == "Quiet", "scene mixer assignment did not persist");
+    const auto assigned = bytes(sceneFile);
+    for (const auto& invalid : std::vector<std::vector<std::string>>{
+        {"assign", "--mixer", "/Game/Audio/Main.kbmixer", "--snapshot", "Missing"},
+        {"assign", "--mixer", "/Game/Scenes/Main.21kbscene"},
+        {"assign", "--mixer", outside.string()},
+        {"assign", "--mixer", "none", "--snapshot", "Quiet"}}) {
+        Require(run(invalid).exitCode != 0 && bytes(sceneFile) == assigned,
+            "a rejected mixer assignment changed the scene");
+    }
+    Require(run({"assign", "--mixer", "none"}).exitCode == 0, "mixer clearing failed");
+    scene = kb::scene::SceneDocumentService::Load(sceneFile);
+    Require(scene.succeeded && scene.document.audioMixerAssetId == 0U && scene.document.audioMixerSnapshot.empty(),
+        "clearing the mixer left a scene reference");
+}
+
 } // namespace
 
 void RunWorldCommandTests() {
@@ -3880,7 +3969,12 @@ int main(int argc, char** argv) {
 #else
     static_cast<void>(argv);
 #endif
+    if (argc == 2 && std::string_view{argv[1]} == "audio-mixer") {
+        RunAudioMixerCommandTests();
+        return EXIT_SUCCESS;
+    }
     if (argc != 1) return EXIT_FAILURE;
+    RunAudioMixerCommandTests();
     RunMiniJsonTests();
     RunArgumentListTests();
     RunFlexibleAssetPathTests();

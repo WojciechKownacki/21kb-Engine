@@ -10,6 +10,8 @@
 namespace kb::cli {
 
 [[nodiscard]] int RunApiCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunAudioMixerCommand(const ArgumentList& arguments, CommandIo io);
+[[nodiscard]] int RunSceneAudioMixerCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAnimatorCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunSkeletonCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunAbilityCommand(const ArgumentList& arguments, CommandIo io);

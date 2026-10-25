@@ -105,7 +105,15 @@ Commands:
                profile, or none for the renderer's defaults.
                  --project <dir> [--scene <path>] --profile /Game/<path>.kbppfx|none
 )"
-R"(  animator     Build an Animator Controller, the state machine that picks a character's
+R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
+                 new --project <dir> --name <Name> [--folder Assets/Audio]
+                     [--bus <Bus> ...] [--set Bus.parent|volume|mute=value ...]
+                 set --project <dir> --mixer <path> [--bus <Bus> ...]
+                     [--remove-bus <Bus> ...] [--set Bus.parent|volume|mute=value ...]
+                 show --project <dir> --mixer <path>
+                 assign --project <dir> [--scene <path>] --mixer <path>|none
+                     [--snapshot <Name>]   (parent '-' means the implicit master)
+  animator     Build an Animator Controller, the state machine that picks a character's
                animation; every change is validated and saved at once.
                  new --project <dir> --name <Name> --clip <clip> [--clip ...]
                      [--folder Assets/Animation]   (a state per clip, named after it:
@@ -408,6 +416,9 @@ int Dispatch(int argc, char** argv) {
     }
     if (command == "component") {
         return kb::cli::RunComponentCommand(arguments, io);
+    }
+    if (command == "audio-mixer") {
+        return kb::cli::RunAudioMixerCommand(arguments, io);
     }
     if (command == "schema") {
         return kb::cli::RunSchemaCommand(arguments, io);
