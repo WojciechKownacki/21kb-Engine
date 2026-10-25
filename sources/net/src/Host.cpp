@@ -322,6 +322,15 @@ bool Host::PollEvent(NetEvent& event) {
     return true;
 }
 
+std::vector<std::uint64_t> Host::ClientIds() const {
+    std::vector<std::uint64_t> ids;
+    ids.reserve(byClient_.size());
+    for (const auto& entry : byClient_) {
+        ids.push_back(entry.first);
+    }
+    return ids;
+}
+
 const SessionStats* Host::ClientStats(std::uint64_t clientId) const noexcept {
     const auto byClient = byClient_.find(clientId);
     if (byClient == byClient_.end()) {

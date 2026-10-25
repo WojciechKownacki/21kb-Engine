@@ -7,8 +7,8 @@ authenticated sessions with reliable and unreliable channels, and a connection h
 using it does not change any engine header. The existing `kb::network` types (objects, schemas, RPC
 descriptors, prediction helpers) are unchanged; phase 1 provides the layer under them.
 
-This is phase 1. It does not yet replicate entities, dispatch RPCs or predict movement: it moves
-validated bytes between two peers. Those layers are built on `Session` messages.
+Phase 1 is the transport, sessions and handshake. Phase 2 (`Replication.hpp`, `Rpc.hpp`) adds RPC
+and state replication on top; see "Replication and RPC" below. Prediction and rollback are not done.
 
 ## Layers
 
@@ -67,6 +67,64 @@ the old connection.
 | Datagrams read per `Update` | 1024 | `HostConfig::maxDatagramsPerUpdate` |
 | Clients | 64 | `HostConfig::maxClients` |
 | Inactivity timeout | 10 s | `SessionConfig::timeoutMilliseconds` |
+
+## Replication and RPC
+
+The server is authoritative. `ReplicationServer` takes a `Host` and an ECS `World`; `ReplicationClient`
+takes a `Client` and the client's own `World`. The application passes every `NetEvent` to
+`HandleEvent`, calls `ReplicationServer::Tick` at its tick rate and `ReplicationClient::Flush` once
+per tick.
+
+* **What replicates.** `Replicate(entity, owner)` gives an entity a network id (a `std::uint32_t`,
+  never reused in a run). Only the components registered in a `ReplicationRegistry` travel, each
+  through a `StructCodec<T>` that lists its float, unsigned and bool members. Floats are quantized
+  (`Float(&T::x, min, max, bits)`, 1 to 24 bits, clamped to the range; a position over +-500 with 16
+  bits costs 2 bytes and has a step of 0.015). Other components never leave the server. Up to 16 components.
+* **Why not the ECS snapshot.** `WorldSnapshot` and the chunked deltas save and restore a whole world
+  on one machine: raw component memory, local entity ids, every component, no per-client view, no
+  quantization. They cannot be restricted to what a client may see, so the network layer has its own
+  codecs and baselines.
+* **Spawn and despawn** are reliable and ordered. A Spawn carries the whole state of the entity. A
+  client creates the entity only after every component in the message has been checked, and destroys
+  it on Despawn; it never holds an entity the server no longer shows it.
+* **State updates** are unreliable. For each client the server remembers what the client has
+  acknowledged and sends, for each entity, every replicated component that differs from that
+  baseline. So a lost, duplicated or reordered update is repaired by the next one, nothing is
+  retransmitted, and a component changes on the wire only when its quantized value changes. The client
+  acknowledges a state message only when every entry in it was applied to an entity it has and was not
+  older than what that entity shows, because the server treats an acknowledged message as delivered
+  state. Updates are bounded by `maxUpdateBytes` per message and `maxBytesPerClientPerTick` per
+  client; a big change is spread over several ticks.
+* **Relevance.** `IRelevance` decides, per client and entity, whether the client may see it; an
+  entity that stops being relevant is despawned on that client only. `RadiusRelevance` is a distance
+  rule with a hysteresis band so that an entity on the edge does not flicker.
+* **Ownership.** Each replicated entity has an owner (client id, 0 for the server). `SetOwner`
+  tells the clients that see it. Ownership is what an RPC's permission check uses.
+* **Late join and reconnect.** A client that connects (again) gets a Hello, answers with the
+  fingerprints of its component and RPC registries, and only after a match does it receive Spawns for
+  everything it may see. A client built with a different layout is refused and gets no state.
+* **RPC.** `RpcRegistry` declares each call: name, direction (client to server or server to client),
+  reliable or unreliable, typed arguments with ranges (bool, int32, uint32, float, string with a
+  maximum length, network id), an optional owner argument, and a rate limit. The receiver rejects, and
+  counts, a call that has an unknown id, the wrong direction, the wrong argument count, type, range or
+  length, trailing or missing bytes, a caller that does not own the entity named by the owner argument,
+  or too many calls per second; a handler never sees such a call, and a handler that throws is contained.
+  A client has no way to write server state: the server accepts from a client only the acknowledgement
+  and RPC messages, and everything else is counted as malformed.
+
+Tests: `kb_net_replication_tests` covers the codecs, the RPC wire format and its refusals, convergence
+on a perfect network (movement, component add/remove, ownership, despawn, late join, reconnect), on a
+network with 25% loss, 20% reordering and 10% duplication (24 seeds, with spawn and despawn churn),
+RPC in both directions with permissions, a client that tries to heal an entity it does not own, forged
+state messages, a registry mismatch, relevance with hysteresis, size and bandwidth limits, and 120000
+random and mutated messages into a client replica and into the server.
+
+## Not done
+
+* Prediction, rollback and interpolation on the client (A148).
+* Interest management beyond a per-client predicate (no spatial grid); every tick evaluates every
+  entity for every client.
+* Delta compression of components within an entity (an entity sends its changed components whole).
 
 ## Not done in phase 1
 

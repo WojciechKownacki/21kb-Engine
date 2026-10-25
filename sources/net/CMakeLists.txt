@@ -4,10 +4,14 @@
 add_library(kb_net STATIC
     include/kb/net/ByteIO.hpp
     include/kb/net/Host.hpp
+    include/kb/net/Replication.hpp
+    include/kb/net/Rpc.hpp
     include/kb/net/Session.hpp
     include/kb/net/Transport.hpp
     src/Host.cpp
     src/Loopback.cpp
+    src/Replication.cpp
+    src/Rpc.cpp
     src/Session.cpp
     src/UdpTransport.cpp
     src/Wire.hpp
@@ -34,4 +38,10 @@ if(BUILD_TESTING)
     add_test(NAME kb_net_tests COMMAND $<TARGET_FILE:kb_net_tests>)
     set_tests_properties(kb_net_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120 LABELS "network;correctness")
     kb_apply_quality_gates(kb_net_tests)
+
+    add_executable(kb_net_replication_tests tests/ReplicationTests.cpp)
+    target_link_libraries(kb_net_replication_tests PRIVATE kb_net)
+    add_test(NAME kb_net_replication_tests COMMAND $<TARGET_FILE:kb_net_replication_tests>)
+    set_tests_properties(kb_net_replication_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120 LABELS "network;correctness")
+    kb_apply_quality_gates(kb_net_replication_tests)
 endif()

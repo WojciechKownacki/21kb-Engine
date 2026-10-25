@@ -110,6 +110,8 @@ public:
     void Disconnect(std::uint64_t clientId);
     [[nodiscard]] bool PollEvent(NetEvent& event);
     [[nodiscard]] std::size_t ClientCount() const noexcept { return peers_.size(); }
+    // Ids of the clients that are connected now.
+    [[nodiscard]] std::vector<std::uint64_t> ClientIds() const;
     [[nodiscard]] const HostStats& Stats() const noexcept { return stats_; }
     [[nodiscard]] const SessionStats* ClientStats(std::uint64_t clientId) const noexcept;
 
