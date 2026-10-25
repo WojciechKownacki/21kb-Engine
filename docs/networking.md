@@ -140,6 +140,37 @@ server has, and convergence once the inputs stop). A provider that is not determ
 physics engine stepped differently on the two sides, cannot be predicted this way. There is no rollback of
 other entities (the server is always the only truth), and no lag compensation for hits.
 
+## Scripts (Net.*)
+
+Gameplay scripts reach the network through the `Net` module (Lua and Visual Graph), defined in
+`engine/script/ScriptNetApi.*`. The engine does not link kb_net: it only knows the interface
+`kb::network::INetworkScriptRuntime` (`engine/network/NetworkScriptBridge.hpp`). A game or a server
+creates a `kb::net::ScriptNetworkRuntime` for its scene, which attaches itself; without one the scene is
+offline and `Net.Mode()` says so.
+
+| Function | What it does |
+| --- | --- |
+| `Net.Mode`, `Net.IsServer`, `Net.IsClient`, `Net.LocalPlayerId` | Which side this scene is and who the local player is. |
+| `Net.RegisterRpc{ name, direction, args, reliable, owner, maxPerSecond }` | Declares an RPC (call it from `Created` or `Ready`). `direction` is `"toServer"` or `"toClients"`; `args` lists types such as `"entity,float(-1..1),string(32),uint,bool"`; `owner` is the index of an entity argument the caller must own. |
+| `Net.Call{ rpc, target, n1.., s1.., b1.., e1.. }` | Calls it. The arguments go in numbered slots by kind (4 numbers, 2 strings, 2 bools, 2 entities), in declaration order; each is checked against its declared range or length before it leaves the script. `target` is a player id on a server, 0 for all. |
+| `Net.Replicate{ entity }`, `Net.IsReplicated`, `Net.SetOwner{ entity, player }` | Server only. Mark an entity replicated, ask, and give it to a player. |
+
+Events arrive as world events in the next script frame; the arguments are in `event.args`:
+`OnNetConnected(player)`, `OnNetDisconnected(player, reason)`, `OnNetSpawned(entity, owner)` and
+`OnNetDespawned(entity)` on a client, and `OnRpc_<name>(sender, n1.., s1.., ...)` for a call that arrived.
+An `entity` on a client is an entity of the replica world and can be passed back as an argument of
+`Net.Call`. A call whose entity argument the receiver does not have is dropped.
+
+Order on both sides: create the `ScriptNetworkRuntime`, let the scripts start (they declare their RPCs and
+mark entities), `Freeze` it into the `RpcRegistry`, create the `Host` or `Client` and the replication
+object with that registry, and `Bind` the runtime to them. Both sides must declare the same RPCs, or the
+hello refuses the client.
+
+Tests: `ScriptNetApiTests.cpp` in `kb_engine_tests` (`script-net`: argument list parser, offline behaviour, declaration and
+call validation against a fake session, a real Lua behaviour and event delivery) and `kb_net_script_tests` (a server
+scene and two client scenes running one Lua script over a lossy simulated network: declaration, replication of
+the hero, ownership, a move RPC, the reply, and the refusal of the player who does not own the hero).
+
 ## Dedicated server
 
 `kb_dedicated_server` (built next to `kb_cli`) runs a project's startup scene without a window or a

@@ -1,5 +1,6 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
+#include "engine/script/ScriptNetApi.hpp"
 #include "engine/script/ScriptWorldApi.hpp"
 
 #include "engine/gameplay/AbilityAsset.hpp"
@@ -380,6 +381,30 @@ void ScriptRuntimeSceneSystem::DispatchCompletedTasks(kb::scene::Scene& scene, f
 }
 
 void ScriptRuntimeSceneSystem::DispatchPendingParticleEvents(kb::scene::Scene& scene, float deltaSeconds) {
+    // Network events (OnNetConnected, OnNetDisconnected, OnRpc_<name>) queued by an attached network session
+    // go out with the other pending world events; see ScriptNetApi.
+    for (ScriptNetEvent& pending : ScriptNetApi::DrainEvents(scene)) {
+        ScriptEvent event;
+        event.name = std::move(pending.name);
+        for (auto& [argumentName, value] : pending.arguments) {
+            ScriptValue converted;
+            if (const auto* flag = std::get_if<bool>(&value)) {
+                converted = ScriptValue{ *flag };
+            } else if (const auto* number = std::get_if<std::int32_t>(&value)) {
+                converted = ScriptValue{ static_cast<int>(*number) };
+            } else if (const auto* unsignedNumber = std::get_if<std::uint32_t>(&value)) {
+                converted = ScriptValue{ *unsignedNumber };
+            } else if (const auto* real = std::get_if<float>(&value)) {
+                converted = ScriptValue{ *real };
+            } else if (const auto* text = std::get_if<std::string>(&value)) {
+                converted = ScriptValue{ *text };
+            } else {
+                converted = ScriptValue{ std::get<std::uint64_t>(value), ScriptValueType::Entity };
+            }
+            event.arguments.push_back(ScriptEventArgument{ .name = argumentName, .value = std::move(converted) });
+        }
+        MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
     for (const kb::scene::ParticleSystemFinishedEvent& pending : scene.Particles().DrainFinishedEvents()) {
         ScriptEvent event;
         event.name = "OnParticleSystemFinished";

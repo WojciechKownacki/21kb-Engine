@@ -312,6 +312,8 @@ public:
     bool Unreplicate(NetworkId id);
     bool SetOwner(NetworkId id, std::uint64_t owner);
     [[nodiscard]] kb::ecs::Entity EntityOf(NetworkId id) const;
+    // 0 when the entity is not replicated.
+    [[nodiscard]] NetworkId NetworkIdOf(kb::ecs::Entity entity) const;
     [[nodiscard]] std::uint64_t OwnerOf(NetworkId id) const;
     [[nodiscard]] std::size_t ReplicatedCount() const noexcept { return entities_.size(); }
     void SetRelevance(IRelevance* relevance) noexcept { relevance_ = relevance; }
@@ -423,8 +425,17 @@ public:
     void Flush();
 
     [[nodiscard]] kb::ecs::Entity Find(NetworkId id) const;
+    // 0 when the entity is not a replica.
+    [[nodiscard]] NetworkId NetworkIdOf(kb::ecs::Entity entity) const;
     [[nodiscard]] std::uint64_t OwnerOf(NetworkId id) const;
     [[nodiscard]] std::size_t ReplicaCount() const noexcept { return replicas_.size(); }
+    // Called when a replica appears or goes away (also for every replica when the connection ends).
+    using SpawnCallback = std::function<void(NetworkId id, kb::ecs::Entity entity, std::uint64_t owner)>;
+    using DespawnCallback = std::function<void(NetworkId id, kb::ecs::Entity entity)>;
+    void SetReplicaCallbacks(SpawnCallback onSpawn, DespawnCallback onDespawn) {
+        onSpawn_ = std::move(onSpawn);
+        onDespawn_ = std::move(onDespawn);
+    }
     [[nodiscard]] std::vector<NetworkId> ReplicaIds() const;
     [[nodiscard]] bool Ready() const noexcept { return ready_; }
 
@@ -455,6 +466,8 @@ private:
     ReplicationConfig config_;
     std::map<NetworkId, Replica> replicas_;
     std::map<std::uint16_t, RpcHandler> handlers_;
+    SpawnCallback onSpawn_;
+    DespawnCallback onDespawn_;
     ReplicationClientStats stats_;
     bool ready_ = false;
     std::uint32_t latestUpdate_ = 0U;

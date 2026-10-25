@@ -21,6 +21,7 @@
 #include "engine/script/ScriptPostProcessApi.hpp"
 #include "engine/script/ScriptNavigationApi.hpp"
 #include "engine/script/ScriptMap2DApi.hpp"
+#include "engine/script/ScriptNetApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRendererApi.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -316,6 +317,13 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Map2D",
             .ownerRuntime = "kb::scene::SceneTilemapRuntime",
             .Register = &kb::script::ScriptMap2DApi::Register,
+        },
+        // Net.*: the script face of a network session attached to the scene (kb_net's dedicated server
+        // or a game client). Offline scenes answer it too.
+        LibraryModuleDesc{
+            .name = "Net",
+            .ownerRuntime = "kb::network::INetworkScriptRuntime",
+            .Register = &kb::script::ScriptNetApi::Register,
         },
     };
     return kCatalog;

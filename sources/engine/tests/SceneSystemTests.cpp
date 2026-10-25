@@ -9,6 +9,7 @@ void RunSceneSystemTests() {
     RunPhysicsSceneSystemTests();
     RunAudioSceneSystemTests();
     RunSceneSystemParallelTests();
+    RunScriptNetApiTests();
 }
 
 } // namespace kb::tests

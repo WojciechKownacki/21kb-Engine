@@ -9,6 +9,7 @@ void RunSceneSingleCreateObjectAllocationTest();
 void RunPhysicsSceneSystemTests();
 void RunAudioSceneSystemTests();
 void RunSceneSystemParallelTests();
+void RunScriptNetApiTests();
 void RunSceneSystemParallelBenchmark();
 
 } // namespace kb::tests

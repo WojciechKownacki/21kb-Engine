@@ -97,6 +97,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneUIBuildFrameProfile();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
+    } else if (suite == "script-net") {
+        kb::tests::RunScriptNetApiTests();
     } else if (suite == "scene-system-parallel") {
         kb::tests::RunSceneSystemParallelTests();
     } else if (suite == "scene-system-parallel-bench") {

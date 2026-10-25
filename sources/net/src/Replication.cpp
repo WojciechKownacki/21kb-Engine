@@ -166,6 +166,11 @@ kb::ecs::Entity ReplicationServer::EntityOf(NetworkId id) const {
     return found == entities_.end() ? kb::ecs::Entity{} : found->second.entity;
 }
 
+NetworkId ReplicationServer::NetworkIdOf(kb::ecs::Entity entity) const {
+    const auto found = byEntity_.find(entity.Id());
+    return found == byEntity_.end() ? 0U : found->second;
+}
+
 std::uint64_t ReplicationServer::OwnerOf(NetworkId id) const {
     const auto found = entities_.find(id);
     return found == entities_.end() ? 0U : found->second.owner;
@@ -619,6 +624,9 @@ ReplicationClient::ReplicationClient(Client& client, kb::ecs::World& world, cons
 
 void ReplicationClient::Reset() {
     for (const auto& [id, replica] : replicas_) {
+        if (onDespawn_) {
+            onDespawn_(id, replica.entity);
+        }
         if (world_->IsAlive(replica.entity)) {
             world_->DestroyEntity(replica.entity);
         }
@@ -629,6 +637,15 @@ void ReplicationClient::Reset() {
     receivedBits_ = 0U;
     ackDirty_ = false;
     helloAckPending_ = false;
+}
+
+NetworkId ReplicationClient::NetworkIdOf(kb::ecs::Entity entity) const {
+    for (const auto& [id, replica] : replicas_) {
+        if (replica.entity == entity) {
+            return id;
+        }
+    }
+    return 0U;
 }
 
 kb::ecs::Entity ReplicationClient::Find(NetworkId id) const {
@@ -745,6 +762,9 @@ void ReplicationClient::HandleSpawn(std::span<const std::uint8_t> data) {
     }
     replicas_.emplace(id, Replica{ entity, owner, tick });
     ++stats_.spawnsApplied;
+    if (onSpawn_) {
+        onSpawn_(id, entity, owner);
+    }
 }
 
 void ReplicationClient::HandleDespawn(std::span<const std::uint8_t> data) {
@@ -757,6 +777,9 @@ void ReplicationClient::HandleDespawn(std::span<const std::uint8_t> data) {
     const auto found = replicas_.find(id);
     if (found == replicas_.end()) {
         return;
+    }
+    if (onDespawn_) {
+        onDespawn_(id, found->second.entity);
     }
     if (world_->IsAlive(found->second.entity)) {
         world_->DestroyEntity(found->second.entity);

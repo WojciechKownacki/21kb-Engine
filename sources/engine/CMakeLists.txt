@@ -1226,6 +1226,7 @@ add_library(kb_engine STATIC
     src/script/ScriptPostProcessApi.cpp
     src/script/ScriptNavigationApi.cpp
     src/script/ScriptMap2DApi.cpp
+    src/script/ScriptNetApi.cpp
     src/assets/Map2DNavigation.cpp
     src/script/ScriptPhysicsApi.cpp
     src/script/ScriptRendererApi.cpp
@@ -1923,6 +1924,7 @@ if(BUILD_TESTING)
         tests/SceneRuntimeTests.cpp
         tests/SceneSystemTestSuites.hpp
         tests/SceneSystemParallelTests.cpp
+        tests/ScriptNetApiTests.cpp
         tests/SceneSystemTests.cpp
         tests/SceneSystemTransformSyncTests.cpp
         tests/ScriptApiCatalogTests.cpp
