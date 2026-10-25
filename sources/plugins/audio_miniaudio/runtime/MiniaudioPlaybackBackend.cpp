@@ -1,4 +1,5 @@
 #include "runtime/MiniaudioPlaybackBackend.hpp"
+#include "runtime/MiniaudioMeterReport.hpp"
 
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
@@ -119,7 +120,9 @@ void MiniaudioPlaybackBackend::Shutdown() noexcept {
     listenerSynchronizer_.Reset();
     audioSpace_.Reset();
     engine_.Shutdown();
+    { const auto lock = engine_.LockGraph(); busRegistry_.ConfigureMeters(false); }
     offline_ = false;
+    metersEnabled_ = false;
 }
 
 void MiniaudioPlaybackBackend::SyncRouting(kb::scene::Scene& scene, bool routingAvailable) {
@@ -235,7 +238,9 @@ kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeInternal(kb::
     listenerSynchronizer_.Reset();
     audioSpace_.Reset();
     engine_.Shutdown();
+    { const auto lock = engine_.LockGraph(); busRegistry_.ConfigureMeters(false); }
     offline_ = false;
+    metersEnabled_ = false;
     engine_.Initialize(forceNoDevice);
     return engine_.Status();
 }
@@ -287,6 +292,39 @@ kb::audio::AudioDspRuntimeReport MiniaudioPlaybackBackend::DspReport(kb::scene::
     if (engine_.IsInitialized()) {
         report.sampleRate = ma_engine_get_sample_rate(&engine_.Native());
         report.channels = ma_engine_get_channels(&engine_.Native());
+    }
+    return report;
+}
+
+bool MiniaudioPlaybackBackend::ConfigureMeterCapture(kb::scene::Scene& scene, bool enabled) {
+    AssertOwnerThread();
+    if (!engine_.IsInitialized()) return false;
+    SyncRouting(scene, PlaybackAvailable());
+    const auto lock = engine_.LockGraph();
+    if (!engine_.MasterMeter().Configure(ma_engine_get_channels(&engine_.Native()), enabled)) return false;
+    busRegistry_.ConfigureMeters(enabled);
+    metersEnabled_ = enabled;
+    return true;
+}
+
+bool MiniaudioPlaybackBackend::ResetMeterCapture(kb::scene::Scene& scene) {
+    AssertOwnerThread();
+    static_cast<void>(scene);
+    if (!engine_.IsInitialized()) return false;
+    const auto lock = engine_.LockGraph();
+    engine_.MasterMeter().Reset();
+    busRegistry_.ResetMeters();
+    return true;
+}
+
+kb::audio::AudioMeterReport MiniaudioPlaybackBackend::MeterReport(kb::scene::Scene& scene) {
+    AssertOwnerThread();
+    static_cast<void>(scene);
+    auto report = busRegistry_.MeterReport();
+    report.initialized = engine_.IsInitialized(); report.captureEnabled = metersEnabled_;
+    if (report.initialized) {
+        report.sampleRate = ma_engine_get_sample_rate(&engine_.Native());
+        report.master = ReadAudioMeter(engine_.MasterMeter());
     }
     return report;
 }

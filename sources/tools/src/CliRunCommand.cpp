@@ -1,5 +1,6 @@
 #include "CliCommands.hpp"
 #include "CliAudioJson.hpp"
+#include "CliAudioMeterJson.hpp"
 
 #include "engine/core/JsonValue.hpp"
 #include "engine/audio/AudioPlayback.hpp"
@@ -163,6 +164,7 @@ struct DiagnosticPrinter {
 }
 
 int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr) {
+    const bool requireMeters = arguments.Option("--report") == std::optional<std::string>{"audio-meters"};
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
         io.err << "error: run requires --project <dir>\n";
@@ -338,6 +340,9 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
             io.err << "error: audio probes require 1..384000 PCM frames per tick and at most 1920000 total frames\n"; return 1;
         }
         pcmFramesPerTick = static_cast<std::uint32_t>(requested);
+        if (requireMeters && !kb::audio::AudioMetering::Configure(scene, true)) {
+            io.err << "error: the active audio provider could not enable signal meters\n"; return 1;
+        }
     }
 
     kb::script::ScriptRuntimeHost host{ scene };
@@ -431,6 +436,15 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         ? kb::particles::ParticlePlayback::ReadRenderSnapshot(scene) : nullptr;
     const bool particleProviderAvailable = kb::particles::ParticlePlayback::HasBackend(scene);
     const auto audioSnapshot = audioReport != nullptr ? kb::audio::AudioPlayback::DspReport(scene) : kb::audio::AudioDspRuntimeReport{};
+    const auto meterSnapshot = requireMeters ? kb::audio::AudioMetering::Report(scene) : kb::audio::AudioMeterReport{};
+    if (requireMeters) {
+        bool valid = meterSnapshot.backendAvailable && meterSnapshot.supported && meterSnapshot.initialized
+            && meterSnapshot.captureEnabled && meterSnapshot.master.available
+            && meterSnapshot.master.processedFrames >= audioFrames && audioFrames > 0U
+            && meterSnapshot.mixerAssetId == kb::scene::SceneAudioMixerAccess::ActiveMixer(scene);
+        for (const auto& bus : meterSnapshot.buses) valid = valid && bus.available && bus.processedFrames > 0U;
+        if (!valid) { audioSucceeded = false; audioError = "audio meters did not capture the actual mixer output"; }
+    }
     if (audioReport != nullptr) {
         audioSucceeded = audioSucceeded && audioSnapshot.backendAvailable && audioFrames > 0U
             && audioSnapshot.mixerAssetId == kb::scene::SceneAudioMixerAccess::ActiveMixer(scene);
@@ -467,6 +481,10 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     if (audioReport != nullptr) {
         auto report = AudioRuntimeJson(audioSnapshot);
         using kb::core::JsonValue;
+        if (requireMeters) {
+            report.Set("schema", JsonValue::MakeString("21kb.audio-meters/v1"));
+            report.Set("meters", AudioMetersJson(meterSnapshot));
+        }
         report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && audioSucceeded));
         report.Set("error", JsonValue::MakeString(audioError));
         report.Set("simulation_frames", JsonValue::MakeNumber(frames));
@@ -487,15 +505,15 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
 int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     const auto report = arguments.Option("--report");
     if (arguments.Flag("--dry-run")) { io.err << "error: run does not support --dry-run\n"; return 1; }
-    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles or audio\n"; return 1; }
-    if (arguments.Option("--pcm-frames").has_value() && (!report || *report != "audio")) {
-        io.err << "error: --pcm-frames requires --report audio\n"; return 1;
+    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio or audio-meters\n"; return 1; }
+    if (arguments.Option("--pcm-frames").has_value() && (!report || (*report != "audio" && *report != "audio-meters"))) {
+        io.err << "error: --pcm-frames requires --report audio or audio-meters\n"; return 1;
     }
-    if (report && *report != "particles" && *report != "audio") {
-        io.err << "error: --report expects particles or audio\n";
+    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters") {
+        io.err << "error: --report expects particles, audio or audio-meters\n";
         return 1;
     }
-    if (report && *report == "audio") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, &io.out);
+    if (report && (*report == "audio" || *report == "audio-meters")) return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, &io.out);
     return report ? RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, &io.out)
                   : RunSceneRuntime(arguments, io, nullptr);
 }

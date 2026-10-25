@@ -2,6 +2,7 @@
 
 #include "assets/MiniaudioClipResolver.hpp"
 #include "engine/audio/AudioPlayback.hpp"
+#include "engine/audio/AudioMetering.hpp"
 #include "playback/MiniaudioVoicePool.hpp"
 #include "runtime/MiniaudioEngine.hpp"
 #include "scene/MiniaudioAudioSpace.hpp"
@@ -23,7 +24,7 @@ class SceneSystemContext;
 
 namespace kb::audio_miniaudio {
 
-class MiniaudioPlaybackBackend final : public kb::audio::IAudioPlaybackBackend {
+class MiniaudioPlaybackBackend final : public kb::audio::IAudioPlaybackBackend, public kb::audio::IAudioMeteringBackend {
 public:
     MiniaudioPlaybackBackend();
     ~MiniaudioPlaybackBackend() override;
@@ -44,6 +45,9 @@ public:
     [[nodiscard]] bool ConfigureOffline(kb::scene::Scene& scene) noexcept override;
     [[nodiscard]] kb::audio::AudioOfflinePcm RenderOffline(kb::scene::Scene& scene, std::uint32_t frames) override;
     [[nodiscard]] kb::audio::AudioDspRuntimeReport DspReport(kb::scene::Scene& scene) override;
+    [[nodiscard]] bool ConfigureMeterCapture(kb::scene::Scene& scene, bool enabled) override;
+    [[nodiscard]] bool ResetMeterCapture(kb::scene::Scene& scene) override;
+    [[nodiscard]] kb::audio::AudioMeterReport MeterReport(kb::scene::Scene& scene) override;
     // LIB-148: per-voice control forwarded to the one-shot voice pool (scene-agnostic -
     // this backend instance is already scene-bound through its owning scene system).
     [[nodiscard]] bool StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept override;
@@ -102,6 +106,7 @@ private:
     MiniaudioSourceRegistry sourceRegistry_;
     MiniaudioVoicePool voicePool_;
     bool offline_ = false;
+    bool metersEnabled_ = false;
 #if !defined(NDEBUG)
     const std::thread::id ownerThread_;
 #endif

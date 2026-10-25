@@ -4,6 +4,8 @@
 #include "engine/audio/AudioDspEffect.hpp"
 #include "engine/audio/AudioDspRuntimeReport.hpp"
 #include "runtime/MiniaudioFilterChain.hpp"
+#include "runtime/MiniaudioMeterNode.hpp"
+#include "engine/audio/AudioMetering.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -69,6 +71,10 @@ public:
     [[nodiscard]] bool RoutingWillChange(kb::scene::Scene& scene, bool playbackAvailable) const;
     [[nodiscard]] Route Resolve(std::string_view busName) noexcept;
     [[nodiscard]] kb::audio::AudioDspRuntimeReport DspReport() const;
+    // Caller excludes PCM reads when configuring or resetting capture.
+    void ConfigureMeters(bool enabled);
+    void ResetMeters() noexcept;
+    [[nodiscard]] kb::audio::AudioMeterReport MeterReport() const;
     // Monotonic, bumped on every topology rebuild/teardown - baked into the source
     // registry's sound signatures so live entity sounds recreate against fresh groups.
     [[nodiscard]] std::uint64_t Generation() const noexcept { return generation_; }
@@ -82,6 +88,7 @@ private:
         std::string name;
         std::string parent;
         std::unique_ptr<ma_sound_group> group;
+        std::unique_ptr<MiniaudioMeterNode> meter;
         std::unique_ptr<MiniaudioFilterChain> effects;
         std::vector<kb::audio::AudioDspEffect> appliedEffects;
         std::vector<kb::audio::AudioDspEffect> attemptedEffects;
@@ -108,6 +115,7 @@ private:
     std::uint64_t generation_ = 0U;
     bool mixerLoaded_ = false;
     bool groupsInitialized_ = false;
+    bool metersEnabled_ = false;
 };
 
 } // namespace kb::audio_miniaudio

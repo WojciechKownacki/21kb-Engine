@@ -279,6 +279,47 @@ One PCM writer publishes coherent snapshots using lock-free atomics. A reader
 makes at most eight attempts and reports busy without replacing its previous
 snapshot. Configuration, reset and node destruction require exclusion from
 the PCM writer; ordinary snapshots do not. Tests cover allocation failure,
-shutdown, concurrent native reads and Wasm ASan/UBSan graph execution. The
-standalone kernel does not yet expose live mixer meters, CLI reports or editor
-preview controls; these require integration into the production bus graph.
+shutdown, concurrent native reads and Wasm ASan/UBSan graph execution.
+
+`AudioMetering::Configure(scene, true)` enables actual production meters;
+`Reset` clears history, and `Configure(scene, false)` disables and clears it.
+These operations exclude PCM reads through the existing graph lock and preserve
+voices and DSP history. Capture is off by default and resets on provider
+shutdown or reinitialization. `Report` only observes installed state. Named bus
+taps run after that bus's effects and fader, before its parent's processing;
+the master observes the complete output returned by `ReadPcm`, including the
+native device callback. Bus processing quanta and presented master blocks can
+differ because of graph buffering. Each reading declares its own block and
+cumulative frame counts. Last-block peak/RMS must not be mistaken for a whole
+caller-requested PCM buffer's measurement. Meter state is transient and is not
+serialized into mixer assets.
+
+The optional `IAudioMeteringBackend` capability leaves the existing playback
+interface and scene layout unchanged. Missing capabilities are unsupported;
+an uninitialized provider or a busy snapshot does not fabricate readings.
+Native Windows tests load an actual current provider DLL through the public
+facade and also verify that a previously built ABI13 provider still renders DSP
+PCM while refusing an explicit meter probe.
+
+`run --project Sample --report audio-meters --json --frames 4 --pcm-frames 4096`
+requires actual offline PCM and capture, and returns `21kb.audio-meters/v1`.
+It retains DSP diagnostics and adds `meters.master` and named `meters.buses`,
+with per-channel measurements. Cumulative 64-bit counters use decimal strings.
+The existing `audio` report continues to work without the optional capability.
+The packaged DSP test verifies the CLI's loaded DLL meter output independently
+against PCM. Native runtime tests additionally cover clipping in a child while
+its parent attenuates, parent mute, reset preserving transport, failed DSP edits
+preserving the old signal, and concurrent reset/read during 64 DSP changes on
+an offline reader and an actual null-device callback.
+
+Three Release repetitions alternate capture order on the same workload. Median
+mixing wall totals per 393216 frames were 17.37 ms disabled / 19.04 ms enabled
+for one bus and eight voices, and 316.35 / 326.99 ms for eight buses, 64 voices
+and 56 DSP stages. Peak/RMS remained identical to the pre-meter baseline.
+The latter case's median process CPU accounting was 328.13 ms in both modes;
+the simple case's coarse counter varied between 15.63 and 31.25 ms. Active RSS
+was about 11.1 MiB and 17.6 MiB respectively; capture-mode differences were
+within 72 KiB and are not a memory-saving claim. These are local sampled values,
+not allocation sizes, measured peaks or device deadline guarantees. Full live
+editor meters/preview controls, script meter access, packaged meter assertions,
+physical-device timing and other platform integration remain pending.

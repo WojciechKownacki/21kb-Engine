@@ -1,5 +1,8 @@
 #include "runtime/MiniaudioEngine.hpp"
 
+#include <algorithm>
+#include <limits>
+
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h>
 #endif
@@ -23,6 +26,14 @@ ma_result MiniaudioEngine::ReadPcm(float* output, ma_uint64 frames, ma_uint64* f
     const auto lock = LockGraph();
     ma_uint64 read = 0U;
     const auto result = ma_engine_read_pcm_frames(&engine_, output, frames, &read);
+    if (output != nullptr) {
+        for (ma_uint64 offset = 0U; offset < read;) {
+            const auto count = static_cast<std::uint32_t>(std::min(read - offset,
+                static_cast<ma_uint64>(std::numeric_limits<std::uint32_t>::max())));
+            masterMeter_.Observe(output + offset * ma_engine_get_channels(&engine_), count);
+            offset += count;
+        }
+    }
     renderedFrames_.fetch_add(read, std::memory_order_relaxed);
     if (framesRead != nullptr) *framesRead = read;
     return result;
@@ -79,6 +90,9 @@ void MiniaudioEngine::Initialize(bool forceNoDevice, ma_context* context) {
     initializationFailed_ = !initialized_;
     if (!initialized_) {
         playbackAvailable_ = false;
+    } else {
+        const auto lock = LockGraph();
+        static_cast<void>(masterMeter_.Configure(ma_engine_get_channels(&engine_), false));
     }
 }
 
@@ -89,6 +103,8 @@ void MiniaudioEngine::Shutdown() noexcept {
     }
     playbackAvailable_ = false;
     initializationFailed_ = false;
+    const auto lock = LockGraph();
+    static_cast<void>(masterMeter_.Configure(1U, false));
 #if defined(__EMSCRIPTEN__)
     outputActiveUntilMs_.store(0.0, std::memory_order_relaxed);
 #endif

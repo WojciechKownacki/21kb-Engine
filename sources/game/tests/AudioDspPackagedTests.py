@@ -116,6 +116,22 @@ def main():
     expected_peak = (3276 / 32768) * 0.25 * 10**(12/20)
     require(abs(report["peak"] - expected_peak) < 0.002 and 0.068 < report["rms"] < 0.072,
             "CLI PCM does not contain the independent expected DSP gain")
+    meters = json.loads(cli("run", "--project", project, "--frames", "4", "--report", "audio-meters",
+                            "--json", "--pcm-frames", "4096"))
+    captured = meters["meters"]
+    require(meters["schema"] == "21kb.audio-meters/v1" and meters["succeeded"] and captured["supported"]
+            and captured["initialized"] and captured["capture_enabled"] and captured["master"]["available"]
+            and int(captured["master"]["processed_frames"]) == 16384 and captured["sample_rate"] == 48000,
+            "Actual provider DLL did not expose or execute the optional meter capability")
+    require(len(captured["buses"]) == 1 and captured["buses"][0]["bus"] == "Effects"
+            and captured["buses"][0]["available"] and int(captured["buses"][0]["processed_frames"]) > 0,
+            "Actual provider DLL did not capture its named bus")
+    for channel in captured["master"]["channel"]:
+        require(abs(channel["held_peak"] - meters["peak"]) < 1e-8
+                and abs(channel["held_peak"] - expected_peak) < 0.002
+                and abs(channel["rms"] - expected_peak / math.sqrt(2)) < 0.002
+                and int(channel["clipped_samples"]) == 0 and int(channel["non_finite_samples"]) == 0,
+                "Provider DLL meters differ from independent PCM analysis")
     active_effects = 2
     expected_rms = expected_peak / math.sqrt(2)
     peak_tolerance = 0.002
@@ -194,7 +210,7 @@ end
     cook()
     run(player, "--headless", "--frames=3", "--width=64", "--height=64", "--uncapped", cwd=output, expected=1)
     require("DSP negative control" in history[-1]["stderr"] + history[-1]["stdout"], "Negative assertion was not executed")
-    (root / "result.json").write_text(json.dumps(dict(result="PASS", pcm=report, inspectorAuthored=bool(args.editor_tests),
+    (root / "result.json").write_text(json.dumps(dict(result="PASS", pcm=report, meters=meters, inspectorAuthored=bool(args.editor_tests),
         inspectorPcm=ui_report if args.editor_tests else None, negativeScriptExit=1,
         limitation="Offline native PCM and a hidden Windows player; no physical audio device or other platform qualification."), indent=2), encoding="utf8")
     print(f"PASS: authored effects, actual CLI PCM and cooked runtime PCM; {root}")

@@ -747,7 +747,107 @@ void RunMixerDspRuntimeTest() {
     std::cout << "Mixer DSP runtime realFrames=" << frames << " voicePreserved=1 failedEditPreserved=1 mutedTail=0 shutdownBuses=0\n";
 }
 
-void RunMixerDspWorkloadBenchmark() {
+void RunMixerMeterRuntimeTest() {
+    using Playback = kb::audio::AudioPlayback;
+    using Meters = kb::audio::AudioMetering;
+    kb::scene::Scene scene;
+    Require(!Meters::Report(scene).backendAvailable && !Meters::Configure(scene, true), "Missing metering backend was reported as available");
+    const auto tone = TestRoot() / "MeterTone.wav"; WriteToneWav(tone);
+    const auto root = TestRoot() / "MeterProject";
+    Require(scene.Assets().MountProject(root), "Meter project did not mount");
+    const auto imported = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), std::array{tone}, "/Game/Audio");
+    Require(imported.Succeeded() && imported.items.size() == 1U, "Meter tone did not import");
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses = {{.name = "Output", .volume = 0.25F}, {.name = "Signal", .parentBus = "Output"}};
+    const auto path = root / "Meters.kbmixer";
+    constexpr kb::assets::AssetId mixerId{9801U};
+    Require(kb::audio::AudioMixerAssetIO::Save(path, mixer)
+        && scene.Assets().Manager().RegisterAsset({.id = mixerId, .type = kb::audio::kAudioMixerAssetType,
+            .name = "Meters", .virtualPath = "/Game/Meters.kbmixer", .physicalPath = path, .contentHash = 1U}), "Meter mixer did not register");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerId.value);
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    Playback::RegisterBackend(scene, backend);
+    Require(Meters::Report(scene).supported && !Meters::Report(scene).initialized && !Meters::Configure(scene, true),
+        "Uninitialized meter provider was reported as executing");
+    Require(Playback::ConfigureOffline(scene), "Meter provider did not configure offline");
+    const auto voice = Playback::PlayOneShot(scene, {.clipAssetId = imported.items.front().id.value,
+        .outputBus = "Signal", .loop = true, .spatial = false});
+    Require(voice.Succeeded(), "Meter tone did not start");
+    const auto save = [&] {
+        Require(kb::audio::AudioMixerAssetIO::Save(path, mixer) && scene.Assets().Manager().Unload(mixerId)
+            && scene.Assets().Manager().Load<kb::audio::AudioMixerAsset>(mixerId).IsLoaded(), "Meter fixture edit did not reload");
+    };
+    std::uint64_t rendered = 0U;
+    const auto render = [&] {
+        auto pcm = Playback::RenderOffline(scene, 512U);
+        Require(pcm.succeeded && pcm.frames == 512U && pcm.samples.size() == 1024U, "Meter did not mix actual complete PCM");
+        rendered += pcm.frames; return pcm;
+    };
+    const auto bus = [](const kb::audio::AudioMeterReport& report, std::string_view name) -> const kb::audio::AudioMeterReading& {
+        const auto found = std::find_if(report.buses.begin(), report.buses.end(), [&](const auto& item) { return item.bus == name; });
+        Require(found != report.buses.end() && found->available, "Installed meter bus is missing or unavailable"); return *found;
+    };
+    static_cast<void>(render());
+    Require(!Meters::Report(scene).captureEnabled && Meters::Report(scene).master.processedFrames == 0U,
+        "Reading meters implicitly enabled capture");
+    Require(Meters::Configure(scene, true), "Explicit capture did not enable");
+    kb::audio::AudioOfflinePcm pcm;
+    for (unsigned i = 0U; i < 8U; ++i) pcm = render();
+    auto report = Meters::Report(scene);
+    Require(report.initialized && report.supported && report.captureEnabled && report.sampleRate == 48000U
+        && report.mixerAssetId == mixerId.value && report.master.available && report.master.channels == 2U
+        && report.master.processedFrames == 4096U && report.master.blockFrames == 512U, "Master meter format or actual frame counts changed");
+    for (std::size_t channel = 0U; channel < 2U; ++channel) {
+        double energy = 0.0; float peak = 0.0F;
+        for (std::size_t i = channel; i < pcm.samples.size(); i += 2U) { peak = std::max(peak, std::abs(pcm.samples[i])); energy += static_cast<double>(pcm.samples[i]) * pcm.samples[i]; }
+        Require(report.master.channel[channel].peak == peak && std::abs(report.master.channel[channel].rms - std::sqrt(energy / 512.0)) < 1e-8,
+            "Master meter differs from independently analyzed actual PCM");
+    }
+    const auto& child = bus(report, "Signal"); const auto& parent = bus(report, "Output");
+    Require(std::abs(child.channel[0].heldPeak - 3276.0F / 32768.0F) < 1e-6F
+        && std::abs(parent.channel[0].heldPeak * 4.0F - child.channel[0].heldPeak) < 1e-6F
+        && parent.channel[0].heldPeak == report.master.channel[0].heldPeak, "Bus meter is not after its fader and before its parent");
+    const auto beforeReset = Playback::VoicePlaybackSeconds(scene, voice.voiceId);
+    Require(Meters::Reset(scene) && Meters::Report(scene).master.processedFrames == 0U
+        && Playback::VoicePlaybackSeconds(scene, voice.voiceId) == beforeReset, "Meter reset restarted the voice");
+    mixer.buses[1].effects = {{.id = "Boost", .parameters = {.kind = kb::audio::AudioDspKind::Compressor,
+        .thresholdDb = 0.0, .ratio = 1.0, .attackMs = 0.0, .makeupDb = 24.0}}}; save();
+    for (unsigned i = 0U; i < 4U; ++i) static_cast<void>(render());
+    report = Meters::Report(scene);
+    Require(bus(report, "Signal").channel[0].heldPeak > 1.5F && bus(report, "Signal").channel[0].clippedSamples > 0U
+        && bus(report, "Output").channel[0].clippedSamples == 0U && report.master.channel[0].clippedSamples == 0U,
+        "Post-DSP clipping did not distinguish the child from attenuated parent/master");
+    const auto framesBeforeEdit = bus(report, "Signal").processedFrames;
+    mixer.buses[1].effects = {{.id = "InvalidRate", .parameters = {.kind = kb::audio::AudioDspKind::LowPass, .cutoffHz = 24000.0}}}; save();
+    const auto retainedPcm = render(); report = Meters::Report(scene);
+    float retainedPeak = 0.0F;
+    for (const auto sample : retainedPcm.samples) retainedPeak = std::max(retainedPeak, std::abs(sample));
+    Require(!Playback::DspReport(scene).buses[1].settingsCurrent && bus(report, "Signal").processedFrames > framesBeforeEdit
+        && bus(report, "Signal").channel[0].heldPeak > 1.5F && retainedPeak > 0.375F
+        && Playback::DspReport(scene).buses[1].appliedEffects[0].parameters.makeupDb == 24.0
+        && Playback::IsVoicePlaying(scene, voice.voiceId),
+        "Failed DSP edit discarded the installed meter or previous signal");
+    mixer.buses[1].effects.clear(); mixer.buses[0].mute = true; save();
+    static_cast<void>(render()); Require(Meters::Reset(scene), "Mute capture did not reset");
+    for (unsigned i = 0U; i < 4U; ++i) static_cast<void>(render());
+    report = Meters::Report(scene);
+    Require(bus(report, "Signal").channel[0].heldPeak > 0.09F && bus(report, "Output").channel[0].heldPeak == 0.0F
+        && report.master.channel[0].heldPeak == 0.0F, "Parent mute erased child diagnostics or leaked output");
+    mixer.buses[0].mute = false; save(); static_cast<void>(render());
+    Require(Meters::Configure(scene, false), "Capture did not disable");
+    pcm = render(); report = Meters::Report(scene);
+    Require(!report.captureEnabled && report.master.processedFrames == 0U && bus(report, "Signal").processedFrames == 0U
+        && std::any_of(pcm.samples.begin(), pcm.samples.end(), [](float value) { return std::abs(value) > 0.01F; }),
+        "Disabling capture muted playback or kept accumulating");
+    backend.Shutdown(); report = Meters::Report(scene);
+    Require(report.supported && !report.initialized && !report.captureEnabled && !report.master.available && report.buses.empty()
+        && backend.ResourcesForTesting().buses == 0U, "Meter shutdown retained native resources or stale readings");
+    Playback::UnregisterBackend(scene, backend);
+    Require(!Meters::Report(scene).backendAvailable, "Unregistered metering provider remained available");
+    std::cout << "Mixer meters actualFrames=" << rendered << " masterPCM=exact postDSP=1 postFader=1 clipping=1 mutedParent=0 resetPreservesVoice=1 shutdownBuses=0\n";
+}
+
+void RunMixerDspWorkloadBenchmark(bool capture = false) {
     using Playback = kb::audio::AudioPlayback;
     using Kind = kb::audio::AudioDspKind;
     const auto memory = [] {
@@ -823,6 +923,7 @@ void RunMixerDspWorkloadBenchmark() {
                 for (const auto voice : voices) Require(Playback::IsVoicePlaying(scene, voice), "Audio workload lost a playing voice");
             };
             verifyVoices();
+            if (capture) Require(kb::audio::AudioMetering::Configure(scene, true), "Workload meters did not enable");
             for (int i = 0; i < 8; ++i) Require(Playback::RenderOffline(scene, 1024U).succeeded, "Audio workload warmup did not execute");
             active = memory();
             const auto threadStart = cpu(false), processStart = cpu(true);
@@ -848,6 +949,11 @@ void RunMixerDspWorkloadBenchmark() {
             Require(report.buses.size() == busCount, "Audio workload lost its active buses");
             for (const auto& bus : report.buses) Require(bus.initialized && bus.settingsCurrent && bus.activeEffects == (effects ? 7U : 0U),
                 "Audio workload skipped requested DSP processing");
+            const auto meters = kb::audio::AudioMetering::Report(scene);
+            Require(meters.captureEnabled == capture && meters.master.available
+                && meters.master.processedFrames == (capture ? 401408U : 0U), "Workload master capture did not observe actual warmup and measured frames");
+            for (const auto& bus : meters.buses) Require(bus.available && (capture ? bus.processedFrames > 0U : bus.processedFrames == 0U),
+                "Workload bus meter did not follow explicit capture");
             Require(realFrames == 393216U && peak > 1e-5 && energy > 0.0, "Audio workload readback is empty or silent");
             Playback::UnregisterBackend(scene, backend); backend.Shutdown();
             const auto released = backend.ResourcesForTesting();
@@ -856,6 +962,7 @@ void RunMixerDspWorkloadBenchmark() {
         const auto after = memory();
         std::sort(batches.begin(), batches.end());
         std::cout << "Audio workload kind=" << (effects ? "effects" : "plain") << " buses=" << busCount << " voices=" << voiceCount
+            << " meterCapture=" << capture
             << " realFrames=" << realFrames << " mixWallNs=" << mixWall << " medianBatchMixWallNs=" << batches[batches.size()/2U]
             << " maxBatchMixWallNs=" << batches.back() << " probeOwnerThreadCpuNs=";
         if (threadCpu == 0U) std::cout << "unavailable"; else std::cout << threadCpu;
@@ -911,8 +1018,13 @@ void RunMixerDspConcurrentTest(bool deviceCallback) {
     const auto rate = ma_engine_get_sample_rate(&engine.Native());
     const auto channels = ma_engine_get_channels(&engine.Native());
     Require(channels == 2U, "Concurrent DSP fixture requires the configured stereo output");
+    {
+        const auto lock = engine.LockGraph();
+        Require(engine.MasterMeter().Configure(channels, true), "Concurrent master meter did not enable");
+        buses.ConfigureMeters(true);
+    }
     const auto waveConfig = ma_waveform_config_init(ma_format_f32, channels, rate, ma_waveform_type_sine,
-        deviceCallback ? 0.0 : 0.02, 440.0);
+        0.02, 440.0);
     source.waveReady = ma_waveform_init(&waveConfig, &source.wave) == MA_SUCCESS;
     Require(source.waveReady, "Concurrent DSP source did not initialize");
     const auto nodeConfig = ma_data_source_node_config_init(&source.wave);
@@ -946,15 +1058,35 @@ void RunMixerDspConcurrentTest(bool deviceCallback) {
         const auto report = buses.DspReport();
         Require(report.buses[0].initialized && report.buses[0].settingsCurrent && report.buses[0].error.empty()
             && report.buses[0].appliedEffects == mixer.buses[0].effects, "Concurrent DSP edit was skipped or bypassed");
+        const auto meters = buses.MeterReport();
+        Require(meters.buses.size() == 1U && (!meters.buses[0].available || (meters.buses[0].channels == channels
+            && std::isfinite(meters.buses[0].channel[0].rms) && meters.buses[0].channel[0].nonFiniteSamples == 0U)),
+            "Concurrent meter snapshot was incoherent or non-finite");
+        if (edit % 7U == 0U) {
+            const auto lock = engine.LockGraph(); engine.MasterMeter().Reset(); buses.ResetMeters();
+        }
     }
     waitForRead(previous);
+    waitForRead(engine.RenderedFrames());
     if (pump != nullptr) {
         pump->Stop();
         Require(pump->Finite() && pump->Frames() > 0U && pump->Nonzero() > 0U,
             "Concurrent DSP readback was non-finite, silent or did not execute");
     }
+    std::uint64_t meterFrames = 0U;
+    {
+        const auto lock = engine.LockGraph();
+        kb::audio_miniaudio::MiniaudioMeterSnapshot master;
+        Require(engine.MasterMeter().TryRead(master) && master.enabled && master.processedFrames > 0U
+            && master.channel[0].heldPeak > 0.0F && master.channel[0].nonFiniteSamples == 0U,
+            "Native processing did not publish actual master signal");
+        const auto meters = buses.MeterReport();
+        Require(meters.buses[0].available && meters.buses[0].processedFrames > 0U && meters.buses[0].channel[0].heldPeak > 0.0F,
+            "Native processing did not publish actual bus signal");
+        meterFrames = master.processedFrames;
+    }
     std::cout << "Mixer DSP concurrent deviceCallback=" << deviceCallback << " edits=64 actualFrames=" << engine.RenderedFrames()
-        << " finiteReadback=" << (pump != nullptr ? "verified" : "separate-offline-test") << " groupPreserved=1\n";
+        << " meterFrames=" << meterFrames << " finiteReadback=" << (pump != nullptr ? "verified" : "meter-verified") << " groupPreserved=1\n";
 }
 
 void RunBusTopologyPcmTest() {
@@ -3256,6 +3388,8 @@ int RunTests(int argc, char** argv) {
     WriteSilentWav(clipPath);
     const std::string_view filter = argc > 1 ? std::string_view{ argv[1] } : std::string_view{};
     if (filter == "mixer-dsp-workload") RunMixerDspWorkloadBenchmark();
+    if (filter == "mixer-meters-workload") RunMixerDspWorkloadBenchmark(true);
+    if (filter == "mixer-meters") RunMixerMeterRuntimeTest();
     if (filter.empty() || filter == "mixer-dsp") {
         RunMixerDspAssetTest();
         RunMixerDspRuntimeTest();

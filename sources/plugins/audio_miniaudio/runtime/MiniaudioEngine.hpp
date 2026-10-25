@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/audio/AudioPlayback.hpp"
+#include "runtime/MiniaudioMeterNode.hpp"
 
 #include <miniaudio.h>
 #include <mutex>
@@ -29,6 +30,8 @@ public:
     [[nodiscard]] ma_result ReadPcm(float* output, ma_uint64 frames, ma_uint64* framesRead);
     [[nodiscard]] std::unique_lock<std::mutex> LockGraph();
     [[nodiscard]] std::uint64_t RenderedFrames() const noexcept { return renderedFrames_.load(std::memory_order_relaxed); }
+    [[nodiscard]] MiniaudioMeterAccumulator& MasterMeter() noexcept { return masterMeter_; }
+    [[nodiscard]] const MiniaudioMeterAccumulator& MasterMeter() const noexcept { return masterMeter_; }
 
 private:
     static void ProcessDevice(ma_device* device, void* output, const void* input, ma_uint32 frames);
@@ -37,6 +40,7 @@ private:
     std::atomic<double> outputActiveUntilMs_{0.0};
 #endif
     std::mutex graphMutex_;
+    MiniaudioMeterAccumulator masterMeter_;
     std::atomic<std::uint64_t> renderedFrames_{0U};
     ma_engine engine_{};
     bool initialized_ = false;

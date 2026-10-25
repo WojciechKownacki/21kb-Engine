@@ -1,5 +1,6 @@
 #include "scene/MiniaudioBusRegistry.hpp"
 #include "runtime/MiniaudioEngine.hpp"
+#include "runtime/MiniaudioMeterReport.hpp"
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -88,9 +89,20 @@ bool MiniaudioBusRegistry::Sync(kb::scene::Scene& scene, bool playbackAvailable)
                     }
                 }
                 auto group = std::make_unique<ma_sound_group>();
+                auto meter = std::make_unique<MiniaudioMeterNode>();
                 const auto lock = engine_.LockGraph();
                 if (ma_sound_group_init(&engine, 0U, parentGroup, group.get()) == MA_SUCCESS) {
-                    buses_.push_back(BusRecord{ .name = bus.name, .parent = bus.parentBus, .group = std::move(group) });
+                    if (meter->Initialize(*ma_engine_get_node_graph(&engine), metersEnabled_) == MA_SUCCESS
+                        && ma_node_attach_output_bus(meter->Native(), 0U, parentGroup != nullptr
+                            ? static_cast<ma_node*>(parentGroup) : ma_engine_get_endpoint(&engine), 0U) == MA_SUCCESS
+                        && ma_node_attach_output_bus(group.get(), 0U, meter->Native(), 0U) == MA_SUCCESS) {
+                        buses_.push_back(BusRecord{ .name = bus.name, .parent = bus.parentBus,
+                            .group = std::move(group), .meter = std::move(meter) });
+                    } else {
+                        meter->Reset();
+                        ma_sound_group_uninit(group.get());
+                        initializationFailed = true;
+                    }
                 } else {
                     initializationFailed = true;
                 }
@@ -174,15 +186,11 @@ void MiniaudioBusRegistry::SyncEffects(BusRecord& record,
         return;
     }
     record.nextEffectAttempt = now + std::chrono::seconds{1};
-    ma_node* target = ma_engine_get_endpoint(&engine_.Native());
-    if (!record.parent.empty()) {
-        const auto parent = std::find_if(buses_.begin(), buses_.end(), [&](const auto& bus) { return bus.name == record.parent; });
-        if (parent == buses_.end() || parent->group == nullptr) {
-            record.effectError = "DSP parent bus is unavailable";
-            return;
-        }
-        target = parent->group.get();
+    if (record.meter == nullptr) {
+        record.effectError = "DSP output meter is unavailable";
+        return;
     }
+    ma_node* target = record.meter->Native();
     std::unique_ptr<MiniaudioFilterChain> candidate;
     std::vector<kb::audio::AudioDspEffect> accepted;
     ma_result result = MA_OUT_OF_MEMORY;
@@ -288,6 +296,27 @@ void MiniaudioBusRegistry::StopAll() noexcept {
     static_cast<void>(TearDown());
 }
 
+void MiniaudioBusRegistry::ConfigureMeters(bool enabled) {
+    metersEnabled_ = enabled;
+    for (auto& bus : buses_) {
+        if (bus.meter != nullptr) static_cast<void>(bus.meter->Meter().Configure(ma_engine_get_channels(&engine_.Native()), enabled));
+    }
+}
+
+void MiniaudioBusRegistry::ResetMeters() noexcept {
+    for (auto& bus : buses_) if (bus.meter != nullptr) bus.meter->Meter().Reset();
+}
+
+kb::audio::AudioMeterReport MiniaudioBusRegistry::MeterReport() const {
+    kb::audio::AudioMeterReport report{.backendAvailable = true, .supported = true, .mixerAssetId = activeMixerAssetId_};
+    report.buses.reserve(buses_.size());
+    for (const auto& bus : buses_) {
+        report.buses.push_back(bus.meter != nullptr ? ReadAudioMeter(bus.meter->Meter(), bus.name)
+            : kb::audio::AudioMeterReading{.bus = bus.name});
+    }
+    return report;
+}
+
 kb::audio::AudioDspRuntimeReport MiniaudioBusRegistry::DspReport() const {
     kb::audio::AudioDspRuntimeReport report{.backendAvailable = true, .mixerAssetId = activeMixerAssetId_};
     report.buses.reserve(buses_.size());
@@ -305,6 +334,7 @@ void MiniaudioBusRegistry::DestroyGroups() noexcept {
     // Children before parents - creation appended parents first, so destroy in reverse.
     for (auto iterator = buses_.rbegin(); iterator != buses_.rend(); ++iterator) {
         iterator->effects.reset();
+        iterator->meter.reset();
         if (iterator->group != nullptr) {
             ma_sound_group_uninit(iterator->group.get());
         }
