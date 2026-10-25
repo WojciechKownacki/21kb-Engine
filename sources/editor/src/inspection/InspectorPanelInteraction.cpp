@@ -88,6 +88,10 @@ public:
     [[nodiscard]] bool SetBusParent(kb::assets::AssetId id, std::string_view name, std::string_view parent) { return context_.SetAudioMixerBusParent(id, name, parent); }
     [[nodiscard]] bool SetBusVolume(kb::assets::AssetId id, std::string_view name, float volume) { return context_.SetAudioMixerBusVolume(id, name, volume); }
     [[nodiscard]] bool SetBusMute(kb::assets::AssetId id, std::string_view name, bool mute) { return context_.SetAudioMixerBusMute(id, name, mute); }
+    [[nodiscard]] bool AddEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect, kb::audio::AudioDspKind kind) { return context_.AddAudioMixerEffect(id, bus, effect, kind); }
+    [[nodiscard]] bool RemoveEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect) { return context_.RemoveAudioMixerEffect(id, bus, effect); }
+    [[nodiscard]] bool MoveEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect, std::size_t index) { return context_.MoveAudioMixerEffect(id, bus, effect, index); }
+    [[nodiscard]] bool SetEffectField(kb::assets::AssetId id, std::string_view bus, std::string_view effect, std::string_view field, std::string_view value) { return context_.SetAudioMixerEffectField(id, bus, effect, field, value); }
     [[nodiscard]] bool AddSnapshot(kb::assets::AssetId id, std::string_view name) { return context_.AddAudioMixerSnapshot(id, name); }
     [[nodiscard]] bool RemoveSnapshot(kb::assets::AssetId id, std::string_view name) { return context_.RemoveAudioMixerSnapshot(id, name); }
     [[nodiscard]] bool RenameSnapshot(kb::assets::AssetId id, std::string_view name, std::string_view replacement) { return context_.RenameAudioMixerSnapshot(id, name, replacement); }

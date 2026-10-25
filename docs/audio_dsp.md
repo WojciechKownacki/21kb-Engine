@@ -215,6 +215,32 @@ a callback concurrency test, with no physical playback qualification.
 the project, then checks effects and mute/unmute inside a hidden native player
 using packaged assets and the actual provider. A separate incorrect script
 assertion must fail the process. Windows native package execution is checked;
-editor DSP controls, audible device comparison, other packaged platforms,
-memory/latency workload qualification and hosted CI remain pending. The thin
+audible device comparison, other packaged platforms, memory/latency workload
+qualification and hosted CI remain pending. The thin
 WebAssembly kernel checks above do not establish browser mixer playback.
+
+The mixer Inspector exposes all seven kinds on each bus, with separate controls
+for every applicable parameter, bypass, removal and movement through the chain.
+Repeated kinds get distinct stable IDs. Inspector edits call the same typed
+editing service as CLI commands, then use the asset command history for atomic
+save, cache invalidation and Undo/Redo. Neither editing nor undoing a mixer
+marks the scene dirty. Pending text edits retain the asset, bus, effect and
+field identity; a reorder or external edit cannot redirect an old buffer to a
+different effect. External effect changes also prevent conflicting Undo.
+
+`kb_editor_tests audio-mixer-inspector` checks real row geometry, hit testing and
+GDI painting without opening windows. It exercises 27 parameter edits, fifty
+saved operations with exact Undo/Redo, distinct repeated effects, invalid input,
+stale edits, cache reload and all 32 translated catalogs. The normal editor
+event dispatch and scene command objects also compile against these controls.
+This does not establish a linked GUI application or audible preview result.
+
+`kb_editor_audio_dsp_package` extends the packaged test with
+`--editor-tests <kb_editor_tests>`: the actual saved Inspector asset becomes the
+project mixer, CLI diagnostics must report its installed parameters, and the
+cooked player checks the fourth-order 200 Hz low-pass response to a 440 Hz tone
+against an independent bilinear Butterworth calculation within 2% after warmup.
+The remaining six authored stages retain their bypassed parameters. Mute,
+unmute and an intentionally incorrect assertion are checked in the package.
+This workflow runs in native Windows Release; full editor ASan execution,
+meters, dedicated mixer panels and runtime preview qualification remain pending.

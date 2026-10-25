@@ -25,11 +25,14 @@ def main():
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--plugin", action="append", type=Path, required=True)
     parser.add_argument("--runtime-dll", action="append", type=Path, default=[])
+    parser.add_argument("--editor-tests", type=Path, help="Also author the packaged mixer through headless Inspector controls")
     args = parser.parse_args()
     for name in ["cli", "cooker", "player", "engine_root", "test_root", "shaderc"]:
         setattr(args, name, getattr(args, name).resolve())
     args.plugin = [path.resolve() for path in args.plugin]
     args.runtime_dll = [path.resolve() for path in args.runtime_dll]
+    if args.editor_tests:
+        args.editor_tests = args.editor_tests.resolve()
     require(os.name == "nt", "The packaged DSP test requires the native Windows player")
     ctypes.windll.kernel32.SetErrorMode(32771)
     args.test_root.mkdir(parents=True, exist_ok=True)
@@ -113,29 +116,57 @@ def main():
     expected_peak = (3276 / 32768) * 0.25 * 10**(12/20)
     require(abs(report["peak"] - expected_peak) < 0.002 and 0.068 < report["rms"] < 0.072,
             "CLI PCM does not contain the independent expected DSP gain")
+    active_effects = 2
+    expected_rms = expected_peak / math.sqrt(2)
+    peak_tolerance = 0.002
+    if args.editor_tests:
+        editor_output = run(args.editor_tests, "audio-mixer-inspector")
+        require("parameterEdits=27 uiCommands=50 languages=32 stableRepeatId=1 undoRedoExact=1 externalConflict=1" in editor_output,
+                "Inspector did not execute its complete authoring and Undo workflow")
+        ui_mixer = temp / "kb_editor_audio_mixer_inspector_tests/Project/Assets/Mixers/NewAudioMixer.kbmixer"
+        require(ui_mixer.is_file(), "Inspector did not save its actual mixer asset")
+        shutil.copyfile(ui_mixer, file)
+        authored = json.loads(cli("audio-mixer", "show", "--project", project, "--mixer", mixer, "--json"))
+        effects = authored["buses"][0]["effects"]
+        require(len(effects) == 7 and effects[0]["kind"] == "lowpass" and
+                effects[0]["parameters"]["cutoffHz"] == 200 and effects[0]["parameters"]["order"] == 4,
+                "Inspector-authored package fixture has the wrong effects")
+        active_effects = sum(not effect["parameters"]["bypass"] for effect in effects)
+        require(active_effects == 1, "Inspector did not enable exactly its authored filter")
+        ratio = math.tan(math.pi * 440 / 48000) / math.tan(math.pi * 200 / 48000)
+        expected_peak = (3276 / 32768) / math.sqrt(1 + ratio**8)
+        expected_rms = expected_peak / math.sqrt(2)
+        peak_tolerance = expected_peak * 0.02
+        ui_report = json.loads(cli("run", "--project", project, "--frames", "4", "--report", "audio", "--json", "--pcm-frames", "4096"))
+        require(ui_report["succeeded"] and ui_report["buses"][0]["applied_effects"] == effects and
+                ui_report["peak"] < 0.03 and ui_report["rms"] < 0.01,
+                "CLI did not execute the actual Inspector-authored effect chain")
     cli("entity", "add", "--project", project, "--create", "Camera", "--name", "MainCamera")
     cli("script-new", "--project", project, "--name", "DspProbe", "--language", "lua")
     script = project / "Assets/Scripts/DspProbe.lua"
-    script.write_text('''function Ready(self, dt)
+    script.write_text(('''function Ready(self, dt)
     assert(Audio.ConfigureOffline(), "offline audio provider")
+    Audio.RenderOffline(8192)
     local pcm = Audio.RenderOffline(8192)
     local state = Audio.DspState("Effects")
-    assert(state.current and state.activeEffects == 2 and state.error == "", "installed DSP chain")
+    assert(state.current and state.activeEffects == @ACTIVE@ and state.error == "", "installed DSP chain")
     assert(state.sampleRate == 48000 and state.channels == 2, "actual PCM format")
-    assert(pcm.frames == 8192 and math.abs(pcm.peak - 0.09950) < 0.002 and
-           pcm.rms > 0.068 and pcm.rms < 0.072, "packaged DSP PCM gain")
+    assert(pcm.frames == 8192 and math.abs(pcm.peak - @PEAK@) < @TOL@ and
+           math.abs(pcm.rms - @RMS@) < @TOL@, "packaged DSP PCM gain")
     assert(Audio.SetBusVolume("Effects", 0), "post DSP mute")
     Audio.RenderOffline(512)
     assert(Audio.RenderOffline(4096).peak == 0, "post DSP mute PCM")
-    assert(Audio.SetBusVolume("Effects", 0.25), "post DSP unmute")
+    assert(Audio.SetBusVolume("Effects", @VOLUME@), "post DSP unmute")
     Audio.RenderOffline(512)
-    assert(Audio.RenderOffline(4096).peak > 0.095, "post DSP unmute PCM")
+    assert(math.abs(Audio.RenderOffline(4096).peak - @PEAK@) < @TOL@, "post DSP unmute PCM")
     Log("packaged DSP PCM verified")
 end
 function Destroyed(self, dt)
     Log("packaged DSP stopped")
 end
-''', encoding="utf8")
+''').replace("@ACTIVE@", str(active_effects)).replace("@PEAK@", repr(expected_peak))
+       .replace("@RMS@", repr(expected_rms)).replace("@TOL@", repr(peak_tolerance))
+       .replace("@VOLUME@", "1" if args.editor_tests else "0.25"), encoding="utf8")
     cli("scene-attach", "--project", project, "--scene", "Assets/Scenes/Main.21kbscene",
         "--node", "Emitter", "--script", "/Game/Scripts/DspProbe.lua")
     output = root / "Packaged"
@@ -163,7 +194,8 @@ end
     cook()
     run(player, "--headless", "--frames=3", "--width=64", "--height=64", "--uncapped", cwd=output, expected=1)
     require("DSP negative control" in history[-1]["stderr"] + history[-1]["stdout"], "Negative assertion was not executed")
-    (root / "result.json").write_text(json.dumps(dict(result="PASS", pcm=report, negativeScriptExit=1,
+    (root / "result.json").write_text(json.dumps(dict(result="PASS", pcm=report, inspectorAuthored=bool(args.editor_tests),
+        inspectorPcm=ui_report if args.editor_tests else None, negativeScriptExit=1,
         limitation="Offline native PCM and a hidden Windows player; no physical audio device or other platform qualification."), indent=2), encoding="utf8")
     print(f"PASS: authored effects, actual CLI PCM and cooked runtime PCM; {root}")
 

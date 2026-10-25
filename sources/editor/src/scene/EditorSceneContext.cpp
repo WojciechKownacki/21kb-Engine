@@ -2891,6 +2891,23 @@ bool EditorSceneContext::AddAudioMixerSnapshot(kb::assets::AssetId id, std::stri
     return AudioMixerAuthoring().AddSnapshot(id, name);
 }
 
+bool EditorSceneContext::AddAudioMixerEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect, kb::audio::AudioDspKind kind) {
+    return AudioMixerAuthoring().AddEffect(id, bus, effect, kind);
+}
+
+bool EditorSceneContext::RemoveAudioMixerEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect) {
+    return AudioMixerAuthoring().RemoveEffect(id, bus, effect);
+}
+
+bool EditorSceneContext::MoveAudioMixerEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect, std::size_t index) {
+    return AudioMixerAuthoring().MoveEffect(id, bus, effect, index);
+}
+
+bool EditorSceneContext::SetAudioMixerEffectField(kb::assets::AssetId id, std::string_view bus, std::string_view effect,
+    std::string_view field, std::string_view value) {
+    return AudioMixerAuthoring().SetEffectField(id, bus, effect, field, value);
+}
+
 bool EditorSceneContext::RemoveAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name) {
     return AudioMixerAuthoring().RemoveSnapshot(id, name);
 }

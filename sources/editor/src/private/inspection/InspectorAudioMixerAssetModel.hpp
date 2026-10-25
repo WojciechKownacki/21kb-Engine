@@ -31,6 +31,10 @@ struct InspectorAudioMixerRow {
     std::string busName;
     std::string snapshotName;
     std::string overrideBusName;
+    std::string effectId;
+    std::string effectField;
+    std::size_t effectIndex = 0U;
+    kb::audio::AudioDspKind effectKind = kb::audio::AudioDspKind::LowPass;
     std::string label;
     std::string value;
     bool boolValue = false;
@@ -51,6 +55,7 @@ public:
 
     [[nodiscard]] static std::string UniqueBusName(const kb::audio::AudioMixerAsset& asset);
     [[nodiscard]] static std::string UniqueSnapshotName(const kb::audio::AudioMixerAsset& asset);
+    [[nodiscard]] static std::string UniqueEffectId(const kb::audio::AudioMixerBus& bus, kb::audio::AudioDspKind kind);
     [[nodiscard]] static int RowHeight(InspectorAudioMixerRowKind kind) noexcept;
 
 private:

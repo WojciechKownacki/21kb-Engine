@@ -1,6 +1,7 @@
 #include "inspection/InspectorAudioMixerAssetInteraction.hpp"
 
 #include "engine/library/EngineLibraryParsing.hpp"
+#include "engine/audio/AudioMixerEffectEditing.hpp"
 
 #include <cmath>
 #include <limits>
@@ -34,6 +35,7 @@ bool InspectorAudioMixerAssetInteraction::IsTextProperty(InspectorPropertyId pro
     case InspectorPropertyId::AudioMixerBusVolume:
     case InspectorPropertyId::AudioMixerSnapshotName:
     case InspectorPropertyId::AudioMixerOverrideVolume:
+    case InspectorPropertyId::AudioMixerEffectParameter:
         return true;
     default:
         return false;
@@ -69,6 +71,34 @@ std::optional<InspectorAudioMixerCommand> InspectorAudioMixerAssetInteraction::R
         return std::nullopt;
     }
     switch (row->property) {
+    case InspectorPropertyId::AudioMixerEffectAdd:
+        if (row->kind == InspectorAudioMixerRowKind::Action && target.kind == InspectorHitKind::Row) {
+            const auto* bus = asset.FindBus(row->busName);
+            if (bus == nullptr) return std::nullopt;
+            return InspectorAudioMixerCommand{.kind = InspectorAudioMixerCommandKind::AddEffect, .bus = row->busName,
+                .effect = InspectorAudioMixerAssetModel::UniqueEffectId(*bus, row->effectKind), .effectKind = row->effectKind};
+        }
+        break;
+    case InspectorPropertyId::AudioMixerEffectRemove:
+        if (row->kind == InspectorAudioMixerRowKind::Action && target.kind == InspectorHitKind::Row)
+            return InspectorAudioMixerCommand{.kind = InspectorAudioMixerCommandKind::RemoveEffect, .bus = row->busName, .effect = row->effectId};
+        break;
+    case InspectorPropertyId::AudioMixerEffectMoveUp:
+    case InspectorPropertyId::AudioMixerEffectMoveDown:
+        if (row->kind == InspectorAudioMixerRowKind::Action && target.kind == InspectorHitKind::Row) {
+            const auto* bus = asset.FindBus(row->busName);
+            if (bus == nullptr) return std::nullopt;
+            const bool up = row->property == InspectorPropertyId::AudioMixerEffectMoveUp;
+            if ((up && row->effectIndex == 0U) || (!up && row->effectIndex + 1U >= bus->effects.size())) return std::nullopt;
+            return InspectorAudioMixerCommand{.kind = InspectorAudioMixerCommandKind::MoveEffect, .bus = row->busName,
+                .effect = row->effectId, .effectIndex = up ? row->effectIndex - 1U : row->effectIndex + 1U};
+        }
+        break;
+    case InspectorPropertyId::AudioMixerEffectBypass:
+        if (row->kind == InspectorAudioMixerRowKind::Bool && target.kind == InspectorHitKind::BoolField)
+            return InspectorAudioMixerCommand{.kind = InspectorAudioMixerCommandKind::SetEffectField, .bus = row->busName,
+                .value = row->boolValue ? "false" : "true", .effect = row->effectId, .field = "bypass"};
+        break;
     case InspectorPropertyId::AudioMixerBusAdd:
         if (row->kind == InspectorAudioMixerRowKind::Action && target.kind == InspectorHitKind::Row) {
             return InspectorAudioMixerCommand{
@@ -150,6 +180,14 @@ std::optional<InspectorAudioMixerCommand> InspectorAudioMixerAssetInteraction::R
         return std::nullopt;
     }
     switch (row->property) {
+    case InspectorPropertyId::AudioMixerEffectParameter: {
+        const auto* bus = asset.FindBus(row->busName);
+        if (bus == nullptr || row->effectIndex >= bus->effects.size()) return std::nullopt;
+        auto candidate = bus->effects[row->effectIndex].parameters;
+        if (!kb::audio::SetAudioDspField(candidate, row->effectField, state.EditBuffer()).empty()) return std::nullopt;
+        return InspectorAudioMixerCommand{.kind = InspectorAudioMixerCommandKind::SetEffectField, .bus = row->busName,
+            .value = state.EditBuffer(), .effect = row->effectId, .field = row->effectField};
+    }
     case InspectorPropertyId::AudioMixerBusName:
         return InspectorAudioMixerCommand{
             .kind = InspectorAudioMixerCommandKind::RenameBus,

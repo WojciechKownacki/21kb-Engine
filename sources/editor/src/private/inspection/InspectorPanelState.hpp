@@ -596,6 +596,12 @@ enum class InspectorPropertyId : std::uint16_t {
     PostProcessProfileField,
     ScenePostProcessProfile,
     ScenePostProcessProfileClear,
+    AudioMixerEffectAdd,
+    AudioMixerEffectParameter,
+    AudioMixerEffectBypass,
+    AudioMixerEffectRemove,
+    AudioMixerEffectMoveUp,
+    AudioMixerEffectMoveDown,
 };
 
 struct InspectorDynamicRowIdentity {

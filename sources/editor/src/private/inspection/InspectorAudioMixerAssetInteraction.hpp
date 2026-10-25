@@ -28,6 +28,10 @@ enum class InspectorAudioMixerCommandKind : std::uint8_t {
     AddOverride,
     RemoveOverride,
     SetOverrideVolume,
+    AddEffect,
+    RemoveEffect,
+    MoveEffect,
+    SetEffectField,
 };
 
 struct InspectorAudioMixerCommand {
@@ -37,6 +41,10 @@ struct InspectorAudioMixerCommand {
     std::string value;
     float number = 0.0F;
     bool flag = false;
+    std::string effect;
+    std::string field;
+    kb::audio::AudioDspKind effectKind = kb::audio::AudioDspKind::LowPass;
+    std::size_t effectIndex = 0U;
 };
 
 class InspectorAudioMixerAssetInteraction {
@@ -87,6 +95,14 @@ public:
             return actions.RemoveSnapshotOverride(id, command.snapshot, command.bus);
         case InspectorAudioMixerCommandKind::SetOverrideVolume:
             return actions.SetSnapshotOverrideVolume(id, command.snapshot, command.bus, command.number);
+        case InspectorAudioMixerCommandKind::AddEffect:
+            return actions.AddEffect(id, command.bus, command.effect, command.effectKind);
+        case InspectorAudioMixerCommandKind::RemoveEffect:
+            return actions.RemoveEffect(id, command.bus, command.effect);
+        case InspectorAudioMixerCommandKind::MoveEffect:
+            return actions.MoveEffect(id, command.bus, command.effect, command.effectIndex);
+        case InspectorAudioMixerCommandKind::SetEffectField:
+            return actions.SetEffectField(id, command.bus, command.effect, command.field, command.value);
         }
         return false;
     }

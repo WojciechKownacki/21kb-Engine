@@ -819,6 +819,11 @@ public:
     [[nodiscard]] bool SetAudioMixerBusParent(kb::assets::AssetId id, std::string_view name, std::string_view parent);
     [[nodiscard]] bool SetAudioMixerBusVolume(kb::assets::AssetId id, std::string_view name, float volume);
     [[nodiscard]] bool SetAudioMixerBusMute(kb::assets::AssetId id, std::string_view name, bool mute);
+    [[nodiscard]] bool AddAudioMixerEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect, kb::audio::AudioDspKind kind);
+    [[nodiscard]] bool RemoveAudioMixerEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect);
+    [[nodiscard]] bool MoveAudioMixerEffect(kb::assets::AssetId id, std::string_view bus, std::string_view effect, std::size_t index);
+    [[nodiscard]] bool SetAudioMixerEffectField(kb::assets::AssetId id, std::string_view bus, std::string_view effect,
+        std::string_view field, std::string_view value);
     [[nodiscard]] bool AddAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name);
     [[nodiscard]] bool RemoveAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name);
     [[nodiscard]] bool RenameAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name, std::string_view replacement);

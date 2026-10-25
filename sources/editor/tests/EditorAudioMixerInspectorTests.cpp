@@ -4,12 +4,15 @@
 
 #include "assets/EditorAssetBrowserState.hpp"
 #include "console/EditorConsoleState.hpp"
+#include "commands/EditorCommandStack.hpp"
+#include "engine/audio/AudioMixerEffectEditing.hpp"
 #include "engine/audio/AudioMixerAssetIO.hpp"
 #include "engine/library/EngineLibraryParsing.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "inspection/InspectorAudioMixerAssetInteraction.hpp"
 #include "inspection/InspectorAudioMixerAssetModel.hpp"
+#include "localization/EditorLocalization.hpp"
 #include "rendering/InspectorAudioMixerAssetView.hpp"
 #include "scene/audio/EditorAudioMixerAuthoring.hpp"
 
@@ -543,12 +546,157 @@ void RunAudioMixerInspectorTest() {
         "Cache-only view fixture must restore the exact persisted mixer file");
 }
 
+void RunAudioMixerDspInspectorTest() {
+    using Kind = kb::audio::AudioDspKind;
+    using Property = kb::editor::InspectorPropertyId;
+    using RowKind = kb::editor::InspectorAudioMixerRowKind;
+    using Interaction = kb::editor::InspectorAudioMixerAssetInteraction;
+    using Model = kb::editor::InspectorAudioMixerAssetModel;
+    using kb::editor::tests::Require;
+    ResetTestRoot();
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::EditorConsoleState console;
+    kb::editor::EditorCommandStack stack;
+    kb::editor::InspectorPanelState inspector;
+    Require(scene.Assets().MountProject(TestRoot() / "Project"), "DSP Inspector project did not mount");
+    kb::editor::EditorAudioMixerAuthoring authoring{scene, browser, console, &stack};
+    Require(authoring.Create("/Game/Mixers"), "DSP Inspector mixer did not create");
+    const auto id = browser.InspectorAsset();
+    Require(authoring.AddBus(id, "Effects"), "DSP Inspector bus did not create");
+    const auto metadata = *scene.Assets().Manager().Registry().Find(id);
+    const auto path = metadata.physicalPath;
+    const auto key = kb::editor::EditorCommandHistoryKey::AudioMixerAsset(id.value);
+    std::vector<std::vector<std::uint8_t>> states{ReadBytes(path)};
+    auto mixer = CachedMixer(scene, id);
+    const auto refresh = [&] { mixer = CachedMixer(scene, id); Require(mixer.IsLoaded(), "DSP Inspector cache did not refresh"); };
+    const auto click = [&](const kb::editor::InspectorAudioMixerRow& row) {
+#if defined(_WIN32)
+        const RECT content{0, 0, 420, 320};
+        const auto bounds = kb::editor::InspectorAudioMixerAssetView::RowBounds(content, inspector, *mixer, row.flatIndex);
+        Require(bounds.has_value(), "DSP Inspector row has no real geometry");
+        const int maxScroll = std::max(0, kb::editor::InspectorAudioMixerAssetView::ContentHeight(inspector, *mixer) - 320);
+        static_cast<void>(inspector.SetScrollOffset(inspector.ScrollOffset() + bounds->top - 60, maxScroll));
+        const auto target = HitRow(content, inspector, *mixer, row);
+        PaintSmoke(content, inspector, metadata, *mixer);
+#else
+        const kb::editor::InspectorAudioMixerAssetTarget target{.kind = row.kind == RowKind::Bool
+            ? kb::editor::InspectorHitKind::BoolField : row.kind == RowKind::Text ? kb::editor::InspectorHitKind::TextField : kb::editor::InspectorHitKind::Row,
+            .section = row.section, .property = row.property, .index = row.flatIndex};
+#endif
+        Require(Interaction::HandlePointerDown(inspector, *mixer, target, authoring, id), "DSP Inspector click was not handled");
+    };
+    const auto find = [&](Property property, std::string_view effect = {}, std::string_view field = {}, Kind kind = Kind::LowPass) {
+        const Model model{*mixer};
+        const auto found = std::ranges::find_if(model.Rows(), [&](const auto& row) {
+            return row.property == property && row.busName == "Effects" && (effect.empty() || row.effectId == effect)
+                && (field.empty() || row.effectField == field) && (property != Property::AudioMixerEffectAdd || row.effectKind == kind);
+        });
+        Require(found != model.Rows().end(), "DSP Inspector control is missing");
+        return *found;
+    };
+    const auto record = [&] { refresh(); states.push_back(ReadBytes(path)); Require(states.back() != states[states.size()-2U], "DSP UI action did not change saved data"); };
+    for (const auto kind : {Kind::LowPass, Kind::HighPass, Kind::PeakingEqualizer, Kind::Delay, Kind::Reverb, Kind::Compressor, Kind::Limiter, Kind::Delay}) {
+        click(find(Property::AudioMixerEffectAdd, {}, {}, kind)); record();
+        Require(mixer->FindBus("Effects")->effects.back().parameters.kind == kind, "DSP add control selected the wrong kind");
+    }
+    Require(mixer->FindBus("Effects")->effects[3].id != mixer->FindBus("Effects")->effects[7].id,
+        "Repeated effect controls reused a stable ID");
+    const auto valueFor = [](std::string_view field) -> std::string_view {
+        if (field == "cutoffHz") return "1234.5678901234567";
+        if (field == "order") return "4";
+        if (field == "gainDb") return "3.123456789012345";
+        if (field == "quality") return "2.718281828459045";
+        if (field == "delayMs") return "12.345678901234567";
+        if (field == "thresholdDb") return "-18";
+        if (field == "ratio") return "3";
+        if (field == "attackMs") return "3";
+        if (field == "releaseMs") return "80";
+        if (field == "makeupDb") return "2";
+        if (field == "ceilingDb") return "-3";
+        return "0.4";
+    };
+    const auto effects = mixer->FindBus("Effects")->effects;
+    std::size_t parameterEdits = 0U;
+    for (const auto& effect : effects) {
+        for (const auto field : kb::audio::AudioDspFieldNames(effect.parameters.kind)) {
+            if (field == "bypass") { click(find(Property::AudioMixerEffectBypass, effect.id)); record(); continue; }
+            auto expected = *kb::audio::AudioMixerAssetIO::Load(path);
+            Require(kb::audio::SetAudioMixerEffectField(expected, "Effects", effect.id, field, valueFor(field)).empty(), "DSP Inspector fixture field is invalid");
+            click(find(Property::AudioMixerEffectParameter, effect.id, field));
+            SetEditedText(inspector, valueFor(field));
+            Require(Interaction::CommitTextEdit(inspector, *mixer, authoring, id), "DSP Inspector parameter did not commit"); record();
+            Require(mixer->FindBus("Effects")->effects == expected.FindBus("Effects")->effects, "DSP Inspector lost field precision or changed another effect");
+            ++parameterEdits;
+        }
+    }
+    const auto retained = ReadBytes(path); const auto undoCount = stack.UndoCount(key);
+    click(find(Property::AudioMixerEffectParameter, effects[3].id, "feedback")); SetEditedText(inspector, "nan");
+    Require(!Interaction::CommitTextEdit(inspector, *mixer, authoring, id) && ReadBytes(path) == retained
+        && stack.UndoCount(key) == undoCount, "Invalid DSP control edit changed data or history");
+    click(find(Property::AudioMixerEffectParameter, effects[3].id, "delayMs")); SetEditedText(inspector, "25");
+    Require(authoring.MoveEffect(id, "Effects", effects[3].id, 7U), "DSP stale edit fixture did not reorder"); record();
+    const auto moved = ReadBytes(path);
+    Require(!Interaction::CommitTextEdit(inspector, *mixer, authoring, id) && ReadBytes(path) == moved,
+        "Stale DSP edit overwrote another effect after reorder");
+    click(find(Property::AudioMixerEffectParameter, effects[3].id, "delayMs")); SetEditedText(inspector, "30");
+    Require(authoring.MoveEffect(id, "Effects", effects[3].id, 6U), "Repeated DSP stale edit fixture did not reorder"); record();
+    const auto repeatedMoved = ReadBytes(path);
+    Require(!Interaction::CommitTextEdit(inspector, *mixer, authoring, id) && ReadBytes(path) == repeatedMoved,
+        "Stale DSP edit crossed equal-shaped repeated effects with distinct stable IDs");
+    click(find(Property::AudioMixerEffectMoveUp, effects[3].id)); record();
+    click(find(Property::AudioMixerEffectMoveDown, effects[3].id)); record();
+    click(find(Property::AudioMixerEffectRemove, effects[7].id)); record();
+    const auto finalEffects = mixer->FindBus("Effects")->effects;
+    for (std::size_t i = states.size()-1U; i > 0U; --i) {
+        Require(stack.Undo(key) && ReadBytes(path) == states[i-1U], "DSP Inspector Undo did not restore exact asset bytes"); refresh();
+    }
+    for (std::size_t i = 1U; i < states.size(); ++i) {
+        Require(stack.Redo(key) && ReadBytes(path) == states[i], "DSP Inspector Redo did not restore exact asset bytes"); refresh();
+    }
+    Require(scene.Assets().Manager().Unload(id), "DSP Inspector cache did not unload"); refresh();
+    Require(mixer->FindBus("Effects")->effects == finalEffects && parameterEdits == 27U,
+        "DSP Inspector reload lost authored effect fields");
+    auto external = *mixer; external.buses[0].effects[0].parameters.bypass = !external.buses[0].effects[0].parameters.bypass;
+    Require(kb::audio::AudioMixerAssetIO::Save(path, external), "DSP external edit fixture did not save");
+    const auto externalBytes = ReadBytes(path);
+    Require(!stack.Undo(key) && ReadBytes(path) == externalBytes, "DSP Undo overwrote an external effect edit");
+    Require(kb::audio::AudioMixerAssetIO::Save(path, *mixer) && ReadBytes(path) == states.back(),
+        "DSP external conflict fixture did not restore the UI-authored state");
+    click(find(Property::AudioMixerEffectBypass, effects[0].id)); record();
+    click(find(Property::AudioMixerEffectParameter, effects[0].id, "cutoffHz")); SetEditedText(inspector, "200");
+    Require(Interaction::CommitTextEdit(inspector, *mixer, authoring, id), "DSP package fixture frequency did not commit through its control"); record();
+    for (std::size_t i = states.size()-1U; i > states.size()-3U; --i)
+        Require(stack.Undo(key) && ReadBytes(path) == states[i-1U], "DSP package fixture Undo did not preserve exact bytes");
+    for (std::size_t i = states.size()-2U; i < states.size(); ++i)
+        Require(stack.Redo(key) && ReadBytes(path) == states[i], "DSP package fixture Redo did not preserve exact bytes");
+    refresh();
+    std::string error;
+    std::size_t languages = 0U;
+    for (const auto& language : kb::editor::EditorLocalization::Languages()) {
+        if (language.code == "en") continue;
+        Require(kb::editor::EditorLocalization::SetLanguage(language.code, KB_EDITOR_LOCALIZATION_DIR, error),
+            "DSP Inspector language catalog did not load");
+        Require(find(Property::AudioMixerEffectParameter, effects[0].id, "cutoffHz").label != "Frequency (Hz)",
+            "DSP Inspector field fell back to English instead of its catalog");
+#if defined(_WIN32)
+        PaintSmoke(RECT{0, 0, 420, 320}, inspector, metadata, *mixer);
+#endif
+        ++languages;
+    }
+    Require(kb::editor::EditorLocalization::SetLanguage("en", {}, error) && languages == 32U,
+        "DSP Inspector did not cover every translated language");
+    std::cout << "DSP Inspector parameterEdits=" << parameterEdits << " uiCommands=" << states.size()-1U
+        << " languages=" << languages << " stableRepeatId=1 undoRedoExact=1 externalConflict=1\n";
+}
+
 } // namespace
 
 namespace kb::editor::tests {
 
 void RunEditorAudioMixerInspectorTests() {
     RunAudioMixerInspectorTest();
+    RunAudioMixerDspInspectorTest();
 }
 
 } // namespace kb::editor::tests
