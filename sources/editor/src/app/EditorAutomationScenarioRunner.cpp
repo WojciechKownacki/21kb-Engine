@@ -2377,6 +2377,9 @@ ReadScriptValue(
             NumberMember(step, "min_size", error, false).value_or(0.0);
         const auto contains =
             StringMember(step, "contains", error, false);
+        // The text the file must not hold: proves an edit stayed in the file it was meant for.
+        const auto notContains =
+            StringMember(step, "not_contains", error, false);
         if (!error.empty() || minimum < 0.0 ||
             std::floor(minimum) != minimum) {
             return { false, error.empty()
@@ -2403,6 +2406,14 @@ ReadScriptValue(
                 text.find(*contains) == std::string::npos) {
                 return { false, readError.empty()
                     ? "file text was not found" : readError };
+            }
+        }
+        if (notContains.has_value()) {
+            std::string readError;
+            const std::string text = ReadText(*resolved, readError);
+            if (!readError.empty() || text.find(*notContains) != std::string::npos) {
+                return { false, readError.empty()
+                    ? "file holds text it must not hold" : readError };
             }
         }
         return { true, std::to_string(size) + " byte(s)" };
