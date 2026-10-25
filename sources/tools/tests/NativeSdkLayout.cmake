@@ -7,7 +7,7 @@ file(MAKE_DIRECTORY "${TEST_ROOT}/sdk/bin/Release" "${TEST_ROOT}/sdk/engine/Rele
 file(COPY_FILE "${CLI}" "${TEST_ROOT}/sdk/bin/Release/kb_cli.exe" ONLY_IF_DIFFERENT)
 file(COPY_FILE "${ENGINE_LIBRARY}" "${TEST_ROOT}/sdk/engine/Release/kb_engine.lib" ONLY_IF_DIFFERENT)
 file(COPY_FILE "${FLECS_LIBRARY}" "${TEST_ROOT}/sdk/third_party/flecs/Release/flecs_static.lib" ONLY_IF_DIFFERENT)
-foreach(name IN ITEMS PHYSICS AUDIO LIGHTING PARTICLES AI)
+foreach(name IN ITEMS PHYSICS AUDIO LIGHTING PARTICLES AI WORLD2D)
     get_filename_component(plugin_name "${${name}_PLUGIN}" NAME)
     file(COPY_FILE "${${name}_PLUGIN}" "${TEST_ROOT}/sdk/bin/Release/${plugin_name}" ONLY_IF_DIFFERENT)
 endforeach()

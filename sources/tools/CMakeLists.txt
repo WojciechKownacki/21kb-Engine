@@ -149,7 +149,7 @@ if(BUILD_TESTING)
 
     if(WIN32 AND KB_BUILD_PROVIDER_MODULES_AS_DLL)
         add_dependencies(kb_cli kb_physics_jolt_plugin kb_audio_miniaudio_plugin
-            kb_basic_lighting_plugin kb_21kb_particle_plugin kb_ai_plugin)
+            kb_basic_lighting_plugin kb_21kb_particle_plugin kb_ai_plugin kb_world2d_plugin)
         add_test(NAME kb_native_sdk_layout COMMAND ${CMAKE_COMMAND}
             "-DCLI=$<TARGET_FILE:kb_cli>"
             "-DENGINE_ROOT=${PROJECT_SOURCE_DIR}"
@@ -164,6 +164,7 @@ if(BUILD_TESTING)
             "-DLIGHTING_PLUGIN=$<TARGET_FILE:kb_basic_lighting_plugin>"
             "-DPARTICLES_PLUGIN=$<TARGET_FILE:kb_21kb_particle_plugin>"
             "-DAI_PLUGIN=$<TARGET_FILE:kb_ai_plugin>"
+            "-DWORLD2D_PLUGIN=$<TARGET_FILE:kb_world2d_plugin>"
             "-Dlua_LIBRARY=$<TARGET_FILE:kb_lua>"
             "-Dufbx_LIBRARY=$<TARGET_FILE:kb_ufbx>"
             "-Dmonocypher_LIBRARY=$<TARGET_FILE:kb_monocypher>"
