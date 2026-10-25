@@ -74,6 +74,7 @@
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
+#include "engine/script/NativeScriptPlugin.hpp"
 #include "engine/script/NativeScriptPluginManager.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
@@ -653,6 +654,11 @@ void RunNativeScriptPluginManagerDispatchTest() {
         .shadowCopyDirectory = TestRoot() / "NativePluginShadow",
     });
     kb::tests::Require(!failedLoad.Succeeded(), "Native script plugin manager accepted a plugin whose registration returned false");
+    // A plugin built against another SDK version must be told what to do, not just refused.
+    kb::tests::Require(std::ranges::any_of(failedLoad.errors, [](const std::string& message) {
+        return message.find("rebuild the plugin against the current SDK") != std::string::npos &&
+            message.find("SDK API " + std::to_string(kb::script::kNativeScriptPluginApiVersion)) != std::string::npos;
+    }), "Native script plugin manager did not tell the author to rebuild a plugin whose registration returned false");
     kb::tests::Require(!plugins.IsLoaded("partial-failure-plugin"), "Native script plugin manager tracked a failed plugin load");
     kb::tests::Require(native->BindAssetSymbol(kNativeAsset, "tests.NativePluginPartialFailure"), "Native script partial failure asset symbol binding failed");
     const kb::script::ScriptRuntimeExecutionResult afterFailedLoad = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
@@ -675,6 +681,23 @@ void RunNativeScriptBuildPipelineTest() {
     });
     kb::tests::Require(built.Succeeded(), "Native script build pipeline did not execute the build command");
     kb::tests::Require(std::filesystem::is_regular_file(marker), "Native script build pipeline did not create the build marker");
+
+    const kb::script::NativeScriptBuildResult missingTool = kb::script::NativeScriptBuildPipeline::Build(kb::script::NativeScriptBuildDesc{
+        .enabled = true,
+        .command = "kb_native_build_tool_that_does_not_exist",
+        .workingDirectory = projectRoot,
+    });
+    kb::tests::Require(!missingTool.Succeeded() && missingTool.exitCode != 0,
+        "Native script build pipeline reported success for a build tool that does not exist");
+    kb::tests::Require(std::ranges::any_of(missingTool.errors, [](const std::string& message) {
+        return message.find("native script build command failed with exit code") != std::string::npos;
+    }), "Native script build pipeline did not report the failing exit code");
+    const kb::script::NativeScriptBuildResult emptyCommand = kb::script::NativeScriptBuildPipeline::Build(kb::script::NativeScriptBuildDesc{
+        .enabled = true,
+        .command = "",
+        .workingDirectory = projectRoot,
+    });
+    kb::tests::Require(!emptyCommand.Succeeded(), "Native script build pipeline accepted an empty build command");
 }
 
 void RunScriptRuntimeExecutionOrderTest() {
