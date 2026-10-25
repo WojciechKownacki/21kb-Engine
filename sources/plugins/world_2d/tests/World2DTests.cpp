@@ -999,6 +999,38 @@ int main() {
         step();
         Require(scene.Entities().Count() == withChunks, "the next Play starts from the authored map, which has no prefab cells");
     }
+    // Prefab cells in the editor: painting one is a single undoable step, it survives a save, and redo and undo can be
+    // repeated without leaving a stray prefab behind. Tile data reaches a game from the bytes the cooker stores: a map
+    // loaded from the written bytes answers the same cell queries as the source file.
+    {
+        using kb::assets::Map2DTile;
+        Map2DAsset map = kb::assets::MakeEmptyMap2DAsset(8U, 8U);
+        kb::world2d::Map2DEditor editor{ map, library, assets };
+        kb::world2d::Map2DChangeSet change;
+        editor.SetChangeSet(&change);
+        Map2DTile tile;
+        tile.prefab = "/Game/Marker.kbprefab";
+        tile.properties["owner"] = std::string{ "scout" };
+        tile.properties["level"] = std::int64_t{ 7 };
+        editor.SetTile(3U, 3U, 0, tile);
+        change.Finish(map);
+        Require(map.tiles.contains(Map2DTileKey(3U, 3U, 0)) && map.tiles.at(Map2DTileKey(3U, 3U, 0)).prefab == tile.prefab, "painting a prefab cell stores its prefab");
+        const std::string written = kb::assets::Map2DAssetIO::Write(map);
+        const auto cooked = kb::assets::Map2DAssetIO::Load(std::span<const std::uint8_t>{ reinterpret_cast<const std::uint8_t*>(written.data()), written.size() });
+        Require(cooked.has_value() && cooked->tiles == map.tiles, "a prefab cell and its data survive the bytes the cooker stores");
+        const Map2DTile& cell = cooked->tiles.at(Map2DTileKey(3U, 3U, 0));
+        const auto level = kb::assets::Map2DCellProperty(*cooked, cell, "level");
+        const auto owner = kb::assets::Map2DCellProperty(*cooked, cell, "owner");
+        Require(level.has_value() && std::get<std::int64_t>(*level) == 7 && owner.has_value() && std::get<std::string>(*owner) == "scout" &&
+                !kb::assets::Map2DCellProperty(*cooked, cell, "missing").has_value(),
+            "typed cell data is read from the cooked bytes, and a missing name is absent");
+        for (int round = 0; round < 3; ++round) {
+            change.Undo(map);
+            Require(map.tiles.empty(), "undoing a prefab paint removes the cell and its prefab");
+            change.Redo(map);
+            Require(map.tiles.size() == 1U && map.tiles.at(Map2DTileKey(3U, 3U, 0)).prefab == tile.prefab, "redoing a prefab paint restores it exactly once");
+        }
+    }
     // Tile collision: neighbouring equal shapes join into boxes that cover exactly the solid cells, different
     // shapes, floors and one-way ledges stay apart, and every box sits where its cells are.
     {
