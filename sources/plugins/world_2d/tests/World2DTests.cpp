@@ -44,6 +44,7 @@
 #include <psapi.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -1567,6 +1568,125 @@ int main() {
         const std::string expected =
             "4,3:-+16;5,3:-+17;6,3:-+18;3,4:-+16;4,4:-+28;5,4:25;6,4:-+27;7,4:-+18;3,5:-+24;4,5:25;5,5:25;6,5:25;7,5:-+26;3,6:-+32;4,6:-+20;5,6:25;6,6:-+19;7,6:-+34;4,7:-+32;5,7:-+33;6,7:-+34;";
         Require(golden == expected, ("the autoborder of a plus-shaped patch changed: " + golden).c_str());
+    }
+    // Top-down paths: a body wider than a cell, diagonal policy, cell costs, the visited budget and why a path is empty.
+    {
+        using kb::assets::Map2DPathStatus;
+        auto map = kb::assets::MakeEmptyMap2DAsset(12U, 12U);
+        for (unsigned x = 0; x < 12; ++x) if (x != 5U) map.tiles[Map2DTileKey(x, 6U, 0)].solid = true;
+        const kb::assets::Map2DPathResult thin = kb::assets::FindMap2DPathResult(map, { 5, 1 }, { 5, 10 });
+        Require(thin.status == Map2DPathStatus::Found && thin.path.size() == 10U, "a body of one cell passes a one cell gap");
+        const kb::assets::Map2DPathResult wide = kb::assets::FindMap2DPathResult(map, { 5, 1 }, { 5, 10 }, { .clearanceCells = 1U });
+        Require(wide.status == Map2DPathStatus::NoPath && wide.path.empty(), "a body of three cells does not fit a one cell gap");
+        map.tiles.clear();
+        for (unsigned x = 0; x < 12; ++x) if (x < 4U || x > 6U) map.tiles[Map2DTileKey(x, 6U, 0)].solid = true;
+        Require(kb::assets::FindMap2DPathResult(map, { 5, 1 }, { 5, 10 }, { .clearanceCells = 1U }).status == Map2DPathStatus::Found,
+            "a body of three cells passes a gap of three");
+        auto tall = kb::assets::MakeEmptyMap2DAsset(20U, 20U);
+        for (unsigned x = 0; x < 20; ++x) if (x < 4U || x > 6U) tall.tiles[Map2DTileKey(x, 10U, 0)].solid = true;
+        Require(kb::assets::FindMap2DPathResult(tall, { 5, 3 }, { 5, 16 }, { .clearanceCells = 1U }).status == Map2DPathStatus::Found &&
+                kb::assets::FindMap2DPathResult(tall, { 5, 3 }, { 5, 16 }, { .clearanceCells = 2U }).status == Map2DPathStatus::NoPath,
+            "a body of five cells does not fit a gap of three");
+
+        map.tiles.clear();
+        const kb::assets::Map2DPathResult four = kb::assets::FindMap2DPathResult(map, { 0, 0 }, { 4, 4 });
+        const kb::assets::Map2DPathResult eight = kb::assets::FindMap2DPathResult(map, { 0, 0 }, { 4, 4 }, { .diagonal = kb::assets::Map2DDiagonalPolicy::Allowed });
+        Require(four.path.size() == 9U && eight.path.size() == 5U, "diagonal steps shorten a path across open ground");
+        map.tiles[Map2DTileKey(2U, 1U, 0)].solid = true;
+        map.tiles[Map2DTileKey(1U, 2U, 0)].solid = true;
+        const kb::assets::Map2DPathResult cut = kb::assets::FindMap2DPathResult(map, { 1, 1 }, { 2, 2 }, { .diagonal = kb::assets::Map2DDiagonalPolicy::Allowed });
+        const kb::assets::Map2DPathResult careful = kb::assets::FindMap2DPathResult(map, { 1, 1 }, { 2, 2 }, { .diagonal = kb::assets::Map2DDiagonalPolicy::NoCornerCutting });
+        Require(cut.path.size() == 2U && careful.status == Map2DPathStatus::Found && careful.path.size() > 2U,
+            "a policy that does not cut corners goes around two blocked cells that a free diagonal squeezes between");
+
+        map.tiles.clear();
+        kb::assets::Map2DTile mud;
+        mud.properties["navCost"] = 100.0;
+        for (unsigned x = 3; x < 6; ++x) map.tiles[Map2DTileKey(x, 1U, 0)] = mud;
+        const kb::assets::Map2DPathResult straight = kb::assets::FindMap2DPathResult(map, { 0, 1 }, { 9, 1 });
+        const kb::assets::Map2DPathResult detour = kb::assets::FindMap2DPathResult(map, { 0, 1 }, { 9, 1 }, { .costProperty = "navCost" });
+        const auto touchesMud = [](const kb::assets::Map2DPathResult& result) {
+            return std::ranges::any_of(result.path, [](const std::array<int, 2>& cell) { return cell[1] == 1 && cell[0] >= 3 && cell[0] <= 5; });
+        };
+        Require(straight.path.size() == 10U && detour.status == Map2DPathStatus::Found && !touchesMud(detour) && detour.path.size() > 10U,
+            "a costly cell is avoided when a detour is cheaper, and ignored without the cost option");
+
+        auto large = kb::assets::MakeEmptyMap2DAsset(128U, 128U);
+        const kb::assets::Map2DPathResult big = kb::assets::FindMap2DPathResult(large, { 0, 0 }, { 127, 127 });
+        Require(big.status == Map2DPathStatus::Found && big.visited < 65536U, "a path across a large open map stays inside the default budget");
+        const kb::assets::Map2DPathResult tight = kb::assets::FindMap2DPathResult(large, { 0, 0 }, { 127, 127 }, { .maximumVisited = 100U });
+        Require(tight.status == Map2DPathStatus::BudgetExceeded && tight.path.empty(), "a search that runs out of budget says so instead of saying there is no way");
+        large.tiles[Map2DTileKey(0U, 1U, 0)].solid = true;
+        large.tiles[Map2DTileKey(1U, 0U, 0)].solid = true;
+        const kb::assets::Map2DPathResult boxed = kb::assets::FindMap2DPathResult(large, { 0, 0 }, { 127, 127 });
+        Require(boxed.status == Map2DPathStatus::NoPath && boxed.visited == 1U, "a start walled in has no way, found at once");
+        large.tiles[Map2DTileKey(127U, 127U, 0)].solid = true;
+        Require(kb::assets::FindMap2DPathResult(large, { 5, 5 }, { 127, 127 }).status == Map2DPathStatus::EndBlocked &&
+                kb::assets::FindMap2DPathResult(large, { 127, 127 }, { 5, 5 }).status == Map2DPathStatus::StartBlocked,
+            "a blocked end and a blocked start are told apart");
+    }
+    // Platformer paths: falling down a ledge, a ceiling that stops a jump, a one-way platform entered from below.
+    {
+        using kb::assets::Map2DPathStatus;
+        auto map = kb::assets::MakeEmptyMap2DAsset(12U, 12U);
+        for (unsigned x = 0; x < 12; ++x) map.tiles[Map2DTileKey(x, 9U, 0)].solid = true;
+        for (unsigned x = 0; x < 3; ++x) map.tiles[Map2DTileKey(x, 6U, 0)].solid = true;
+        const kb::assets::Map2DPathResult fall = kb::assets::FindMap2DPathResult(map, { 1, 5 }, { 4, 8 }, { .platformer = true });
+        bool falls = false;
+        for (std::size_t index = 1U; index < fall.path.size(); ++index) falls = falls || fall.path[index][1] > fall.path[index - 1U][1];
+        Require(fall.status == Map2DPathStatus::Found && falls, "a path off a ledge goes down by falling");
+
+        map.tiles.clear();
+        for (unsigned x = 0; x < 12; ++x) if (x != 4U && x != 5U) map.tiles[Map2DTileKey(x, 8U, 0)].solid = true;
+        Require(kb::assets::FindMap2DPathResult(map, { 2, 7 }, { 7, 7 }, { .platformer = true }).status == Map2DPathStatus::Found,
+            "a gap in the floor is jumped");
+        // A low ceiling is a platform to the planner: the way over the gap then leads along its top, not across the floor.
+        for (unsigned x = 1; x < 9; ++x) map.tiles[Map2DTileKey(x, 5U, 0)].solid = true;
+        const kb::assets::Map2DPathResult overTop = kb::assets::FindMap2DPathResult(map, { 2, 7 }, { 7, 7 }, { .platformer = true });
+        Require(overTop.status == Map2DPathStatus::Found &&
+                std::ranges::any_of(overTop.path, [](const std::array<int, 2>& cell) { return cell[1] <= 4; }) &&
+                std::ranges::none_of(overTop.path, [](const std::array<int, 2>& cell) { return cell[0] >= 4 && cell[0] <= 5 && cell[1] == 7; }),
+            "with a low ceiling above the gap the way leads over the ceiling, never across the gap on the floor");
+        // A ceiling that fills the space up to the top of the map leaves no arc and no platform: the gap cannot be crossed.
+        for (unsigned y = 0; y < 5; ++y) for (unsigned x = 1; x < 9; ++x) map.tiles[Map2DTileKey(x, y, 0)].solid = true;
+        Require(kb::assets::FindMap2DPathResult(map, { 2, 7 }, { 7, 7 }, { .platformer = true }).status != Map2DPathStatus::Found,
+            "a ceiling that the arc of the jump would hit makes the jump impossible");
+
+        map.tiles.clear();
+        for (unsigned x = 0; x < 12; ++x) map.tiles[Map2DTileKey(x, 9U, 0)].solid = true;
+        kb::assets::Map2DTile platform;
+        platform.collision = kb::assets::Map2DCollision{ .kind = kb::assets::Map2DCollisionKind::OneWay };
+        for (unsigned x = 0; x < 12; ++x) map.tiles[Map2DTileKey(x, 6U, 0)] = platform;
+        Require(kb::assets::FindMap2DPathResult(map, { 4, 8 }, { 4, 5 }, { .platformer = true }).status == Map2DPathStatus::Found,
+            "a one-way floor across the whole map is entered by jumping up through it");
+        for (unsigned x = 0; x < 12; ++x) { map.tiles[Map2DTileKey(x, 6U, 0)] = kb::assets::Map2DTile{}; map.tiles[Map2DTileKey(x, 6U, 0)].solid = true; }
+        Require(kb::assets::FindMap2DPathResult(map, { 4, 8 }, { 4, 5 }, { .platformer = true }).status != Map2DPathStatus::Found,
+            "a solid floor across the whole map cannot be entered from below");
+        // A sealed pocket is unreachable and says so.
+        for (unsigned x = 8; x < 11; ++x) { map.tiles[Map2DTileKey(x, 4U, 0)].solid = true; map.tiles[Map2DTileKey(x, 6U, 0)].solid = true; }
+        map.tiles[Map2DTileKey(8U, 5U, 0)].solid = true;
+        map.tiles[Map2DTileKey(10U, 5U, 0)].solid = true;
+        const kb::assets::Map2DPathResult sealed = kb::assets::FindMap2DPathResult(map, { 1, 8 }, { 9, 5 }, { .platformer = true });
+        Require(sealed.status == Map2DPathStatus::NoPath && sealed.path.empty(), "a goal in a sealed pocket is reported as unreachable");
+    }
+    // Map limits: a map of 4096 cells a side is valid and one cell more is not, tiles on the last row and column are
+    // kept exactly, cells outside the map are refused rather than wrapped, and shrinking a map is undoable.
+    {
+        Require(kb::assets::Map2DAssetIO::Parse("21kb-map2d 1\nsize 4096 4096\n").has_value(), "a map of 4096 by 4096 cells is valid");
+        Require(!kb::assets::Map2DAssetIO::Parse("21kb-map2d 1\nsize 4097 4096\n").has_value() && !kb::assets::Map2DAssetIO::Parse("21kb-map2d 1\nsize 4096 4097\n").has_value(),
+            "a map of 4097 cells in one direction is refused");
+        auto corner = kb::assets::MakeEmptyMap2DAsset(4096U, 4096U);
+        corner.tiles[Map2DTileKey(4095U, 4095U, 50)].solid = true;
+        corner.tiles[Map2DTileKey(0U, 0U, -50)].solid = true;
+        const std::optional<Map2DAsset> corners = kb::assets::Map2DAssetIO::Parse(kb::assets::Map2DAssetIO::Write(corner));
+        Require(corners.has_value() && corners->tiles == corner.tiles, "tiles on the last row, last column and the outermost floors survive a save exactly");
+        auto small = kb::assets::MakeEmptyMap2DAsset(8U, 8U);
+        small.tiles[Map2DTileKey(7U, 7U, 0)].solid = true;
+        Require(kb::assets::IsMap2DAssetValid(small), "a tile on the last cell of the map is valid");
+        small.tiles[Map2DTileKey(8U, 7U, 0)].solid = true;
+        Require(!kb::assets::IsMap2DAssetValid(small), "a tile one cell outside the map is invalid, not wrapped to the next row");
+        Require(!kb::assets::Map2DAssetIO::Parse("21kb-map2d 1\nsize 8 8\nt 8 0 0 g=0:0\n").has_value() && !kb::assets::Map2DAssetIO::Parse("21kb-map2d 1\nsize 8 8\nt -1 0 0 g=0:0\n").has_value(),
+            "an imported tile outside the map fails the whole import and nothing is truncated");
     }
     std::filesystem::remove_all(root);
     std::puts("kb_world2d_tests passed");

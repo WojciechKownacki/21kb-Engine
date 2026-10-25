@@ -20,10 +20,45 @@ bool Map2DCellBlocked(const Map2DAsset& map, int x, int y, int floor) {
 
 std::vector<std::array<int, 2>> FindMap2DPath(const Map2DAsset& map, std::array<int, 2> start,
     std::array<int, 2> end, const Map2DPathOptions& options) {
+    return FindMap2DPathResult(map, start, end, options).path;
+}
+
+Map2DPathResult FindMap2DPathResult(const Map2DAsset& map, std::array<int, 2> start,
+    std::array<int, 2> end, const Map2DPathOptions& options) {
     using Cell = std::array<int, 2>;
+    Map2DPathResult result;
     const auto blocked = [&](Cell cell) { return Map2DCellBlocked(map, cell[0], cell[1], options.floor); };
-    if (blocked(start) || blocked(end) || options.maximumVisited == 0) return {};
-    const auto distance = [](Cell a, Cell b) { return std::abs(a[0] - b[0]) + std::abs(a[1] - b[1]); };
+    const int clearance = static_cast<int>(std::min(options.clearanceCells, 8U));
+    // A body wider than one cell needs its whole footprint free (top-down only).
+    const auto blockedForBody = [&](Cell cell) {
+        if (blocked(cell)) return true;
+        if (options.platformer || clearance == 0) return false;
+        for (int dx = -clearance; dx <= clearance; ++dx) for (int dy = -clearance; dy <= clearance; ++dy) {
+            if (blocked({cell[0] + dx, cell[1] + dy})) return true;
+        }
+        return false;
+    };
+    if (blocked(start)) { result.status = Map2DPathStatus::StartBlocked; return result; }
+    if (blockedForBody(end)) { result.status = Map2DPathStatus::EndBlocked; return result; }
+    if (options.maximumVisited == 0) { result.status = Map2DPathStatus::BudgetExceeded; return result; }
+    const bool diagonals = !options.platformer && options.diagonal != Map2DDiagonalPolicy::None;
+    // Costs are in tenths of a step so that a diagonal step costs 14 against 10.
+    const auto distance = [diagonals](Cell a, Cell b) {
+        const int dx = std::abs(a[0] - b[0]), dy = std::abs(a[1] - b[1]);
+        return diagonals ? 10 * std::max(dx, dy) + 4 * std::min(dx, dy) : 10 * (dx + dy);
+    };
+    const auto stepFactor = [&](Cell cell) {
+        if (options.costProperty.empty() || options.platformer || cell[0] < 0 || cell[1] < 0) return 1.0;
+        const auto tile = map.tiles.find(Map2DTileKey(static_cast<unsigned>(cell[0]), static_cast<unsigned>(cell[1]), options.floor));
+        if (tile == map.tiles.end()) return 1.0;
+        const std::optional<Map2DValue> value = Map2DCellProperty(map, tile->second, options.costProperty);
+        if (!value.has_value()) return 1.0;
+        double number = 1.0;
+        if (const auto* integer = std::get_if<std::int64_t>(&*value)) number = static_cast<double>(*integer);
+        else if (const auto* real = std::get_if<double>(&*value)) number = *real;
+        return std::isfinite(number) ? std::clamp(number, 1.0, 1000.0) : 1.0;
+    };
+    bool budgetHit = false;
     struct Entry { int score; int cost; Cell cell; bool operator>(const Entry& other) const { return std::tie(score, cost, cell) > std::tie(other.score, other.cost, other.cell); } };
     std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> open;
     std::map<Cell, std::pair<int, Cell>> visited;
@@ -38,20 +73,30 @@ std::vector<std::array<int, 2>> FindMap2DPath(const Map2DAsset& map, std::array<
             std::vector<Cell> path{end};
             while (path.back() != start) path.push_back(visited[path.back()].second);
             std::ranges::reverse(path);
-            return path;
+            result.path = std::move(path);
+            result.status = Map2DPathStatus::Found;
+            result.visited = visited.size();
+            return result;
         }
         const auto add = [&](Cell next) {
-            if (blocked(next)) return;
-            const auto cost = current.cost + distance(current.cell, next);
+            if (blockedForBody(next)) return;
+            const int step = static_cast<int>(std::lround(static_cast<double>(distance(current.cell, next)) * stepFactor(next)));
+            const auto cost = current.cost + step;
             const auto previous = visited.find(next);
             if (previous != visited.end() && previous->second.first <= cost) return;
-            if (previous == visited.end() && visited.size() >= std::min<std::size_t>(options.maximumVisited, 1048576U)) return;
+            if (previous == visited.end() && visited.size() >= std::min<std::size_t>(options.maximumVisited, 1048576U)) { budgetHit = true; return; }
             visited[next] = {cost, current.cell};
             open.push({cost + distance(next, end), cost, next});
         };
         const int x = current.cell[0], y = current.cell[1];
         if (!options.platformer) {
             add({x - 1, y}); add({x + 1, y}); add({x, y - 1}); add({x, y + 1});
+            if (diagonals) {
+                for (const int dx : { -1, 1 }) for (const int dy : { -1, 1 }) {
+                    if (options.diagonal == Map2DDiagonalPolicy::NoCornerCutting && (blocked({x + dx, y}) || blocked({x, y + dy}))) continue;
+                    add({x + dx, y + dy});
+                }
+            }
             continue;
         }
         const bool grounded = blocked({x, y + 1});
@@ -78,6 +123,8 @@ std::vector<std::array<int, 2>> FindMap2DPath(const Map2DAsset& map, std::array<
             if (clear) add(target);
         }
     }
-    return {};
+    result.status = budgetHit ? Map2DPathStatus::BudgetExceeded : Map2DPathStatus::NoPath;
+    result.visited = visited.size();
+    return result;
 }
 } // namespace kb::assets
