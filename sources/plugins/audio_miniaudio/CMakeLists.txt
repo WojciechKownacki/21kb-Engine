@@ -31,6 +31,8 @@ set(KB_AUDIO_MINIAUDIO_DSP_SOURCES
     runtime/MiniaudioDelayNode.cpp
     runtime/MiniaudioReverbNode.hpp
     runtime/MiniaudioReverbNode.cpp
+    runtime/MiniaudioDynamicsNode.hpp
+    runtime/MiniaudioDynamicsNode.cpp
 )
 # The existing reverb API supports a configurable fixed maximum sample rate.
 # Use the same state layout in the vendor implementation and every consumer.
@@ -114,6 +116,13 @@ if(BUILD_TESTING)
     target_compile_features(kb_audio_reverb_tests PRIVATE cxx_std_20)
     add_test(NAME kb_audio_reverb_tests COMMAND $<TARGET_FILE:kb_audio_reverb_tests>)
     kb_apply_quality_gates(kb_audio_reverb_tests)
+
+    add_executable(kb_audio_dynamics_tests tests/AudioDynamicsTests.cpp ${KB_AUDIO_MINIAUDIO_DSP_SOURCES})
+    target_include_directories(kb_audio_dynamics_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(kb_audio_dynamics_tests PRIVATE miniaudio miniaudio_reverb_node)
+    target_compile_features(kb_audio_dynamics_tests PRIVATE cxx_std_20)
+    add_test(NAME kb_audio_dynamics_tests COMMAND $<TARGET_FILE:kb_audio_dynamics_tests>)
+    kb_apply_quality_gates(kb_audio_dynamics_tests)
 
     add_executable(kb_audio_runtime_tests
         tests/AudioRuntimeTests.cpp

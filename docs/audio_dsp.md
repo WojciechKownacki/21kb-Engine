@@ -1,7 +1,8 @@
 # Audio DSP primitives
 
 The miniaudio provider contains a private filter-chain primitive for ordered
-low-pass, high-pass, peaking equalizer, delay and reverb stages. It builds actual native graph nodes with the
+low-pass, high-pass, peaking equalizer, delay, reverb, compressor and limiter
+stages. It builds actual native graph nodes with the
 vendored miniaudio API; the dependency's existing license and notices remain
 in its source tree. Repeated stages keep separate parameters and state.
 Bypassed stages retain validated settings and create no processing node.
@@ -47,6 +48,28 @@ the old graph. A bypassed reverb retains its settings on any supported chain
 format. The configured vendor maximum is five times 44.1 kHz, with one shared
 state layout for its implementation and callers; the engine still caps at
 192 kHz. The large fixed state is heap-owned only by active reverb stages.
+
+Compressor and limiter are engine-owned nodes in the same graph. Their peak
+detector uses the largest absolute sample across all channels in each frame
+and applies one gain to every channel, preserving their relative levels.
+The compressor uses a hard knee: above the threshold, each input dB above it
+becomes `1 / ratio` output dB above it. Threshold is -60 through 0 dBFS, ratio
+1 through 20, attack 0 through 200 ms, release 1 through 5000 ms and makeup
+0 through 24 dB. Defaults are -12 dBFS, 4:1, 10 ms, 100 ms and 0 dB.
+Gain approaches its target exponentially in the linear amplitude domain;
+the selected time is one time constant. Zero attack applies reduction
+immediately. Makeup applies after this gain. Attack transients and makeup
+can exceed 1.0, so callers reserve headroom or place a limiter afterward.
+
+Limiter ceiling is -24 through 0 dBFS, default -1 dBFS. It applies immediate
+gain reduction on every frame and exponential recovery with the same release
+range, default 100 ms. The ceiling bounds discrete PCM sample peaks within
+float rounding; inter-sample peaks and lookahead are outside its contract.
+Both nodes accept the full chain channel/sample-rate range and allocate no
+memory during processing. A non-finite input sample silences its entire linked
+frame and leaves the state usable for subsequent finite input. Compressor
+arithmetic uses double precision and saturates at the finite float range on
+overflow; this does not cap normal audio at 1.0.
 
 Invalid parameters and failed construction preserve the
 previous graph and signal. Partial node initialization also releases filter
@@ -104,16 +127,30 @@ over-budget delay/reverb state must fail before allocation and preserve the
 old PCM. All eight observed allocations in a replacement are separately
 refused while reverb plays; reset must leave zero owned allocations.
 
+`kb_audio_dynamics_tests` checks 136 static response cases against a dB-domain
+reference, including sample-rate/channel boundaries, parameter extremes,
+sixteen stages, bypass and repeated differing compressors. Twenty-six envelope
+cases compare actual PCM to closed-form exponential attack/release within an
+absolute 2e-6, across four read block sizes and 8–192 kHz. Switching compressor
+and limiter order must produce the separately predicted nonlinear results.
+Abrupt level changes, maximum finite float input, non-finite input and EOF
+check the limiter ceiling, finite saturation, recovery and silence. Thirty-two
+invalid configurations for each playing kind must fail before allocation;
+all six vendor allocation positions in a mixed replacement are separately
+refused for each kind, preserving exact old PCM and storage until reset.
+
 The tests pass in x64 MSVC Release and Debug ASan, and in a 32-bit WebAssembly
 ASan/UBSan build of the same sources. The WebAssembly check uses the real
-graph/filter/delay/reverb/waveform implementation with device I/O, decoders and threading
+graph/filter/delay/reverb/dynamics/waveform implementation with device I/O, decoders and threading
 omitted. One stereo second-order low/high-pass stage requested 7760 bytes from the vendor
 allocator on x64 and 7744 bytes in WebAssembly. A stereo peaking EQ stage requested
 7696 bytes on both tested architectures. A stereo 5 ms delay at 48 kHz requested
 28800 bytes on both tested architectures, including its split/merge
 graph nodes and 1920-byte delay line. One reverb stage requests 517800 bytes on
 x64 (510120 fixed-state bytes) or 517568 bytes in WebAssembly (509888 state
-bytes), independent of its active channel count and sample rate. Native ASan
+bytes), independent of its active channel count and sample rate. A compressor
+or limiter requests 7680 vendor graph bytes on both architectures; its small
+scalar state lives in its C++ node. Native ASan
 instruments engine-owned wrappers and tests; the WebAssembly build also
 instruments the vendor implementations. These figures exclude C++ node
 objects, container storage, source/output buffers and sanitizer overhead.

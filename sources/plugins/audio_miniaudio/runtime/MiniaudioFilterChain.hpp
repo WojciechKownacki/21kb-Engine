@@ -10,7 +10,7 @@
 
 namespace kb::audio_miniaudio {
 
-enum class MiniaudioFilterKind : std::uint8_t { LowPass, HighPass, PeakingEqualizer, Delay, Reverb };
+enum class MiniaudioFilterKind : std::uint8_t { LowPass, HighPass, PeakingEqualizer, Delay, Reverb, Compressor, Limiter };
 
 struct MiniaudioFilterDesc {
     MiniaudioFilterKind kind = MiniaudioFilterKind::LowPass;
@@ -26,6 +26,12 @@ struct MiniaudioFilterDesc {
     float roomSize = 0.5F;
     float damping = 0.25F;
     float width = 1.0F;
+    double thresholdDb = -12.0;
+    double ratio = 4.0;
+    double attackMs = 10.0;
+    double releaseMs = 100.0;
+    double makeupDb = 0.0;
+    double ceilingDb = -1.0;
 };
 
 // Private graph primitive. The graph and attached source/target must outlive this

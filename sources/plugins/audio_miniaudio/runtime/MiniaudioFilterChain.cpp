@@ -1,6 +1,7 @@
 #include "runtime/MiniaudioFilterChain.hpp"
 #include "runtime/MiniaudioDelayNode.hpp"
 #include "runtime/MiniaudioReverbNode.hpp"
+#include "runtime/MiniaudioDynamicsNode.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -32,7 +33,7 @@ std::uint32_t DelayFrames(double milliseconds, std::uint32_t rate) noexcept {
 } // namespace
 
 struct MiniaudioFilterChain::Node {
-    std::variant<ma_lpf_node, ma_hpf_node, ma_peak_node, MiniaudioDelayNode, MiniaudioReverbNode> value;
+    std::variant<ma_lpf_node, ma_hpf_node, ma_peak_node, MiniaudioDelayNode, MiniaudioReverbNode, MiniaudioDynamicsNode> value;
     ma_allocation_callbacks allocations{};
     bool customAllocator = false;
     bool initialized = false;
@@ -44,13 +45,14 @@ struct MiniaudioFilterChain::Node {
         if (auto* low = std::get_if<ma_lpf_node>(&value)) ma_lpf_node_uninit(low, Allocator());
         else if (auto* high = std::get_if<ma_hpf_node>(&value)) ma_hpf_node_uninit(high, Allocator());
         else if (auto* peak = std::get_if<ma_peak_node>(&value)) ma_peak_node_uninit(peak, Allocator());
-        // Delay and reverb own independent RAII state, including partial construction.
+        // Other stages own independent RAII state, including partial construction.
     }
     ma_node* Native() noexcept {
         if (auto* low = std::get_if<ma_lpf_node>(&value)) return low;
         if (auto* high = std::get_if<ma_hpf_node>(&value)) return high;
         if (auto* peak = std::get_if<ma_peak_node>(&value)) return peak;
         if (auto* reverb = std::get_if<MiniaudioReverbNode>(&value)) return reverb->Native();
+        if (auto* dynamics = std::get_if<MiniaudioDynamicsNode>(&value)) return dynamics->Native();
         return std::get<MiniaudioDelayNode>(value).Input();
     }
     ma_node* Output() noexcept {
@@ -89,8 +91,10 @@ struct MiniaudioFilterChain::Node {
             result = ma_peak_node_init(&graph, &config, Allocator(), &value.emplace<ma_peak_node>());
         } else if (desc.kind == MiniaudioFilterKind::Delay) {
             result = value.emplace<MiniaudioDelayNode>().Initialize(graph, rate, DelayFrames(desc.delayMs, rate), desc, Allocator());
-        } else {
+        } else if (desc.kind == MiniaudioFilterKind::Reverb) {
             result = value.emplace<MiniaudioReverbNode>().Initialize(graph, rate, desc, Allocator());
+        } else {
+            result = value.emplace<MiniaudioDynamicsNode>().Initialize(graph, rate, desc, Allocator());
         }
         initialized = result == MA_SUCCESS;
         if (!initialized) {
@@ -121,7 +125,8 @@ ma_result MiniaudioFilterChain::Initialize(ma_node_graph& graph, std::uint32_t s
     for (const auto& filter : filters) {
         if ((filter.kind != MiniaudioFilterKind::LowPass && filter.kind != MiniaudioFilterKind::HighPass
                 && filter.kind != MiniaudioFilterKind::PeakingEqualizer && filter.kind != MiniaudioFilterKind::Delay
-                && filter.kind != MiniaudioFilterKind::Reverb)
+                && filter.kind != MiniaudioFilterKind::Reverb && filter.kind != MiniaudioFilterKind::Compressor
+                && filter.kind != MiniaudioFilterKind::Limiter)
             || !std::isfinite(filter.cutoffHz) || filter.cutoffHz < 1.0
             || filter.cutoffHz > 0.49 * sampleRate || filter.order == 0U || filter.order > MA_MAX_FILTER_ORDER
             || !std::isfinite(filter.gainDb) || filter.gainDb < -24.0 || filter.gainDb > 24.0
@@ -129,6 +134,9 @@ ma_result MiniaudioFilterChain::Initialize(ma_node_graph& graph, std::uint32_t s
             || (filter.kind == MiniaudioFilterKind::PeakingEqualizer && filter.order != 2U)
             || (filter.kind != MiniaudioFilterKind::PeakingEqualizer && (filter.gainDb != 0.0 || filter.quality != 1.0)))
             return MA_INVALID_ARGS;
+        if (!MiniaudioDynamicsNode::Valid(filter)
+            || ((filter.kind == MiniaudioFilterKind::Compressor || filter.kind == MiniaudioFilterKind::Limiter)
+                && (filter.cutoffHz != 1000.0 || filter.order != 2U))) return MA_INVALID_ARGS;
         if (!std::isfinite(filter.roomSize) || filter.roomSize < 0.0F || filter.roomSize > 1.0F
             || !std::isfinite(filter.damping) || filter.damping < 0.0F || filter.damping > 1.0F
             || !std::isfinite(filter.width) || filter.width < 0.0F || filter.width > 1.0F
