@@ -1939,6 +1939,44 @@ void TestScrollMovementAndLocalizedText() {
     kb::tests::Require(scene.Localization().SetLanguage("pl"), "The menu language must switch");
     pointer.At(390.0F, 390.0F, false);
     kb::tests::Require(ShownText(scene.UI().Frame(), text.Entity()) == "Graj", "A localized text must follow a language change");
+
+    // Edges: a language that is not in the catalog (a regional variant too) is refused and changes nothing, a message
+    // missing from the selected language falls back to the catalog language, a message missing everywhere shows its key,
+    // and a translation longer than the text limit is cut on a character boundary instead of overflowing.
+    kb::tests::Require(!scene.Localization().SetLanguage("pl-PL") && !scene.Localization().SetLanguage("xx") && scene.Localization().Language() == "pl",
+        "A language the catalog does not have must be refused and leave the language alone");
+    const std::string accent = "\xE2\x82\xAC"; // the euro sign: three bytes, so a cut at 1022 would split it
+    std::string tooLong;
+    for (int index = 0; index < 600; ++index) tooLong += accent;
+    const kb::localization::LocalizationCatalog edgeCatalog{
+        .fallbackLanguage = "en",
+        .languages = {{"en", {{"long.text", {.text = tooLong}}, {"short.text", {.text = "ok"}}}}, {"pl", {{"short.text", {.text = "OK!"}}}}},
+    };
+    kb::tests::Require(kb::localization::LocalizationCatalogIO::Save(root / "Assets" / "Localization" / "Edge.kbloc", edgeCatalog), "The edge catalog must save");
+    static_cast<void>(scene.Assets().Discover());
+    const auto* edgeMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Localization/Edge.kbloc");
+    kb::tests::Require(edgeMetadata != nullptr && scene.Localization().SetCatalog(edgeMetadata->id.value), "The edge catalog must load");
+    const auto addLocalized = [&](const char* key, float y) {
+        kb::scene::UIComponentSet components;
+        components.rectTransform = Rect(0.0F, y, 100.0F, 20.0F);
+        components.text.emplace();
+        static_cast<void>(kb::scene::SetUITextLocalizationKey(*components.text, key));
+        return AddUI(scene, canvas, components);
+    };
+    const kb::scene::SceneObject longText = addLocalized("long.text", 130.0F);
+    const kb::scene::SceneObject shortText = addLocalized("short.text", 150.0F);
+    const kb::scene::SceneObject missingText = addLocalized("no.such.key", 170.0F);
+    for (const char* language : {"pl", "en"}) {
+        kb::tests::Require(scene.Localization().SetLanguage(language), "The edge catalog language must switch");
+        pointer.At(390.0F, 390.0F, false);
+        const std::string shownLong{ShownText(scene.UI().Frame(), longText.Entity())};
+        kb::tests::Require(!shownLong.empty() && shownLong.size() < kb::scene::UIText::MaxUtf8Bytes && shownLong.size() % 3U == 0U &&
+                shownLong.compare(0U, 3U, accent) == 0 && shownLong.compare(shownLong.size() - 3U, 3U, accent) == 0,
+            "A translation longer than the text limit must be cut at a character boundary, also when it comes from the fallback language");
+        kb::tests::Require(ShownText(scene.UI().Frame(), shortText.Entity()) == (std::string{language} == "pl" ? "OK!" : "ok"),
+            "A short message must follow the language");
+        kb::tests::Require(ShownText(scene.UI().Frame(), missingText.Entity()) == "no.such.key", "A message missing everywhere must show its key");
+    }
     std::filesystem::remove_all(root);
 }
 
