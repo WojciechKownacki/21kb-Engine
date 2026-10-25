@@ -535,6 +535,77 @@ void RunVorbisUnicodePathTest() {
     Require(frames > 0U && energy > 1.0, "Unicode Vorbis stream produced silent PCM");
 }
 
+void RunVorbisTransportTest() {
+    const auto path = FixtureRoot() / "seek.ogg";
+    const auto bytes = ReadFileBytesU8(path);
+    auto memory = std::make_shared<kb::audio::AudioClipAsset>();
+    memory->encodedBytes = bytes;
+    memory->sourceExtension = ".ogg";
+    for (const bool inMemory : {false, true}) {
+        kb::audio_miniaudio::MiniaudioEngine engine;
+        engine.Initialize(true);
+        auto clip = inMemory ? kb::audio_miniaudio::ResolvedAudioClip{
+            .audioClip = memory, .extension = ".ogg", .identity = "VorbisSeekMemory",
+        } : DirectTestClip(path);
+        kb::audio_miniaudio::MiniaudioSound sound;
+        Require(sound.Initialize(engine.Native(), clip, false) == MA_SUCCESS,
+            "Vorbis transport fixture could not initialize");
+        sound.Apply(kb::audio_miniaudio::MiniaudioSoundSettings{.volume = 1.0F, .spatial = false});
+        sound.SetLooping(true);
+        Require(sound.Start() == MA_SUCCESS, "Vorbis transport fixture could not start");
+        struct Block final { double rms; double frequency; ma_uint64 cursor; };
+        const auto render = [&]() {
+            std::array<float, 2048U * 2U> output{};
+            ma_uint64 frames = 0U;
+            Require(ma_engine_read_pcm_frames(&engine.Native(), output.data(), output.size() / 2U, &frames) == MA_SUCCESS
+                && frames == 2048U, "Vorbis transport PCM block is incomplete");
+            double energy = 0.0;
+            std::uint32_t crossings = 0U;
+            for (std::size_t frame = 0U; frame < static_cast<std::size_t>(frames); ++frame) {
+                const float sample = output[frame * 2U];
+                Require(std::isfinite(sample), "Vorbis transport produced non-finite PCM");
+                energy += static_cast<double>(sample) * sample;
+                if (frame > 0U && output[(frame - 1U) * 2U] <= 0.0F && sample > 0.0F) ++crossings;
+            }
+            return Block{std::sqrt(energy / static_cast<double>(frames)),
+                static_cast<double>(crossings) * 48000.0 / static_cast<double>(frames), sound.PlaybackFrame()};
+        };
+        const auto matches = [](const Block& block, double frequency) {
+            return block.rms > 0.05 && block.rms < 0.09 && std::abs(block.frequency - frequency) < 30.0;
+        };
+        const auto settle = [&](ma_uint64 target, double frequency) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            std::uint32_t good = 0U;
+            std::uint32_t nonSilent = 0U;
+            Block block{};
+            do {
+                block = render();
+                if (block.rms > 0.001) ++nonSilent;
+                good = matches(block, frequency) && block.cursor >= target && block.cursor <= target + 12288U ? good + 1U : 0U;
+                Require(nonSilent <= 6U && std::chrono::steady_clock::now() < deadline,
+                    "Vorbis seek did not settle within six non-silent output blocks");
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            } while (good < 4U);
+            return block;
+        };
+        static_cast<void>(settle(0U, 440.0));
+        Require(sound.SeekSeconds(0.625F) == MA_SUCCESS, "Forward Vorbis seek was rejected");
+        const Block forward = settle(30000U, 880.0);
+        Require(sound.SeekSeconds(0.125F) == MA_SUCCESS, "Backward Vorbis seek was rejected");
+        const Block backward = settle(6000U, 440.0);
+        Block loop{};
+        for (std::uint32_t block = 0U; block < 24U; ++block) {
+            loop = render();
+            if (block >= 20U) Require(matches(loop, 440.0), "Vorbis loop did not restore first-half PCM after end of stream");
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        Require(sound.IsPlaying(), "Vorbis playback stopped at a looping boundary");
+        std::cout << "Vorbis transport " << (inMemory ? "memory" : "file")
+            << " forward=" << forward.cursor << " backward=" << backward.cursor
+            << " loopHz=" << loop.frequency << " loopRms=" << loop.rms << '\n';
+    }
+}
+
 [[nodiscard]] bool SameResources(
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting& left,
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting& right) noexcept {
@@ -2545,6 +2616,9 @@ int RunTests(int argc, char** argv) {
     }
     if (filter.empty() || filter == "vorbis-unicode") {
         RunVorbisUnicodePathTest();
+    }
+    if (filter.empty() || filter == "vorbis-transport") {
+        RunVorbisTransportTest();
     }
     if (filter.empty() || filter == "import-memory") {
         RunImportedMemoryLifecycleTest();

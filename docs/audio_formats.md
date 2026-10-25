@@ -26,6 +26,17 @@ name contains characters outside legacy Windows code pages. Readiness and
 playback must preserve its native path and produce actual PCM. Cache identities
 encode file paths as UTF-8 independently of the process locale.
 
+`kb_audio_runtime_tests vorbis-transport` uses a generated two-tone clip in
+both file-streaming and memory-backed playback. Four consecutive PCM blocks and
+the decoder cursor must agree after seeking forward to the 880 Hz half and
+back to the 440 Hz half. At most six non-silent blocks may settle each seek,
+preventing natural playback from substituting for a successful seek. Further
+output crosses the clip's end and must restore nonzero first-half PCM while
+looping remains active. A 2048-frame window at 48 kHz gives a 23.4375 Hz
+zero-crossing resolution; the frequency tolerance is 30 Hz. These native checks
+passed in Release and ASan. They do not establish gapless physical playback or
+a performance bound for long-distance streaming seeks.
+
 `sources/game/tests/web/run_game_audio_ogg_tests.py` uses the full browser fixture
 arguments. It imports the generated Ogg sine, cooks a normal package and
 requires actual native PCM after trusted activation. It checks gain, mute,

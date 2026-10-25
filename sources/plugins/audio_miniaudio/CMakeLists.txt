@@ -107,6 +107,7 @@ if(BUILD_TESTING)
         tests/assets/tone.flac
         tests/assets/tone.mp3
         tests/assets/tone.ogg
+        tests/assets/seek.ogg
     )
     set_source_files_properties(${KB_AUDIO_RUNTIME_TEST_ASSETS} PROPERTIES HEADER_FILE_ONLY TRUE)
     target_sources(kb_audio_runtime_tests PRIVATE ${KB_AUDIO_RUNTIME_TEST_ASSETS})
