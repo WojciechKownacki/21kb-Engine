@@ -7489,6 +7489,79 @@ void RunVoxelGridFollowsMeshGeometryTest() {
     renderer.Shutdown();
 }
 
+// A thin wall keeps its thinness, an opening stays open, and a mesh that kept no triangles is counted as the solid
+// bounding box it is filled as, instead of being filled that way without a word.
+void RunVoxelGridKeepsThinWallsAndOpeningsTest() {
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Voxel wall test could not initialize bgfx");
+    {
+        struct Rectangle { float x0, y0, x1, y1; };
+        // A 4 x 4 m wall in the XY plane (no thickness) built from rectangles, with or without a 2 x 2 m opening.
+        const auto buildWall = [](const std::vector<Rectangle>& rectangles, std::vector<RenderStaticMeshVertexP3N3UV2>& vertices,
+                                  std::vector<std::uint16_t>& indices) {
+            for (const Rectangle& rectangle : rectangles) {
+                const auto base = static_cast<std::uint16_t>(vertices.size());
+                vertices.push_back({ rectangle.x0, rectangle.y0, 0.0F, 0.0F, 0.0F, -1.0F });
+                vertices.push_back({ rectangle.x1, rectangle.y0, 0.0F, 0.0F, 0.0F, -1.0F });
+                vertices.push_back({ rectangle.x1, rectangle.y1, 0.0F, 0.0F, 0.0F, -1.0F });
+                vertices.push_back({ rectangle.x0, rectangle.y1, 0.0F, 0.0F, 0.0F, -1.0F });
+                indices.insert(indices.end(), { base, static_cast<std::uint16_t>(base + 1), static_cast<std::uint16_t>(base + 2),
+                    base, static_cast<std::uint16_t>(base + 2), static_cast<std::uint16_t>(base + 3) });
+            }
+        };
+        std::vector<RenderStaticMeshVertexP3N3UV2> solidVertices;
+        std::vector<std::uint16_t> solidIndices;
+        buildWall({ { -2.0F, -2.0F, 2.0F, 2.0F } }, solidVertices, solidIndices);
+        std::vector<RenderStaticMeshVertexP3N3UV2> holedVertices;
+        std::vector<std::uint16_t> holedIndices;
+        buildWall({ { -2.0F, -2.0F, 2.0F, -1.0F }, { -2.0F, 1.0F, 2.0F, 2.0F }, { -2.0F, -1.0F, -1.0F, 1.0F }, { 1.0F, -1.0F, 2.0F, 1.0F } },
+            holedVertices, holedIndices);
+        RenderResourceRegistry resources;
+        const auto registerMesh = [&](const std::vector<RenderStaticMeshVertexP3N3UV2>& vertices, const std::vector<std::uint16_t>& indices, bool dynamic) {
+            return resources.RegisterMesh(RenderMeshDesc{ .vertexData = vertices.data(),
+                .vertexCount = static_cast<std::uint32_t>(vertices.size()), .indices = indices.data(),
+                .indexCount = static_cast<std::uint32_t>(indices.size()), .vertexFormat = RenderVertexFormat::P3N3UV2,
+                .bounds = { .radius = 3.0F }, .boundsBox = { .center = { 0.0F, 0.0F, 0.0F }, .halfExtents = { 2.0F, 2.0F, 0.01F } },
+                .dynamicVertexBuffer = dynamic });
+        };
+        SceneRenderResourceMap bindings;
+        bindings.BindMesh(1U, registerMesh(solidVertices, solidIndices, false));
+        bindings.BindMesh(2U, registerMesh(holedVertices, holedIndices, false));
+        bindings.BindMesh(3U, registerMesh(solidVertices, solidIndices, true));
+        struct Result { std::uint32_t occupied; std::uint32_t geometry; std::uint32_t box; };
+        const auto voxelize = [&](std::uint64_t meshAssetId) {
+            RenderScene scene;
+            MeshRenderProxyDesc desc{ .entityId = 1U, .meshAssetId = meshAssetId };
+            desc.model[0] = desc.model[5] = desc.model[10] = desc.model[15] = 1.0F;
+            static_cast<void>(scene.UpsertMesh(desc));
+            SceneGiVoxelGrid grid;
+            Require(grid.Initialize(), "Voxel wall test could not create the voxel grid");
+            grid.Update(scene, resources, bindings, { 0.0F, 0.0F, 0.0F }, 0.25F);
+            return Result{ grid.OccupiedVoxelCount(), grid.GeometryMeshCount(), grid.BoundingBoxMeshCount() };
+        };
+        const Result solid = voxelize(1U);
+        const Result holed = voxelize(2U);
+        const Result dynamic = voxelize(3U);
+        std::fprintf(stderr, "voxel_thin_wall solid=%u/%u/%u holed=%u/%u/%u dynamic=%u/%u/%u%c", solid.occupied, solid.geometry, solid.box,
+            holed.occupied, holed.geometry, holed.box, dynamic.occupied, dynamic.geometry, dynamic.box, 10);
+        // 16 x 16 voxels of a quarter metre across the wall, one or two layers thick.
+        Require(solid.occupied >= 256U && solid.occupied <= 520U, "Voxel wall test: a zero-thickness wall must fill one or two voxel layers");
+        Require(holed.occupied * 10U < solid.occupied * 9U, "Voxel wall test: the opening in the wall must stay open");
+        Require(holed.occupied * 10U > solid.occupied * 5U, "Voxel wall test: the frame around the opening must stay filled");
+        Require(solid.geometry == 1U && solid.box == 0U && holed.geometry == 1U && holed.box == 0U,
+            "Voxel wall test: a mesh with triangles must be counted as filled by its geometry");
+        Require(dynamic.geometry == 0U && dynamic.box == 1U,
+            "Voxel wall test: a mesh without triangles must be counted as filled by its bounding box");
+        // The same wall as a bounding box has the voxels of the slab only, but a thick bounding box would fill many more.
+        Require(dynamic.occupied >= solid.occupied, "Voxel wall test: the bounding box fill can only be as large as the geometry fill or larger");
+    }
+    renderer.Shutdown();
+}
+
 // A GPU-simulated particle dropped from 2 m above the origin falls through the floor unless it collides.
 // Collision can come from a plane (exact) or from the surface the scene depth buffer shows; with either
 // the particle is still near the floor 1.5 s later, without it it is far below the camera's view.
@@ -8971,6 +9044,7 @@ void RunRendererScreenSpaceEffectTests() {
     RunRendererRendersVoxelGiFromOffscreenObjectsTest();
     RunRendererShadowsVoxelGiBounceTest();
     RunVoxelGridFollowsMeshGeometryTest();
+    RunVoxelGridKeepsThinWallsAndOpeningsTest();
 #endif
 }
 
