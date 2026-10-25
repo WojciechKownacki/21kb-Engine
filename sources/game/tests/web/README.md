@@ -273,5 +273,9 @@ pixels. It does not unlock audio itself or bypass browser activation policy.
 See [browser audio verification](../../../../docs/browser_audio.md) for the
 measurement bounds and remaining platform coverage.
 The native status must distinguish suspended output before activation and after
-a controlled `AudioContext.suspend()` interruption. Source transport intent must
-survive that interruption; automatic recovery is separate coverage.
+controlled `AudioContext.suspend()` interruptions. Source transport intent must
+survive two explicit backend restarts through trusted native UI clicks, with
+previous contexts closed and no amplitude doubling. An owned second tab must
+hide the player while PCM continues; restoring focus must preserve both PCM
+and native UI rendering. OS interruption and automatic recovery are separate
+coverage.

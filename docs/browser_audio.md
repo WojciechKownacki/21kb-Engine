@@ -10,8 +10,10 @@ Run `sources/game/tests/web/run_game_audio_tests.py` with the full fixture
 arguments documented in the [browser test README](../sources/game/tests/web/README.md).
 The player must render native UI on an identifiable hardware GPU. Before any
 gesture, the WebAudio context must be suspended and no output callback may have
-run. The test sends five trusted browser clicks: play, pause, resume, stop and
-play again. It never calls `AudioContext.resume()` or changes autoplay policy.
+run. The first five trusted browser clicks request play, pause, resume, stop and
+play again. Two more request explicit backend restart after controlled
+interruptions. The test never calls `AudioContext.resume()` or changes autoplay
+policy.
 
 The observer delegates `createScriptProcessor` unchanged and attaches a
 read-only `audioprocess` listener after the backend installs its synchronous
@@ -28,7 +30,7 @@ This scenario passed on desktop Chromium with the current ScriptProcessor
 backend: actual PCM RMS approximately 0.01767, peak 0.02499, and silent
 pause/stop blocks. GPU rendering uses bgfx. This verifies delivery to WebAudio,
 not physical speaker output, acoustic latency or device routing. It does not
-qualify mobile browsers, AudioWorklet, background interruption or route changes.
+qualify mobile browsers, AudioWorklet, OS interruption or route changes.
 
 `Audio.DeviceStatus` returns `PlaybackSuspended` (4), with `available=false`,
 when a started browser device has not produced output callbacks yet, or its
@@ -44,5 +46,14 @@ queued or autoplay intent. The scenario requires the native suspended status
 before the first gesture, then actual PCM and available status after activation.
 After replay, it explicitly calls the standard context `suspend()` API as an
 interruption injection and requires suspended native status, no further output
-callbacks and retained playing intent. This checks diagnostics for a controlled
-interruption; OS interruption and automatic recovery remain unverified.
+callbacks and retained playing intent. Two cycles then recover through trusted
+native UI clicks calling `Audio.Reinitialize`. Each must restore the same PCM
+amplitude and close all previous contexts, retaining one running context.
+
+Between those cycles, an owned second tab takes focus and hides the player.
+The test requires actual PCM while hidden and after focus returns, with stable
+amplitude, followed by a second native UI GPU capture. Desktop tab visibility
+and explicit native backend recovery passed. OS interruption, automatic
+interruption recovery, device switching and physical mobile routes remain
+unverified. Restart can briefly stop output; this scenario does not establish
+gapless recovery or an acoustic latency bound.

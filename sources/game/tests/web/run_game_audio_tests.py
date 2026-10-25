@@ -1,12 +1,14 @@
 """Read actual native mixer PCM after trusted browser input and audio transport."""
 from pathlib import Path
+import json
 import math
 import time
+import urllib.request
 
 from run_game_audio_property_tests import write_tone
 from run_game_loading_tests import LOAD_OBSERVER
 from run_game_storage_tests import BrowserSession, StorageScenario, author_fixture as author_storage, main
-from run_game_touch_tests import require
+from run_game_touch_tests import RuntimeClient, require
 
 
 # Observe standard WebAudio output after the backend's synchronous handler has
@@ -82,6 +84,58 @@ class AudioScenario(StorageScenario):
             require(time.monotonic() < deadline, label + ": " + str(value))
             time.sleep(0.03)
 
+    def interrupt(self):
+        # Inject through the public context API after activation. This qualifies
+        # controlled suspension, not an OS/device interruption.
+        self.client.call("Runtime.evaluate", expression="kbAudioReadback.contexts.at(-1).suspend()", awaitPromise=True)
+        suspended_at = time.monotonic()
+        count = self.audio()["count"]
+        self.wait("native reports interrupted output and retains source intent",
+            lambda state: not state["available"] and state["deviceStatus"] == 4 and state["playing"])
+        require(self.audio()["count"] == count, "Output continued after context suspension")
+        elapsed = (time.monotonic() - suspended_at) * 1000
+        self.report.setdefault("suspensionDetectionsMs", []).append(elapsed)
+        require(elapsed < 1500, "Native audio suspension diagnostic arrived too late")
+
+    def restart(self, clicks, reference):
+        cursor = len(self.states())
+        after = self.audio()["count"]
+        self.click_save()
+        self.wait("native explicit audio restart " + str(clicks), lambda state: state["clicks"] == clicks and
+            state["playing"] and state["available"], cursor)
+        self.output("actual PCM after explicit restart " + str(clicks), after, True, reference)
+        contexts = self.audio()["contexts"]
+        require(len(contexts) == clicks - 4 and contexts[-1]["state"] == "running" and
+            all(c["state"] == "closed" for c in contexts[:-1]), "Audio restart leaked a context: " + str(contexts))
+
+    def focus_cycle(self, profile, reference):
+        client = self.client
+        target_id = client.call("Target.createTarget", url="about:blank", background=False)["targetId"]
+        other = None
+        try:
+            port = int((profile / "DevToolsActivePort").read_text().splitlines()[0])
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2) as response:
+                target = next(t for t in json.load(response) if t["id"] == target_id)
+            other = RuntimeClient(target["webSocketDebuggerUrl"])
+            other.call("Page.enable")
+            other.call("Page.bringToFront")
+            require(client.evaluate("!document.hasFocus() && document.visibilityState === 'hidden'"),
+                "Own second tab did not hide the player")
+            self.output("actual PCM while player tab is hidden", self.audio()["count"], True, reference)
+            require(client.evaluate("!document.hasFocus() && document.visibilityState === 'hidden'"),
+                "Player did not remain hidden during audio measurement")
+            client.call("Page.bringToFront")
+        finally:
+            try:
+                client.call("Target.closeTarget", targetId=target_id)
+            finally:
+                if other is not None:
+                    other.close()
+        require(client.evaluate("document.hasFocus() && document.visibilityState === 'visible'"),
+            "Player focus did not return")
+        self.output("actual PCM after player focus returns", self.audio()["count"], True, reference)
+        self.blue_button("audio-after-focus-native-ui")
+
 
 def run_cases(args, root, report, origin):
     with BrowserSession(args, root, root / "profile", report, origin, "audio-flow",
@@ -107,23 +161,19 @@ def run_cases(args, root, report, origin):
             if clicks == 1:
                 reference = measured
         require(len(case.audio()["contexts"]) == 1, "Audio transport created duplicate contexts")
+        case.interrupt()
+        case.restart(6, reference)
+        case.focus_cycle(root / "profile", reference)
+        case.interrupt()
+        case.restart(7, reference)
         events = case.client.evaluate("kbMouseEvents")
-        require(len([e for e in events if e["type"] == "click"]) == 5 and all(e["trusted"] for e in events),
+        require(len([e for e in events if e["type"] == "click"]) == 7 and all(e["trusted"] for e in events),
             "Audio transport must come from trusted browser input: " + str(events))
-        # Inject an interruption through the standard API after activation. This
-        # does not unlock audio or qualify recovery from an OS/device interruption.
-        case.client.call("Runtime.evaluate", expression="kbAudioReadback.contexts[0].suspend()", awaitPromise=True)
-        suspended_at = time.monotonic()
-        count = case.audio()["count"]
-        case.wait("native reports interrupted output and retains source intent",
-            lambda state: not state["available"] and state["deviceStatus"] == 4 and state["playing"])
-        require(case.audio()["count"] == count, "Output continued after context suspension")
-        report["suspensionDetectionMs"] = (time.monotonic() - suspended_at) * 1000
-        require(report["suspensionDetectionMs"] < 1500, "Native audio suspension diagnostic arrived too late")
         case.blue_button("audio-transport-native-ui")
         report["coverage"] = dict(nativeMixerPcm=True, trustedActivation=True, pauseResumeStop=True,
             suspendedOutputStatus=True, injectedContextSuspension=True,
-            physicalSpeaker=False, deviceRouting=False, backgroundInterruption=False, interruptionRecovery=False)
+            explicitBackendRecovery=True, desktopTabFocus=True,
+            physicalSpeaker=False, deviceRouting=False, osInterruption=False, automaticInterruptionRecovery=False)
 
 
 if __name__ == "__main__":

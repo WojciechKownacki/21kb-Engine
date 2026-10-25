@@ -12,6 +12,12 @@ end
 function OnUIClicked(self, event)
     assert(event.args.entity == self.entity)
     clicks = clicks + 1
+    if clicks == 6 or clicks == 7 then
+        local result = call("Reinitialize")
+        lastStatus = result.status
+        assert(result.status == 3 or result.status == 4, "Audio restart failed: " .. result.status)
+        return
+    end
     local result = call(assert(operations[clicks]))
     lastStatus = result.status
     assert(result.succeeded, "Audio transport failed: " .. result.status)
