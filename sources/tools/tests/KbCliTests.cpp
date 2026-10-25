@@ -3389,6 +3389,14 @@ void RunMcpCommandTests() {
     input += '\n';
     input += R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"import_asset","arguments":{"source":"Assets/Logic/Player.lua","destination":"/Game/Data"}}})";
     input += '\n';
+    input += R"({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"scene_list","arguments":{"scene":"Assets/Scenes/Main.21kbscene"}}})";
+    input += '\n';
+    input += R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"scene_attach","arguments":{"scene":"Assets/Scenes/Main.21kbscene","node":"Player","script":"/Game/Logic/Player.lua"}}})";
+    input += '\n';
+    input += R"({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"run_scene","arguments":{"scene":"Assets/Scenes/Main.21kbscene","frames":2}}})";
+    input += '\n';
+    input += R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"api_reference","arguments":{"format":"json"}}})";
+    input += '\n';
 
     std::istringstream in{ input };
     std::ostringstream out;
@@ -3406,7 +3414,7 @@ void RunMcpCommandTests() {
             responses.push_back(line);
         }
     }
-    Require(responses.size() == 5U, "mcp server response count is wrong");
+    Require(responses.size() == 9U, "mcp server response count is wrong");
 
     for (const std::string& response : responses) {
         JsonValue parsed;
@@ -3420,6 +3428,10 @@ void RunMcpCommandTests() {
     Require(Contains(responses[2], "OK") && Contains(responses[2], "\"isError\":false"), "mcp validate_script call failed");
     Require(Contains(responses[3], "-32601"), "mcp unknown method error is wrong");
     Require(Contains(responses[4], "created /Game/Data/Player.21kb") && Contains(responses[4], "\"isError\":false"), "mcp import_asset call failed");
+    Require(Contains(responses[5], "Player") && Contains(responses[5], "Camera") && Contains(responses[5], "\"isError\":false"), "mcp scene_list did not list the scene");
+    Require(Contains(responses[6], "\"isError\":false"), "mcp scene_attach call failed");
+    Require(Contains(responses[7], "diagnostics") && Contains(responses[7], "\"isError\":false"), "mcp run_scene call failed");
+    Require(Contains(responses[8], "Input.IsPressed") && Contains(responses[8], "\"isError\":false"), "mcp api_reference call failed");
 }
 
 void RunAudioMixerCommandTests() {
