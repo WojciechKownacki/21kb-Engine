@@ -600,6 +600,33 @@ int main() {
         Require(scene.Runtime().RemoveSceneSystem(handle), "detach rich runtime");
         for (const auto& asset : manager.Registry().All()) Require(!NormalizeAssetPath(asset.virtualPath).starts_with("/Runtime/"), "runtime releases generated resources on detach");
     }
+    // Every rotation and flip turns the collision outline the same way as the graphic: the UV mapping
+    // that draws the sprite sends each displayed outline point back to the authored one.
+    {
+        auto map = kb::assets::MakeEmptyMap2DAsset(4, 4);
+        map.sheets.push_back({ .texture = "/Game/Sprites/ground.png", .material = "/Game/Maps/Materials/Turn.kbmat", .cellSize = 16, .columns = 4, .rows = 2 });
+        const std::vector<std::array<float, 2>> authored{ { 0.1F, 0.2F }, { 0.9F, 0.3F }, { 0.4F, 0.8F } };
+        for (const bool slope : { false, true }) {
+            auto& collision = map.sheets[0].definitions[0].collision;
+            collision = kb::assets::Map2DCollision{ .kind = slope ? kb::assets::Map2DCollisionKind::SlopeUp : kb::assets::Map2DCollisionKind::Polygon,
+                .polygon = slope ? std::vector<std::array<float, 2>>{} : authored };
+            const std::vector<std::array<float, 2>> original = slope ? std::vector<std::array<float, 2>>{ { 0.0F, 1.0F }, { 1.0F, 0.0F }, { 1.0F, 1.0F } } : authored;
+            for (std::uint8_t rotation = 0U; rotation < 4U; ++rotation) for (const bool flipX : { false, true }) for (const bool flipY : { false, true }) {
+                kb::assets::Map2DTile tile;
+                tile.ground = { .sheet = 0, .cell = 0, .rotation = rotation, .flipX = flipX, .flipY = flipY };
+                const kb::assets::Map2DCollision shape = kb::assets::Map2DCellCollision(map, tile);
+                Require((shape.polygon.size() == original.size() && shape.kind == kb::assets::Map2DCollisionKind::Polygon) ||
+                        (!rotation && !flipX && !flipY && slope && shape.kind == kb::assets::Map2DCollisionKind::SlopeUp),
+                    "a turned or mirrored outline becomes a polygon with the same points");
+                if (shape.polygon.empty()) continue;
+                for (std::size_t point = 0U; point < original.size(); ++point) {
+                    const auto texture = kb::assets::Map2DSpriteUV(tile.ground, shape.polygon[point][0], shape.polygon[point][1]);
+                    Require(std::abs(texture[0] - original[point][0]) < 0.0001F && std::abs(texture[1] - original[point][1]) < 0.0001F,
+                        "the collision outline follows the same rotation and flip as the graphic");
+                }
+            }
+        }
+    }
     // A large map: a fill, a stroke across a 16 cell chunk seam, undo and redo keep every tile,
     // and the whole sequence stays inside a generous time budget.
     {
