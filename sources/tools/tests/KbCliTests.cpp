@@ -4218,6 +4218,49 @@ void RunBatchCommandTests() {
     Require(RunCliProgram({ "batch", "--project", project }).exitCode == 1, "batch without --file must fail");
 }
 
+#if KB_CLI_RENDERER
+// The play camera of a map is set from the command line: pixel density, target, smoothing, drag margins, bounds.
+void RunMap2DCameraCliTests() {
+    const std::filesystem::path parent = TestRoot() / "camera_cli";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Cam", "--template", "Empty" }).exitCode == 0, "new failed");
+    const std::string project = (parent / "Cam").string();
+    const std::string map = "/Game/Maps/World.kbmap2d";
+    Require(RunCliProgram({ "map2d", "new", "--project", project, "--name", "World", "--size", "32x24" }).exitCode == 0, "map2d new failed");
+    const std::filesystem::path file = parent / "Cam" / "Assets" / "Maps" / "World.kbmap2d";
+    const auto text = [&]() {
+        std::ifstream input{ file, std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    Require(!Contains(text(), "camera "), "a new map has the plain camera");
+
+    const CliRun set = RunCliProgram({ "map2d", "set", "--project", project, "--map", map, "--camera-pixels-per-unit", "16", "--camera-follow", "Hero",
+        "--camera-smoothing", "0.25", "--camera-dead-zone", "1.5,0.5", "--camera-clamp", "yes" });
+    Require(set.exitCode == 0, "map2d set with camera options failed: " + set.out + set.err);
+    Require(Contains(text(), "camera 16 0.25 1.5 0.5 true \"Hero\""), "the camera settings must be in the map file: " + text());
+    const CliRun info = RunCliProgram({ "map2d", "info", "--project", project, "--map", map });
+    Require(Contains(info.out, "pixel perfect at 16") && Contains(info.out, "follows Hero") && Contains(info.out, "kept inside the map"),
+        "info must describe the play camera: " + info.out);
+
+    const std::string before = text();
+    for (const std::vector<std::string_view>& bad : { std::vector<std::string_view>{ "--camera-pixels-per-unit", "-4" },
+             std::vector<std::string_view>{ "--camera-pixels-per-unit", "many" }, std::vector<std::string_view>{ "--camera-smoothing", "100" },
+             std::vector<std::string_view>{ "--camera-dead-zone", "1" }, std::vector<std::string_view>{ "--camera-clamp", "maybe" } }) {
+        std::vector<std::string> words{ "map2d", "set", "--project", project, "--map", map };
+        words.insert(words.end(), bad.begin(), bad.end());
+        std::istringstream in;
+        std::ostringstream out;
+        std::ostringstream err;
+        Require(kb::cli::RunCli(words, in, kb::cli::CommandIo{ .out = out, .err = err }) == 1, "a camera option that is not sensible must fail");
+        Require(text() == before, "a refused camera option must leave the map file as it was");
+    }
+    Require(RunCliProgram({ "map2d", "set", "--project", project, "--map", map, "--camera-follow", "none", "--camera-pixels-per-unit", "0", "--camera-smoothing", "0",
+                            "--camera-dead-zone", "0,0", "--camera-clamp", "no" }).exitCode == 0 && !Contains(text(), "camera "),
+        "setting everything back to its defaults writes no camera line");
+}
+#endif
+
 int main(int argc, char** argv) {
 #if KB_CLI_RENDERER
     kb::render::tests::InstallRendererAssertionPolicy();
@@ -4254,6 +4297,7 @@ int main(int argc, char** argv) {
     RunImportSettingsCommandTests();
     RunMaterialAuthoringCommandTests();
     RunMaterialGraphUtilityNodeCommandTests();
+    RunMap2DCameraCliTests();
 #endif
     RunSceneCommandTests();
     RunRunCommandTests();

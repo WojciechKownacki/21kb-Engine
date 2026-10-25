@@ -27,6 +27,8 @@ constexpr std::string_view kUsage =
     "  view       --entity <Name> [--scene <path>]      (the Map Camera again, after set)\n"
     "  info       --map <path>\n"
     "  set        --map <path> [--size WxH] [--orientation flat|wall] [--view WxH]\n"
+    "             [--camera-pixels-per-unit n] [--camera-follow <Name>|none] [--camera-smoothing seconds]\n"
+    "             [--camera-dead-zone w,h] [--camera-clamp yes|no]   (the play camera: pixel perfect, follow, bounds)\n"
     "  paint      --map <path> --at x,y[,floor] [--to x,y] [--size n]\n"
     "             (--ground <Name> | --sprite <texture> --cell <n> [--cell-size 32] [--as-ground]) [--no-borders]\n"
     "  fill       --map <path> --ground <Name> --at x,y[,floor]\n"
@@ -166,8 +168,15 @@ struct MapSession {
     io.out << "map: " << kb::world2d::Map2DVirtualPath(session->assetsRoot, session->file) << '\n'
            << "size: " << map.width << " x " << map.height << " tiles of " << map.tileSize << " m, floor height " << map.floorHeight << " m\n"
            << "orientation: " << kb::assets::Map2DOrientationName(map.orientation) << '\n'
-           << "client box: " << map.viewWidth << " x " << map.viewHeight << " tiles\n"
-           << "tiles: " << map.tiles.size() << " on floors";
+           << "client box: " << map.viewWidth << " x " << map.viewHeight << " tiles\n";
+    if (map.camera != kb::assets::Map2DCamera{}) {
+        const kb::assets::Map2DCamera& camera = map.camera;
+        io.out << "play camera: " << (camera.pixelsPerUnit > 0.0F ? "pixel perfect at " + std::to_string(camera.pixelsPerUnit) + " px per unit" : std::string{ "plain" })
+               << (camera.followTarget.empty() ? std::string{} : ", follows " + camera.followTarget + " (smoothing " + std::to_string(camera.smoothingSeconds) +
+                   " s, drag margins " + std::to_string(camera.deadZoneWidth) + " x " + std::to_string(camera.deadZoneHeight) + " tiles)")
+               << (camera.clampToMap ? ", kept inside the map" : "") << '\n';
+    }
+    io.out << "tiles: " << map.tiles.size() << " on floors";
     for (const std::int32_t floor : Floors(map)) io.out << ' ' << floor;
     io.out << '\n';
     for (std::size_t index = 0U; index < map.sheets.size(); ++index) {
@@ -207,6 +216,43 @@ struct MapSession {
             return 1;
         }
         map.orientation = *orientation == "wall" ? kb::assets::Map2DOrientation::Wall : kb::assets::Map2DOrientation::Flat;
+    }
+    kb::assets::Map2DCamera& camera = map.camera;
+    const auto camera_number = [&](std::string_view option, float& target) {
+        const std::optional<std::string> text = arguments.Option(option);
+        if (!text.has_value()) return true;
+        const std::optional<std::vector<float>> values = Numbers<float>(*text);
+        if (!values.has_value() || values->size() != 1U) {
+            io.err << "error: " << option << " takes one number\n";
+            return false;
+        }
+        target = values->front();
+        return true;
+    };
+    if (!camera_number("--camera-pixels-per-unit", camera.pixelsPerUnit) || !camera_number("--camera-smoothing", camera.smoothingSeconds)) return 1;
+    if (const std::optional<std::string> margins = arguments.Option("--camera-dead-zone"); margins.has_value()) {
+        const std::optional<std::vector<float>> values = Numbers<float>(*margins);
+        if (!values.has_value() || values->size() != 2U) {
+            io.err << "error: --camera-dead-zone takes <width>,<height> in tiles\n";
+            return 1;
+        }
+        camera.deadZoneWidth = (*values)[0];
+        camera.deadZoneHeight = (*values)[1];
+    }
+    if (const std::optional<std::string> follow = arguments.Option("--camera-follow"); follow.has_value()) {
+        camera.followTarget = *follow == "none" ? std::string{} : *follow;
+    }
+    if (const std::optional<std::string> clamp = arguments.Option("--camera-clamp"); clamp.has_value()) {
+        if (*clamp != "yes" && *clamp != "no") {
+            io.err << "error: --camera-clamp takes yes or no\n";
+            return 1;
+        }
+        camera.clampToMap = *clamp == "yes";
+    }
+    std::string invalid;
+    if (!kb::assets::IsMap2DAssetValid(map, &invalid)) {
+        io.err << "error: " << invalid << '\n';
+        return 1;
     }
     io.out << "the scene's Map Camera follows with: kb_cli map2d view --entity <Name>\n";
     return SaveMap(*session, "updated the map", io);

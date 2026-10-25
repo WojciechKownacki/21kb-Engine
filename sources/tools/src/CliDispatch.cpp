@@ -197,6 +197,8 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  block|unblock --project <dir> --map <path> --at x,y[,floor] [--to x,y]
                  borderize --project <dir> --map <path> [--floor n]
                  set --project <dir> --map <path> [--size WxH] [--orientation flat|wall] [--view WxH]
+                     [--camera-pixels-per-unit n] [--camera-follow <Name>|none] [--camera-smoothing seconds]
+                     [--camera-dead-zone w,h] [--camera-clamp yes|no]   (the play camera, see docs/world_2d_camera.md)
                  view --project <dir> --entity <Name>   (update the Map Camera and painted collision)
                  info --project <dir> --map <path>
                Sprite sheets go into Assets/2D Map Sprites/<Category>; cells count row by row from 0.
