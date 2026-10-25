@@ -24,3 +24,23 @@ VEC3 count and the next refused count, combined accessor sizes, zero counts and
 valid zero initialization. It also retains the external-resource, material and
 import-transform regressions. The mesh glTF fuzz corpus includes an oversized
 accessor regression for normal corpus replay.
+
+Import resource collection and shared buffer loading also preflight the selected
+scene before loading buffers or allocating expanded vertex arrays. A separate 2 GiB
+working-size estimate includes both vertex formats, a tangent-format copy and
+vertex-remap workspace, both index widths, mesh sections, and the largest
+primitive's decoded attribute arrays. Repeated node instances contribute their
+expanded geometry each time. Arithmetic divides before multiplying and checks
+the renderer's 32-bit index range. Hierarchies are limited to 512 levels and one
+million expanded node visits; preflight traverses them iteratively. The common
+policy charges 256 bytes per vertex, 6 per index, and 128 per section, plus decoded
+attributes. Compile-time checks keep the static renderer's layouts within those
+charges. CLI, editor import, static runtime and skeletal loaders share this check.
+
+This estimate is conservative and does not reserve memory or guarantee physical
+memory availability. Materials, images, parser data, and unrelated resident
+assets have separate costs. A refusal reports the working-size or hierarchy
+limit before the import writes an asset. `kb_renderer_tests gltf-external`
+checks metadata-only accepted sizes, oversized output, repeated instances, and
+the actual previously failing numeric-token case through runtime loading and
+import inspection. The corpus includes a valid numeric oversized mesh variant.

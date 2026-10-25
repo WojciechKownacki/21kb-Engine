@@ -33,6 +33,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <vector>
 
 namespace kb::render::tests {
@@ -399,9 +400,74 @@ void ImportScaleAndRotationReachTheMesh() {
     }
 }
 
+void ExpandedMeshSizesAreRefusedBeforeDecoding() {
+    const auto document = [](std::string_view count, bool instanced) {
+        return std::string{R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[)"}
+            + (instanced ? "0,1" : "0") + R"(]}],"nodes":[{"mesh":0})"
+            + (instanced ? ",{\"mesh\":0}" : "")
+            + R"(],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"accessors":[{"componentType":5126,"count":)"
+            + std::string{count} + R"(,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}]})";
+    };
+    for (const auto& [count, instances, expected] : std::array{
+        std::tuple{"3", false, true}, std::tuple{"6000000", false, true},
+        std::tuple{"6000000", true, false}, std::tuple{"92233722", false, false},
+        std::tuple{"92233720)6854775807", false, false}, std::tuple{"10000002", false, false}}) {
+        const auto text = document(count, instances);
+        cgltf_options options{};
+        cgltf_data* parsed = nullptr;
+        Require(cgltf_parse(&options, text.data(), text.size(), &parsed) == cgltf_result_success && parsed != nullptr,
+            "Expanded glTF budget fixture must parse");
+        const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data{parsed, &cgltf_free};
+        const bool accepted = kb::assets::ValidateGltfGeometrySize(*data);
+        std::cout << "glTF expanded budget count=" << count << " instanced=" << instances
+            << " accepted=" << accepted << " expected=" << expected << '\n';
+        Require(accepted == expected, "Expanded glTF output and scratch budget differs");
+        if (!expected) {
+            const auto bytes = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t*>(text.data()), text.size()};
+            Require(!RenderMeshAssetBuilder::LoadGltf(bytes, {}).has_value(), "Oversized glTF runtime mesh was accepted");
+            const TempRoot root;
+            const auto path = root.Path() / "Expanded.gltf";
+            WriteText(path, text);
+            std::string error;
+            Require(!RenderMeshSourceImport::Inspect(path, &error).has_value()
+                && error.find("2 GiB") != std::string::npos, "glTF import inspection missed its expanded-size diagnostic");
+            ImportProject project{root.Path()};
+            const auto result = project.Import(path);
+            Require(!result.Succeeded() && result.error.find("2 GiB") != std::string::npos,
+                "glTF source import accepted oversized geometry");
+            Require(!std::filesystem::exists(project.assets / "Meshes" / "Expanded.21kb"),
+                "Rejected glTF source import wrote an asset");
+        }
+    }
+}
+
+void ExpandedMeshHierarchiesAreBounded() {
+    for (const auto& [count, duplicate, expected] : std::array{
+        std::tuple{64U, false, true}, std::tuple{600U, false, false}, std::tuple{24U, true, false}}) {
+        std::vector<cgltf_node> nodes(count);
+        std::vector<std::array<cgltf_node*, 2>> children(count);
+        for (std::uint32_t i = 0U; i + 1U < count; ++i) {
+            children[i] = {&nodes[i + 1U], &nodes[i + 1U]};
+            nodes[i].children = children[i].data();
+            nodes[i].children_count = duplicate ? 2U : 1U;
+            nodes[i + 1U].parent = &nodes[i];
+        }
+        cgltf_node* root = nodes.data();
+        cgltf_scene scene{};
+        scene.nodes = &root;
+        scene.nodes_count = 1U;
+        cgltf_data data{};
+        data.scene = &scene;
+        Require(kb::assets::ValidateGltfGeometrySize(data) == expected,
+            "glTF hierarchy depth or repeated-node work is unbounded");
+    }
+}
+
 } // namespace
 
 void RunGltfExternalResourceTests() {
+    ExpandedMeshSizesAreRefusedBeforeDecoding();
+    ExpandedMeshHierarchiesAreBounded();
     OversizedAccessorCountsAreRefused();
     DecodedAccessorBudgetIsCheckedWithoutAllocatingIt();
     ImportScaleAndRotationReachTheMesh();

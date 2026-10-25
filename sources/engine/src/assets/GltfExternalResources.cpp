@@ -17,6 +17,91 @@ namespace {
 constexpr std::uintmax_t kMaximumExternalBufferBytes = std::uintmax_t{ 1U } << 31U;
 constexpr std::uintmax_t kMaximumDecodedAccessorBytes = std::uintmax_t{ 1U } << 31U;
 
+constexpr std::uint64_t kGltfMeshWorkingByteLimit = 2ULL * 1024ULL * 1024ULL * 1024ULL;
+constexpr std::size_t kGltfExpandedNodeLimit = 1000000U;
+constexpr std::size_t kGltfNodeDepthLimit = 512U;
+
+struct GltfMeshSizeBudget final {
+    std::uint64_t vertices = 0U;
+    std::uint64_t indices = 0U;
+    std::uint64_t primitives = 0U;
+    std::uint64_t scratch = 0U;
+
+    [[nodiscard]] bool Add(const cgltf_primitive& primitive) {
+        if (primitive.type != cgltf_primitive_type_triangles) return true;
+        const cgltf_accessor* positions = nullptr;
+        for (cgltf_size i = 0U; i < primitive.attributes_count; ++i) {
+            const auto& attribute = primitive.attributes[i];
+            if (attribute.type == cgltf_attribute_type_position && attribute.index == 0) positions = attribute.data;
+        }
+        if (positions == nullptr || positions->count == 0U) return false;
+        const std::uint64_t vertexCount = positions->count;
+        const std::uint64_t indexCount = primitive.indices == nullptr ? vertexCount : primitive.indices->count;
+        if (indexCount % 3U != 0U || vertexCount > std::numeric_limits<std::uint32_t>::max() - vertices
+            || indexCount > std::numeric_limits<std::uint32_t>::max() - indices) return false;
+        std::uint64_t decoded = 0U;
+        for (cgltf_size i = 0U; i < primitive.attributes_count; ++i) {
+            const auto* accessor = primitive.attributes[i].data;
+            if (accessor == nullptr || accessor->count != vertexCount) return false;
+            const std::uint64_t components = cgltf_num_components(accessor->type);
+            if (components == 0U || vertexCount > (kGltfMeshWorkingByteLimit - decoded) / sizeof(float) / components) return false;
+            decoded += vertexCount * components * sizeof(float);
+        }
+        vertices += vertexCount;
+        indices += indexCount;
+        ++primitives;
+        scratch = std::max(scratch, decoded);
+        // Both vertex formats can coexist during promotion. Finalization can also
+        // allocate a tangent-format vertex copy and a vertex-remap array.
+        constexpr std::uint64_t vertexBytes = kGltfMeshVertexWorkingBytes;
+        constexpr std::uint64_t indexBytes = kGltfMeshIndexWorkingBytes;
+        std::uint64_t remaining = kGltfMeshWorkingByteLimit - scratch;
+        if (vertices > remaining / vertexBytes) return false;
+        remaining -= vertices * vertexBytes;
+        if (indices > remaining / indexBytes) return false;
+        remaining -= indices * indexBytes;
+        return primitives <= remaining / kGltfMeshSectionWorkingBytes;
+    }
+};
+
+[[nodiscard]] bool GltfGeometrySizeFits(const cgltf_data& data) {
+    GltfMeshSizeBudget budget;
+    std::vector<std::pair<const cgltf_node*, std::size_t>> pending;
+    std::size_t queued = 0U;
+    const auto enqueue = [&](const cgltf_node* node, std::size_t depth) {
+        if (node == nullptr || depth > kGltfNodeDepthLimit || queued >= kGltfExpandedNodeLimit) return false;
+        ++queued;
+        pending.emplace_back(node, depth);
+        return true;
+    };
+    const auto addScene = [&](const cgltf_scene& scene) {
+        for (cgltf_size i = 0U; i < scene.nodes_count; ++i) {
+            if (!enqueue(scene.nodes[i], 0U)) return false;
+        }
+        return true;
+    };
+    if (data.scene != nullptr) {
+        if (!addScene(*data.scene)) return false;
+    } else {
+        for (cgltf_size i = 0U; i < data.scenes_count; ++i) if (!addScene(data.scenes[i])) return false;
+    }
+    while (!pending.empty()) {
+        const auto [node, depth] = pending.back();
+        pending.pop_back();
+        std::size_t parents = 0U;
+        for (const cgltf_node* parent = node->parent; parent != nullptr; parent = parent->parent) {
+            if (++parents > kGltfNodeDepthLimit) return false;
+        }
+        if (node->mesh != nullptr) {
+            for (cgltf_size i = 0U; i < node->mesh->primitives_count; ++i) {
+                if (!budget.Add(node->mesh->primitives[i])) return false;
+            }
+        }
+        for (cgltf_size i = 0U; i < node->children_count; ++i) if (!enqueue(node->children[i], depth + 1U)) return false;
+    }
+    return true;
+}
+
 bool Fail(std::string* error, std::string message) {
     if (error != nullptr) *error = std::move(message);
     return false;
@@ -158,6 +243,11 @@ struct ParsedGltfDeleter {
 
 } // namespace
 
+bool ValidateGltfGeometrySize(const cgltf_data& data, std::string* error) {
+    return GltfGeometrySizeFits(data) || Fail(error,
+        "glTF geometry exceeds its 2 GiB working-size or hierarchy limit, or has invalid primitive counts.");
+}
+
 std::optional<std::filesystem::path> GltfRelativeResourcePath(std::string_view uri) {
     if (uri.empty() || IsDataUri(uri)) return std::nullopt;
     // A colon is a scheme ("file:", "http:"), a drive ("C:") or an NTFS stream; a backslash is a
@@ -209,7 +299,8 @@ bool LoadGltfBuffers(
     std::span<const ImportedAssetResource> embedded,
     std::string* error) {
     // Accessor readers use typed loads, including for sparse indices and values.
-    if (!ValidateAccessorDimensions(data, error) || !ValidateAccessorAlignment(data, error)) return false;
+    if (!ValidateAccessorDimensions(data, error) || !ValidateAccessorAlignment(data, error)
+        || !ValidateGltfGeometrySize(data, error)) return false;
     for (cgltf_size index = 0U; index < data.buffers_count; ++index) {
         cgltf_buffer& buffer = data.buffers[index];
         if (buffer.data != nullptr || buffer.uri == nullptr || IsDataUri(buffer.uri)) continue;
@@ -260,7 +351,7 @@ std::optional<std::vector<ImportedAssetResource>> CollectGltfExternalBuffers(
         return std::nullopt;
     }
     const std::unique_ptr<cgltf_data, ParsedGltfDeleter> data{ raw };
-    if (!ValidateAccessorDimensions(*data, error)) return std::nullopt;
+    if (!ValidateAccessorDimensions(*data, error) || !ValidateGltfGeometrySize(*data, error)) return std::nullopt;
     std::vector<ImportedAssetResource> resources;
     for (cgltf_size index = 0U; index < data->buffers_count; ++index) {
         const cgltf_buffer& buffer = data->buffers[index];

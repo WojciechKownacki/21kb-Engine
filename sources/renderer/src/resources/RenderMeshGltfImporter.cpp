@@ -22,6 +22,11 @@
 namespace kb::render {
 namespace {
 
+static_assert(sizeof(RenderStaticMeshVertexP3N3UV2) + 2U * sizeof(RenderStaticMeshVertexP3N3T4UV2)
+    + sizeof(std::uint32_t) <= kb::assets::kGltfMeshVertexWorkingBytes);
+static_assert(sizeof(std::uint32_t) + sizeof(std::uint16_t) <= kb::assets::kGltfMeshIndexWorkingBytes);
+static_assert(sizeof(RenderMeshSectionDesc) <= kb::assets::kGltfMeshSectionWorkingBytes);
+
 struct GltfAccessorFloats {
     std::vector<float> values;
     std::uint32_t componentCount = 0;

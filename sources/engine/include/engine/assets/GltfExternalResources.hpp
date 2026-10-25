@@ -16,6 +16,15 @@ struct cgltf_options;
 
 namespace kb::assets {
 
+// Conservative import working-storage charges; renderers assert their layouts fit this policy.
+inline constexpr std::uint64_t kGltfMeshVertexWorkingBytes = 256U;
+inline constexpr std::uint64_t kGltfMeshIndexWorkingBytes = 6U;
+inline constexpr std::uint64_t kGltfMeshSectionWorkingBytes = 128U;
+
+// Refuses expanded geometry over 2 GiB, including repeated scene instances and scratch
+// storage. Traversal is bounded to 512 levels and one million expanded node visits.
+[[nodiscard]] bool ValidateGltfGeometrySize(const cgltf_data& data, std::string* error = nullptr);
+
 // The file a glTF document references by URI (a buffer or an image), as a path relative to the
 // document's directory. Accepted: a percent-encoded relative reference made of plain path
 // segments ("." segments are dropped). Refused: any scheme ("file:", "http:", ...), an absolute
