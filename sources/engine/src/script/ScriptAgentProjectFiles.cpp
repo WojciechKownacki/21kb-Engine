@@ -318,7 +318,7 @@ end
 
 // Ready-made 2D players (kb_cli entity add --create 'Platformer Player' / 'Top Down Player'). Plain Lua files of
 // the project; the @expose lines are the tunables the Inspector shows. The CharacterController supplies gravity,
-// ground and walls; the engine lets a jump asked for within 0.1 s of leaving the ground succeed (coyote time).
+// ground and walls; the platformer script switches on the engine's coyote time for its own character.
 constexpr std::string_view kPlatformer2DPlayerLuaTemplate = R"lua(-- Platformer2DPlayer.lua
 -- For a Map Platformer (a wall map: x across, y up). Requires: CharacterController.
 -- Input: Move (Axis2D, x = left and right), Jump (Bool).
@@ -328,7 +328,8 @@ constexpr std::string_view kPlatformer2DPlayerLuaTemplate = R"lua(-- Platformer2
 -- @expose jumpBuffer Float = 0.12
 -- @expose releaseGravity Float = 3.0
 -- @expose fallGravity Float = 1.5
--- coyoteTime: seconds after walking off an edge in which Jump still works (the engine allows up to 0.1).
+-- coyoteTime: seconds after walking off an edge in which Jump still works (0 to 0.5; this script asks the engine
+-- for that window with Physics.SetCharacterJumpGrace, which is off for every other character).
 -- jumpBuffer: seconds before landing in which a Jump press is remembered.
 -- releaseGravity: gravity multiplier while rising with Jump released (a short hop); fallGravity: while falling.
 
@@ -344,6 +345,12 @@ function Tick(self, dt)
     if state == nil then
         state = { sinceGround = 1000.0, sincePress = 1000.0, gravity = 1.0 }
         states[entity] = state
+    end
+    -- Ask for the coyote window until the engine has the character, and again whenever the tunable changes.
+    if state.grace ~= vars.coyoteTime then
+        if Physics.SetCharacterJumpGrace(entity, math.min(math.max(vars.coyoteTime, 0.0), 0.5)) then
+            state.grace = vars.coyoteTime
+        end
     end
     local grounded = Physics.CharacterIsGrounded(entity)
     local sinceGround = state.sinceGround

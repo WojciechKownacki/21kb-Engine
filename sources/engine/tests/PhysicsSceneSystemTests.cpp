@@ -3112,12 +3112,21 @@ void RunPhysicsPipelinedStepEquivalenceTest() {
 // Walks off the edge, waits `waitFrames` more frames in the air and asks for a jump; returns the highest upward speed
 // of the next 12 frames, and the change in vertical speed made by asking again in the air.
 struct LedgeJump { float peak = 0.0F; float secondRequestChange = 0.0F; bool left = false; };
-[[nodiscard]] LedgeJump LedgeJumpAfter(unsigned waitFrames, bool standing) {
+// `graceSeconds` below zero leaves coyote time at its default (off); otherwise the script API switches it on.
+[[nodiscard]] LedgeJump LedgeJumpAfter(unsigned waitFrames, bool standing, float graceSeconds) {
     kb::scene::SceneEntity character{};
     const std::unique_ptr<kb::scene::Scene> owner = MakeLedgeScene(character);
     kb::scene::Scene& scene = *owner;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "the ledge scene script host must install");
     const auto step = [&]() { static_cast<void>(scene.Runtime().Update(1.0F / 60.0F)); };
     for (unsigned frame = 0U; frame < 30U; ++frame) step();
+    if (graceSeconds >= 0.0F) {
+        std::vector<kb::script::ScriptFunctionArgument> args{ { "entity", kb::script::ScriptValue{ character.Id(), kb::script::ScriptValueType::Entity } },
+            { "seconds", kb::script::ScriptValue{ graceSeconds } } };
+        const auto set = host.Functions().Call("Physics.SetCharacterJumpGrace", args, { .scene = &scene });
+        kb::tests::Require(set.Succeeded() && set.Output("applied")->AsBool(), "Physics.SetCharacterJumpGrace must accept a character and 0.1 s");
+    }
     LedgeJump result;
     if (!kb::scene::PhysicsBackend::CharacterIsGrounded(scene, character)) return result;
     if (!standing) {
@@ -3150,16 +3159,53 @@ struct LedgeJump { float peak = 0.0F; float secondRequestChange = 0.0F; bool lef
 
 void RunCharacterJumpGraceTest() {
     if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) return;
-    const LedgeJump standing = LedgeJumpAfter(0U, true);
+    // Without the API a character jumps from the ground only, as it always did.
+    const LedgeJump standing = LedgeJumpAfter(0U, true, -1.0F);
     kb::tests::Require(standing.peak > 7.0F, "A standing character jumps");
     kb::tests::Require(standing.secondRequestChange < 0.0F, "A jump asked for again in the air does not push the character up a second time");
-    const LedgeJump justLeft = LedgeJumpAfter(0U, false);
+    const LedgeJump defaultSoon = LedgeJumpAfter(2U, false, -1.0F);
+    kb::tests::Require(defaultSoon.left && defaultSoon.peak < 1.0F, "By default a jump 0.03 s after leaving the edge does not work");
+    const LedgeJump defaultNow = LedgeJumpAfter(0U, false, -1.0F);
+    kb::tests::Require(defaultNow.left && defaultNow.peak < 1.0F, "By default a jump as the character leaves the edge does not work either");
+    const LedgeJump zero = LedgeJumpAfter(2U, false, 0.0F);
+    kb::tests::Require(zero.left && zero.peak < 1.0F, "A grace of 0 is the default behaviour");
+    // With it, within the window and not after it.
+    const LedgeJump justLeft = LedgeJumpAfter(0U, false, 0.1F);
     kb::tests::Require(justLeft.left && justLeft.peak > 7.0F, "A jump asked for as the character leaves the edge succeeds (coyote time)");
     kb::tests::Require(justLeft.secondRequestChange < 0.0F, "The coyote jump is used up by the first jump");
-    const LedgeJump soon = LedgeJumpAfter(3U, false);
-    kb::tests::Require(soon.left && soon.peak > 7.0F, "A jump 0.05 s after leaving the edge still succeeds");
-    const LedgeJump late = LedgeJumpAfter(12U, false);
-    kb::tests::Require(late.left && late.peak < 1.0F, "A jump 0.2 s after leaving the edge is too late");
+    const LedgeJump soon = LedgeJumpAfter(2U, false, 0.1F);
+    kb::tests::Require(soon.left && soon.peak > 7.0F, "A jump 0.03 s after leaving the edge succeeds with a grace of 0.1 s");
+    const LedgeJump late = LedgeJumpAfter(12U, false, 0.1F);
+    kb::tests::Require(late.left && late.peak < 1.0F, "A jump 0.2 s after leaving the edge is too late for a grace of 0.1 s");
+    const LedgeJump longer = LedgeJumpAfter(12U, false, 0.3F);
+    kb::tests::Require(longer.left && longer.peak > 7.0F, "A grace of 0.3 s covers a jump 0.2 s after leaving the edge");
+    const LedgeJump standingWithGrace = LedgeJumpAfter(0U, true, 0.1F);
+    kb::tests::Require(standingWithGrace.peak > 7.0F && standingWithGrace.secondRequestChange < 0.0F, "A grace does not give a standing character a second jump");
+
+    // The API refuses what is not a time from 0 to 0.5 s, and says so; a jump is not mistaken for it.
+    kb::scene::SceneEntity character{};
+    const std::unique_ptr<kb::scene::Scene> owner = MakeLedgeScene(character);
+    kb::scene::Scene& scene = *owner;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "the ledge scene script host must install");
+    for (unsigned frame = 0U; frame < 10U; ++frame) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+    const auto call = [&](kb::scene::SceneEntity entity, float seconds) {
+        std::vector<kb::script::ScriptFunctionArgument> args{ { "entity", kb::script::ScriptValue{ entity.Id(), kb::script::ScriptValueType::Entity } },
+            { "seconds", kb::script::ScriptValue{ seconds } } };
+        return host.Functions().Call("Physics.SetCharacterJumpGrace", args, { .scene = &scene });
+    };
+    for (const float bad : { -0.01F, 0.51F, 5.0F, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity() }) {
+        const auto refused = call(character, bad);
+        kb::tests::Require(!refused.Succeeded() && !refused.errors.empty(), "a grace that is not 0 to 0.5 seconds must be refused with a diagnostic");
+    }
+    for (const float good : { 0.0F, 0.05F, 0.5F }) {
+        const auto accepted = call(character, good);
+        kb::tests::Require(accepted.Succeeded() && accepted.Output("applied")->AsBool(), "a grace from 0 to 0.5 seconds is accepted");
+    }
+    const auto ground = scene.Entities().CreateObject({ .name = "NotACharacter" });
+    const auto notCharacter = call(ground.Entity(), 0.1F);
+    kb::tests::Require(notCharacter.Succeeded() && !notCharacter.Output("applied")->AsBool(), "an entity without a character controller reports that nothing was applied");
+    kb::tests::Require(call(character, 0.0F).Succeeded(), "the grace can be switched off again");
 }
 
 // The ready-made platformer and top-down players of ScriptAgentProjectFiles, as a project holds them, against the

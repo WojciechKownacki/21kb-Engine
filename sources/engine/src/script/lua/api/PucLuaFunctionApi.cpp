@@ -2311,6 +2311,21 @@ int LuaPhysicsCharacterJump(lua_State* state) {
     return 1;
 }
 
+int LuaPhysicsSetCharacterJumpGrace(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("entity", ScriptValue{ CheckEntityArg(state, 1), ScriptValueType::Entity }),
+        Arg("seconds", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Physics.SetCharacterJumpGrace", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 int LuaPhysicsCharacterVelocity(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -3610,6 +3625,7 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaPhysicsCharacterIsGrounded,
     &LuaPhysicsCharacterGroundNormal,
     &LuaPhysicsCharacterGroundVelocity,
+    &LuaPhysicsSetCharacterJumpGrace,
     &LuaPhysicsSetDebugDrawEnabled,
     &LuaPhysicsIsDebugDrawEnabled,
     &LuaInputIsPressed,

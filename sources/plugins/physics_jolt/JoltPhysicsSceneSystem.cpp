@@ -597,8 +597,11 @@ struct CharacterSignature {
     return SameVec3(lhs.scale, rhs.scale) && SameVec3(lhs.center, rhs.center) && lhs.radius == rhs.radius && lhs.height == rhs.height;
 }
 
-// How long after leaving its ground a character may still jump (coyote time).
-constexpr float kCharacterJumpGraceSeconds = 0.1F;
+// Coyote time is asked for with CharacterJump of a speed in [-1.5, -1] (Physics.SetCharacterJumpGrace in
+// ScriptPhysicsApi.cpp): the seconds a character may still jump after leaving its ground are -speed - 1.
+// A jump needs a positive speed, so such a call was never a jump, and IPhysicsBackend and the module ABI stay as they were.
+constexpr float kCharacterJumpGraceCodeLow = -1.5F;
+constexpr float kCharacterJumpGraceCodeHigh = -1.0F;
 
 struct CharacterRecord {
     JPH::Ref<JPH::CharacterVirtual> character;
@@ -611,9 +614,10 @@ struct CharacterRecord {
     // semantics.
     Vec3 moveInput{};
     float pendingJumpSpeed = 0.0F;
-    // Seconds left in which a jump is still honored after the character walked off its ground
-    // (coyote time). Refilled on every step spent standing, spent by a jump so that it never
-    // makes a second one in the air.
+    // Coyote time. jumpGraceLimit is what a script asked for (0, the default, means jumps from the ground only);
+    // jumpGraceSeconds is what is left of it after the character walked off its ground: refilled on every step
+    // spent standing, spent by a jump so that it never makes a second one in the air.
+    float jumpGraceLimit = 0.0F;
     float jumpGraceSeconds = 0.0F;
     // Mirrors of CharacterControllerComponent's own fields that Jolt has no "live setter"
     // for (unlike slopeLimitDegrees, applied straight to the JPH::CharacterVirtual via
@@ -1570,6 +1574,10 @@ public:
         if (record == nullptr) {
             return false;
         }
+        if (verticalSpeed >= kCharacterJumpGraceCodeLow && verticalSpeed <= kCharacterJumpGraceCodeHigh) {
+            record->jumpGraceLimit = -verticalSpeed - 1.0F;
+            return true;
+        }
         record->pendingJumpSpeed = verticalSpeed;
         return true;
     }
@@ -2440,7 +2448,7 @@ private:
                 // LIB-131 jump: only actually honored while grounded and not already moving
                 // away from the ground - a request made while airborne was already dropped by
                 // this same `if` not being taken, so pendingJumpSpeed is simply never added.
-                record.jumpGraceSeconds = kCharacterJumpGraceSeconds;
+                record.jumpGraceSeconds = record.jumpGraceLimit;
                 if (record.pendingJumpSpeed > 0.0F) {
                     newVelocity += up * record.pendingJumpSpeed;
                     record.jumpGraceSeconds = 0.0F;

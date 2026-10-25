@@ -31,14 +31,16 @@ Wall maps (`Map Platformer`): x runs across, y up. `Platformer2DPlayer.lua` read
 |---|---|---|
 | `speed` | 6.0 | Walking speed in m/s |
 | `jumpSpeed` | 9.0 | Upward speed at take-off (about 4 m high with a full jump) |
-| `coyoteTime` | 0.1 | Seconds after walking off an edge in which Jump still works; the engine allows up to 0.1 |
+| `coyoteTime` | 0.1 | Seconds after walking off an edge in which Jump still works (0 to 0.5) |
 | `jumpBuffer` | 0.12 | Seconds before landing in which a Jump press is remembered |
 | `releaseGravity` | 3.0 | Gravity multiplier while rising with Jump released: a tap is a short hop |
 | `fallGravity` | 1.5 | Gravity multiplier while falling |
 
-Gravity, ground contact, walls, steps and slopes come from the CharacterController. A jump asked for within 0.1 s of leaving
-the ground succeeds once (the engine's coyote time for every CharacterController, `Physics.CharacterJump`); a jump in the
-air, or a second one, does not.
+Gravity, ground contact, walls, steps and slopes come from the CharacterController. A CharacterController jumps from the ground
+only, as it always did. The platformer script asks the engine for coyote time for its own character with
+`Physics.SetCharacterJumpGrace(entity, seconds)` (0 to 0.5 seconds, 0 switches it off again; anything else is refused with a
+diagnostic): a jump asked for within that time of leaving the ground succeeds once, so a jump in the air, or a second one, does
+not. Any script can use the function on any character.
 
 ## The top-down script
 

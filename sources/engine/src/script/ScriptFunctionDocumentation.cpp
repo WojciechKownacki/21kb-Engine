@@ -203,6 +203,7 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Physics.CharacterIsGrounded", "Returns whether a character controller has a valid ground contact." },
     { "Physics.CharacterGroundNormal", "Returns the ground-contact normal of a character controller." },
     { "Physics.CharacterGroundVelocity", "Returns the velocity of the platform supporting a character controller." },
+    { "Physics.SetCharacterJumpGrace", "Lets a character controller still jump for this many seconds (0 to 0.5) after it leaves the ground, once per stand (coyote time). 0, the default, allows jumps from the ground only." },
     { "Physics.SetDebugDrawEnabled", "Enables or disables physics debug geometry collection." },
     { "Physics.IsDebugDrawEnabled", "Returns whether physics debug geometry collection is enabled." },
 

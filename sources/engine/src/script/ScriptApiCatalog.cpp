@@ -173,6 +173,7 @@ constexpr auto kLuaBindings = std::to_array<ScriptApiCatalogLuaBindingDefinition
     { "Physics", "CharacterIsGrounded", "Physics.CharacterIsGrounded", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "CharacterGroundNormal", "Physics.CharacterGroundNormal", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Physics", "CharacterGroundVelocity", "Physics.CharacterGroundVelocity", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Physics", "SetCharacterJumpGrace", "Physics.SetCharacterJumpGrace", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "SetDebugDrawEnabled", "Physics.SetDebugDrawEnabled", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Physics", "IsDebugDrawEnabled", "Physics.IsDebugDrawEnabled", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "IsPressed", "Input.IsPressed", ScriptApiCatalogLuaReturnKind::Default, "" },
