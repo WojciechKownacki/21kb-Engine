@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import math
+import shutil
 import time
 import urllib.request
 
@@ -43,9 +44,12 @@ window.kbReadAudio = () => ({count:kbAudioReadback.count,blocks:kbAudioReadback.
 """
 
 
-def author_fixture(args, root, *, autoplay=False, script_name="AudioFlow"):
-    tone = root / "Tone.wav"
-    write_tone(tone)
+def author_fixture(args, root, *, autoplay=False, script_name="AudioFlow", source_clip=None):
+    tone = root / ("Tone" + (source_clip.suffix if source_clip else ".wav"))
+    if source_clip is None:
+        write_tone(tone)
+    else:
+        shutil.copy2(source_clip, tone)
 
     def configure(run, component, project):
         run(args.cli, "import", "--project", project, "--destination", "/Game/Audio", tone)

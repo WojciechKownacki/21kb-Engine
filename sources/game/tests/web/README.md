@@ -285,3 +285,8 @@ It requires queued authored autoplay before activation, then actual PCM after a
 trusted click without a script play request. Live volume, mute, pitch and
 enabled writes through the shared property API must change measured PCM as
 expected, retaining one context and a hardware-rendered native UI capture.
+
+`run_game_audio_ogg_tests.py` reports `21kb.web-game-audio-ogg/v1` and repeats the
+autoplay and live-property PCM scenario using a normally imported and cooked
+Ogg Vorbis fixture. It requires actual decoder output, not a format-catalog
+entry alone. See [audio formats](../../../../docs/audio_formats.md).

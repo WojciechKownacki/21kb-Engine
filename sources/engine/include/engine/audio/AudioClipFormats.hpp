@@ -6,10 +6,11 @@
 
 namespace kb::audio {
 
-inline constexpr std::array<std::string_view, 3U> kSupportedAudioClipExtensions{
+inline constexpr std::array<std::string_view, 4U> kSupportedAudioClipExtensions{
     ".wav",
     ".flac",
     ".mp3",
+    ".ogg",
 };
 
 [[nodiscard]] inline bool IsSupportedAudioClipExtension(std::string_view extension) noexcept {

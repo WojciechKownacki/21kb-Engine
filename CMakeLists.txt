@@ -395,6 +395,7 @@ set(MINIAUDIO_BUILD_TESTS OFF CACHE BOOL "Do not build miniaudio tests" FORCE)
 set(MINIAUDIO_BUILD_TOOLS OFF CACHE BOOL "Do not build miniaudio tools" FORCE)
 set(MINIAUDIO_INSTALL OFF CACHE BOOL "Do not install vendored miniaudio" FORCE)
 add_subdirectory(third_party/miniaudio third_party/miniaudio EXCLUDE_FROM_ALL)
+include(CMake/EnableMiniaudioVorbis.cmake)
 
 # ufbx is intentionally built as a small isolated C library. The engine owns
 # conversion into its canonical skeletal asset types; no ufbx types escape the

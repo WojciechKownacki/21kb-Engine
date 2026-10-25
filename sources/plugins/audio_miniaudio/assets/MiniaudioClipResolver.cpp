@@ -118,6 +118,78 @@ private:
         && prefix[0] == 'f' && prefix[1] == 'L' && prefix[2] == 'a' && prefix[3] == 'C';
 }
 
+[[nodiscard]] bool OggPageCrcMatches(std::span<const unsigned char> page) noexcept {
+    if (page.size() < 27U) {
+        return false;
+    }
+    std::uint32_t crc = 0U;
+    for (std::size_t index = 0U; index < page.size(); ++index) {
+        const std::uint32_t byte = index >= 22U && index < 26U ? 0U : page[index];
+        crc ^= byte << 24U;
+        for (std::uint32_t bit = 0U; bit < 8U; ++bit) {
+            crc = (crc << 1U) ^ ((crc & 0x80000000U) != 0U ? 0x04C11DB7U : 0U);
+        }
+    }
+    return crc == ReadLittleEndianU32(page.data() + 22U);
+}
+
+[[nodiscard]] bool IsOggPageHeader(std::span<const unsigned char> bytes) noexcept {
+    return bytes.size() >= 27U && bytes[0] == 'O' && bytes[1] == 'g'
+        && bytes[2] == 'g' && bytes[3] == 'S' && bytes[4] == 0U;
+}
+
+[[nodiscard]] bool ValidateOggContainer(const EncodedReader& reader, std::uint64_t& inspectedTailBytes) {
+    std::array<unsigned char, 27U> prefix{};
+    if (!reader.Read(0U, prefix) || !IsOggPageHeader(prefix) || (prefix[5] & 2U) == 0U || prefix[26] == 0U) {
+        return false;
+    }
+    const std::size_t headerBytes = prefix.size() + prefix[26];
+    std::vector<unsigned char> firstPage(headerBytes);
+    if (!reader.Read(0U, firstPage)) {
+        return false;
+    }
+    std::size_t pageBytes = headerBytes;
+    for (std::size_t index = prefix.size(); index < headerBytes; ++index) {
+        pageBytes += firstPage[index];
+    }
+    firstPage.resize(pageBytes);
+    if (!reader.Read(0U, firstPage) || pageBytes < headerBytes + 7U || !OggPageCrcMatches(firstPage)) {
+        return false;
+    }
+    constexpr std::array<unsigned char, 7U> identification{1U, 'v', 'o', 'r', 'b', 'i', 's'};
+    if (!std::equal(identification.begin(), identification.end(), firstPage.begin() + static_cast<std::ptrdiff_t>(headerBytes))) {
+        return false;
+    }
+
+    // A complete Ogg page is at most 65307 bytes. Inspect one fixed tail window
+    // so truncated streams cannot pass merely because their first PCM decodes.
+    const auto tailBytes = static_cast<std::size_t>(std::min(reader.Size(), kCompressedTailBytes));
+    std::vector<unsigned char> tail(tailBytes);
+    inspectedTailBytes = tailBytes;
+    if (!reader.Read(reader.Size() - tailBytes, tail)) {
+        return false;
+    }
+    for (std::size_t offset = 0U; offset + prefix.size() <= tail.size(); ++offset) {
+        const auto page = std::span<const unsigned char>{tail}.subspan(offset);
+        if (!IsOggPageHeader(page) || (page[5] & 4U) == 0U
+            || ReadLittleEndianU32(page.data() + 14U) != ReadLittleEndianU32(prefix.data() + 14U)) {
+            continue;
+        }
+        const std::size_t endOfHeader = prefix.size() + page[26];
+        if (endOfHeader > page.size()) {
+            continue;
+        }
+        std::size_t size = endOfHeader;
+        for (std::size_t index = prefix.size(); index < endOfHeader; ++index) {
+            size += page[index];
+        }
+        if (size == page.size() && OggPageCrcMatches(page)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] std::uint16_t FlacFrameCrc(std::span<const unsigned char> bytes) noexcept {
     std::uint16_t crc = 0U;
     for (const unsigned char byte : bytes) {
@@ -404,6 +476,11 @@ struct CompressedFrame final {
     }
 #if defined(_WIN32)
     const std::wstring nativePath = clip.path.wstring();
+    // The bundled Vorbis backend has no wide-file initializer. Its public VFS
+    // path keeps Unicode file access and the forced decoder without a copy.
+    if (clip.extension == ".ogg") {
+        return ma_decoder_init_vfs_w(nullptr, nativePath.c_str(), &config, &decoder);
+    }
     return ma_decoder_init_file_w(nativePath.c_str(), &config, &decoder);
 #else
     const std::string nativePath = clip.path.string();
@@ -504,7 +581,7 @@ bool MiniaudioClipResolver::ValidateDecodeReady(
                         && ValidateFlacTailIfBounded(reader, inspectedTailBytes)
                     : clip.extension == ".mp3"
                         ? ValidateCompressedContainer(reader, inspectedTailBytes)
-                        : false);
+                        : clip.extension == ".ogg" && ValidateOggContainer(reader, inspectedTailBytes));
     std::uint64_t decodedProbeFrames = 0U;
     const bool valid = containerValid && ProbeDecoder(clip, decodedProbeFrames);
 #if defined(KB_AUDIO_MINIAUDIO_TESTING)

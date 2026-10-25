@@ -80,10 +80,11 @@ struct AudioFixture final {
     std::size_t firstFrameBytes = 0U;
 };
 
-constexpr std::array<AudioFixture, 3U> kAudioFixtures{
+constexpr std::array<AudioFixture, 4U> kAudioFixtures{
     AudioFixture{ .extension = ".wav", .filename = "tone.wav", .expectedBytes = 22094U, .magic = { 'R', 'I', 'F', 'F' } },
     AudioFixture{ .extension = ".flac", .filename = "tone.flac", .expectedBytes = 4999U, .magic = { 'f', 'L', 'a', 'C' } },
     AudioFixture{ .extension = ".mp3", .filename = "tone.mp3", .expectedBytes = 3448U, .magic = { 0xFFU, 0xFBU, 0x70U, 0xC4U }, .firstFrameBytes = 313U },
+    AudioFixture{ .extension = ".ogg", .filename = "tone.ogg", .expectedBytes = 5761U, .magic = { 'O', 'g', 'g', 'S' } },
 };
 
 [[nodiscard]] const AudioFixture& FixtureFor(std::string_view extension) {
@@ -560,7 +561,7 @@ void RunFormatRejectionTest() {
     for (std::size_t index = 0U; index < kAudioFixtures.size(); ++index) {
         RegisterClip(scene, validBase + index, FixturePath(kAudioFixtures[index]));
         Require(resolver.Resolve(scene, validBase + index).Succeeded(),
-            "Advertised direct audio asset failed bounded resolver validation");
+            "Advertised direct audio asset failed bounded resolver validation: " + std::string{kAudioFixtures[index].extension});
         const kb::audio::AudioPlayResult result = backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
             .clipAssetId = validBase + index,
             .volume = 0.0F,
@@ -602,7 +603,27 @@ void RunFormatRejectionTest() {
             ("Truncated" + std::string{ fixture.extension });
         WriteBytes(truncated, std::span<const char>{ validBytes.data(), validBytes.size() / 2U });
 
-        for (const std::filesystem::path& rejectedPath : { invalidMagic, truncated }) {
+        std::vector<std::filesystem::path> rejectedPaths{invalidMagic, truncated};
+        if (fixture.extension == ".ogg") {
+            for (const auto& [name, offset] : std::array{
+                    std::pair{"FirstPageCrc", std::size_t{22U}},
+                    std::pair{"FinalPageCrc", validBytes.size() - 1U}}) {
+                auto changed = validBytes;
+                changed[offset] ^= 1;
+                const auto path = TestRoot() / (std::string{name} + ".ogg");
+                WriteBytes(path, changed);
+                rejectedPaths.push_back(path);
+            }
+            const auto truncatedTail = TestRoot() / "TruncatedTail.ogg";
+            WriteBytes(truncatedTail, std::span<const char>{validBytes}.first(validBytes.size() - 1U));
+            rejectedPaths.push_back(truncatedTail);
+            auto trailing = validBytes;
+            trailing.push_back(0);
+            const auto trailingPath = TestRoot() / "TrailingData.ogg";
+            WriteBytes(trailingPath, trailing);
+            rejectedPaths.push_back(trailingPath);
+        }
+        for (const std::filesystem::path& rejectedPath : rejectedPaths) {
             const std::uint64_t id = corruptId++;
             RegisterClip(scene, id, rejectedPath);
             const auto before = backend.ResourcesForTesting();
@@ -2422,13 +2443,13 @@ void RunClipResolverValidationTest(const std::filesystem::path& clipPath, Resolv
     Require(!resolver.Resolve(scene, 8603U).Succeeded(),
         "Audio clip resolver accepted imported metadata on a native source file");
 
-    const std::filesystem::path unsupportedPath = TestRoot() / "Unsupported.ogg";
+    const std::filesystem::path unsupportedPath = TestRoot() / "Unsupported.aac";
     std::filesystem::copy_file(clipPath, unsupportedPath, std::filesystem::copy_options::overwrite_existing);
     Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
                 .id = kb::assets::AssetId{ 8604U },
                 .type = "AudioClip",
                 .name = "UnsupportedPhysical",
-                .virtualPath = "/Audio/Unsupported.ogg",
+                .virtualPath = "/Audio/Unsupported.aac",
                 .physicalPath = unsupportedPath,
                 .contentHash = 8604U,
             }),

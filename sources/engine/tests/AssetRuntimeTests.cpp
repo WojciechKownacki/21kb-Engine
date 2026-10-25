@@ -1320,8 +1320,8 @@ void RunSceneAudioClipAssetDiscoveryTest() {
 }
 
 void RunAudioClipFormatCatalogTest() {
-    const std::array<std::string_view, 12U> unsupported{
-        ".ogg", ".aac", ".m4a", ".wma", ".aiff", ".aif",
+    const std::array<std::string_view, 11U> unsupported{
+        ".aac", ".m4a", ".wma", ".aiff", ".aif",
         ".xm", ".mod", ".s3m", ".it", ".mid", ".midi",
     };
     const std::vector<std::string> catalog = kb::assets::AssetImportCatalog::SupportedSourceExtensions();
@@ -1337,6 +1337,7 @@ void RunAudioClipFormatCatalogTest() {
             "A supported audio clip extension was not shared by catalog and loader");
     }
     kb::tests::Require(kb::audio::IsSupportedAudioClipExtension(".WAV")
+            && kb::audio::IsSupportedAudioClipExtension(".OGG")
             && kb::assets::AssetImportCatalog::ClassifyExtension(".FLAC") == kb::assets::AssetImportCategory::Audio,
         "Audio clip format matching must be case-insensitive");
     for (const std::string_view extension : unsupported) {
@@ -1349,7 +1350,7 @@ void RunAudioClipFormatCatalogTest() {
 
     ResetTestRoot();
     const std::filesystem::path supportedPath = TestRoot() / "Format.WAV";
-    const std::filesystem::path unsupportedPath = TestRoot() / "Format.ogg";
+    const std::filesystem::path unsupportedPath = TestRoot() / "Format.aac";
     WriteTextFile(supportedPath, "format fixture");
     WriteTextFile(unsupportedPath, "format fixture");
     const kb::assets::AssetMetadata metadata{

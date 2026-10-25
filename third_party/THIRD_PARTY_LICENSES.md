@@ -57,6 +57,17 @@ miniaudio can be used under either license option documented in its license
 file. If the MIT No Attribution option is chosen, no attribution is required by
 the license text.
 
+## stb_vorbis
+
+- Source: `third_party/miniaudio/extras/stb_vorbis.c` (version 1.22)
+- Author: Sean Barrett
+- Selected license: MIT
+- License file: `third_party/licenses/stb_vorbis.txt`
+
+The audio implementation compiles this existing bundled decoder for Ogg Vorbis.
+Its original source and embedded license remain intact. The game distribution
+manifest includes its attribution and selected license.
+
 ## ufbx
 
 - Repository: https://github.com/ufbx/ufbx
