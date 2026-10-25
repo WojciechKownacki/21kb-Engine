@@ -3475,8 +3475,9 @@ void RunAudioMixerCommandTests() {
     Require(kb::audio::AudioMixerAssetIO::Save(outside, *loaded), "outside mixer fixture failed");
     Require(run({"show", "--mixer", outside.string()}).exitCode != 0,
         "mixer lookup escaped the project assets");
-    loaded->snapshots.push_back({.name = "Quiet", .busVolumes = {{.bus = "Effects.Main", .volume = 0.1F}}});
-    Require(kb::audio::AudioMixerAssetIO::Save(mixerFile, *loaded), "mixer snapshot fixture failed");
+    Require(run({"set", "--mixer", "/Game/Audio/Main.kbmixer", "--add-snapshot", "Quiet",
+        "--snapshot", "Quiet", "--set-snapshot", "Effects.Main=0.1"}).exitCode == 0,
+        "mixer snapshot authoring failed");
     result = run({"set", "--mixer", "Assets/Audio/Main.kbmixer", "--bus", "Transient",
         "--set", "Output.mute=1", "--set", "Effects.Main.volume=0.5"});
     Require(result.exitCode == 0, "mixer edit failed: " + result.output);
@@ -3505,6 +3506,53 @@ void RunAudioMixerCommandTests() {
     scene = kb::scene::SceneDocumentService::Load(sceneFile);
     Require(scene.succeeded && scene.document.audioMixerAssetId == 0U && scene.document.audioMixerSnapshot.empty(),
         "clearing the mixer left a scene reference");
+
+    const auto snapshotFile = root / "Assets/Audio/Snapshots.kbmixer";
+    result = run({"new", "--name", "Snapshots", "--bus", "Output", "--bus", "Layer=Low",
+        "--add-snapshot", "Quiet=Low", "--snapshot", "Quiet=Low",
+        "--set-snapshot", "Layer=Low=0.25", "--set-snapshot", "Layer=Low=0.125"});
+    Require(result.exitCode == 0, "snapshot creation failed: " + result.output);
+    auto snapshots = kb::audio::AudioMixerAssetIO::Load(snapshotFile);
+    Require(snapshots && snapshots->snapshots.size() == 1U && snapshots->snapshots[0].name == "Quiet=Low"
+        && snapshots->snapshots[0].busVolumes.size() == 1U && snapshots->snapshots[0].busVolumes[0].bus == "Layer=Low"
+        && snapshots->snapshots[0].busVolumes[0].volume == 0.125F, "snapshot overrides did not upsert or round trip");
+    const auto editSnapshot = [&](std::vector<std::string> arguments) {
+        arguments.insert(arguments.begin(), "set");
+        arguments.insert(arguments.end(), {"--mixer", "/Game/Audio/Snapshots.kbmixer"});
+        return run(std::move(arguments));
+    };
+    Require(editSnapshot({"--add-snapshot", "Loud"}).exitCode == 0, "adding an empty snapshot failed");
+    const auto originalSnapshots = bytes(snapshotFile);
+    for (const auto& invalid : std::vector<std::vector<std::string>>{
+        {"--add-snapshot", "Quiet=Low"}, {"--remove-snapshot", "Missing"},
+        {"--snapshot", "Missing", "--set-snapshot", "Output=0.2"},
+        {"--set-snapshot", "Output=0.2"}, {"--snapshot", "Quiet=Low"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "invalid"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "=0.2"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "Missing=0.2"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "Output=nan"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "Output=inf"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "Output=-1"},
+        {"--snapshot", "Quiet=Low", "--set-snapshot", "Output=1e100"},
+        {"--snapshot", "Quiet=Low", "--clear-snapshot-bus", "Missing"},
+        {"--remove-bus", "Layer=Low"},
+        {"--set", "Output.volume=0.75", "--snapshot", "Quiet=Low", "--set-snapshot", "Missing=1"}}) {
+        Require(editSnapshot(invalid).exitCode != 0 && bytes(snapshotFile) == originalSnapshots,
+            "a rejected snapshot batch modified the saved mixer");
+    }
+    Require(run({"new", "--name", "InvalidSnapshots", "--add-snapshot", "Quiet", "--snapshot", "Quiet",
+        "--set-snapshot", "Missing=0.5"}).exitCode != 0
+        && !std::filesystem::exists(root / "Assets/Audio/InvalidSnapshots.kbmixer"),
+        "an invalid new snapshot asset was saved");
+    Require(editSnapshot({"--snapshot", "Quiet=Low", "--clear-snapshot-bus", "Layer=Low",
+        "--remove-bus", "Layer=Low"}).exitCode == 0, "atomic removal of a bus and its snapshot override failed");
+    snapshots = kb::audio::AudioMixerAssetIO::Load(snapshotFile);
+    Require(snapshots && snapshots->buses.size() == 1U && snapshots->snapshots.size() == 2U
+        && snapshots->FindSnapshot("Quiet=Low")->busVolumes.empty(), "cleared snapshot override did not persist");
+    Require(editSnapshot({"--remove-snapshot", "Quiet=Low"}).exitCode == 0, "snapshot removal failed");
+    snapshots = kb::audio::AudioMixerAssetIO::Load(snapshotFile);
+    Require(snapshots && snapshots->snapshots.size() == 1U && snapshots->snapshots[0].name == "Loud"
+        && snapshots->FindBus("Output")->volume == 1.0F, "snapshot removal changed unrelated mixer data");
 }
 
 } // namespace

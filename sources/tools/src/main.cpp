@@ -113,6 +113,10 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                  show --project <dir> --mixer <path>
                  assign --project <dir> [--scene <path>] --mixer <path>|none
                      [--snapshot <Name>]   (parent '-' means the implicit master)
+               Snapshot edits for new/set: [--add-snapshot <Name> ...]
+                     [--snapshot <Name> --set-snapshot Bus=volume ...]
+               Additional set edits: [--remove-snapshot <Name> ...]
+                     [--snapshot <Name> --clear-snapshot-bus <Bus> ...]
   animator     Build an Animator Controller, the state machine that picks a character's
                animation; every change is validated and saved at once.
                  new --project <dir> --name <Name> --clip <clip> [--clip ...]

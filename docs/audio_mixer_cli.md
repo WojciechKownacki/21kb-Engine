@@ -23,8 +23,23 @@ contain dots; the last dot before `=` separates the property name.
 
 Duplicate buses, cycles, missing parents, invalid values, and dangling snapshot
 references reject the operation without modifying the existing mixer file. Edits
-preserve existing snapshots. Snapshot creation and transition authoring are not
-provided by this command.
+preserve existing snapshots.
+
+Use `--add-snapshot Name` with `new` or `set` to create a snapshot. Select it with
+`--snapshot Name` and repeat `--set-snapshot Bus=volume` to add or replace bus
+volume overrides. The last `=` separates the bus name from its volume. Editing
+also supports `--clear-snapshot-bus Bus` to return that bus to its authored gain,
+and `--remove-snapshot Name` to delete a snapshot. Snapshot additions, removals,
+override removals, and override writes occur in that order, after bus edits;
+the entire candidate is validated before writing. Removing a bus and its
+snapshot override in one batch is supported. Invalid snapshot edits leave both
+the saved bus graph and snapshot data unchanged. Timed transitions are runtime
+state and are not authored by these asset commands.
+
+```sh
+kb_cli audio-mixer set --project Sample --mixer /Game/Audio/Main.kbmixer --add-snapshot Quiet --snapshot Quiet --set-snapshot Effects=0.25
+kb_cli audio-mixer assign --project Sample --mixer /Game/Audio/Main.kbmixer --snapshot Quiet
+```
 
 Assignment updates the default scene, or the scene selected with `--scene`.
 `--snapshot Name` selects an existing snapshot; invalid mixers or missing snapshots

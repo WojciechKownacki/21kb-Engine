@@ -59,6 +59,54 @@ struct MixerFile final {
     return MixerFile{file, "/Game/" + Utf8Text(relative)};
 }
 
+[[nodiscard]] std::optional<float> ParseGain(std::string_view value) {
+    double gain = 0.0;
+    if (!kb::library::TryParseDouble(value, gain) || !std::isfinite(gain) || gain < 0.0
+        || gain > static_cast<double>(std::numeric_limits<float>::max())) return std::nullopt;
+    return static_cast<float>(gain);
+}
+
+[[nodiscard]] std::string ApplySnapshotEdits(kb::audio::AudioMixerAsset& mixer, const ArgumentList& arguments) {
+    for (const auto& name : arguments.Options("--add-snapshot")) {
+        mixer.snapshots.push_back(kb::audio::AudioMixerSnapshot{.name = name});
+    }
+    for (const auto& name : arguments.Options("--remove-snapshot")) {
+        if (std::erase_if(mixer.snapshots, [&](const auto& snapshot) { return snapshot.name == name; }) == 0U) {
+            return "audio snapshot does not exist: " + name;
+        }
+    }
+    const auto selected = arguments.Option("--snapshot");
+    const auto settings = arguments.Options("--set-snapshot");
+    const auto removals = arguments.Options("--clear-snapshot-bus");
+    if (settings.empty() && removals.empty()) {
+        return selected.has_value() ? "--snapshot requires --set-snapshot or --clear-snapshot-bus" : "";
+    }
+    if (!selected.has_value()) return "snapshot edits require --snapshot <Name>";
+    const auto snapshot = std::find_if(mixer.snapshots.begin(), mixer.snapshots.end(),
+        [&](const auto& item) { return item.name == *selected; });
+    if (snapshot == mixer.snapshots.end()) return "audio snapshot does not exist: " + *selected;
+    for (const auto& bus : removals) {
+        if (std::erase_if(snapshot->busVolumes, [&](const auto& item) { return item.bus == bus; }) == 0U) {
+            return "snapshot bus override does not exist: " + bus;
+        }
+    }
+    for (const auto& setting : settings) {
+        const auto equals = setting.rfind('=');
+        if (equals == std::string::npos || equals == 0U) return "--set-snapshot requires Bus=volume: " + setting;
+        const auto bus = std::string_view{setting}.substr(0U, equals);
+        const auto gain = ParseGain(std::string_view{setting}.substr(equals + 1U));
+        if (!gain.has_value()) return "snapshot volume must be finite and nonnegative: " + setting;
+        const auto existing = std::find_if(snapshot->busVolumes.begin(), snapshot->busVolumes.end(),
+            [&](const auto& item) { return item.bus == bus; });
+        if (existing == snapshot->busVolumes.end()) {
+            snapshot->busVolumes.push_back({.bus = std::string{bus}, .volume = *gain});
+        } else {
+            existing->volume = *gain;
+        }
+    }
+    return "";
+}
+
 [[nodiscard]] std::string ApplyEdits(kb::audio::AudioMixerAsset& mixer, const ArgumentList& arguments) {
     for (const auto& name : arguments.Options("--bus")) {
         mixer.buses.push_back(kb::audio::AudioMixerBus{.name = name});
@@ -82,12 +130,11 @@ struct MixerFile final {
         if (field == "parent") {
             bus->parentBus = value == "-" ? std::string{} : std::string{value};
         } else if (field == "volume") {
-            double gain = 0.0;
-            if (!kb::library::TryParseDouble(value, gain) || !std::isfinite(gain) || gain < 0.0
-                || gain > static_cast<double>(std::numeric_limits<float>::max())) {
+            const auto gain = ParseGain(value);
+            if (!gain.has_value()) {
                 return "audio bus volume must be finite and nonnegative: " + setting;
             }
-            bus->volume = static_cast<float>(gain);
+            bus->volume = *gain;
         } else if (field == "mute") {
             if (value != "true" && value != "false" && value != "0" && value != "1") {
                 return "audio bus mute requires true, false, 0 or 1: " + setting;
@@ -97,6 +144,7 @@ struct MixerFile final {
             return "unknown audio bus field (parent, volume, mute): " + setting;
         }
     }
+    if (const auto error = ApplySnapshotEdits(mixer, arguments); !error.empty()) return error;
     return kb::audio::ValidateAudioMixerAsset(mixer);
 }
 
@@ -124,8 +172,10 @@ int RunAudioMixerCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
     const auto& action = arguments.Positionals().front();
-    constexpr std::array<std::string_view, 5U> newOptions{"--project", "--name", "--folder", "--bus", "--set"};
-    constexpr std::array<std::string_view, 5U> setOptions{"--project", "--mixer", "--bus", "--remove-bus", "--set"};
+    constexpr std::array<std::string_view, 8U> newOptions{"--project", "--name", "--folder", "--bus", "--set",
+        "--add-snapshot", "--snapshot", "--set-snapshot"};
+    constexpr std::array<std::string_view, 10U> setOptions{"--project", "--mixer", "--bus", "--remove-bus", "--set",
+        "--add-snapshot", "--remove-snapshot", "--snapshot", "--set-snapshot", "--clear-snapshot-bus"};
     constexpr std::array<std::string_view, 2U> showOptions{"--project", "--mixer"};
     constexpr std::array<std::string_view, 4U> assignOptions{"--project", "--scene", "--mixer", "--snapshot"};
     std::span<const std::string_view> allowed;
@@ -183,10 +233,13 @@ int RunAudioMixerCommand(const ArgumentList& arguments, CommandIo io) {
         ShowMixer(file, mixer, io);
         return 0;
     }
-    if (action == "set" && arguments.Options("--set").empty() && arguments.Options("--bus").empty()
-        && arguments.Options("--remove-bus").empty()) {
-        io.err << "error: audio-mixer set requires --set, --bus or --remove-bus\n";
-        return 1;
+    if (action == "set") {
+        constexpr std::array<std::string_view, 7U> edits{"--set", "--bus", "--remove-bus", "--add-snapshot",
+            "--remove-snapshot", "--set-snapshot", "--clear-snapshot-bus"};
+        if (std::none_of(edits.begin(), edits.end(), [&](auto option) { return !arguments.Options(option).empty(); })) {
+            io.err << "error: audio-mixer set requires a bus or snapshot edit\n";
+            return 1;
+        }
     }
     if (const auto error = ApplyEdits(mixer, arguments); !error.empty()) {
         io.err << "error: " << error << '\n';
