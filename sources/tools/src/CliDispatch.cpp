@@ -220,6 +220,20 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                TorusSwirl, Separation, ...) to an emitter / remove one by id.
                  --project <dir> --effect <path> --emitter <id> --type <Type> [--target <id>]
                  | --module <id>
+  batch        Run many kb_cli commands as one transaction on a project: all of them
+               take effect, or none (one fails: every file below the project is put back
+               and the exit code is 1). --dry-run runs them the same way, then puts the
+               files back and prints what would change, file by file with a short diff.
+                 --project <dir> --file <operations> [--dry-run]
+               (the file has one command per line, # starts a comment, "quotes" keep
+               spaces together: entity add --name Hero; a .json file or a file starting
+               with [ holds an array of operations, each an array of words. --project is
+               added to each; files outside the project, and Binaries, Intermediate,
+               Saved, Library, Build, .git, are not restored; a project over 512 MiB is
+               refused; batch and mcp cannot be used in it. With --json it prints
+               {"schema":"21kb.batch/v1","ok","dryRun","applied","rolledBack",
+               "failedOperation","operations":[...],"changes":[{"path","status",
+               "bytesBefore","bytesAfter","diff"}],"errors":[...]})
   script-build Build the project's C++ scripts (or one), as Play and the cooker
                do. Exits 1 when a build fails.
                  --project <dir> [--script <path>]
@@ -364,7 +378,7 @@ Global options:
                   "command":"entity","output":"<stdout>","errors":["<stderr line>",...]}
                "ok" is true when the exit code is 0; "errors" lists what the command
                wrote to stderr. A command that prints its own JSON (audio-mixer,
-               run --report, api --print json) keeps it unchanged. mcp ignores --json.
+               run --report, api --print json, batch) keeps it unchanged. mcp ignores --json.
   --dry-run    Only for the commands that name it (audio-mixer new/set).
 
 Exit codes: 0 on success, 1 on any failure (bad arguments, an unknown command, a
@@ -483,6 +497,11 @@ std::optional<int> RunNamedCommand(
         return 1;
 #endif
     }
+    if (command == "batch") {
+        return RunBatchCommand(arguments, io, [&in](std::span<const std::string> words, CommandIo target) {
+            return RunCli(words, in, target);
+        });
+    }
     if (command == "script-build") {
         return RunScriptBuildCommand(arguments, io);
     }
@@ -520,7 +539,8 @@ std::optional<int> RunNamedCommand(
     return std::nullopt;
 }
 
-// Text as JSON can carry it: bytes that are not valid UTF-8 become U+FFFD.
+} // namespace
+
 std::string ToValidUtf8(std::string_view text) {
     std::string result;
     result.reserve(text.size());
@@ -544,6 +564,8 @@ std::string ToValidUtf8(std::string_view text) {
     }
     return result;
 }
+
+namespace {
 
 // The command's stderr, one entry per non-empty line, without the "error: " prefix.
 kb::core::JsonValue StderrLines(const std::string& text) {
@@ -616,7 +638,7 @@ int RunCli(std::span<const std::string> args, std::istream& in, CommandIo io) {
 
     // Only audio-mixer and run --report act on --json themselves; for the rest it asks for the
     // result object, and the command must not see it.
-    if (json && command != "audio-mixer" && !(command == "run" && arguments.Option("--report").has_value())) {
+    if (json && command != "audio-mixer" && command != "batch" && !(command == "run" && arguments.Option("--report").has_value())) {
         std::vector<std::string> withoutJson;
         for (const std::string& token : rest) {
             if (token != "--json") withoutJson.push_back(token);

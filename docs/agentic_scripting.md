@@ -59,6 +59,7 @@ scene in the editor and press Play.
 | `kb_cli scene-list --project <dir> --scene <path>` | show what's in a scene |
 | `kb_cli scene-attach --project <dir> --scene <path> --node <name> --script <path>` | attach a script to a node |
 | `kb_cli run --project <dir> --scene <path> --frames <n>` | run a scene without the editor and report errors |
+| `kb_cli batch --project <dir> --file <list> [--dry-run]` | run many commands as one all-or-nothing transaction, or preview their changes |
 
 ## Scripting `kb_cli` without a person at the keyboard
 
@@ -85,6 +86,34 @@ No other code is returned. `help`, `--help`, `-h` and a bare `kb_cli` print the 
   on stdout still come as the object above.
 - The whole output is collected first, so a long command prints nothing until it ends.
   `mcp` ignores `--json`; it speaks JSON-RPC on stdout.
+
+**Several changes as one transaction.** `batch` runs a list of commands so that all of them
+take effect or none does:
+
+```
+kb_cli batch --project <dir> --file changes.txt [--dry-run] [--json]
+```
+
+`changes.txt` has one command per line (`#` starts a comment, quotes keep spaces together):
+
+```
+entity add --name Hero --position 0,1,0
+component add --entity Hero --type Light --set intensity=2
+script-new --name HeroLogic --language lua
+```
+
+A JSON file (an array of operations, each an array of words) works too. `--project` is added
+to every line. If an operation fails, every file of the project is put back as it was and the
+exit code is 1; the failing operation is named in the output. With `--dry-run` the operations
+run the same way and are then undone, so you see what would change without writing anything:
+each file as added, modified or deleted, with a short text diff (for a scene, the nodes and
+their components that differ). `--json` prints `21kb.batch/v1` with `operations`, `changes`
+(`path`, `status`, `bytesBefore`, `bytesAfter`, `diff`), `applied`, `rolledBack` and
+`failedOperation`.
+
+The transaction covers the files of the project folder except `Binaries`, `Intermediate`,
+`Saved`, `Library`, `Build` and `.git`; files an operation writes elsewhere are not restored.
+A project over 512 MiB is refused, and `batch` and `mcp` cannot be used inside a batch.
 
 ## Good to know
 

@@ -54,6 +54,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <memory>
 #include <span>
@@ -4109,6 +4110,102 @@ void RunCliJsonTests() {
         "a failing command with JSON of its own must report the failure as a result");
 }
 
+// Every file of a folder with its bytes: two of these are equal when nothing was touched.
+[[nodiscard]] std::map<std::string, std::string> Fingerprint(const std::filesystem::path& root) {
+    std::map<std::string, std::string> files;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+        if (!entry.is_regular_file()) continue;
+        std::ifstream input{ entry.path(), std::ios::binary };
+        files[std::filesystem::relative(entry.path(), root).generic_string()] =
+            std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    }
+    return files;
+}
+
+void RunBatchCommandTests() {
+    const std::filesystem::path parent = TestRoot() / "batch_project";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Scena", "--template", "Empty" }).exitCode == 0,
+        "new failed");
+    const std::filesystem::path projectPath = parent / "Scena";
+    const std::string project = projectPath.string();
+    const std::filesystem::path good = parent / "good.txt";
+    const std::filesystem::path bad = parent / "bad.txt";
+    WriteTextFile(good, "# three changes that belong together\n"
+        "entity add --name Alpha --position 1,2,3\n"
+        "script-new --name Probe --language lua\n"
+        "component add --entity Alpha --type Light --set intensity=2.5\n");
+    // The fourth operation fails (a second Light is refused) after three have written files.
+    WriteTextFile(bad, "entity add --name Alpha\n"
+        "script-new --name Probe --language lua\n"
+        "component add --entity Alpha --type Light\n"
+        "component add --entity Alpha --type Light\n");
+
+    const auto before = Fingerprint(projectPath);
+
+    const CliRun failed = RunCliProgram({ "batch", "--project", project, "--file", bad.string() });
+    Require(failed.exitCode == 1 && Contains(failed.out, "rolled back: operation 4 failed"),
+        "a failing operation must fail the batch and say so: " + failed.out + failed.err);
+    Require(Fingerprint(projectPath) == before, "a failed batch must leave every file as it was");
+
+    const CliRun failedJson = RunCliProgram({ "batch", "--project", project, "--file", bad.string(), "--json" });
+    JsonValue failedResult;
+    std::string parseError;
+    Require(failedJson.exitCode == 1 && JsonValue::Parse(failedJson.out, failedResult, parseError) &&
+            failedResult.Find("schema")->AsString() == "21kb.batch/v1" && !failedResult.Find("ok")->AsBool() &&
+            failedResult.Find("rolledBack")->AsBool() && failedResult.Find("failedOperation")->AsNumber() == 4.0 &&
+            failedResult.Find("operations")->Size() == 4U &&
+            failedResult.Find("operations")->At(3U)->Find("exitCode")->AsNumber() != 0.0 &&
+            failedResult.Find("changes")->Size() == 0U,
+        "a failed batch must report the failing operation as JSON: " + failedJson.out);
+    Require(Fingerprint(projectPath) == before, "a failed batch with --json must leave every file as it was");
+
+    const CliRun dry = RunCliProgram({ "batch", "--project", project, "--file", good.string(), "--dry-run", "--json" });
+    JsonValue dryResult;
+    Require(dry.exitCode == 0 && JsonValue::Parse(dry.out, dryResult, parseError) && dryResult.Find("ok")->AsBool() &&
+            dryResult.Find("dryRun")->AsBool() && !dryResult.Find("applied")->AsBool() && dryResult.Find("rolledBack")->AsBool(),
+        "a dry run must succeed without applying: " + dry.out);
+    Require(Fingerprint(projectPath) == before, "a dry run must not change any file");
+    bool sceneDiff = false;
+    bool scriptAdded = false;
+    const JsonValue& changes = *dryResult.Find("changes");
+    for (std::size_t index = 0U; index < changes.Size(); ++index) {
+        const JsonValue& change = *changes.At(index);
+        const std::string& path = change.Find("path")->AsString();
+        if (path.ends_with(".21kbscene") && change.Find("status")->AsString() == "modified") {
+            for (std::size_t line = 0U; line < change.Find("diff")->Size(); ++line) {
+                const std::string& text = change.Find("diff")->At(line)->AsString();
+                sceneDiff = sceneDiff || (text.starts_with("+") && Contains(text, "Alpha"));
+            }
+        }
+        scriptAdded = scriptAdded || (path.ends_with("Probe.lua") && change.Find("status")->AsString() == "added" &&
+                                      change.Find("diff")->Size() > 1U);
+    }
+    Require(sceneDiff && scriptAdded, "a dry run must list the scene diff and the new script: " + dry.out);
+    const CliRun dryText = RunCliProgram({ "batch", "--project", project, "--file", good.string(), "--dry-run" });
+    Require(dryText.exitCode == 0 && Contains(dryText.out, "dry run:") && Contains(dryText.out, "modified ") &&
+            Contains(dryText.out, "added "),
+        "a text dry run must list the changes: " + dryText.out);
+
+    const CliRun applied = RunCliProgram({ "batch", "--project", project, "--file", good.string() });
+    Require(applied.exitCode == 0 && Contains(applied.out, "applied: 3 operation(s)"), "a good batch must apply: " + applied.out + applied.err);
+    Require(Fingerprint(projectPath) != before, "a good batch must write its files");
+    Require(std::filesystem::exists(projectPath / "Assets" / "Scripts" / "Probe.lua"), "the batch did not create its script");
+    const CliRun scene = RunCliProgram({ "scene-list", "--project", project, "--scene", "Assets/Scenes/Main.21kbscene" });
+    Require(scene.exitCode == 0 && Contains(scene.out, "Alpha"), "the batch did not save its scene changes: " + scene.out);
+
+    // Batch and mcp cannot be nested, and one transaction is one project.
+    const auto afterApply = Fingerprint(projectPath);
+    WriteTextFile(parent / "nested.txt", "entity add --name Gamma\nbatch --file good.txt\n");
+    WriteTextFile(parent / "other.txt", "entity add --name Gamma\nentity add --name Delta --project " + (parent / "Elsewhere").string() + "\n");
+    Require(RunCliProgram({ "batch", "--project", project, "--file", (parent / "nested.txt").string() }).exitCode == 1 &&
+            RunCliProgram({ "batch", "--project", project, "--file", (parent / "other.txt").string() }).exitCode == 1,
+        "an operation that starts a batch or names another project must be refused");
+    Require(Fingerprint(projectPath) == afterApply, "a refused batch must not run any operation");
+    Require(RunCliProgram({ "batch", "--project", project }).exitCode == 1, "batch without --file must fail");
+}
+
 int main(int argc, char** argv) {
 #if KB_CLI_RENDERER
     kb::render::tests::InstallRendererAssertionPolicy();
@@ -4127,9 +4224,14 @@ int main(int argc, char** argv) {
         RunCliJsonTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "batch") {
+        RunBatchCommandTests();
+        return EXIT_SUCCESS;
+    }
     if (argc != 1) return EXIT_FAILURE;
     RunAudioMixerCommandTests();
     RunCliJsonTests();
+    RunBatchCommandTests();
     RunMiniJsonTests();
     RunArgumentListTests();
     RunFlexibleAssetPathTests();
