@@ -53,6 +53,17 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <psapi.h>
+#endif
+
 namespace {
 
 void Require(bool condition, std::string_view message) {
@@ -734,6 +745,130 @@ void RunMixerDspRuntimeTest() {
     const auto resources = backend.ResourcesForTesting();
     Require(resources.buses == 0U && resources.voices == 0U && resources.sourceSounds == 0U, "DSP shutdown retained native routing resources");
     std::cout << "Mixer DSP runtime realFrames=" << frames << " voicePreserved=1 failedEditPreserved=1 mutedTail=0 shutdownBuses=0\n";
+}
+
+void RunMixerDspWorkloadBenchmark() {
+    using Playback = kb::audio::AudioPlayback;
+    using Kind = kb::audio::AudioDspKind;
+    const auto memory = [] {
+        std::array<std::uint64_t, 2U> values{};
+#if defined(_WIN32)
+        PROCESS_MEMORY_COUNTERS_EX counters{};
+        if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters)))
+            values = {static_cast<std::uint64_t>(counters.WorkingSetSize), static_cast<std::uint64_t>(counters.PrivateUsage)};
+#endif
+        return values;
+    };
+    const auto cpu = [](bool process) -> std::uint64_t {
+#if defined(_WIN32)
+        FILETIME created{}, exited{}, kernel{}, user{};
+        const bool valid = process ? GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user) != 0
+            : GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user) != 0;
+        if (valid) return ((static_cast<std::uint64_t>(kernel.dwHighDateTime) << 32U) + kernel.dwLowDateTime
+            + (static_cast<std::uint64_t>(user.dwHighDateTime) << 32U) + user.dwLowDateTime) * 100U;
+#else
+        static_cast<void>(process);
+#endif
+        return 0U;
+    };
+    for (const bool effects : {false, true}) {
+        const auto before = memory();
+        std::array<std::uint64_t, 2U> active{};
+        std::uint64_t realFrames = 0U, mixWall = 0U, threadCpu = 0U, processCpu = 0U;
+        std::array<std::uint64_t, 12U> batches{};
+        double peak = 0.0, energy = 0.0;
+        const std::size_t busCount = effects ? 8U : 1U, voiceCount = busCount * 8U;
+        {
+            kb::scene::Scene scene;
+            const auto root = TestRoot() / (effects ? "EffectsWorkload" : "PlainWorkload");
+            Require(scene.Assets().MountProject(root), "Audio workload project did not mount");
+            std::vector<std::filesystem::path> clips;
+            for (std::size_t i = 0U; i < busCount; ++i) {
+                const auto file = TestRoot() / ("WorkloadTone" + std::to_string(i) + ".wav");
+                WriteToneWav(file); clips.push_back(file);
+            }
+            const auto imported = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), clips, "/Game/Audio");
+            Require(imported.Succeeded() && imported.items.size() == busCount, "Audio workload clips did not import");
+            kb::audio::AudioMixerAsset mixer;
+            for (std::size_t i = 0U; i < busCount; ++i) {
+                kb::audio::AudioMixerBus bus{.name = "Bus" + std::to_string(i)};
+                if (effects) bus.effects = {
+                    {.id = "Low", .parameters = {.kind = Kind::LowPass, .cutoffHz = 12000.0}},
+                    {.id = "High", .parameters = {.kind = Kind::HighPass, .cutoffHz = 80.0}},
+                    {.id = "Tone", .parameters = {.kind = Kind::PeakingEqualizer, .cutoffHz = 440.0, .gainDb = 6.0}},
+                    {.id = "Echo", .parameters = {.kind = Kind::Delay, .delayMs = 20.0, .feedback = 0.4F, .wet = 0.2F, .dry = 0.8F}},
+                    {.id = "Room", .parameters = {.kind = Kind::Reverb, .wet = 0.2F, .dry = 0.8F}},
+                    {.id = "Dynamics", .parameters = {.kind = Kind::Compressor, .thresholdDb = -24.0, .ratio = 3.0}},
+                    {.id = "Ceiling", .parameters = {.kind = Kind::Limiter}}};
+                mixer.buses.push_back(std::move(bus));
+            }
+            const auto path = root / "Workload.kbmixer";
+            constexpr kb::assets::AssetId mixerId{9701U};
+            Require(kb::audio::AudioMixerAssetIO::Save(path, mixer)
+                && scene.Assets().Manager().RegisterAsset({.id = mixerId, .type = kb::audio::kAudioMixerAssetType,
+                    .name = "Workload", .virtualPath = "/Game/Workload.kbmixer", .physicalPath = path, .contentHash = 1U}),
+                "Audio workload mixer did not register");
+            kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerId.value);
+            kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+            Playback::RegisterBackend(scene, backend);
+            Require(Playback::ConfigureOffline(scene), "Audio workload provider did not configure offline");
+            std::vector<std::uint64_t> voices;
+            for (std::size_t i = 0U; i < voiceCount; ++i) {
+                const auto voice = Playback::PlayOneShot(scene, {.clipAssetId = imported.items[i / 8U].id.value,
+                    .outputBus = mixer.buses[i / 8U].name, .volume = 0.5F / static_cast<float>(voiceCount), .loop = true, .spatial = false});
+                Require(voice.Succeeded(), "Audio workload voice did not start"); voices.push_back(voice.voiceId);
+            }
+            const auto verifyVoices = [&] {
+                Require(backend.ResourcesForTesting().voices == voiceCount, "Audio workload silently stole a voice");
+                for (const auto voice : voices) Require(Playback::IsVoicePlaying(scene, voice), "Audio workload lost a playing voice");
+            };
+            verifyVoices();
+            for (int i = 0; i < 8; ++i) Require(Playback::RenderOffline(scene, 1024U).succeeded, "Audio workload warmup did not execute");
+            active = memory();
+            const auto threadStart = cpu(false), processStart = cpu(true);
+            for (auto& batch : batches) {
+                for (int i = 0; i < 32; ++i) {
+                    const auto begin = std::chrono::steady_clock::now();
+                    const auto pcm = Playback::RenderOffline(scene, 1024U);
+                    batch += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - begin).count());
+                    Require(pcm.succeeded && pcm.frames == 1024U && pcm.channels == 2U && pcm.sampleRate == 48000U
+                        && pcm.samples.size() == 2048U, "Audio workload did not produce actual complete PCM");
+                    realFrames += pcm.frames;
+                    for (const float sample : pcm.samples) {
+                        Require(std::isfinite(sample), "Audio workload produced non-finite PCM");
+                        peak = std::max(peak, std::abs(static_cast<double>(sample))); energy += static_cast<double>(sample) * sample;
+                    }
+                }
+                mixWall += batch;
+            }
+            threadCpu = cpu(false) - threadStart; processCpu = cpu(true) - processStart;
+            verifyVoices();
+            const auto report = Playback::DspReport(scene);
+            Require(report.buses.size() == busCount, "Audio workload lost its active buses");
+            for (const auto& bus : report.buses) Require(bus.initialized && bus.settingsCurrent && bus.activeEffects == (effects ? 7U : 0U),
+                "Audio workload skipped requested DSP processing");
+            Require(realFrames == 393216U && peak > 1e-5 && energy > 0.0, "Audio workload readback is empty or silent");
+            Playback::UnregisterBackend(scene, backend); backend.Shutdown();
+            const auto released = backend.ResourcesForTesting();
+            Require(released.voices == 0U && released.buses == 0U && released.decoders == 0U, "Audio workload shutdown retained native resources");
+        }
+        const auto after = memory();
+        std::sort(batches.begin(), batches.end());
+        std::cout << "Audio workload kind=" << (effects ? "effects" : "plain") << " buses=" << busCount << " voices=" << voiceCount
+            << " realFrames=" << realFrames << " mixWallNs=" << mixWall << " medianBatchMixWallNs=" << batches[batches.size()/2U]
+            << " maxBatchMixWallNs=" << batches.back() << " probeOwnerThreadCpuNs=";
+        if (threadCpu == 0U) std::cout << "unavailable"; else std::cout << threadCpu;
+        std::cout << " probeProcessCpuNs=";
+        if (processCpu == 0U) std::cout << "unavailable"; else std::cout << processCpu;
+        const auto printMemory = [](std::string_view label, std::uint64_t value) {
+            std::cout << ' ' << label << '=';
+            if (value == 0U) std::cout << "unavailable"; else std::cout << value;
+        };
+        printMemory("rssBefore", before[0]); printMemory("rssActive", active[0]); printMemory("rssAfterScene", after[0]);
+        printMemory("privateCommitBefore", before[1]); printMemory("privateCommitActive", active[1]); printMemory("privateCommitAfterScene", after[1]);
+        std::cout << " peak=" << peak << " rms=" << std::sqrt(energy / static_cast<double>(realFrames * 2U)) << '\n';
+    }
 }
 
 void RunMixerDspConcurrentTest(bool deviceCallback) {
@@ -3120,6 +3255,7 @@ int RunTests(int argc, char** argv) {
     const std::filesystem::path clipPath = TestRoot() / "Runtime.wav";
     WriteSilentWav(clipPath);
     const std::string_view filter = argc > 1 ? std::string_view{ argv[1] } : std::string_view{};
+    if (filter == "mixer-dsp-workload") RunMixerDspWorkloadBenchmark();
     if (filter.empty() || filter == "mixer-dsp") {
         RunMixerDspAssetTest();
         RunMixerDspRuntimeTest();

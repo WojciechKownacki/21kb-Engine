@@ -177,6 +177,8 @@ if(BUILD_TESTING)
     )
 
     add_test(NAME kb_audio_runtime_tests COMMAND $<TARGET_FILE:kb_audio_runtime_tests>)
+    add_test(NAME kb_audio_mixer_workload COMMAND $<TARGET_FILE:kb_audio_runtime_tests> mixer-dsp-workload)
+    set_tests_properties(kb_audio_mixer_workload PROPERTIES LABELS "audio;performance" TIMEOUT 20)
     set_tests_properties(kb_audio_runtime_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     kb_apply_quality_gates(kb_audio_runtime_tests)
 endif()

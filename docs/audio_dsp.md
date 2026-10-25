@@ -244,3 +244,23 @@ The remaining six authored stages retain their bypassed parameters. Mute,
 unmute and an intentionally incorrect assertion are checked in the package.
 This workflow runs in native Windows Release; full editor ASan execution,
 meters, dedicated mixer panels and runtime preview qualification remain pending.
+
+`kb_audio_runtime_tests mixer-dsp-workload` (CTest `kb_audio_mixer_workload`)
+provides a short repeatable performance workload. It reads 393216 actual stereo
+frames per case at 48 kHz: one bus with eight voices, then eight buses with
+64 voices and all seven active effect kinds on each bus. Eight different clip
+IDs respect the per-clip voice limit; every requested voice and effect must
+remain active, PCM must be finite and non-silent, and native routing/decoder
+resources must reach zero on shutdown.
+
+The report separates mixing wall time from owner-thread and process CPU time
+measured with native Windows counters. CPU time includes the same PCM
+verification work in both cases; CPU accounting can be coarser than the wall
+timer. Twelve batches each contain 32 reads of 1024
+frames; their median and maximum mixing times are batch totals. Process RSS and
+private committed bytes are sampled before construction, while active and
+after scene destruction. These are sampled process values, not allocator
+requests or a measured memory peak. Unavailable counters say `unavailable`.
+This offline workload is a baseline for changes; it does not establish device
+callback deadlines, audible latency, real-time scheduling or a performance
+budget on other machines. Sanitized runs check correctness, not release speed.
