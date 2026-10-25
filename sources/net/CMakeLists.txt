@@ -7,12 +7,14 @@ add_library(kb_net STATIC
     include/kb/net/Prediction.hpp
     include/kb/net/Replication.hpp
     include/kb/net/Rpc.hpp
+    include/kb/net/SceneReplication.hpp
     include/kb/net/Session.hpp
     include/kb/net/Transport.hpp
     src/Host.cpp
     src/Loopback.cpp
     src/Replication.cpp
     src/Rpc.cpp
+    src/SceneReplication.cpp
     src/Session.cpp
     src/UdpTransport.cpp
     src/Wire.hpp
@@ -45,4 +47,29 @@ if(BUILD_TESTING)
     add_test(NAME kb_net_replication_tests COMMAND $<TARGET_FILE:kb_net_replication_tests>)
     set_tests_properties(kb_net_replication_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120 LABELS "network;correctness")
     kb_apply_quality_gates(kb_net_replication_tests)
+endif()
+
+# The dedicated server: a project's scene without a window or a renderer, replicated to clients over UDP.
+add_library(kb_net_server STATIC
+    server/DedicatedServer.cpp
+    server/DedicatedServer.hpp
+)
+target_include_directories(kb_net_server PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/server)
+target_link_libraries(kb_net_server PUBLIC kb_net)
+kb_apply_quality_gates(kb_net_server)
+
+add_executable(kb_dedicated_server server/ServerMain.cpp)
+target_link_libraries(kb_dedicated_server PRIVATE kb_net_server)
+# Next to kb_cli, where project modules resolve their plugin files the same way.
+set_target_properties(kb_dedicated_server PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+kb_apply_quality_gates(kb_dedicated_server)
+
+if(BUILD_TESTING)
+    add_executable(kb_dedicated_server_tests tests/DedicatedServerTests.cpp)
+    target_link_libraries(kb_dedicated_server_tests PRIVATE kb_net_server)
+    add_dependencies(kb_dedicated_server_tests kb_dedicated_server)
+    target_compile_definitions(kb_dedicated_server_tests PRIVATE "KB_DEDICATED_SERVER_PATH=\"$<TARGET_FILE:kb_dedicated_server>\"")
+    add_test(NAME kb_dedicated_server_tests COMMAND $<TARGET_FILE:kb_dedicated_server_tests>)
+    set_tests_properties(kb_dedicated_server_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 240 LABELS "network;correctness;process")
+    kb_apply_quality_gates(kb_dedicated_server_tests)
 endif()

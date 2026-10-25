@@ -140,6 +140,42 @@ server has, and convergence once the inputs stop). A provider that is not determ
 physics engine stepped differently on the two sides, cannot be predicted this way. There is no rollback of
 other entities (the server is always the only truth), and no lag compensation for hits.
 
+## Dedicated server
+
+`kb_dedicated_server` (built next to `kb_cli`) runs a project's startup scene without a window or a
+renderer, steps it at a fixed rate, and replicates it over UDP.
+
+    kb_dedicated_server --project <dir> --keys <file> [--scene <path>] [--port 27015] [--bind 0.0.0.0]
+        [--max-clients 16] [--tick-rate 30] [--idle-timeout 30] [--empty-timeout <s>] [--max-seconds <s>]
+        [--replicate all|none|prefix:<name>] [--world-extent 1000] [--stop-file <path>] [--port-file <path>]
+        [--status-file <path>] [--json] [--quiet]
+
+* **Keys.** The keys file lists one `<client id> <64 hex digits>` per line (`#` starts a comment). Only
+  those clients can connect; the handshake is the one above, so a wrong key or an unknown id gets no session.
+* **What is replicated.** The local transform (`SceneTransformCodec`: position over +-`world-extent` with 16
+  bits, rotation, scale; 20 bytes) of the entities chosen by `--replicate`: all that have a transform, those
+  whose name starts with a prefix, or none. An entity is judged once, when it is first seen. The server
+  also defines the standard RPCs `Ping`/`Pong` and `Say`/`Said` (`DefineStandardRpcs`); a client builds the
+  same registries (`MakeSceneReplicationRegistry`, `DefineStandardRpcs`) and uses `ReplicationClient`.
+* **Loop.** The scene (and its scripts) advance by a fixed step of `1 / tick-rate`; replication runs at the
+  same rate; the loop catches up at most five steps behind and then drops the backlog.
+* **Limits.** `--max-clients` (a further client is not accepted), `--idle-timeout` (a client silent for this
+  long is dropped), `--empty-timeout` and `--max-seconds` end the run, and the per-session limits of kb_net apply.
+* **Stopping.** SIGINT/SIGTERM (Ctrl+C or Ctrl+Break on Windows) or the stop file: the server tells the
+  clients, closes and exits 0. Exit code 1: it could not start (missing project, scene, keys, port in use)
+  or failed; 2: bad command line. Log lines go to stdout, or to stderr with `--json`, which prints one JSON
+  object (`21kb.dedicated-server/v1`: exit reason, ticks, clients, host and replication counters) on stdout at
+  the end; `--status-file` holds the same object, refreshed about once a second.
+* **Tested.** `kb_dedicated_server_tests` starts the real process and talks to it over real UDP on 127.0.0.1:
+  handshake, replication of the scene's entities, RPC both ways and a broadcast, a wrong key and an unknown id,
+  600 hostile datagrams, a client dropped by the idle timeout, the client limit, `--max-seconds` and
+  `--empty-timeout`, a clean stop by file with exit code 0 and the final JSON, and the command line errors.
+  This is the remote process proof the transport needed (A145).
+
+Not done in the server: it replicates the local transform only (no hierarchy, no other component), has no
+player spawning or authority rules of its own (scripts and RPCs would add them), and has not been run on
+Linux.
+
 ## Not done
 
 * Interest management beyond a per-client predicate (no spatial grid); every tick evaluates every
