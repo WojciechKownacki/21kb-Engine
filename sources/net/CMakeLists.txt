@@ -4,6 +4,7 @@
 add_library(kb_net STATIC
     include/kb/net/ByteIO.hpp
     include/kb/net/Host.hpp
+    include/kb/net/Prediction.hpp
     include/kb/net/Replication.hpp
     include/kb/net/Rpc.hpp
     include/kb/net/Session.hpp

@@ -1,6 +1,7 @@
 // Tests for the replication and RPC layer of kb_net: codecs, RPC validation, state convergence on a
 // perfect and on a bad network, permissions, relevance, hostile messages.
 
+#include "kb/net/Prediction.hpp"
 #include "kb/net/Replication.hpp"
 
 #include <algorithm>
@@ -40,6 +41,9 @@ struct Facing {
 struct Secret {
     int value = 0; // never registered for replication
 };
+struct InputAck {
+    std::uint32_t sequence = 0U; // the last input the server applied for this entity
+};
 
 constexpr float kPositionTolerance = 0.02F; // 1000 / 65535 per step
 constexpr float kYawTolerance = 0.36F;      // 360 / 1023 per step
@@ -56,6 +60,9 @@ std::unique_ptr<ReplicationRegistry> MakeComponents() {
     auto facing = std::make_unique<StructCodec<Facing>>("Facing");
     facing->Float(&Facing::yaw, 0.0F, 360.0F, 10U);
     Require(registry->Add(std::move(facing), error), error);
+    auto inputAck = std::make_unique<StructCodec<InputAck>>("InputAck");
+    inputAck->UInt(&InputAck::sequence, 0xFFFFFFU);
+    Require(registry->Add(std::move(inputAck), error), error);
     return registry;
 }
 
@@ -70,6 +77,8 @@ std::unique_ptr<RpcRegistry> MakeRpcs() {
     define({ "Ping", RpcDirection::ClientToServer, false, { { RpcArgType::UInt32, 0.0, 1e9 } }, -1, 100U });
     define({ "Pong", RpcDirection::ServerToClient, false, { { RpcArgType::UInt32, 0.0, 1e9 } }, -1, 100U });
     define({ "Heal", RpcDirection::ClientToServer, true, { { RpcArgType::NetworkId }, { RpcArgType::UInt32, 1.0, 50.0 } }, 0, 20U });
+    define({ "Input", RpcDirection::ClientToServer, true,
+        { { RpcArgType::NetworkId }, { RpcArgType::UInt32, 1.0, 16000000.0 }, { RpcArgType::Float, -1.0, 1.0 }, { RpcArgType::Float, -1.0, 1.0 } }, 0, 200U });
     return registry;
 }
 
@@ -679,6 +688,129 @@ void TestRpcAndPermissions() {
     Require(alice.client->State() == ClientState::Connected && bob.client->State() == ClientState::Connected, "a client was dropped");
 }
 
+struct Vec2 {
+    float x = 0.0F;
+    float y = 0.0F;
+};
+struct MoveInput {
+    float x = 0.0F;
+    float y = 0.0F;
+};
+
+Vec2 StepMove(const Vec2& state, const MoveInput& input, float dt, bool wall) {
+    Vec2 next{ state.x + input.x * 10.0F * dt, state.y + input.y * 10.0F * dt };
+    if (wall) {
+        next.x = std::min(next.x, 50.0F);
+    }
+    return next;
+}
+
+// The client predicts its own movement, the server applies the same inputs (and, if `wall`, a wall the
+// client does not know about), and the client reconciles with the replicated state.
+void RunPredictionScenario(bool wall) {
+    constexpr float kDt = 0.03F;
+    Rig rig(BadLink(5U));
+    Rig::Peer& peer = rig.AddPeer(1U, 9101U, 0U);
+    const kb::ecs::Entity entity = rig.world->CreateEntity();
+    rig.world->Set(entity, Position{});
+    rig.world->Set(entity, InputAck{});
+    const NetworkId id = rig.server->Replicate(entity, 1U);
+    rig.server->SetRpcHandler("Input", [&](std::uint64_t, std::span<const RpcValue> args) {
+        const kb::ecs::Entity target = rig.server->EntityOf(std::get<std::uint32_t>(args[0]));
+        const Position current = *rig.world->TryGet<Position>(target);
+        const Vec2 next = StepMove(Vec2{ current.x, current.y }, MoveInput{ std::get<float>(args[2]), std::get<float>(args[3]) }, kDt, wall);
+        rig.world->Set(target, Position{ next.x, next.y, 0.0F });
+        rig.world->Set(target, InputAck{ std::get<std::uint32_t>(args[1]) });
+    });
+    ClientPrediction<Vec2, MoveInput> prediction(
+        [](const Vec2& state, const MoveInput& input, float dt) { return StepMove(state, input, dt, false); },
+        [](const Vec2& left, const Vec2& right) { return std::hypot(static_cast<double>(left.x - right.x), static_cast<double>(left.y - right.y)); },
+        Vec2{}, kDt, 0.05);
+
+    std::uint64_t now = rig.Run(0U, 30'000U, [&] { return rig.AllReady() && rig.AllConverged(); });
+    Require(rig.AllReady(), "the client did not become ready");
+    constexpr int kInputs = 200;
+    int sent = 0;
+    std::uint32_t lastAck = 0U;
+    double maxLead = 0.0;
+    std::size_t maxPending = 0U;
+    for (const std::uint64_t end = now + 120'000U; now < end; now += 10U) {
+        if (sent < kInputs && now % 30U == 0U) {
+            const MoveInput input{ 1.0F, sent % 40 < 20 ? 0.5F : -0.5F };
+            const std::uint32_t sequence = prediction.Predict(input);
+            Require(sequence != 0U, "the prediction refused an input");
+            Require(peer.replication->CallRpc("Input", std::vector<RpcValue>{ id, sequence, input.x, input.y }) == RpcStatus::Ok, "the input could not be sent");
+            ++sent;
+        }
+        rig.Step(now);
+        maxPending = std::max(maxPending, prediction.Pending());
+        const kb::ecs::Entity replica = peer.replication->Find(id);
+        if (replica.IsValid()) {
+            const Position* position = peer.world->TryGet<Position>(replica);
+            const InputAck* ack = peer.world->TryGet<InputAck>(replica);
+            if (position != nullptr && ack != nullptr) {
+                maxLead = std::max(maxLead, static_cast<double>(prediction.Current().x - position->x));
+                if (ack->sequence != lastAck) {
+                    lastAck = ack->sequence;
+                    static_cast<void>(prediction.Reconcile(Vec2{ position->x, position->y }, ack->sequence));
+                }
+            }
+        }
+        if (sent == kInputs && prediction.Pending() == 0U && rig.AllConverged() && lastAck == static_cast<std::uint32_t>(kInputs)) {
+            break;
+        }
+    }
+    const Position server = *rig.world->TryGet<Position>(entity);
+    const double finalError = std::hypot(static_cast<double>(prediction.Current().x - server.x), static_cast<double>(prediction.Current().y - server.y));
+    Require(lastAck == static_cast<std::uint32_t>(kInputs) && prediction.Pending() == 0U, "the server did not process every input");
+    Require(finalError < 0.05, "the prediction did not converge on the server's state: " + std::to_string(finalError));
+    Require(maxLead > 1.0, "the prediction never ran ahead of the replicated state");
+    Require(maxPending <= 128U, "the input history is not bounded");
+    const auto& stats = prediction.GetStats();
+    if (wall) {
+        Require(server.x == 50.0F, "the server's wall did not hold");
+        Require(stats.corrections > 0U && stats.largestError > 1.0, "the wall the client did not know about caused no correction");
+    } else {
+        Require(stats.corrections == 0U && stats.largestError < 0.05, "a prediction that matches the server was corrected: " + std::to_string(stats.largestError));
+    }
+    std::printf("  prediction (%s): %llu reconciliations, %llu corrections, largest correction %.3f, ran ahead by up to %.1f, history up to %zu inputs\n",
+        wall ? "with a wall only the server knows" : "same rules", static_cast<unsigned long long>(stats.reconciliations),
+        static_cast<unsigned long long>(stats.corrections), stats.largestError, maxLead, maxPending);
+}
+
+void TestPredictionAndReconciliation() {
+    RunPredictionScenario(false);
+    RunPredictionScenario(true);
+
+    // An acknowledgement of an input that was never sent is refused and changes nothing.
+    ClientPrediction<Vec2, MoveInput> prediction(
+        [](const Vec2& state, const MoveInput& input, float dt) { return StepMove(state, input, dt, false); },
+        [](const Vec2& a, const Vec2& b) { return static_cast<double>(std::fabs(a.x - b.x)); }, Vec2{}, 1.0F, 0.1, 4U);
+    for (int index = 0; index < 4; ++index) {
+        Require(prediction.Predict(MoveInput{ 1.0F, 0.0F }) != 0U, "an input within the limit was refused");
+    }
+    Require(prediction.Predict(MoveInput{ 1.0F, 0.0F }) == 0U && prediction.GetStats().refusedInputs == 1U, "the history limit was not enforced");
+    const Vec2 before = prediction.Current();
+    Require(prediction.Reconcile(Vec2{ 99.0F, 99.0F }, 40U) == 0.0 && prediction.GetStats().rejectedAcks == 1U && prediction.Current().x == before.x,
+        "an acknowledgement of an unsent input changed the state");
+    Require(prediction.Reconcile(Vec2{ 0.0F, 0.0F }, 2U) > 0.0 && prediction.Pending() == 2U, "reconciliation did not drop the processed inputs");
+}
+
+void TestSnapshotInterpolation() {
+    SnapshotInterpolator<Vec2> interpolator(
+        [](const Vec2& a, const Vec2& b, double t) { return Vec2{ static_cast<float>(a.x + (b.x - a.x) * t), static_cast<float>(a.y + (b.y - a.y) * t) }; }, 0.1, 4U);
+    Require(!interpolator.Sample(1.0).has_value(), "an empty interpolator returned a state");
+    Require(interpolator.Add(1.0, Vec2{ 0.0F, 0.0F }) && interpolator.Add(1.1, Vec2{ 10.0F, 0.0F }) && interpolator.Add(1.2, Vec2{ 20.0F, 0.0F }), "snapshots were refused");
+    Require(!interpolator.Add(1.1, Vec2{ 99.0F, 0.0F }), "an old snapshot was accepted");
+    Require(std::fabs(interpolator.Sample(1.25)->x - 15.0F) < 1e-4F, "the state between two snapshots is wrong");
+    Require(interpolator.Sample(0.5)->x == 0.0F, "a time before the first snapshot should hold the first");
+    Require(interpolator.Sample(5.0)->x == 20.0F, "a time after the last snapshot extrapolated");
+    for (int index = 0; index < 20; ++index) {
+        static_cast<void>(interpolator.Add(2.0 + index * 0.1, Vec2{ static_cast<float>(index), 0.0F }));
+    }
+    Require(interpolator.Size() == 4U, "the snapshot history is not bounded");
+}
+
 void TestRegistryMismatchIsRefused() {
     Rig rig;
     // A client built with another layout of Facing.
@@ -922,6 +1054,8 @@ int main() {
         { "replication-bad-network", &TestReplicationOnBadNetwork },
         { "replication-many-seeds", &TestReplicationManySeeds },
         { "rpc-and-permissions", &TestRpcAndPermissions },
+        { "prediction", &TestPredictionAndReconciliation },
+        { "interpolation", &TestSnapshotInterpolation },
         { "registry-mismatch", &TestRegistryMismatchIsRefused },
         { "relevance", &TestRelevance },
         { "limits", &TestLimits },

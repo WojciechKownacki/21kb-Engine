@@ -119,9 +119,29 @@ RPC in both directions with permissions, a client that tries to heal an entity i
 state messages, a registry mismatch, relevance with hysteresis, size and bandwidth limits, and 120000
 random and mutated messages into a client replica and into the server.
 
+## Prediction and interpolation
+
+`Prediction.hpp` has two header-only helpers for state that the game declares and steps deterministically.
+
+* `ClientPrediction<State, Input>`: `Predict(input)` applies an input to the local state at once and
+  returns its sequence number (the client sends it to the server, reliably and in order, for instance as
+  an RPC with an owner argument); the server applies inputs in order and replicates its state together
+  with the sequence number of the last input it applied; `Reconcile(authoritative, lastProcessed)`
+  forgets the inputs up to there, replays the rest on top of the server's state and reports how far the
+  prediction was off. The history is bounded (`Predict` refuses past `maxPending`), and an acknowledgement
+  of an input that was never sent is refused.
+* `SnapshotInterpolator<State>`: shows a remote entity a fixed delay in the past between two snapshots;
+  it holds the newest snapshot instead of extrapolating, and keeps a bounded history.
+
+Contract: `Step` must be the same pure function on both sides. A server that also does something the
+client cannot know (a wall, another player) makes the prediction wrong by exactly that, which
+`Reconcile` measures and corrects (the test shows 13 corrections of up to 1.8 units against a wall only the
+server has, and convergence once the inputs stop). A provider that is not deterministic, such as a
+physics engine stepped differently on the two sides, cannot be predicted this way. There is no rollback of
+other entities (the server is always the only truth), and no lag compensation for hits.
+
 ## Not done
 
-* Prediction, rollback and interpolation on the client (A148).
 * Interest management beyond a per-client predicate (no spatial grid); every tick evaluates every
   entity for every client.
 * Delta compression of components within an entity (an entity sends its changed components whole).
