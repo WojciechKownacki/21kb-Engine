@@ -1717,6 +1717,23 @@ int main() {
         Require(kb::assets::IsMap2DAssetValid(small), "a tile on the last cell of the map is valid");
         small.tiles[Map2DTileKey(8U, 7U, 0)].solid = true;
         Require(!kb::assets::IsMap2DAssetValid(small), "a tile one cell outside the map is invalid, not wrapped to the next row");
+        // Painting outside the map is refused, never moved onto the edge cell; a stroke that only partly leaves the map
+        // keeps the part inside.
+        {
+            Map2DAsset edge = kb::assets::MakeEmptyMap2DAsset(8U, 8U);
+            kb::world2d::Map2DEditor editor{ edge, library, assets };
+            std::string refusal;
+            Require(!editor.PaintGround(*dirtBrush, { 9999U, 9999U, 9999U, 9999U }, 0, &refusal) && edge.tiles.empty() && refusal.find("outside the map") != std::string::npos,
+                "painting wholly outside the map must fail with a reason and leave the map alone");
+            Require(!editor.PaintGround(*dirtBrush, { 8U, 0U, 12U, 3U }, 0, &refusal) && edge.tiles.empty(), "painting a strip just outside the right edge must fail");
+            editor.PaintCollision({ 40U, 40U, 41U, 41U }, 0, true);
+            editor.Erase({ 40U, 40U, 41U, 41U }, 0, false);
+            Require(edge.tiles.empty(), "collision and erasing wholly outside the map change nothing");
+            Require(editor.PaintGround(*dirtBrush, { 6U, 6U, 20U, 20U }, 0) && edge.tiles.size() == 4U && edge.tiles.contains(Map2DTileKey(7U, 7U, 0)),
+                "a stroke that partly leaves the map keeps the cells inside it");
+            editor.Erase({ 100U, 100U, 200U, 200U }, 0, false);
+            Require(edge.tiles.size() == 4U, "erasing wholly outside the map must not erase the corner cell");
+        }
         Require(!kb::assets::Map2DAssetIO::Parse("21kb-map2d 1\nsize 8 8\nt 8 0 0 g=0:0\n").has_value() && !kb::assets::Map2DAssetIO::Parse("21kb-map2d 1\nsize 8 8\nt -1 0 0 g=0:0\n").has_value(),
             "an imported tile outside the map fails the whole import and nothing is truncated");
     }

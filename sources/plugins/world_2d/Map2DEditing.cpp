@@ -7,6 +7,7 @@
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 
 #include <algorithm>
+#include <string>
 #include <array>
 #include <climits>
 #include <cctype>
@@ -498,6 +499,11 @@ void Map2DEditor::DropIfEmpty(std::uint64_t key) {
 
 bool Map2DEditor::PaintGround(const Map2DGroundBrush& brush, Map2DRect area, std::int32_t z, std::string* error) {
     if (z < Map2DAsset::MinimumFloor || z > Map2DAsset::MaximumFloor) return false;
+    // An area that lies wholly outside the map is refused; it is not squeezed onto the edge cells.
+    if (std::min(area.x0, area.x1) >= map_.width || std::min(area.y0, area.y1) >= map_.height) {
+        if (error != nullptr) *error = "the area lies outside the map (cells 0.." + std::to_string(map_.width - 1U) + " by 0.." + std::to_string(map_.height - 1U) + ")";
+        return false;
+    }
     area = Clamp(area.x0, area.y0, area.x1, area.y1);
     if (brush.tiles.empty()) {
         SetError(error, "Ground " + brush.name + " has no tiles");
@@ -532,6 +538,11 @@ bool Map2DEditor::PaintSprite(
     std::int32_t z,
     std::string* error) {
     if (z < Map2DAsset::MinimumFloor || z > Map2DAsset::MaximumFloor) return false;
+    // An area that lies wholly outside the map is refused; it is not squeezed onto the edge cells.
+    if (std::min(area.x0, area.x1) >= map_.width || std::min(area.y0, area.y1) >= map_.height) {
+        if (error != nullptr) *error = "the area lies outside the map (cells 0.." + std::to_string(map_.width - 1U) + " by 0.." + std::to_string(map_.height - 1U) + ")";
+        return false;
+    }
     area = Clamp(area.x0, area.y0, area.x1, area.y1);
     const std::optional<std::uint16_t> sheet = EnsureMap2DSheet(map_, assetsRoot_, texture, cellSize, error, brushes_.SheetSetting(texture));
     if (!sheet.has_value()) return false;
@@ -565,6 +576,8 @@ bool Map2DEditor::PaintSprite(
 }
 
 void Map2DEditor::Erase(Map2DRect area, std::int32_t z, bool itemsOnly) {
+    // An area that lies wholly outside the map changes nothing; it is not squeezed onto the edge cells.
+    if (std::min(area.x0, area.x1) >= map_.width || std::min(area.y0, area.y1) >= map_.height) return;
     area = Clamp(area.x0, area.y0, area.x1, area.y1);
     bool groundChanged = false;
     for (std::uint32_t y = area.y0; y <= area.y1; ++y) {
@@ -592,6 +605,8 @@ void Map2DEditor::Erase(Map2DRect area, std::int32_t z, bool itemsOnly) {
 
 void Map2DEditor::PaintCollision(Map2DRect area, std::int32_t z, bool solid) {
     if (z < Map2DAsset::MinimumFloor || z > Map2DAsset::MaximumFloor) return;
+    // An area that lies wholly outside the map changes nothing; it is not squeezed onto the edge cells.
+    if (std::min(area.x0, area.x1) >= map_.width || std::min(area.y0, area.y1) >= map_.height) return;
     area = Clamp(area.x0, area.y0, area.x1, area.y1);
     for (std::uint32_t y = area.y0; y <= area.y1; ++y) {
         for (std::uint32_t x = area.x0; x <= area.x1; ++x) {
