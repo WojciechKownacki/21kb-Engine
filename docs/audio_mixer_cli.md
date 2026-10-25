@@ -35,3 +35,21 @@ through cooking; the command does not activate an audio device.
 `kb_cli_tests audio-mixer` checks saved graphs and scene references, invalid edits,
 snapshot preservation, and project path restrictions. These tests do not establish
 rendered audio equivalence between editor and packaged runtime.
+
+The packaged browser scenario `run_game_audio_routing_tests.py` creates two buses
+with gains of 0.5 and a source with volume 0.25, assigns the mixer through CLI,
+and cooks four assets. With the generated 440 Hz tone, four consecutive native
+PCM blocks per phase must match the product gain (RMS about 0.00442). Overriding
+the parent and then child gain to 1 must produce RMS about 0.00884 and 0.01767;
+clearing each override must restore the authored values. Removing the active
+mixer must stop output and explicitly reject a play request on the named bus
+with `MixerUnavailable`, rather than routing it to the master output. Restoring
+the mixer must resume autoplay at the original amplitude with one audio context.
+
+This scenario passed on desktop Chromium's native audio backend with hardware
+WebGL2 rendering through bgfx. The observer reads the real WebAudio output and
+requires amplitude within 2% of the analytic signal, frequency within 30 Hz
+(2048-frame analysis windows), and silence peaks below 0.00001. A native UI pixel
+capture is also required. This verifies the cooked mixer and live runtime
+changes; an editor-output comparison, physical speaker output, other browser
+backends, and mobile devices remain unverified.

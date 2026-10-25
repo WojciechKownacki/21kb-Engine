@@ -44,7 +44,7 @@ window.kbReadAudio = () => ({count:kbAudioReadback.count,blocks:kbAudioReadback.
 """
 
 
-def author_fixture(args, root, *, autoplay=False, script_name="AudioFlow", source_clip=None):
+def author_fixture(args, root, *, autoplay=False, script_name="AudioFlow", source_clip=None, configure_extra=None):
     tone = root / ("Tone" + (source_clip.suffix if source_clip else ".wav"))
     if source_clip is None:
         write_tone(tone)
@@ -56,6 +56,8 @@ def author_fixture(args, root, *, autoplay=False, script_name="AudioFlow", sourc
         component("CanvasRoot/SaveButton", "Audio Source", "clipAssetId=/Game/Audio/Tone.21kb",
             "volume=0.25", "pitch=1", "loop=true", "spatial=false", "autoplay=" + str(autoplay).lower())
         component("MainCamera", "Audio Listener", "localUser=0", "primary=true")
+        if configure_extra is not None:
+            configure_extra(run, component, project)
 
     return author_storage(args, root, script_name=script_name,
         script_source=Path(__file__).with_name("fixtures") / (script_name + ".lua"), configure=configure)

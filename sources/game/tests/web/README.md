@@ -290,3 +290,12 @@ expected, retaining one context and a hardware-rendered native UI capture.
 autoplay and live-property PCM scenario using a normally imported and cooked
 Ogg Vorbis fixture. It requires actual decoder output, not a format-catalog
 entry alone. See [audio formats](../../../../docs/audio_formats.md).
+
+`run_game_audio_routing_tests.py` reports `21kb.web-game-audio-routing/v1`.
+It creates and assigns a parent/child bus graph through the normal mixer CLI,
+cooks the scene, and measures actual native PCM at the product of both bus gains
+and source volume. Trusted UI clicks override and clear each bus gain, remove
+the active mixer (requiring explicit named-route refusal and silence), and
+restore the mixer with autoplay at the original amplitude. It retains one audio
+context and requires hardware-rendered native UI pixels. Editor mix comparison
+and physical output remain separate coverage.
