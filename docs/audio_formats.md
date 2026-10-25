@@ -21,6 +21,11 @@ preserve active backend resources. `kb_engine_tests assets` checks the shared
 catalog and loader. `kb_renderer_tests runtime-pack-validation` checks direct
 and imported audio payloads inside real packs.
 
+`kb_audio_runtime_tests vorbis-unicode` verifies a streamed Vorbis file whose
+name contains characters outside legacy Windows code pages. Readiness and
+playback must preserve its native path and produce actual PCM. Cache identities
+encode file paths as UTF-8 independently of the process locale.
+
 `sources/game/tests/web/run_game_audio_ogg_tests.py` uses the full browser fixture
 arguments. It imports the generated Ogg sine, cooks a normal package and
 requires actual native PCM after trusted activation. It checks gain, mute,

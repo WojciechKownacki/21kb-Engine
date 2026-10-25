@@ -682,6 +682,7 @@ MiniaudioClipResolver::Resolution MiniaudioClipResolver::Resolve(
         ForgetValidation(clipAssetId);
         return { .status = ResolutionStatus::MissingOrInvalid };
     }
+    const std::u8string pathUtf8 = memoryBacked ? std::u8string{} : audioClip->path.generic_u8string();
     ResolvedAudioClip clip{
         .path = memoryBacked ? std::filesystem::path{} : audioClip->path,
         .audioClip = memoryBacked ? audioClip.Shared() : nullptr,
@@ -689,7 +690,7 @@ MiniaudioClipResolver::Resolution MiniaudioClipResolver::Resolve(
         .identity = std::to_string(clipAssetId) + ":" + std::to_string(metadata->contentHash)
             + ":" + (memoryBacked
                 ? std::to_string(audioClip->encodedBytes.size()) + ":memory"
-                : audioClip->path.generic_string()),
+                : std::string{reinterpret_cast<const char*>(pathUtf8.data()), pathUtf8.size()}),
     };
     return ValidateDecodeReady(clipAssetId, clip)
         ? Resolution{ .status = ResolutionStatus::Resolved, .clip = std::move(clip) }

@@ -504,6 +504,37 @@ void RunAdvertisedFormatDecodeTest() {
         "Per-asset decode validation cache exceeded its deterministic capacity");
 }
 
+void RunVorbisUnicodePathTest() {
+    const auto path = TestRoot() / std::filesystem::path{u8"Audio \u97F3\u983B \U0001F3B5.ogg"};
+    std::filesystem::copy_file(FixturePath(FixtureFor(".ogg")), path,
+        std::filesystem::copy_options::overwrite_existing);
+    kb::scene::Scene scene;
+    Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = kb::assets::AssetId{8870U}, .type = "AudioClip", .name = "Unicode Audio",
+        .virtualPath = "/Audio/Unicode.ogg", .physicalPath = path, .contentHash = 8870U,
+    }), "Unicode audio metadata registration failed");
+    kb::audio_miniaudio::MiniaudioClipResolver resolver;
+    const auto resolved = resolver.Resolve(scene, 8870U);
+    Require(resolved.Succeeded() && resolved.clip.path == path,
+        "Unicode Vorbis file did not pass production decode readiness");
+    kb::audio_miniaudio::MiniaudioEngine engine;
+    engine.Initialize(true);
+    kb::audio_miniaudio::MiniaudioSound sound;
+    Require(sound.Initialize(engine.Native(), resolved.clip, false) == MA_SUCCESS,
+        "Unicode Vorbis file could not initialize its streamed sound");
+    sound.Apply(kb::audio_miniaudio::MiniaudioSoundSettings{.volume = 1.0F, .spatial = false});
+    Require(sound.Start() == MA_SUCCESS, "Unicode Vorbis stream could not start");
+    std::array<float, 4096U * 2U> output{};
+    ma_uint64 frames = 0U;
+    Require(ma_engine_read_pcm_frames(&engine.Native(), output.data(), output.size() / 2U, &frames) == MA_SUCCESS,
+        "Unicode Vorbis stream could not render PCM");
+    double energy = 0.0;
+    for (std::size_t index = 0U; index < static_cast<std::size_t>(frames) * 2U; ++index) {
+        energy += std::abs(static_cast<double>(output[index]));
+    }
+    Require(frames > 0U && energy > 1.0, "Unicode Vorbis stream produced silent PCM");
+}
+
 [[nodiscard]] bool SameResources(
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting& left,
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting& right) noexcept {
@@ -2511,6 +2542,9 @@ int RunTests(int argc, char** argv) {
     if (filter.empty() || filter == "formats") {
         RunAdvertisedFormatDecodeTest();
         RunFormatRejectionTest();
+    }
+    if (filter.empty() || filter == "vorbis-unicode") {
+        RunVorbisUnicodePathTest();
     }
     if (filter.empty() || filter == "import-memory") {
         RunImportedMemoryLifecycleTest();
