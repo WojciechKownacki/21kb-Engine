@@ -1,6 +1,8 @@
 #include "ScenePrefabTestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetRegistry.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -19,6 +21,7 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -437,6 +440,51 @@ void RunPrefabReloadOfChangedFileKeepsGuidTest() {
     kb::tests::Require(scene.Prefabs().Overrides(instance).properties.empty(), "Refreshed instance reports the new prefab content as overrides");
 
     std::filesystem::remove(prefabPath, removeError);
+}
+
+// A prefab file renamed or moved on disk is still the same prefab: its guid and the stable ids of its nodes live in the
+// file, so a prefab that nests it by guid still finds it at the new place, and an instance made from it links to it.
+void RunPrefabFileMoveKeepsGuidAndNestedLinksTest() {
+    const std::filesystem::path directory = std::filesystem::temp_directory_path() / "21kb_engine_prefab_move";
+    std::error_code removeError;
+    std::filesystem::remove_all(directory, removeError);
+    std::filesystem::create_directories(directory / "Moved");
+    std::string innerGuid;
+    std::vector<std::uint64_t> innerStableIds;
+    {
+        kb::scene::Scene scene;
+        const kb::scene::SceneObject innerRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Wheel" });
+        static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Hub", .parent = innerRoot }));
+        const kb::scene::ScenePrefabHandle inner = scene.Prefabs().CreateAsset(innerRoot, "Wheel", directory / "Wheel.kbprefab");
+        kb::tests::Require(inner.IsValid(), "The inner prefab could not be created");
+        innerGuid = scene.Prefabs().Guid(inner);
+        for (const kb::scene::ScenePrefabNodeDesc& node : scene.Prefabs().Get(inner).Nodes()) innerStableIds.push_back(node.stableId);
+        // The cart nests the wheel by its guid.
+        kb::scene::ScenePrefab cart;
+        const std::uint32_t cartRoot = cart.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Cart" });
+        static_cast<void>(cart.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Wheel", .nestedPrefabGuid = innerGuid, .parentNode = cartRoot }));
+        const kb::scene::ScenePrefabHandle outer = scene.Prefabs().Register("Cart", std::move(cart));
+        kb::tests::Require(outer.IsValid() && scene.Prefabs().Save(outer, directory / "Cart.kbprefab"), "The outer prefab could not be written");
+    }
+    std::filesystem::rename(directory / "Wheel.kbprefab", directory / "Moved" / "Renamed.kbprefab", removeError);
+    kb::tests::Require(!removeError, "The prefab file could not be moved");
+
+    kb::scene::Scene scene;
+    const kb::scene::ScenePrefabHandle moved = scene.Prefabs().Load(directory / "Moved" / "Renamed.kbprefab");
+    kb::tests::Require(moved.IsValid() && scene.Prefabs().Guid(moved) == innerGuid, "A moved prefab file must keep the guid stored in it");
+    std::vector<std::uint64_t> movedStableIds;
+    for (const kb::scene::ScenePrefabNodeDesc& node : scene.Prefabs().Get(moved).Nodes()) movedStableIds.push_back(node.stableId);
+    kb::tests::Require(movedStableIds == innerStableIds, "A moved prefab file must keep the stable ids of its nodes");
+    // The project finds the moved file by its guid: the cart's asset depends on the prefab at its new path.
+    kb::scene::Scene project;
+    kb::assets::AssetManager& manager = project.Assets().Manager();
+    kb::tests::Require(manager.Mounts().Mount("Game", directory) && manager.DiscoverMountedAssets() >= 2U, "The moved prefab project must mount");
+    const kb::assets::AssetMetadata* renamed = manager.Registry().FindByPath("/Game/Moved/Renamed.kbprefab");
+    const kb::assets::AssetMetadata* cartAsset = manager.Registry().FindByPath("/Game/Cart.kbprefab");
+    kb::tests::Require(renamed != nullptr && cartAsset != nullptr, "Both prefab files must be discovered");
+    kb::tests::Require(std::ranges::find(cartAsset->dependencies, renamed->id) != cartAsset->dependencies.end(),
+        "A prefab nesting another by guid must depend on it at its new path");
+    std::filesystem::remove_all(directory, removeError);
 }
 
 // Spawning a captured prefab at runtime makes plain objects; only document loads and editor restores
@@ -1116,6 +1164,7 @@ void RunScenePrefabCaptureTests() {
     run("RunPrefabCreateAssetRegistersSourceInstanceTest", RunPrefabCreateAssetRegistersSourceInstanceTest);
     run("RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest", RunPrefabCreateAssetFromInstanceKeepsOneOwnerTest);
     run("RunPrefabReloadOfChangedFileKeepsGuidTest", RunPrefabReloadOfChangedFileKeepsGuidTest);
+    run("RunPrefabFileMoveKeepsGuidAndNestedLinksTest", RunPrefabFileMoveKeepsGuidAndNestedLinksTest);
     run("RunPrefabInstanceLinkSurvivesSceneReopenTest", RunPrefabInstanceLinkSurvivesSceneReopenTest);
     run("RunPrefabInstanceNodeIdentitySurvivesReopenTest", RunPrefabInstanceNodeIdentitySurvivesReopenTest);
     run("RunReopenedInstanceFollowsChangedPrefabTest", RunReopenedInstanceFollowsChangedPrefabTest);
