@@ -127,6 +127,99 @@ void RunSaveGameAtomicWriteTest() {
     kb::tests::Require(!std::filesystem::exists(oversizePath), "A refused Save must not write any file");
 }
 
+// The size limit is exact: a save that serializes to exactly kMaxSaveGameSerializedBytes is written and read back
+// whole, one byte more is refused at Save and Serialize and leaves the previous save at the path untouched, and a
+// buffer or file of limit + 1 bytes is refused on the way in. The limit applies to the whole file, not to one entry.
+void RunSaveGameExactSizeLimitTest() {
+    ResetSaveTestRoot();
+    const std::filesystem::path path = SaveTestRoot() / "limit.kbsave";
+    const auto build = [](std::size_t lastLength) {
+        kb::save::SaveGame save;
+        for (int index = 0; index < 15; ++index) {
+            save.SetString("block" + std::to_string(index), std::string(1U << 20U, static_cast<char>('a' + index)));
+        }
+        save.SetString("tail", std::string(lastLength, 'z'));
+        return save;
+    };
+    const auto base = kb::save::SaveGameService::Serialize(build(0U));
+    kb::tests::Require(base.has_value() && base->size() < kb::save::SaveGameService::MaxSerializedBytes,
+        "The sizing fixture must serialize below the limit");
+    const std::size_t room = kb::save::SaveGameService::MaxSerializedBytes - base->size();
+    kb::tests::Require(room > 0U && room <= (1U << 20U), "The sizing fixture must leave less than one string of room");
+
+    const auto exact = kb::save::SaveGameService::Serialize(build(room));
+    kb::tests::Require(exact.has_value() && exact->size() == kb::save::SaveGameService::MaxSerializedBytes,
+        "A save of exactly the limit must serialize");
+    kb::tests::Require(kb::save::SaveGameService::Save(path, build(room)), "A save of exactly the limit must be written");
+    kb::tests::Require(std::filesystem::file_size(path) == kb::save::SaveGameService::MaxSerializedBytes,
+        "The file of a maximal save must have exactly the limit size");
+    const kb::save::SaveGameLoadResult loaded = kb::save::SaveGameService::Load(path);
+    std::string tail;
+    kb::tests::Require(loaded.Succeeded() && loaded.save.GetString("tail", tail) && tail.size() == room,
+        "A maximal save must load back whole");
+
+    // One byte more: refused, and the maximal save already at the path survives.
+    kb::tests::Require(!kb::save::SaveGameService::Serialize(build(room + 1U)).has_value(), "A save over the limit must not serialize");
+    kb::tests::Require(!kb::save::SaveGameService::Save(path, build(room + 1U)), "A save over the limit must be refused");
+    const kb::save::SaveGameLoadResult survivor = kb::save::SaveGameService::Load(path);
+    kb::tests::Require(survivor.Succeeded() && std::filesystem::file_size(path) == kb::save::SaveGameService::MaxSerializedBytes,
+        "A refused over-limit save must leave the previous save intact");
+    std::vector<std::uint8_t> oversized = *exact;
+    oversized.push_back(0U);
+    kb::tests::Require(kb::save::SaveGameService::Deserialize(oversized).status == kb::save::SaveGameLoadStatus::TooLarge,
+        "A buffer of limit + 1 bytes must be refused as too large");
+    kb::tests::Require(kb::save::SaveGameService::Deserialize(*exact).Succeeded(), "A buffer of exactly the limit must load");
+}
+
+// A write that cannot complete leaves the previous save loadable and byte for byte unchanged; a stale temp file from
+// an earlier crash is overwritten and gone afterwards; no strict prefix of a valid file ever loads.
+void RunSaveGameInterruptedWriteTest() {
+    ResetSaveTestRoot();
+    const std::filesystem::path path = SaveTestRoot() / "slot.kbsave";
+    const std::filesystem::path tempPath = std::filesystem::path{ path }.concat(".tmp");
+    const auto readAll = [](const std::filesystem::path& file) {
+        std::ifstream input{ file, std::ios::binary };
+        return std::vector<std::uint8_t>{ std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
+    };
+
+    kb::save::SaveGame first;
+    first.SetInt("generation", 1);
+    first.SetString("name", "first");
+    kb::tests::Require(kb::save::SaveGameService::Save(path, first), "The first save must be written");
+    const std::vector<std::uint8_t> before = readAll(path);
+
+    // The temporary file cannot be created: a directory of that name stands in its way.
+    std::error_code error;
+    std::filesystem::create_directory(tempPath, error);
+    kb::tests::Require(!error, "The blocking directory must be created");
+    kb::save::SaveGame second;
+    second.SetInt("generation", 2);
+    kb::tests::Require(!kb::save::SaveGameService::Save(path, second), "A save whose temporary file cannot be written must fail");
+    kb::tests::Require(readAll(path) == before, "A failed save must leave the previous save byte for byte unchanged");
+    std::int64_t generation = 0;
+    const kb::save::SaveGameLoadResult stillFirst = kb::save::SaveGameService::Load(path);
+    kb::tests::Require(stillFirst.Succeeded() && stillFirst.save.GetInt("generation", generation) && generation == 1,
+        "The previous save must still load after a failed save");
+    std::filesystem::remove_all(tempPath, error);
+
+    // A temporary file left by a crash does not stop the next save, and is not left behind by it.
+    WriteRawFile(tempPath, { 1U, 2U, 3U, 4U, 5U });
+    kb::tests::Require(kb::save::SaveGameService::Save(path, second), "A stale temporary file must not block a save");
+    kb::tests::Require(!std::filesystem::exists(tempPath), "The stale temporary file must be gone after the save");
+    const kb::save::SaveGameLoadResult nowSecond = kb::save::SaveGameService::Load(path);
+    kb::tests::Require(nowSecond.Succeeded() && nowSecond.save.GetInt("generation", generation) && generation == 2,
+        "The save after a stale temporary file must be the new one");
+
+    // Whatever a crash cuts off, a partial file is never returned as a save.
+    const auto bytes = kb::save::SaveGameService::Serialize(second);
+    kb::tests::Require(bytes.has_value() && bytes->size() > 16U, "The truncation fixture must serialize");
+    for (std::size_t length = 0U; length < bytes->size(); ++length) {
+        const kb::save::SaveGameLoadResult cut = kb::save::SaveGameService::Deserialize(
+            std::span<const std::uint8_t>{ bytes->data(), length });
+        kb::tests::Require(!cut.Succeeded(), "A truncated save must never load");
+    }
+}
+
 // LIB-162: every corruption / bad-header path returns a precise status rather
 // than crashing or silently returning empty data.
 void RunSaveGameCorruptionTest() {
@@ -505,6 +598,8 @@ namespace kb::tests {
 void RunSaveGameTests() {
     RunSaveGameRoundTripTest();
     RunSaveGameAtomicWriteTest();
+    RunSaveGameExactSizeLimitTest();
+    RunSaveGameInterruptedWriteTest();
     RunSaveGameCorruptionTest();
     RunSaveGameMigrationTest();
     RunSaveGameDomainSeparationTest();

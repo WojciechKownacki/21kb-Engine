@@ -148,6 +148,14 @@ are rewritten authenticated in place (`migrated` in the load result). An unauthe
 cannot be told apart from a forged one, so a game whose first release already wrote schema 3
 should set `SaveGameIntegrity::acceptUnauthenticatedLegacySaves` to `false`.
 
+A save is one buffer, written and read whole. The limits are: 16 MiB for the serialized file
+(`kMaxSaveGameSerializedBytes`; a file of exactly 16 MiB saves and loads, one byte more is refused by
+`Save` and `Serialize` and by `Deserialize`/`Load` as `TooLarge`), 65536 entries, 1 KiB per key and
+1 MiB per string value. There is no chunked or streaming save: a game with more state than that must
+split it over several save slots. A save is written to `<path>.tmp` and then moved over the old file,
+so a failed or interrupted write leaves the previous save byte for byte unchanged; an out-of-space
+error is a failed `Save`, never a partial file at the final path.
+
 ## Crash reports
 
 A Windows player writes a crash report to `%LOCALAPPDATA%\21kb\CrashReports\<executable name>` and
