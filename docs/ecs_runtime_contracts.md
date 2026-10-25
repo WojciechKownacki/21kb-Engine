@@ -129,12 +129,33 @@ can opt in to running at the same time as others by implementing `IParallelScene
 * Each scheduler that has a parallel system owns a worker pool (created at the first group of two or
   more) with the default worker count; with fewer than two workers the group runs serially.
   A scheduler without parallel systems takes the same serial loop as before.
-* No built-in system opts in yet: the animator, transform, navigation and particle systems already
-  split their own work across worker pools, and each would need an audit of what it really touches
-  before it can declare access. A measured example: four independent systems of about 3.6 ms each
+* No built-in system opts in yet, after an audit (below). The animator, transform and navigation
+  systems also already split their own work across worker pools. A measured example: four independent systems of about 3.6 ms each
   took 14.4 ms in a frame serially and 3.7 ms in parallel on a 24 thread machine
   (`kb_engine_tests scene-system-parallel-bench`).
 
 Tests: `SceneSystemParallelTests.cpp` (`kb_engine_tests scene-system-parallel`): identical results
 serial and parallel, systems really overlapping, conflicts and barriers keeping order, errors in
 registration order, removal and shutdown.
+
+### Audit of the built-in scene systems
+
+Each system was read for what its update touches, not for what it ought to touch. A system can opt in
+only if everything it touches is either private to it or declared, and is safe on a worker thread. None
+passes today, so all stay barriers; the scheduler runs them exactly as before.
+
+| System | Phase | What the code does | Verdict |
+| --- | --- | --- | --- |
+| Audio (`MiniaudioSceneSystem`) | update | `AudioPlayback` asserts the scene's owner thread in every entry point (`AudioPlayback.cpp`) | cannot run on a worker |
+| Navigation | update | moves agents with `scene.Transforms().Set` (`SceneNavigationRuntime.cpp:141`) and `PhysicsBackend::CharacterMove` (`:290`) | writes shared transforms and the physics backend |
+| Content instances | update | `scene.Prefabs().Instantiate` and `scene.Entities().Destroy` (`SceneContentInstanceService.cpp:99,111`) | changes entity structure |
+| AI (`AIBrainSystem`) | update | `Transforms().Set`, `NavAgents().MarkModified`, `PhysicsBackend::CharacterMove`, `Animators().SetFloat`, reads combatants and the gameplay service (`AIBrainSystem.cpp`) | writes transforms, navigation, physics and animators |
+| Gameplay | update | marks `Combatants` modified and reads every transform (`SceneGameplayService.cpp:46,57,306`) | reads transforms that animation and navigation write |
+| Animator | update | 3740 lines of `SceneAnimatorService.cpp`: advances poses, applies socket attachments, publishes debug snapshots; transforms are its output | not shown to be independent of any transform writer |
+| Timeline, UI, particles, 2D map, scripts, input, physics | update / fixed | read or write transforms, entities, the UI frame or Lua state through scene-wide services | not audited line by line; barriers |
+
+What would make parallel scene systems pay off on a real scene is not more declarations but a safe way
+for a system to write: a system that only reads the scene during its update and returns its changes
+as commands, played back in registration order after the group (the ECS `CommandBuffer` already has
+lanes and a defined playback order, see above). AI thinking and the gameplay senses are read heavy and
+would be the first candidates; they need splitting into a read part and a write part first.
