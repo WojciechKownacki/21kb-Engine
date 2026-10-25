@@ -6,6 +6,8 @@
 #include "assets/EditorAssetBrowserHitTester.hpp"
 #include "assets/EditorAssetBrowserLayout.hpp"
 #include "console/EditorConsoleState.hpp"
+#include "commands/EditorCommandStack.hpp"
+#include "engine/audio/AudioMixerAssetIO.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -84,6 +86,95 @@ void RunAudioMixerProjectFilesCreationTest() {
         "A failed discovery or selection must remove only its newly created orphan file");
     kb::editor::tests::Require(scene.Assets().Manager().Registry().FindByPath(outsideMount) == nullptr,
         "A failed mixer creation must not leave registry or cache state for the orphan path");
+}
+
+void RunAudioMixerUndoTest() {
+    ResetTestRoot();
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::EditorConsoleState console;
+    kb::editor::EditorCommandStack stack;
+    kb::editor::tests::Require(scene.Assets().MountProject(TestRoot() / "Project"), "Mixer undo project did not mount");
+    kb::editor::EditorAudioMixerAuthoring authoring{scene, browser, console, &stack};
+    kb::editor::tests::Require(authoring.Create("/Game/Mixers"), "Mixer undo asset did not create");
+    const auto id = browser.InspectorAsset();
+    const auto key = kb::editor::EditorCommandHistoryKey::AudioMixerAsset(id.value);
+    const auto path = scene.Assets().Manager().Registry().Find(id)->physicalPath;
+    std::vector<std::vector<std::uint8_t>> states{ReadBytes(path)};
+    const auto edit = [&](bool result) {
+        kb::editor::tests::Require(result, "Mixer undo edit failed");
+        states.push_back(ReadBytes(path));
+        kb::editor::tests::Require(stack.UndoCount(key) == states.size() - 1U
+            && stack.UndoCount(kb::editor::EditorCommandHistoryKey::Scene()) == 0U
+            && !stack.LastCompletedCommandAffectsSceneDocument()
+            && !stack.LastCompletedCommandAffectsHierarchySelection(), "Mixer edit entered the wrong history or dirtied the scene");
+    };
+    edit(authoring.AddBus(id, "Output"));
+    edit(authoring.AddBus(id, "Effects"));
+    edit(authoring.SetBusParent(id, "Effects", "Output"));
+    edit(authoring.SetBusVolume(id, "Output", 0.25F));
+    edit(authoring.SetBusMute(id, "Effects", true));
+    edit(authoring.AddSnapshot(id, "Quiet"));
+    edit(authoring.AddSnapshotOverride(id, "Quiet", "Output", 0.125F));
+    edit(authoring.RenameBus(id, "Output", "Main"));
+    edit(authoring.RenameSnapshot(id, "Quiet", "Ambient"));
+    edit(authoring.SetSnapshotOverrideVolume(id, "Ambient", "Main", 0.5F));
+    edit(authoring.RemoveBus(id, "Main"));
+    kb::editor::tests::Require(!authoring.AddBus(id, "Effects") && !authoring.SetBusVolume(id, "Effects", -1.0F)
+        && stack.UndoCount(key) == states.size() - 1U && ReadBytes(path) == states.back(), "Rejected mixer edit modified file or history");
+    const auto matchesCache = [&] {
+        const auto disk = kb::audio::AudioMixerAssetIO::Load(path);
+        const auto cached = scene.Assets().Manager().Load<kb::audio::AudioMixerAsset>(id);
+        kb::editor::tests::Require(disk.has_value() && cached.IsLoaded() && disk->buses.size() == cached->buses.size()
+            && disk->snapshots.size() == cached->snapshots.size(), "Mixer undo did not refresh the runtime cache");
+        for (std::size_t i = 0U; i < disk->buses.size(); ++i) {
+            const auto& a = disk->buses[i]; const auto& b = cached->buses[i];
+            kb::editor::tests::Require(a.name == b.name && a.parentBus == b.parentBus && a.volume == b.volume && a.mute == b.mute,
+                "Mixer undo runtime bus differs from persisted state");
+        }
+        for (std::size_t i = 0U; i < disk->snapshots.size(); ++i) {
+            const auto& a = disk->snapshots[i]; const auto& b = cached->snapshots[i];
+            kb::editor::tests::Require(a.name == b.name && a.busVolumes.size() == b.busVolumes.size(), "Mixer undo runtime snapshot differs");
+            for (std::size_t j = 0U; j < a.busVolumes.size(); ++j)
+                kb::editor::tests::Require(a.busVolumes[j].bus == b.busVolumes[j].bus && a.busVolumes[j].volume == b.busVolumes[j].volume,
+                    "Mixer undo runtime snapshot override differs");
+        }
+    };
+    for (std::size_t i = states.size() - 1U; i > 0U; --i) {
+        kb::editor::tests::Require(stack.Undo(key) && ReadBytes(path) == states[i - 1U], "Mixer undo did not restore exact serialized state");
+        matchesCache();
+    }
+    for (std::size_t i = 1U; i < states.size(); ++i) {
+        kb::editor::tests::Require(stack.Redo(key) && ReadBytes(path) == states[i], "Mixer redo did not restore exact serialized state");
+        matchesCache();
+    }
+    kb::editor::tests::Require(authoring.Create("/Game/Mixers"), "Second mixer undo asset did not create");
+    const auto other = browser.InspectorAsset();
+    const auto otherKey = kb::editor::EditorCommandHistoryKey::AudioMixerAsset(other.value);
+    kb::editor::tests::Require(authoring.AddBus(other, "Independent") && stack.Undo(otherKey)
+        && ReadBytes(path) == states.back(), "Undo crossed mixer asset partitions");
+    kb::editor::tests::Require(kb::editor::EditorAudioMixerAssetGateway::SelectedHistoryKey(scene, browser) == otherKey
+        && browser.SelectAsset(id, scene.Assets().Manager())
+        && kb::editor::EditorAudioMixerAssetGateway::SelectedHistoryKey(scene, browser) == key, "Inspector undo did not select its mixer history");
+    auto external = *kb::audio::AudioMixerAssetIO::Load(path);
+    external.buses.front().volume = 0.75F;
+    kb::editor::tests::Require(kb::audio::AudioMixerAssetIO::Save(path, external), "External mixer edit did not save");
+    const auto externalBytes = ReadBytes(path);
+    const auto count = stack.UndoCount(key);
+    kb::editor::tests::Require(!stack.Undo(key) && ReadBytes(path) == externalBytes && stack.UndoCount(key) == count,
+        "Undo overwrote an external mixer edit or lost its command");
+    external.buses.front().volume = 1.0F;
+    kb::editor::tests::Require(kb::audio::AudioMixerAssetIO::Save(path, external) && ReadBytes(path) == states.back()
+        && stack.Undo(key), "Mixer undo could not retry after restoring its expected state");
+    const auto redoCount = stack.RedoCount(key);
+    kb::editor::tests::Require(authoring.SetBusVolume(id, "Effects", 0.5F) && redoCount == 1U && !stack.CanRedo(key)
+        && stack.CanRedo(otherKey), "A new mixer edit did not clear only its own redo partition");
+    static_cast<void>(browser.SelectFolder("/Game/Mixers", scene.Assets().Manager()));
+    kb::editor::tests::Require(kb::editor::EditorAudioMixerAssetGateway::SelectedHistoryKey(scene, browser) == key,
+        "A displayed mixer lost its history while browsing folders");
+    browser.ClearSelection();
+    kb::editor::tests::Require(kb::editor::EditorAudioMixerAssetGateway::SelectedHistoryKey(scene, browser)
+        == kb::editor::EditorCommandHistoryKey::Scene(), "Clearing the inspected asset retained mixer history focus");
 }
 
 void RunAudioMixerGraphAuthoringTest() {
@@ -297,6 +388,7 @@ namespace kb::editor::tests {
 void RunEditorAudioMixerAuthoringTests() {
     RunAudioMixerProjectFilesCreationTest();
     RunAudioMixerGraphAuthoringTest();
+    RunAudioMixerUndoTest();
     RunAudioMixerProjectFilesCommandModelTest();
 }
 

@@ -27,8 +27,8 @@ template <typename Range>
 EditorAudioMixerAuthoring::EditorAudioMixerAuthoring(
     kb::scene::Scene& scene,
     EditorAssetBrowserState& browser,
-    EditorConsoleState& console) noexcept
-    : gateway_(scene, browser)
+    EditorConsoleState& console, EditorCommandStack* commands) noexcept
+    : gateway_(scene, browser, commands)
     , scene_(scene)
     , console_(console) {}
 

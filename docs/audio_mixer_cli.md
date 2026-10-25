@@ -99,3 +99,22 @@ zero native sounds, voices, bus groups, decoders and encoded payloads. This test
 passed in MSVC Release and Debug ASan. It does not establish editor-output parity,
 physical output, browser topology replacement or uninterrupted one-shot playback
 across structural graph edits.
+
+Editor bus and snapshot edits also support Undo/Redo while the mixer is displayed
+in the Inspector. Each mixer has a separate history, apart from scene and material
+edits. Browsing folders keeps the displayed mixer's history; selecting a scene
+object or clearing the inspected asset returns to scene history. A focused
+material graph keeps its own history.
+
+Undo and Redo validate and save through the same atomic asset gateway, then reload
+the runtime cache. They do not mark the scene document or change hierarchy
+selection. If the current mixer differs from the command's expected state, the
+operation refuses to overwrite it and keeps the command available for retry.
+A new edit clears only that mixer's redo history.
+
+`kb_editor_tests audio-mixer` checks exact serialized state and cached bus/snapshot
+values across eleven edits, complete Undo/Redo, two mixer histories, rejected
+edits and an external-file conflict. The mixer Inspector, scene audio Inspector
+and play-session headless suites remain separate controls. These checks cover
+the authoring service and history policy; native window shortcut dispatch and
+the audible editor-to-packaged comparison remain unverified.

@@ -1137,23 +1137,30 @@ bool EditorSceneContext::SaveOpenDocuments() {
 }
 
 bool EditorSceneContext::CanUndoSceneCommand() const noexcept {
+    if (scene_ == nullptr) return false;
     if (materialGraphViewport_.focused && materialEditor_.OpenAssetId().IsValid()) {
         return commandStack_.CanUndo(EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value));
     }
-    return commandStack_.CanUndo(EditorCommandHistoryKey::Scene());
+    return commandStack_.CanUndo(EditorAudioMixerAssetGateway::SelectedHistoryKey(*scene_, assetBrowser_));
 }
 
 bool EditorSceneContext::CanRedoSceneCommand() const noexcept {
+    if (scene_ == nullptr) return false;
     if (materialGraphViewport_.focused && materialEditor_.OpenAssetId().IsValid()) {
         return commandStack_.CanRedo(EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value));
     }
-    return commandStack_.CanRedo(EditorCommandHistoryKey::Scene());
+    return commandStack_.CanRedo(EditorAudioMixerAssetGateway::SelectedHistoryKey(*scene_, assetBrowser_));
 }
 
 bool EditorSceneContext::UndoSceneCommand() {
+    if (scene_ == nullptr) return false;
     static_cast<void>(CommitHierarchyRename());
     inspector_.EndTextEdit();
     const bool materialHistoryActive = materialGraphViewport_.focused && materialEditor_.OpenAssetId().IsValid();
+    const auto assetHistory = EditorAudioMixerAssetGateway::SelectedHistoryKey(*scene_, assetBrowser_);
+    if (!materialHistoryActive && assetHistory.kind == EditorCommandHistoryKind::AudioMixerAsset) {
+        return commandStack_.Undo(assetHistory);
+    }
     const bool undone = materialHistoryActive
         ? commandStack_.Undo(EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value))
         : SceneCommands().Undo();
@@ -1171,9 +1178,14 @@ bool EditorSceneContext::UndoSceneCommand() {
 }
 
 bool EditorSceneContext::RedoSceneCommand() {
+    if (scene_ == nullptr) return false;
     static_cast<void>(CommitHierarchyRename());
     inspector_.EndTextEdit();
     const bool materialHistoryActive = materialGraphViewport_.focused && materialEditor_.OpenAssetId().IsValid();
+    const auto assetHistory = EditorAudioMixerAssetGateway::SelectedHistoryKey(*scene_, assetBrowser_);
+    if (!materialHistoryActive && assetHistory.kind == EditorCommandHistoryKind::AudioMixerAsset) {
+        return commandStack_.Redo(assetHistory);
+    }
     const bool redone = materialHistoryActive
         ? commandStack_.Redo(EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value))
         : SceneCommands().Redo();
@@ -2695,7 +2707,7 @@ EditorInputMappingContextAuthoring EditorSceneContext::InputMappingContextAuthor
 }
 
 EditorAudioMixerAuthoring EditorSceneContext::AudioMixerAuthoring() noexcept {
-    return EditorAudioMixerAuthoring{ *scene_, assetBrowser_, console_ };
+    return EditorAudioMixerAuthoring{ *scene_, assetBrowser_, console_, &commandStack_ };
 }
 
 EditorSceneAudioSettingsService EditorSceneContext::SceneAudioSettings() noexcept {

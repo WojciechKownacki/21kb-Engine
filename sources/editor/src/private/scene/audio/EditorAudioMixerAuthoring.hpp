@@ -23,7 +23,7 @@ public:
     EditorAudioMixerAuthoring(
         kb::scene::Scene& scene,
         EditorAssetBrowserState& browser,
-        EditorConsoleState& console) noexcept;
+        EditorConsoleState& console, EditorCommandStack* commands = nullptr) noexcept;
 
     [[nodiscard]] bool Create(const std::filesystem::path& virtualFolder);
     [[nodiscard]] std::optional<kb::audio::AudioMixerAsset> Read(kb::assets::AssetId id) const;
