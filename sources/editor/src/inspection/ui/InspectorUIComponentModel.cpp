@@ -153,6 +153,7 @@ static_assert(static_cast<std::uint16_t>(InspectorPropertyId::UIWidgetSwitcherFi
     if (name == "preserveAspect") return std::string{ EditorText("uiProperty.preserveAspect", "Preserve Aspect") };
     if (name == "pressedColor") return std::string{ EditorText("uiProperty.pressedColor", "Pressed Color") };
     if (name == "pressedImage") return std::string{ EditorText("uiProperty.pressedImage", "Pressed Image") };
+    if (name == "modal") return std::string{ EditorText("uiProperty.modal", "Blocks Canvases Below") };
     if (name == "radius") return std::string{ EditorText("uiProperty.radius", "Radius") };
     if (name == "raycastPadding") return std::string{ EditorText("uiProperty.raycastPadding", "Raycast Padding") };
     if (name == "raycastTarget") return std::string{ EditorText("uiProperty.raycastTarget", "Raycast Target") };
@@ -460,7 +461,7 @@ std::vector<InspectorUIPropertyRow> InspectorUIComponentModel::Properties(
     using enum kb::scene::UIComponentType;
     switch (component) {
     case Canvas:
-        hide(value("renderMode") == "1" ? std::initializer_list<std::string_view>{"respectSafeArea"}
+        hide(value("renderMode") == "1" ? std::initializer_list<std::string_view>{"respectSafeArea", "modal"}
                                          : std::initializer_list<std::string_view>{"pixelsPerUnit"});
         break;
     case CanvasGroup:

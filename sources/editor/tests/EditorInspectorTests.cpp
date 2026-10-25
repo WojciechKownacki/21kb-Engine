@@ -303,6 +303,38 @@ void RunAudioComponentCatalogTest() {
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::RequiredPluginId("Particle Effect") == "Rendering.21kbParticle", "Particle Effect component should require the particle provider");
 }
 
+// Everyday and technical names find the component they mean, and every component of the engine has a plain sentence on
+// what it does for the author.
+void RunComponentSearchSynonymsTest() {
+    const auto finds = [](std::string_view query, std::string_view id) {
+        const std::vector<const kb::editor::InspectorComponentTile*> tiles = kb::editor::InspectorComponentCatalog::Search(query);
+        return std::ranges::any_of(tiles, [id](const kb::editor::InspectorComponentTile* tile) { return tile != nullptr && tile->id == id; });
+    };
+    kb::editor::tests::Require(finds("billboard", "Facing Panel"), "Searching billboard must find the Facing Panel");
+    kb::editor::tests::Require(finds("decal", "Surface Cast"), "Searching decal must find the Surface Cast");
+    kb::editor::tests::Require(finds("grass", "Geometry Swarm") && finds("instancing", "Geometry Swarm"), "Searching grass or instancing must find the Geometry Swarm");
+    kb::editor::tests::Require(finds("minimap", "Secondary Frame") && finds("render texture", "Secondary Frame"), "Searching minimap or render texture must find the Secondary Frame");
+    kb::editor::tests::Require(finds("lod", "Detail Switch") && finds("occluder", "Visibility Blocker"), "Searching lod or occluder must find the matching component");
+    kb::editor::tests::Require(finds("hitbox", "Collider") && finds("gravity", "Rigidbody") && finds("tilemap", "World2DMap"), "Everyday physics and 2D names must find their components");
+    kb::editor::tests::Require(finds("BILLBOARD", "Facing Panel"), "Synonym search ignores case");
+    kb::editor::tests::Require(!finds("billboard", "Surface Cast") && !finds("decal", "Facing Panel"), "A synonym must not find an unrelated component");
+    kb::editor::tests::Require(finds("facing panel", "Facing Panel"), "The technical name keeps working");
+    // Typing a component's own name puts it first; a component only known by that word as a synonym follows it.
+    const std::vector<const kb::editor::InspectorComponentTile*> lightTiles = kb::editor::InspectorComponentCatalog::Search("light");
+    kb::editor::tests::Require(!lightTiles.empty() && lightTiles.front()->id == "Light" && finds("light", "Ambient Radiance"),
+        "Searching light must list the Light first and still offer the components known by it");
+    std::size_t described = 0U;
+    for (const kb::editor::InspectorComponentTile& tile : kb::editor::InspectorComponentCatalog::Tiles()) {
+        if (tile.category == "User Widget") continue;
+        kb::editor::tests::Require(!kb::editor::InspectorComponentCatalog::Description(tile.id).empty(),
+            ("Component " + tile.id + " has no description of what it does").c_str());
+        kb::editor::tests::Require(!kb::editor::InspectorComponentCatalog::Keywords(tile.id).empty(),
+            ("Component " + tile.id + " has no search keywords").c_str());
+        ++described;
+    }
+    kb::editor::tests::Require(described >= 30U, "The catalog must describe the engine components");
+}
+
 void RunObjectClassificationCatalogTest() {
     const std::vector<const kb::editor::InspectorComponentTile*> tiles = kb::editor::InspectorComponentCatalog::Search("object classification");
     kb::editor::tests::Require(tiles.size() == 1U, "Add Component catalog should find Object Classification by its author-facing name");
@@ -3347,6 +3379,7 @@ void RunEditorInspectorTests() {
     RunInspectorTextCaretTest();
     RunInspectorTextEditDirtyStateTest();
     RunAudioComponentCatalogTest();
+    RunComponentSearchSynonymsTest();
     RunObjectClassificationCatalogTest();
     RunAudioInspectorTextTest();
     RunAudioInspectorComponentModelTest();

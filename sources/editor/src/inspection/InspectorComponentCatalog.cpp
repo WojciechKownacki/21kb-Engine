@@ -88,17 +88,79 @@ namespace {
     return lowered;
 }
 
-[[nodiscard]] bool Matches(const InspectorComponentTile& tile, std::string_view query) {
+struct ComponentNames {
+    std::string_view id;
+    std::string_view keywords;
+    std::string_view description;
+};
+
+constexpr ComponentNames kComponentNames[] = {
+    {"Camera", "view, viewport, eye, player view", "Shows the scene from this object: what the player sees."},
+    {"Light", "lamp, sun, point light, spot light, shadow", "Lights the objects around it, and can cast shadows."},
+    {"MeshRenderer", "mesh, model, 3d model, draw", "Draws a 3D model with a material at this object."},
+    {"Particle Effect", "vfx, fx, smoke, fire, sparks, explosion, effect", "Plays a particle effect such as smoke, sparks or fire at this object."},
+    {"TerrainEditor", "terrain, landscape, ground, heightmap, hills", "Sculpts and paints a landscape in the editor."},
+    {"World2DMap", "tilemap, tile map, 2d map, tiles, level", "Holds a 2D tile map you paint with the Map Editor."},
+    {"WorldBackdrop", "sky, skybox, background, horizon", "Draws the sky and distant background behind the scene."},
+    {"Ambient Radiance", "ambient light, global illumination, gi, light probe, bounce light", "Adds soft indirect light that fills shadows around it."},
+    {"Detail Switch", "lod, level of detail, distance, simplify", "Swaps to simpler models as the object gets far from the camera, to save speed."},
+    {"Visibility Blocker", "occluder, occlusion, hide behind, wall culling", "Marks solid geometry that hides what is behind it, so hidden objects are not drawn."},
+    {"Visibility Cell", "occlusion cell, room, pvs, visible set", "Defines a region that knows which objects can be seen from inside it."},
+    {"Region Portal", "portal, doorway, room link, opening", "Marks an opening between two regions so the view can continue through it."},
+    {"Secondary Frame", "render texture, second camera, mirror, minimap, security camera, picture in picture", "Renders a second view of the scene into a picture you can show on a surface or screen."},
+    {"Geometry Swarm", "instancing, instanced mesh, foliage, grass, trees, scatter, crowd, many copies", "Draws thousands of copies of one model cheaply, for grass, trees or crowds."},
+    {"Surface Cast", "decal, projected, stamp, bullet hole, stain, paint on surface", "Projects a picture onto the surfaces in front of it, like a stain or a mark."},
+    {"Facing Panel", "billboard, sprite, camera facing, always faces camera, flat image, quad", "A flat picture that always turns to face the camera, like a tree sprite or a label in the world."},
+    {"Line Renderer", "line, beam, rope, wire, laser, path line", "Draws a line or beam through a list of points."},
+    {"Trail Renderer", "trail, ribbon, swoosh, streak, motion trail", "Leaves a fading ribbon behind a moving object."},
+    {"Tags", "tag, layer, label, group, category, classification", "Gives the object names and layers so game logic and the editor can find it."},
+    {"RegionShape", "zone, area, volume, trigger zone, bounds", "Describes an area of space other features can use."},
+    {"GuideCurve", "spline, path, rail, curve, route", "A curve in space that other features can follow."},
+    {"ContentInstance", "prefab link, linked scene, reference, sub scene", "Places another saved piece of content in this scene."},
+    {"StreamFocus", "streaming, loader, load around, focus point", "Tells the world where to load content around."},
+    {"AudioSource", "sound, speaker, music, sfx, play sound, audio clip", "Plays a sound from this object, in 3D space if you choose."},
+    {"AudioListener", "ears, microphone, hearing, listener", "Marks where the player hears from."},
+    {"Animator", "animation, animate, state machine, controller, character animation", "Plays and blends animations on a character through a state machine."},
+    {"SkeletonBinding", "skeleton, bones, rig, skinned mesh", "Attaches a model to a skeleton so bones move it."},
+    {"SocketAttachment", "socket, hold, attach to bone, weapon grip, hand", "Attaches this object to a named point on a character, such as a hand."},
+    {"Combatant", "health, hp, team, damage, fighter, enemy, senses", "Gives the object health, a team and senses so it can fight and be hurt."},
+    {"AIBrain", "ai, behaviour, behavior, enemy brain, rules, npc", "Lets the object decide what to do from simple rules, like chase or flee."},
+    {"DeformedGeometry", "cloth, soft, wobble, bend, deform, jelly", "Bends and wobbles a model while it moves."},
+    {"Rigidbody", "physics body, gravity, falls, pushable, simulation", "Makes the object move by physics: fall, bounce and be pushed."},
+    {"Collider", "hitbox, collision, trigger, solid, blocks", "Gives the object a solid shape that things collide with, or a trigger area."},
+    {"CharacterController", "player controller, walking, movement, character movement, capsule", "Moves a character through the world without falling through floors or walls."},
+    {"Joint", "hinge, door, constraint, connect, spring, rope joint", "Connects two physics bodies, like a hinge or a spring."},
+    {"NavAgent", "pathfinding, path, walk to, ai movement, navigation", "Lets the object walk to a point along a route that avoids obstacles."},
+    {"NavObstacle", "blocker, avoid, obstacle, block path", "Makes walkers go around this object."},
+    {"NavLink", "jump link, off mesh, ladder, connection, drop down", "Joins two walkable places that are not next to each other, like a jump or a ladder."},
+};
+
+[[nodiscard]] const ComponentNames* FindNames(std::string_view componentId) noexcept {
+    for (const ComponentNames& names : kComponentNames) {
+        if (names.id == componentId) {
+            return &names;
+        }
+    }
+    return nullptr;
+}
+
+// 0: no match; 1: the label, id or category names it; 2: only an everyday name (keyword) does. Search lists the
+// first kind before the second, so typing a component's own name still puts that component first.
+[[nodiscard]] int MatchRank(const InspectorComponentTile& tile, std::string_view query) {
     if (query.empty()) {
-        return true;
+        return 1;
     }
     const std::string loweredQuery = LowerAscii(query);
     // The names the user reads match as well as the English ones the catalog keeps.
-    return LowerAscii(tile.label).find(loweredQuery) != std::string::npos ||
+    if (LowerAscii(tile.label).find(loweredQuery) != std::string::npos ||
         LowerAscii(tile.category).find(loweredQuery) != std::string::npos ||
         LowerAscii(tile.id).find(loweredQuery) != std::string::npos ||
         LowerAscii(InspectorComponentCatalog::DisplayLabel(tile)).find(loweredQuery) != std::string::npos ||
-        LowerAscii(InspectorComponentCatalog::CategoryLabel(tile.category)).find(loweredQuery) != std::string::npos;
+        LowerAscii(InspectorComponentCatalog::CategoryLabel(tile.category)).find(loweredQuery) != std::string::npos) {
+        return 1;
+    }
+    const ComponentNames* names = FindNames(tile.id);
+    return names != nullptr && LowerAscii(names->keywords).find(loweredQuery) != std::string::npos ? 2 : 0;
 }
 
 } // namespace
@@ -140,13 +202,18 @@ std::vector<const InspectorComponentTile*> InspectorComponentCatalog::InCategory
 
 std::vector<const InspectorComponentTile*> InspectorComponentCatalog::Search(std::string_view query) {
     std::vector<const InspectorComponentTile*> result;
+    std::vector<const InspectorComponentTile*> byKeyword;
     const std::span<const InspectorComponentTile> tiles = Tiles();
     result.reserve(tiles.size());
     for (const InspectorComponentTile& tile : tiles) {
-        if (Matches(tile, query)) {
+        const int rank = MatchRank(tile, query);
+        if (rank == 1) {
             result.push_back(&tile);
+        } else if (rank == 2) {
+            byKeyword.push_back(&tile);
         }
     }
+    result.insert(result.end(), byKeyword.begin(), byKeyword.end());
     return result;
 }
 
@@ -215,6 +282,7 @@ std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile
 std::string_view InspectorComponentCatalog::CategoryLabel(std::string_view category) {
     if (category == "Animation") return EditorText("component.category.animation", "Animation");
     if (category == "Audio") return EditorText("component.category.audio", "Audio");
+    if (category == "Gameplay") return EditorText("component.category.gameplay", "Gameplay");
     if (category == "Navigation") return EditorText("component.category.navigation", "Navigation");
     if (category == "Physics") return EditorText("component.category.physics", "Physics");
     if (category == "Rendering") return EditorText("component.category.rendering", "Rendering");
@@ -222,6 +290,16 @@ std::string_view InspectorComponentCatalog::CategoryLabel(std::string_view categ
     if (category == "User Widget") return EditorText("component.category.userWidget", "User Widget");
     if (category == "World") return EditorText("component.category.world", "World");
     return category;
+}
+
+std::string_view InspectorComponentCatalog::Keywords(std::string_view componentId) noexcept {
+    const ComponentNames* names = FindNames(componentId);
+    return names == nullptr ? std::string_view{} : names->keywords;
+}
+
+std::string_view InspectorComponentCatalog::Description(std::string_view componentId) noexcept {
+    const ComponentNames* names = FindNames(componentId);
+    return names == nullptr ? std::string_view{} : names->description;
 }
 
 std::string_view InspectorComponentCatalog::RequiredPluginId(std::string_view componentId) noexcept {
