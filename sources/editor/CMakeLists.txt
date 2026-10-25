@@ -20,6 +20,8 @@ add_executable(kb_editor WIN32
     src/app/EditorAssetBrowserNativeCommandMap.cpp
     src/private/app/EditorAudioAssetPreview.hpp
     src/app/EditorAudioAssetPreview.cpp
+    src/scene/audio/EditorAudioMixerRuntime.cpp
+    src/inspection/InspectorAudioMixerRuntimeInteraction.cpp
     src/app/EditorAudioAssetInspectorDropHandler.cpp
     src/app/EditorAudioInspectorDropPolicy.cpp
     src/app/EditorAnimatorAssetInspectorDropHandler.cpp
@@ -1303,6 +1305,7 @@ if(BUILD_TESTING)
         tests/EditorAssetBrowserTests.cpp
         tests/EditorAudioMixerAuthoringTests.cpp
         tests/EditorAudioMixerInspectorTests.cpp
+        tests/EditorAudioMixerRuntimeTests.cpp
         tests/EditorSceneAudioInspectorTests.cpp
         tests/EditorViewportPreviewTests.cpp
         tests/EditorMaterialGraphCookServiceTests.cpp
@@ -1420,6 +1423,9 @@ if(BUILD_TESTING)
         src/scene/EditorSceneAssetBrowserCommands.cpp
         src/scene/audio/EditorAudioMixerAssetGateway.cpp
         src/scene/audio/EditorAudioMixerAuthoring.cpp
+        src/scene/audio/EditorAudioMixerRuntime.cpp
+        src/app/EditorAudioAssetPreview.cpp
+        src/inspection/InspectorAudioMixerRuntimeInteraction.cpp
         src/scene/audio/EditorSceneAudioSettingsService.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneHierarchyActions.cpp
@@ -1501,6 +1507,13 @@ if(BUILD_TESTING)
             src/private
             tests
     )
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL AND TARGET kb_audio_miniaudio_plugin)
+        set_property(SOURCE tests/EditorAudioMixerRuntimeTests.cpp APPEND PROPERTY
+            COMPILE_DEFINITIONS KB_EDITOR_TEST_AUDIO_PLUGIN="$<TARGET_FILE:kb_audio_miniaudio_plugin>")
+        add_dependencies(kb_editor_tests kb_audio_miniaudio_plugin)
+        add_test(NAME kb_editor_audio_mixer_runtime COMMAND $<TARGET_FILE:kb_editor_tests> audio-mixer-runtime)
+        set_tests_properties(kb_editor_audio_mixer_runtime PROPERTIES LABELS "editor;audio" TIMEOUT 30)
+    endif()
 
     target_link_libraries(kb_editor_tests
         PRIVATE

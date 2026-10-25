@@ -41,7 +41,8 @@ public:
         kb::assets::AssetId id);
     [[nodiscard]] static int ContentHeight(
         const InspectorPanelState& state,
-        const kb::audio::AudioMixerAsset& asset);
+        const kb::audio::AudioMixerAsset& asset,
+        const EditorAudioMixerRuntimeState* runtime = nullptr);
     [[nodiscard]] static bool IsRowEditing(
         const InspectorPanelState& state,
         kb::assets::AssetId id,
@@ -54,18 +55,21 @@ public:
         const EditorTheme& theme,
         const InspectorPanelState& state,
         const kb::assets::AssetMetadata& metadata,
-        const kb::audio::AudioMixerAsset& asset);
+        const kb::audio::AudioMixerAsset& asset,
+        const EditorAudioMixerRuntimeState* runtime = nullptr);
     [[nodiscard]] static InspectorAudioMixerAssetHit HitTest(
         const RECT& content,
         const InspectorPanelState& state,
         const kb::audio::AudioMixerAsset& asset,
         int x,
-        int y);
+        int y,
+        const EditorAudioMixerRuntimeState* runtime = nullptr);
     [[nodiscard]] static std::optional<RECT> RowBounds(
         const RECT& content,
         const InspectorPanelState& state,
         const kb::audio::AudioMixerAsset& asset,
-        int flatIndex);
+        int flatIndex,
+        const EditorAudioMixerRuntimeState* runtime = nullptr);
 #endif
 };
 

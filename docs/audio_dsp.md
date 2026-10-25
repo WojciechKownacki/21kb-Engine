@@ -340,3 +340,31 @@ produces zero meters, reset clears counters, and disabling capture preserves
 playback. Invalid bus/channel/type, fractional, non-finite and oversized numeric
 arguments must return ordinary errors while the process continues. Separate
 incorrect DSP and meter assertions must each terminate the player with code 1.
+
+The mixer Inspector includes a **Meters and preview** section. Assign the mixer
+to the scene through scene audio routing, enable **Capture signal**, and paste
+an audio asset reference into **Preview clip**. Press Enter, then choose
+**Preview through this bus** on master or a named bus. Preview uses the scene's
+ordinary audio provider and the installed effects. **Stop preview** stops its
+voice; effect tails follow the bus's existing settings. Peak and RMS bars show
+the last processed block on a linear amplitude scale; held peaks and clipped
+sample counters keep the clipping indicator red until reset. The complete
+per-channel readings and processed-frame counters remain visible beside the
+bars. The Inspector refreshes these observations at most about 30 times per
+second without driving the audio clock.
+
+Clip selection and capture controls are transient. They do not write the mixer
+or add Undo entries; authored routing, mute, volume and effects keep their
+ordinary save and Undo behavior. A mixer that is not active cannot display or
+control another asset's runtime graph, including equal bus names. Unsupported
+providers and failed effect updates display diagnostics. Changing the preview
+selection while an older field edit is pending rejects the stale edit.
+
+The registered `kb_editor_audio_mixer_runtime` test loads a real provider DLL,
+routes 17 control actions through actual row geometry and hit-testing, mixes
+PCM, and reads the painted green master and red clipped-child bars from GDI.
+It checks mute, reset, disable, stop, exact Undo/file bytes, other-mixer isolation
+and all 32 translated catalogs. Native Windows Release and ASan runs cover this
+workflow; the focused Windows ASan CI selection includes this target and test.
+A dedicated mixer docking panel, physical-device audio qualification and other
+platform integration remain pending.

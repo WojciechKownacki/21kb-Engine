@@ -3,6 +3,9 @@
 #include <string_view>
 
 int main(int argumentCount, char** arguments) {
+    if (argumentCount == 2 && std::string_view{arguments[1]} == "audio-mixer-runtime") {
+        kb::editor::tests::RunEditorAudioMixerRuntimeTests(); return 0;
+    }
     if (argumentCount == 2 && std::string_view{ arguments[1] } == "hierarchy") {
         kb::editor::tests::RunEditorHierarchyTests();
         return 0;

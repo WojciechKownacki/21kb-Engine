@@ -5,6 +5,7 @@
 #include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
 #include "rendering/InspectorAudioMixerAssetView.hpp"
+#include "scene/audio/EditorAudioMixerRuntime.hpp"
 #include "inspection/InspectorPostProcessProfileModel.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
@@ -1544,7 +1545,8 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneConte
             const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
                 InspectorAudioMixerAssetView::LoadCached(manager, metadata->id);
             if (mixer.IsLoaded()) {
-                InspectorAudioMixerAssetView::Paint(dc, content, theme, inspector, *metadata, *mixer);
+                const auto runtime = EditorAudioMixerRuntime::Query(sceneContext.Scene(), metadata->id);
+                InspectorAudioMixerAssetView::Paint(dc, content, theme, inspector, *metadata, *mixer, &runtime);
             } else {
                 DrawEmpty(dc, content, theme);
             }
@@ -3971,8 +3973,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             sceneContext.Scene().Assets().Manager());
         const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
             InspectorAudioMixerAssetView::LoadCached(manager, metadata.id);
+        const auto runtime = EditorAudioMixerRuntime::Query(sceneContext.Scene(), metadata.id);
         return mixer.IsLoaded()
-            ? InspectorAudioMixerAssetView::ContentHeight(inspector, *mixer)
+            ? InspectorAudioMixerAssetView::ContentHeight(inspector, *mixer, &runtime)
             : height;
     }
 
@@ -5390,8 +5393,9 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             if (!mixer.IsLoaded()) {
                 return {};
             }
+            const auto runtime = EditorAudioMixerRuntime::Query(sceneContext.Scene(), metadata->id);
             const InspectorAudioMixerAssetHit mixerHit =
-                InspectorAudioMixerAssetView::HitTest(viewport, state, *mixer, x, scrolledY);
+                InspectorAudioMixerAssetView::HitTest(viewport, state, *mixer, x, scrolledY, &runtime);
             return InspectorPanelRenderer::Hit{
                 .kind = mixerHit.kind,
                 .section = mixerHit.section,

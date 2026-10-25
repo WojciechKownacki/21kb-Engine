@@ -34,6 +34,8 @@
 
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/components/SceneComponentIteration.hpp"
+#include "scene/transform/SceneTransformRootQueryCache.hpp"
 #include "scene/assets/SceneAssetLoader.hpp"
 #include "scene/assets/ScenePrefabAssetLoader.hpp"
 
@@ -190,6 +192,11 @@ Scene::~Scene() {
     }
     state_->sceneSystemScheduler.Shutdown(*this);
     state_->systemScheduler.Shutdown(state_->world);
+    // Cached queries can retain plans whose shared-pointer deleters live in a
+    // provider module. Release them while that module is still mapped.
+    state_->animatorDebugSnapshotJob.Wait();
+    state_->componentIterationQueries.reset();
+    state_->transformRootQueryCache.reset();
     if (moduleHost_ != nullptr) {
         state_->world.ReleaseUnusedQueryPlans();
         moduleHost_->Unload();

@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace kb::editor {
+struct EditorAudioMixerRuntimeState;
 
 enum class InspectorAudioMixerRowKind : std::uint8_t {
     Group,
@@ -18,6 +19,7 @@ enum class InspectorAudioMixerRowKind : std::uint8_t {
     ReadOnly,
     Action,
     Empty,
+    Meter,
 };
 
 struct InspectorAudioMixerRow {
@@ -38,12 +40,15 @@ struct InspectorAudioMixerRow {
     std::string label;
     std::string value;
     bool boolValue = false;
+    float meterLevel = 0.0F;
+    bool meterClipped = false;
     InspectorDynamicRowIdentity identity;
 };
 
 class InspectorAudioMixerAssetModel {
 public:
-    explicit InspectorAudioMixerAssetModel(const kb::audio::AudioMixerAsset& asset);
+    explicit InspectorAudioMixerAssetModel(const kb::audio::AudioMixerAsset& asset,
+        const EditorAudioMixerRuntimeState* runtime = nullptr);
 
     [[nodiscard]] std::span<const InspectorAudioMixerRow> Rows() const noexcept;
     [[nodiscard]] std::span<const InspectorAudioMixerRow> Rows(InspectorSectionId section) const noexcept;
@@ -59,8 +64,10 @@ public:
     [[nodiscard]] static int RowHeight(InspectorAudioMixerRowKind kind) noexcept;
 
 private:
+    void AppendRuntime(const kb::audio::AudioMixerAsset& asset, const EditorAudioMixerRuntimeState& runtime);
     std::vector<InspectorAudioMixerRow> rows_;
     std::size_t busRows_ = 0U;
+    std::size_t snapshotRows_ = 0U;
 };
 
 } // namespace kb::editor

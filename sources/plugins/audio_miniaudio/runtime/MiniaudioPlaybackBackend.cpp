@@ -307,6 +307,14 @@ bool MiniaudioPlaybackBackend::ConfigureMeterCapture(kb::scene::Scene& scene, bo
     return true;
 }
 
+bool MiniaudioPlaybackBackend::SynchronizeMixerPreview(kb::scene::Scene& scene) {
+    AssertOwnerThread();
+    if (!engine_.IsInitialized() || !PlaybackAvailable()) return false;
+    SyncRouting(scene, PlaybackAvailable());
+    const auto report = busRegistry_.DspReport();
+    return std::all_of(report.buses.begin(), report.buses.end(), [](const auto& bus) { return bus.initialized && bus.settingsCurrent; });
+}
+
 bool MiniaudioPlaybackBackend::ResetMeterCapture(kb::scene::Scene& scene) {
     AssertOwnerThread();
     static_cast<void>(scene);

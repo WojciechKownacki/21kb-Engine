@@ -4,6 +4,7 @@
 #include "app/EditorKeyState.hpp"
 #include "rendering/EditorPanelStyle.hpp"
 #include "inspection/InspectorAudioMixerAssetInteraction.hpp"
+#include "inspection/InspectorAudioMixerRuntimeInteraction.hpp"
 #include "inspection/InspectorPostProcessProfileModel.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
@@ -108,7 +109,7 @@ private:
 
 [[nodiscard]] bool IsAudioMixerInspectorSection(InspectorSectionId section) noexcept {
     return section == InspectorSectionId::AudioMixerBuses
-        || section == InspectorSectionId::AudioMixerSnapshots;
+        || section == InspectorSectionId::AudioMixerSnapshots || section == InspectorSectionId::AudioMixerRuntime;
 }
 
 [[nodiscard]] kb::assets::AssetHandle<kb::audio::AudioMixerAsset> SelectedAudioMixer(
@@ -3520,6 +3521,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
             return true;
         }
         SceneAudioMixerInspectorActions actions{ sceneContext };
+        if (hit.section == InspectorSectionId::AudioMixerRuntime) {
+            const auto runtime = EditorAudioMixerRuntime::Query(sceneContext.Scene(), mixer.Id());
+            return InspectorAudioMixerRuntimeInteraction::HandlePointerDown(sceneContext.Scene(), sceneContext.Inspector(), *mixer,
+                {.kind = hit.kind, .section = hit.section, .property = hit.property, .index = hit.index}, mixer.Id(), runtime);
+        }
         return InspectorAudioMixerAssetInteraction::HandlePointerDown(
             sceneContext.Inspector(),
             *mixer,
@@ -4131,6 +4137,14 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             IsNavAgentProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyNavAgentText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
+            return true;
+        }
+        if (inspector.EditedProperty() == InspectorPropertyId::AudioMixerPreviewClip) {
+            const auto mixer = SelectedAudioMixer(sceneContext);
+            if (mixer.IsLoaded()) {
+                const auto runtime = EditorAudioMixerRuntime::Query(sceneContext.Scene(), mixer.Id());
+                static_cast<void>(InspectorAudioMixerRuntimeInteraction::CommitTextEdit(sceneContext.Scene(), inspector, *mixer, mixer.Id(), runtime));
+            } else inspector.EndTextEdit();
             return true;
         }
         if (InspectorAudioMixerAssetInteraction::IsTextProperty(inspector.EditedProperty())) {

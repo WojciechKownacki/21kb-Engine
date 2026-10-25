@@ -1,6 +1,7 @@
 #include "inspection/InspectorAudioMixerAssetModel.hpp"
 #include "localization/EditorLocalization.hpp"
 #include "engine/audio/AudioMixerEffectEditing.hpp"
+#include "scene/audio/EditorAudioMixerRuntime.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -101,7 +102,8 @@ constexpr int kGroupRowHeight = 20;
 
 } // namespace
 
-InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::AudioMixerAsset& asset) {
+InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::AudioMixerAsset& asset,
+    const EditorAudioMixerRuntimeState* runtime) {
     const auto add = [this](InspectorAudioMixerRow row) {
         row.flatIndex = static_cast<int>(rows_.size());
         row.identity = Identity(row.kind, row.property, row.busName,
@@ -329,6 +331,77 @@ InspectorAudioMixerAssetModel::InspectorAudioMixerAssetModel(const kb::audio::Au
         .property = InspectorPropertyId::AudioMixerSnapshotAdd,
         .label = std::string{ EditorText("inspector.audioMixer.addSnapshot", "Add Snapshot") },
     });
+    snapshotRows_ = rows_.size() - busRows_;
+    if (runtime != nullptr) AppendRuntime(asset, *runtime);
+}
+
+void InspectorAudioMixerAssetModel::AppendRuntime(const kb::audio::AudioMixerAsset& asset, const EditorAudioMixerRuntimeState& runtime) {
+    using Kind = InspectorAudioMixerRowKind;
+    using Property = InspectorPropertyId;
+    const auto add = [&](InspectorAudioMixerRow row) {
+        row.section = InspectorSectionId::AudioMixerRuntime;
+        row.flatIndex = static_cast<int>(rows_.size());
+        row.identity = Identity(row.kind, row.property, row.busName,
+            row.property == Property::AudioMixerPreviewClip ? runtime.previewClip : std::string{}, {});
+        rows_.push_back(std::move(row));
+    };
+    add({.kind = Kind::Empty, .label = runtime.diagnostic.empty()
+        ? std::string{runtime.meters.captureEnabled ? EditorText("inspector.audioMixer.capturing", "Capturing signal")
+            : EditorText("inspector.audioMixer.captureDisabled", "Capture is disabled")}
+        : runtime.diagnostic});
+    add({.kind = runtime.canCapture ? Kind::Bool : Kind::ReadOnly, .property = Property::AudioMixerCapture,
+        .label = std::string{EditorText("inspector.audioMixer.capture", "Capture signal")}, .boolValue = runtime.meters.captureEnabled});
+    add({.kind = runtime.canCapture ? Kind::Action : Kind::ReadOnly, .property = Property::AudioMixerResetMeters,
+        .label = std::string{EditorText("inspector.audioMixer.resetMeters", "Reset peaks and counters")}});
+    add({.kind = Kind::Text, .property = Property::AudioMixerPreviewClip,
+        .label = std::string{EditorText("inspector.audioMixer.previewClip", "Preview clip")}, .value = runtime.previewClip});
+    add({.kind = runtime.previewPlaying ? Kind::Action : Kind::ReadOnly, .property = Property::AudioMixerStopPreview,
+        .label = std::string{EditorText("inspector.audioMixer.stopPreview", "Stop preview")}});
+    const auto meterRows = [&](std::string_view name, const kb::audio::AudioMeterReading* reading) {
+        add({.kind = Kind::Group, .busName = std::string{name}, .label = name.empty()
+            ? std::string{EditorText("inspector.audioMixer.masterOutput", "Master output")} : std::string{name}});
+        add({.kind = runtime.canPreview && !runtime.previewClip.empty() ? Kind::Action : Kind::ReadOnly,
+            .property = Property::AudioMixerPreviewBus, .busName = std::string{name},
+            .label = std::string{EditorText("inspector.audioMixer.previewBus", "Preview through this bus")}});
+        for (const auto property : {Property::AudioMixerMeterPeak, Property::AudioMixerMeterRms,
+                Property::AudioMixerMeterHold, Property::AudioMixerMeterClips}) {
+            std::string label;
+            if (property == Property::AudioMixerMeterPeak) label = EditorText("inspector.audioMixer.peak", "Peak");
+            else if (property == Property::AudioMixerMeterRms) label = EditorText("inspector.audioMixer.rms", "RMS");
+            else if (property == Property::AudioMixerMeterHold) label = EditorText("inspector.audioMixer.heldPeak", "Held peak");
+            else label = EditorText("inspector.audioMixer.clippedSamples", "Clipped samples");
+            InspectorAudioMixerRow row{.kind = property == Property::AudioMixerMeterPeak || property == Property::AudioMixerMeterRms
+                ? Kind::Meter : Kind::ReadOnly, .property = property, .busName = std::string{name}, .label = std::move(label)};
+            if (reading == nullptr || !reading->available || !runtime.meters.captureEnabled) {
+                row.value = EditorText("inspector.audioMixer.noMeterData", "Unavailable");
+            } else {
+                std::ostringstream value; value.imbue(std::locale::classic()); value << std::fixed << std::setprecision(3);
+                for (std::size_t i = 0U; i < reading->channels && i < reading->channel.size(); ++i) {
+                    if (i != 0U) value << " / ";
+                    value << (i + 1U) << ": ";
+                    const auto& channel = reading->channel[i];
+                    row.meterClipped = row.meterClipped || channel.clippedSamples > 0U || channel.heldPeak > 1.0F;
+                    if (property == Property::AudioMixerMeterClips) value << channel.clippedSamples;
+                    else {
+                        const auto level = property == Property::AudioMixerMeterPeak ? channel.peak
+                            : property == Property::AudioMixerMeterRms ? channel.rms : channel.heldPeak;
+                        row.meterLevel = std::max(row.meterLevel, level); value << level;
+                    }
+                }
+                row.value = value.str();
+            }
+            add(std::move(row));
+        }
+        add({.kind = Kind::ReadOnly, .property = Property::AudioMixerMeterFrames, .busName = std::string{name},
+            .label = std::string{EditorText("inspector.audioMixer.processedFrames", "Processed frames")},
+            .value = reading != nullptr && reading->available && runtime.meters.captureEnabled
+                ? std::to_string(reading->processedFrames) : std::string{EditorText("inspector.audioMixer.noMeterData", "Unavailable")}});
+    };
+    meterRows({}, &runtime.meters.master);
+    for (const auto& bus : asset.buses) {
+        const auto found = std::find_if(runtime.meters.buses.begin(), runtime.meters.buses.end(), [&](const auto& row) { return row.bus == bus.name; });
+        meterRows(bus.name, found == runtime.meters.buses.end() ? nullptr : &*found);
+    }
 }
 
 std::span<const InspectorAudioMixerRow> InspectorAudioMixerAssetModel::Rows() const noexcept {
@@ -340,8 +413,10 @@ std::span<const InspectorAudioMixerRow> InspectorAudioMixerAssetModel::Rows(Insp
         return std::span<const InspectorAudioMixerRow>{ rows_ }.first(busRows_);
     }
     if (section == InspectorSectionId::AudioMixerSnapshots) {
-        return std::span<const InspectorAudioMixerRow>{ rows_ }.subspan(busRows_);
+        return std::span<const InspectorAudioMixerRow>{ rows_ }.subspan(busRows_, snapshotRows_);
     }
+    if (section == InspectorSectionId::AudioMixerRuntime)
+        return std::span<const InspectorAudioMixerRow>{ rows_ }.subspan(busRows_ + snapshotRows_);
     return {};
 }
 
@@ -365,7 +440,8 @@ std::string InspectorAudioMixerAssetModel::Text() const {
     for (const InspectorAudioMixerRow& row : rows_) {
         if (row.section != section) {
             section = row.section;
-            text << '\n' << (section == InspectorSectionId::AudioMixerBuses ? "Buses" : "Snapshots") << '\n';
+            text << '\n' << (section == InspectorSectionId::AudioMixerBuses ? "Buses"
+                : section == InspectorSectionId::AudioMixerSnapshots ? "Snapshots" : "Runtime") << '\n';
         }
         switch (row.kind) {
         case InspectorAudioMixerRowKind::Group:
@@ -373,6 +449,7 @@ std::string InspectorAudioMixerAssetModel::Text() const {
             break;
         case InspectorAudioMixerRowKind::Text:
         case InspectorAudioMixerRowKind::ReadOnly:
+        case InspectorAudioMixerRowKind::Meter:
             text << row.label << ": " << row.value << '\n';
             break;
         case InspectorAudioMixerRowKind::Bool:

@@ -112,6 +112,7 @@ enum class InspectorSectionId : std::uint8_t {
     ScenePostProcess,
     // A Mesh Renderer drawing a .kbmap2d tile map (the World 2D Map component).
     World2DMap,
+    AudioMixerRuntime,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -611,6 +612,16 @@ enum class InspectorPropertyId : std::uint16_t {
     World2DMapVisible,
     World2DMapLocked,
     World2DMapCollision,
+    AudioMixerCapture,
+    AudioMixerResetMeters,
+    AudioMixerPreviewClip,
+    AudioMixerPreviewBus,
+    AudioMixerStopPreview,
+    AudioMixerMeterPeak,
+    AudioMixerMeterRms,
+    AudioMixerMeterHold,
+    AudioMixerMeterClips,
+    AudioMixerMeterFrames,
 };
 
 struct InspectorDynamicRowIdentity {

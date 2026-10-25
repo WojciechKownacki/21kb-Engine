@@ -30,6 +30,10 @@ void StopAndClear(kb::scene::Scene& scene) noexcept {
 } // namespace
 
 bool EditorAudioAssetPreview::Play(kb::scene::Scene& scene, kb::assets::AssetId assetId) {
+    return PlayOnBus(scene, assetId, {});
+}
+
+bool EditorAudioAssetPreview::PlayOnBus(kb::scene::Scene& scene, kb::assets::AssetId assetId, std::string_view bus) {
     StopAndClear(scene);
 
     const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(assetId);
@@ -39,6 +43,7 @@ bool EditorAudioAssetPreview::Play(kb::scene::Scene& scene, kb::assets::AssetId 
 
     const kb::audio::AudioPlayResult result = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
         .clipAssetId = assetId.value,
+        .outputBus = std::string{bus},
         .spatial = false,
     });
     if (!result.Succeeded()) {
@@ -47,6 +52,10 @@ bool EditorAudioAssetPreview::Play(kb::scene::Scene& scene, kb::assets::AssetId 
 
     State() = AudioPreviewState{ .assetId = assetId, .sceneId = scene.Id(), .voiceId = result.voiceId };
     return true;
+}
+
+void EditorAudioAssetPreview::Stop(kb::scene::Scene& scene) noexcept {
+    if (State().sceneId == scene.Id()) StopAndClear(scene);
 }
 
 bool EditorAudioAssetPreview::Tick(kb::scene::Scene& scene) noexcept {
@@ -73,6 +82,10 @@ bool EditorAudioAssetPreview::HasActivePreview() noexcept {
 bool EditorAudioAssetPreview::IsPlaying(kb::assets::AssetId assetId) noexcept {
     const AudioPreviewState& state = State();
     return assetId.IsValid() && state.assetId == assetId && state.voiceId != 0U;
+}
+
+bool EditorAudioAssetPreview::IsPlaying(const kb::scene::Scene& scene, kb::assets::AssetId assetId) noexcept {
+    return State().sceneId == scene.Id() && IsPlaying(assetId);
 }
 
 } // namespace kb::editor
