@@ -1,4 +1,5 @@
 #include "runtime/MiniaudioFilterChain.hpp"
+#include "AudioDspTestSupport.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,7 @@
 namespace {
 
 using kb::audio_miniaudio::MiniaudioFilterChain;
+using kb::audio_miniaudio::tests::AllocationCounter;
 using kb::audio_miniaudio::MiniaudioFilterDesc;
 using Kind = kb::audio_miniaudio::MiniaudioFilterKind;
 constexpr double kPi = 3.141592653589793;
@@ -169,46 +171,6 @@ void InvalidEditsPreserveLiveGraph() {
     graph.Configure({});
     Require(std::abs(graph.Render() / (0.1 / std::sqrt(2.0)) - 1.0) < 0.01, "Reset chain could not restore passthrough");
 }
-
-struct AllocationCounter {
-    struct alignas(std::max_align_t) Header { std::size_t bytes; };
-    std::size_t calls = 0U;
-    std::size_t failAt = 0U;
-    std::size_t live = 0U;
-    std::size_t bytes = 0U;
-    std::size_t peak = 0U;
-
-    static void* Allocate(std::size_t size, void* user) {
-        auto& state = *static_cast<AllocationCounter*>(user);
-        if (++state.calls == state.failAt || size > std::numeric_limits<std::size_t>::max() - sizeof(Header)) return nullptr;
-        auto* header = static_cast<Header*>(std::malloc(sizeof(Header) + size));
-        if (header == nullptr) return nullptr;
-        header->bytes = size;
-        ++state.live;
-        state.bytes += size;
-        state.peak = std::max(state.peak, state.bytes);
-        return header + 1;
-    }
-    static void Free(void* memory, void* user) {
-        if (memory == nullptr) return;
-        auto& state = *static_cast<AllocationCounter*>(user);
-        auto* header = static_cast<Header*>(memory) - 1;
-        Require(state.live > 0U && state.bytes >= header->bytes, "DSP allocation ownership is inconsistent");
-        --state.live;
-        state.bytes -= header->bytes;
-        std::free(header);
-    }
-    static void* Reallocate(void* memory, std::size_t size, void* user) {
-        if (memory == nullptr) return Allocate(size, user);
-        if (size == 0U) { Free(memory, user); return nullptr; }
-        const auto oldSize = (static_cast<Header*>(memory) - 1)->bytes;
-        void* replacement = Allocate(size, user);
-        if (replacement == nullptr) return nullptr;
-        std::copy_n(static_cast<const unsigned char*>(memory), std::min(oldSize, size), static_cast<unsigned char*>(replacement));
-        Free(memory, user);
-        return replacement;
-    }
-};
 
 void AllocationFailurePreservesLiveGraph(bool equalizer = false) {
     AllocationCounter counter;

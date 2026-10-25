@@ -24,6 +24,12 @@ set_target_properties(kb_audio_miniaudio_asset_runtime PROPERTIES
 kb_apply_quality_gates(kb_audio_miniaudio_asset_runtime)
 
 set(KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE STATIC)
+set(KB_AUDIO_MINIAUDIO_DSP_SOURCES
+    runtime/MiniaudioFilterChain.hpp
+    runtime/MiniaudioFilterChain.cpp
+    runtime/MiniaudioDelayNode.hpp
+    runtime/MiniaudioDelayNode.cpp
+)
 if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
     set(KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE SHARED)
 endif()
@@ -44,8 +50,7 @@ add_library(kb_audio_miniaudio_plugin ${KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE}
     runtime/MiniaudioPlaybackBackend.cpp
     runtime/MiniaudioSound.hpp
     runtime/MiniaudioSound.cpp
-    runtime/MiniaudioFilterChain.hpp
-    runtime/MiniaudioFilterChain.cpp
+    ${KB_AUDIO_MINIAUDIO_DSP_SOURCES}
     scene/MiniaudioBusRegistry.hpp
     scene/MiniaudioBusRegistry.cpp
     scene/MiniaudioListenerSynchronizer.hpp
@@ -78,12 +83,19 @@ endif()
 kb_apply_quality_gates(kb_audio_miniaudio_plugin)
 
 if(BUILD_TESTING)
-    add_executable(kb_audio_filter_tests tests/AudioFilterTests.cpp runtime/MiniaudioFilterChain.cpp)
+    add_executable(kb_audio_filter_tests tests/AudioFilterTests.cpp ${KB_AUDIO_MINIAUDIO_DSP_SOURCES})
     target_include_directories(kb_audio_filter_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(kb_audio_filter_tests PRIVATE miniaudio)
     target_compile_features(kb_audio_filter_tests PRIVATE cxx_std_20)
     add_test(NAME kb_audio_filter_tests COMMAND $<TARGET_FILE:kb_audio_filter_tests>)
     kb_apply_quality_gates(kb_audio_filter_tests)
+
+    add_executable(kb_audio_delay_tests tests/AudioDelayTests.cpp ${KB_AUDIO_MINIAUDIO_DSP_SOURCES})
+    target_include_directories(kb_audio_delay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(kb_audio_delay_tests PRIVATE miniaudio)
+    target_compile_features(kb_audio_delay_tests PRIVATE cxx_std_20)
+    add_test(NAME kb_audio_delay_tests COMMAND $<TARGET_FILE:kb_audio_delay_tests>)
+    kb_apply_quality_gates(kb_audio_delay_tests)
 
     add_executable(kb_audio_runtime_tests
         tests/AudioRuntimeTests.cpp
