@@ -744,6 +744,59 @@ void TestResponsiveMenuKeepsEveryControlReachable() {
     }
 }
 
+// Controls anchored to the four corners of a screen stay inside the safe area and reachable for every orientation, notch,
+// gesture bar and on-screen keyboard (a bottom inset), and insets larger than the screen collapse without negative
+// sizes or a crash.
+void TestSafeAreaMatrixKeepsCornerControlsReachable() {
+    struct Screen { float width; float height; };
+    struct Insets { float left; float top; float right; float bottom; };
+    constexpr std::array<Screen, 2U> screens{ Screen{ 360.0F, 780.0F }, Screen{ 780.0F, 360.0F } };
+    constexpr std::array<Insets, 5U> insets{ Insets{ 0.0F, 0.0F, 0.0F, 0.0F }, Insets{ 0.0F, 44.0F, 0.0F, 34.0F },
+        Insets{ 44.0F, 0.0F, 44.0F, 21.0F }, Insets{ 0.0F, 24.0F, 0.0F, 300.0F }, Insets{ 400.0F, 400.0F, 400.0F, 400.0F } };
+    for (const Screen& screen : screens) {
+        for (const Insets& edge : insets) {
+            kb::scene::Scene scene{ kb::scene::SceneMode::PrefabPrivate };
+            kb::scene::UIComponentSet canvasComponents = CanvasComponents();
+            canvasComponents.canvas->respectSafeArea = true;
+            const kb::scene::SceneObject canvas = AddUI(scene, {}, canvasComponents);
+            std::array<kb::scene::SceneEntity, 4U> corners{};
+            for (std::size_t index = 0U; index < corners.size(); ++index) {
+                kb::scene::UIComponentSet button = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+                const float x = (index % 2U == 0U) ? 0.0F : 1.0F;
+                const float y = (index < 2U) ? 0.0F : 1.0F;
+                button.rectTransform = kb::scene::UIRectTransform{};
+                button.rectTransform->anchorMin = { x, y };
+                button.rectTransform->anchorMax = { x, y };
+                button.rectTransform->pivot = { x, y };
+                button.rectTransform->offsetMin = { x > 0.5F ? -80.0F : 0.0F, y > 0.5F ? -40.0F : 0.0F };
+                button.rectTransform->offsetMax = { x > 0.5F ? 0.0F : 80.0F, y > 0.5F ? 0.0F : 40.0F };
+                corners[index] = AddUI(scene, canvas, button).Entity();
+            }
+            static_cast<void>(scene.UI().SetSafeAreaInsets(kb::scene::UIEdges{ .left = edge.left, .top = edge.top, .right = edge.right, .bottom = edge.bottom }));
+            kb::tests::Require(scene.UI().Update(screen.width, screen.height, {}, 0.016F), "The safe area frame must build");
+            // With less room than two buttons side by side and two on top of each other, nothing is promised except sane sizes.
+            const bool collapsed = screen.width - edge.left - edge.right < 160.0F || screen.height - edge.top - edge.bottom < 80.0F;
+            for (const kb::scene::SceneEntity entity : corners) {
+                const kb::scene::SceneUIFrameElement* element = FindElement(scene.UI().Frame(), entity);
+                if (element == nullptr) {
+                    kb::tests::Require(collapsed, "A corner control may only vanish when the insets leave no room");
+                    continue;
+                }
+                const kb::math::Rect& rect = element->rect;
+                kb::tests::Require(std::isfinite(rect.x) && std::isfinite(rect.y) && rect.width >= 0.0F && rect.height >= 0.0F,
+                    "A corner control must keep a finite, non-negative size under any inset");
+                if (!collapsed) {
+                    kb::tests::Require(rect.x >= edge.left - 0.5F && rect.y >= edge.top - 0.5F &&
+                            rect.x + rect.width <= screen.width - edge.right + 0.5F && rect.y + rect.height <= screen.height - edge.bottom + 0.5F,
+                        "A corner control must lie inside the safe area");
+                    kb::tests::Require(scene.UI().HitTest({ rect.x + rect.width * 0.5F, rect.y + rect.height * 0.5F }) == entity,
+                        "The middle of a corner control must take presses");
+                }
+            }
+        }
+    }
+}
+
 void TestInteractionAndEditing() {
     kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
     const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
@@ -2276,6 +2329,7 @@ void RunSceneUITests() {
     TestInputFieldEditsGraphemeClusters();
     TestResponsiveMenuKeepsEveryControlReachable();
     TestNestedMasksClipToTheirOverlap();
+    TestSafeAreaMatrixKeepsCornerControlsReachable();
     RunUITextLineBreakingTests();
 }
 
