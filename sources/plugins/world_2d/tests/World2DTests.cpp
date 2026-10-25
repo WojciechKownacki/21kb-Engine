@@ -31,6 +31,17 @@
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
+#endif
+
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -82,6 +93,15 @@ void WritePngHeader(const std::filesystem::path& path, std::uint32_t width, std:
         if (sprite.cell == cell) return true;
     }
     return false;
+}
+
+// Memory the process holds now, in bytes; zero where it cannot be read.
+[[nodiscard]] std::size_t WorkingSetBytes() {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) return static_cast<std::size_t>(counters.WorkingSetSize);
+#endif
+    return 0U;
 }
 
 } // namespace
@@ -668,6 +688,7 @@ int main() {
     // and the whole sequence stays inside a generous time budget.
     {
         constexpr std::uint32_t kSide = 400U;
+        const std::size_t memoryBefore = WorkingSetBytes();
         const auto started = std::chrono::steady_clock::now();
         Map2DAsset map = kb::assets::MakeEmptyMap2DAsset(kSide, kSide);
         kb::world2d::Map2DEditor editor{ map, library, assets };
@@ -687,6 +708,11 @@ int main() {
         Require(map.tiles == filled.tiles, "undo must restore every tile of the large map");
         changes.Redo(map);
         Require(map.tiles == painted.tiles, "redo must repeat the stroke on the large map");
+        // The map, the filled copy, the painted copy and the change set are all alive here.
+        const std::size_t memoryAfter = WorkingSetBytes();
+        const std::size_t memoryGrowth = memoryAfter > memoryBefore ? memoryAfter - memoryBefore : 0U;
+        std::printf("map2d large map %ux%u memory growth %zu MiB\n", kSide, kSide, memoryGrowth / (1024U * 1024U));
+        Require(memoryGrowth < 300U * 1024U * 1024U, "editing a large map must stay inside its memory budget");
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
         std::printf("map2d large map %ux%u edit sequence %lld ms\n", kSide, kSide, static_cast<long long>(elapsed.count()));
         Require(elapsed < std::chrono::seconds(5), "editing a large map must stay inside its time budget");
@@ -1124,6 +1150,63 @@ int main() {
                 Require(best > 0.999F, "the sloped face looks up and away from the solid side");
             }
         }
+    }
+    // Scripts read every type of tile data through the cell's own value, then the top graphic's default; a value of
+    // another type is not found; a script's write is a cell override that never reaches the source asset.
+    {
+        using namespace kb::scene;
+        using namespace kb::script;
+        Scene scene;
+        auto& manager = scene.Assets().Manager();
+        Require(manager.Mounts().Mount("Game", assets), "mount script data assets");
+        Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()), "register script data renderer");
+        auto map = kb::assets::MakeEmptyMap2DAsset(8U, 8U);
+        map.background = false;
+        map.sheets.push_back({ .texture = "/Game/Sprites/ground.png", .material = "/Game/Maps/Materials/Test.kbmat", .columns = 4, .rows = 2 });
+        auto& defaults = map.sheets[0].definitions[0].properties;
+        defaults["title"] = std::string("stone");
+        defaults["mass"] = std::int64_t{ 5 };
+        defaults["ratio"] = 0.5;
+        defaults["hard"] = true;
+        map.tiles[Map2DTileKey(3U, 3U, 0)].ground = { .sheet = 0, .cell = 0 };
+        const auto file = root / "ScriptData.kbmap2d";
+        Require(kb::assets::Map2DAssetIO::Save(file, map), "save the script data map");
+        const kb::assets::AssetId source{ 8789U };
+        Require(manager.RegisterAsset({ .id = source, .type = "RenderMesh", .virtualPath = "/Game/ScriptData.kbmap2d", .physicalPath = file, .contentHash = 1U }),
+            "register the script data map");
+        const auto owner = scene.Entities().CreateEntity({ .name = "ScriptData" });
+        kb::world2d::SetUpMap2DComponents(scene, owner, source.value, map);
+        static_cast<void>(scene.Runtime().AddSceneSystem(std::make_unique<kb::world2d::Map2DRuntime>()));
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(scene.Runtime().DrainSceneSystemErrors().empty(), "the script data map runs without errors");
+        ScriptRuntimeHost host(scene);
+        Require(host.Succeeded(), "the script host installs the map API");
+        const auto call = [&](const char* function, const char* name, std::optional<ScriptValue> value = std::nullopt) {
+            std::vector<ScriptFunctionArgument> args{ { "entity", ScriptValue{ owner.Id(), ScriptValueType::Entity } }, { "x", ScriptValue{ 3 } },
+                { "y", ScriptValue{ 3 } }, { "name", ScriptValue{ std::string{ name } } } };
+            if (value) args.push_back({ "value", *value });
+            const auto result = host.Functions().Call(function, args, { .scene = &scene });
+            Require(result.executed && result.Succeeded(), function);
+            return result;
+        };
+        Require(call("Map2D.GetText", "title").Output("found")->AsBool() && call("Map2D.GetText", "title").Output("value")->AsString() == "stone",
+            "a script reads a graphic's text default");
+        Require(call("Map2D.GetInteger", "mass").Output("value")->AsInt64() == 5 && call("Map2D.GetNumber", "ratio").Output("value")->AsDouble() == 0.5 &&
+                call("Map2D.GetBool", "hard").Output("value")->AsBool(), "a script reads integer, number and flag defaults");
+        Require(!call("Map2D.GetInteger", "title").Output("found")->AsBool() && !call("Map2D.GetText", "mass").Output("found")->AsBool() &&
+                !call("Map2D.GetBool", "missing").Output("found")->AsBool(), "a value of another type, or none, is not found");
+        Require(call("Map2D.SetText", "title", ScriptValue{ std::string{ "ice" } }).Output("applied")->AsBool() &&
+                call("Map2D.SetBool", "hard", ScriptValue{ false }).Output("applied")->AsBool() &&
+                call("Map2D.SetNumber", "ratio", ScriptValue{ 2.5 }).Output("applied")->AsBool() &&
+                call("Map2D.SetInteger", "mass", ScriptValue{ std::int64_t{ -9 } }).Output("applied")->AsBool(), "a script sets every type");
+        const auto hard = call("Map2D.GetBool", "hard");
+        Require(call("Map2D.GetText", "title").Output("value")->AsString() == "ice" && call("Map2D.GetNumber", "ratio").Output("value")->AsDouble() == 2.5 &&
+                call("Map2D.GetInteger", "mass").Output("value")->AsInt64() == -9 && hard.Output("found")->AsBool() && !hard.Output("value")->AsBool(),
+            "the cell's own value beats the graphic's default, also when it is false");
+        Require(call("Map2D.SetText", "mass", ScriptValue{ std::string{ "heavy" } }).Output("applied")->AsBool() &&
+                !call("Map2D.GetInteger", "mass").Output("found")->AsBool() && call("Map2D.GetText", "mass").Output("value")->AsString() == "heavy",
+            "a value of a new type under an existing name replaces the old one");
+        Require(kb::assets::Map2DAssetIO::Load(file)->tiles == map.tiles, "script writes never change the source asset");
     }
     // Golden: the borders of a plus-shaped grass patch on an empty map, as every cell lists them (x,y:ground+borders). A change
     // here changes how existing maps look: update it only on purpose.
