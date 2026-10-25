@@ -1831,7 +1831,7 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
         return &compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect->emitters[particleEmitterIndices_[index]];
     };
     // Separation: a hashed grid of each emitter's particles (cell = its distance), the push from
-    // neighbours of the same instance and emitter (Verth's Separation card).
+    // neighbours of the same instance and emitter.
     thread_local std::vector<std::uint32_t> cellHeads;
     thread_local std::vector<std::uint32_t> cellNext;
     thread_local std::vector<kb::math::Vec3> separationPush;

@@ -33,9 +33,9 @@ Baza źródeł: 3f4a9fc630f7f9413a35942e600ba9a01d014eef, branch 1.0.
 Nowa baza została osobno zbudowana z tym samym harness i nowymi scenami.
 Poprzednia seria RESULTS_20260930.txt ma inne uruchomienia; nie łącz timingów.
 Surowe pliki przed:
-  E:\21kbProjekty\OpenWorldProductionBefore_20260930\Results
+  <workdir>\OpenWorldProductionBefore_20260930\Results
 Surowe pliki po:
-  E:\21kbProjekty\OpenWorldProduction_20260930\Results
+  <workdir>\OpenWorldProduction_20260930\Results
 
 Pamięć procesu w próbkach CPU (Working Set / private MB):
   static_100k: 816.0 / 816.2

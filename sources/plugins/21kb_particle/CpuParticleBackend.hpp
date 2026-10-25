@@ -208,8 +208,8 @@ private:
         const CompiledEffect& previous,
         const CompiledEffect& candidate) noexcept;
     void ProcessOwnerLifecycle(kb::scene::Scene& scene) noexcept;
-    // Copies of one effect whose emitters all loop in local space share one simulation (Verth,
-    // Niagara, VFX Graph instancing): the first copy simulates, the others draw its particles at
+    // Copies of one effect whose emitters all loop in local space share one simulation (instancing,
+    // as in other particle systems): the first copy simulates, the others draw its particles at
     // their own transform. sharedLeaders_[copy] = the simulating copy, or kInvalidDenseIndex.
     void UpdateSharedSimulations() noexcept;
     [[nodiscard]] bool FinishOwnerLifecycle(kb::scene::Scene& scene, std::uint32_t denseIndex) noexcept;

@@ -1,6 +1,5 @@
 21kb: laboratorium dużych światów, Windows / headless / Release
 
-IMPLEMENTATION_PROMPT.txt zawiera zadanie i konkretne klasy objęte poprawkami.
 Katalogi silników referencyjnych służyły wyłącznie do odczytu. Nie kopiowano kodu.
 
 Budowanie (Developer Command Prompt x64, MSVC / Windows SDK / CMake / Ninja):
@@ -14,21 +13,21 @@ Skrypty porównania i raportowania wymagają Pythona 3, wyłącznie standard lib
 
 Generowanie nowego projektu (ponownie generuj na innej maszynie: descriptor
 zawiera ścieżki do zbudowanych lokalnych pluginów):
-  build\perf-release\bin\kb_openworld_perf.exe generate E:\21kbProjekty\OpenWorldAfter_20260930
+  build\perf-release\bin\kb_openworld_perf.exe generate <workdir>\OpenWorldAfter_20260930
 
 Surowe CPU, 180 klatek rozgrzewki + 360 pomiarów:
-  build\perf-release\bin\kb_openworld_perf.exe cpu E:\21kbProjekty\OpenWorldAfter_20260930 physics_4096 1
-  build\perf-release\bin\kb_openworld_perf.exe cpu E:\21kbProjekty\OpenWorldAfter_20260930 batch_dirty_100k 1
-  build\perf-release\bin\kb_openworld_perf.exe stream E:\21kbProjekty\OpenWorldAfter_20260930 static_100k 1
+  build\perf-release\bin\kb_openworld_perf.exe cpu <workdir>\OpenWorldAfter_20260930 physics_4096 1
+  build\perf-release\bin\kb_openworld_perf.exe cpu <workdir>\OpenWorldAfter_20260930 batch_dirty_100k 1
+  build\perf-release\bin\kb_openworld_perf.exe stream <workdir>\OpenWorldAfter_20260930 static_100k 1
 Tryb stream sprawdza trzy cykle, limit operacji, błędy i liczbę encji po fazach.
 Tryb cpu-trace dodatkowo zbiera istniejące liczniki systemów ECS. Profilowanie
 trace może zmienić timing; nie mieszaj takich próbek z podstawowym pomiarem.
 
 Porównanie z bazą, trzy niezależne procesy na scenariusz, kolejno:
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldPerf_20260930 --output E:/21kbProjekty/OpenWorldAfter_20260930
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldPerf_20260930 --output <workdir>/OpenWorldAfter_20260930
 Roślinność z nowego projektu:
-  python benchmarks/openworld/run_compare.py --suite foliage --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldAfter_20260930
-  python benchmarks/openworld/analyze_compare.py --before E:/21kbProjekty/OpenWorldPerf_20260930 --after E:/21kbProjekty/OpenWorldAfter_20260930
+  python benchmarks/openworld/run_compare.py --suite foliage --build build/perf-release --project <workdir>/OpenWorldAfter_20260930 --output <workdir>/OpenWorldAfter_20260930
+  python benchmarks/openworld/analyze_compare.py --before <workdir>/OpenWorldPerf_20260930 --after <workdir>/OpenWorldAfter_20260930
 
 Ścieżki --build/--project/--output mogą być względne: skrypt rozwiązuje je przed
 zmianą katalogu roboczego procesu. Mierz po zakończeniu kompilacji/testów;
@@ -83,7 +82,6 @@ w repozytorium. Nie dołączaj wygenerowanych projektów/binariów do źródeł 
 Nie deklaruj gotowości gry klasy AAA na podstawie kostek i prostych trójkątów.
 
 Produkcja: kolejna seria z bazą 3f4a9fc6 (01.10.2026)
-PRODUCTION_PROMPT.txt zawiera cel, klasy, kontrakt własności i bramki.
 PRODUCTION_RESULTS_20261001.txt zawiera wyniki i konkretne niezaliczone bramki.
 Jest to raport historyczny pierwszego etapu. Wyniki kolejnego etapu i poprawkę
 metodologii CPU opisuje PRODUCTION_RESULTS_STAGE2_20261001.txt.
@@ -99,12 +97,12 @@ Forward+ ma obecnie limit 32 świateł/pas. Scena lights_512 bada selekcję
 spośród 512 świateł; nie dowodzi jednoczesnego oświetlenia wszystkimi.
 
 Generowanie na danej maszynie:
-  build\perf-release\bin\kb_openworld_perf.exe generate E:\21kbProjekty\OpenWorldProduction_20260930
+  build\perf-release\bin\kb_openworld_perf.exe generate <workdir>\OpenWorldProduction_20260930
 Seria bazowa oraz końcowa: identyczne poniższe polecenia, osobne --output.
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProduction_20260930 --suite compare
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProduction_20260930 --suite foliage
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProduction_20260930 --output E:/21kbProjekty/OpenWorldProduction_20260930 --suite production --fixed-step
-  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionBefore_20260930 --after E:/21kbProjekty/OpenWorldProduction_20260930
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldAfter_20260930 --output <workdir>/OpenWorldProduction_20260930 --suite compare
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldAfter_20260930 --output <workdir>/OpenWorldProduction_20260930 --suite foliage
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldProduction_20260930 --output <workdir>/OpenWorldProduction_20260930 --suite production --fixed-step
+  python benchmarks/openworld/report_production.py --before <workdir>/OpenWorldProductionBefore_20260930 --after <workdir>/OpenWorldProduction_20260930
 --fixed-step wymusza symulację 1/60 s tylko w headless z profile-file. Daje
 stałą pracę symulacji mimo zmiennej przepustowości CPU/GPU. Seria zwykła
 zachowuje rzeczywisty zegar. Raport rozdziela obie serie.
@@ -139,11 +137,11 @@ total_ms je obejmuje, query_ms mierzy raycasty osobno. Nie porównuj CPU z
 pierwszym etapem, który kumulował nieodebrane kontakty.
 
 Końcowe serie (każda zawiera trzy procesy, uruchamiaj kolejno):
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite compare
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite capacity
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldAfter_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite foliage
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProduction_20260930 --output E:/21kbProjekty/OpenWorldProductionStage2_20261001 --suite production --fixed-step
-  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionBeforeCorrected_20261001 --after E:/21kbProjekty/OpenWorldProductionStage2_20261001
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldAfter_20260930 --output <workdir>/OpenWorldProductionStage2_20261001 --suite compare
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldAfter_20260930 --output <workdir>/OpenWorldProductionStage2_20261001 --suite capacity
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldAfter_20260930 --output <workdir>/OpenWorldProductionStage2_20261001 --suite foliage
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldProduction_20260930 --output <workdir>/OpenWorldProductionStage2_20261001 --suite production --fixed-step
+  python benchmarks/openworld/report_production.py --before <workdir>/OpenWorldProductionBeforeCorrected_20261001 --after <workdir>/OpenWorldProductionStage2_20261001
 Nowy colliders_100k wymaga 1000 rzeczywistych trafień raycastów/klatkę. Baza
 65536 ciał nie ma poprawnego pomiaru 100k; raport podaje brak porównania.
 Reporter zapisuje też niezaliczone wyniki i zwraca exit 1 przy nieudanej
@@ -181,17 +179,17 @@ ponownie wyszukiwać typ przy każdym odczycie i sygnale dirty.
 Aktualna bramka batch_dirty_100k: Runtime.Update średnia <=8 ms, P99 <=12 ms.
 mutation_ms i total_ms nadal są mierzone; zaliczenie Update nie oznacza,
 że 100k mutowanych obiektów wraz z renderowaniem mieści się w 16.67 ms.
-Nowy projekt i surowe serie: E:/21kbProjekty/OpenWorldProductionStage3_20261001.
+Nowy projekt i surowe serie: <workdir>/OpenWorldProductionStage3_20261001.
 Ten sam generator i scenariusze, trzy procesy na scenariusz, bez trace:
-  build\perf-release\bin\kb_openworld_perf.exe generate E:/21kbProjekty/OpenWorldProductionStage3_20261001
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite compare
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite capacity
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite foliage
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage3_20261001 --output E:/21kbProjekty/OpenWorldProductionStage3_20261001 --suite production --fixed-step
-  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionBeforeCorrected_20261001 --after E:/21kbProjekty/OpenWorldProductionStage3_20261001
+  build\perf-release\bin\kb_openworld_perf.exe generate <workdir>/OpenWorldProductionStage3_20261001
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldProductionStage3_20261001 --output <workdir>/OpenWorldProductionStage3_20261001 --suite compare
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldProductionStage3_20261001 --output <workdir>/OpenWorldProductionStage3_20261001 --suite capacity
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldProductionStage3_20261001 --output <workdir>/OpenWorldProductionStage3_20261001 --suite foliage
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldProductionStage3_20261001 --output <workdir>/OpenWorldProductionStage3_20261001 --suite production --fixed-step
+  python benchmarks/openworld/report_production.py --before <workdir>/OpenWorldProductionBeforeCorrected_20261001 --after <workdir>/OpenWorldProductionStage3_20261001
 Reporter wymusza nową bramkę bulk; historyczny raport etapu 2 zawiera bramki
 obowiązujące w momencie jego pomiaru. Do porównania etapów użyj --before
-E:/21kbProjekty/OpenWorldProductionStage2_20261001. colliders_100k ma wtedy
+<workdir>/OpenWorldProductionStage2_20261001. colliders_100k ma wtedy
 rzeczywiste porównanie przed/po, bez przypisywania mu nieistniejącej bazy 3f4a.
 
 
@@ -205,13 +203,13 @@ SceneMeshInstanceBufferPool oddziela alokacje od sortowania, chroni wielokrotne
 submit w klatce i viewporty; nieużywane klucze usuwa po 3 klatkach.
 Zmiany widoczności, usuwanie i rekey siatki aktualizują tylko zależne grupy.
 
-Projekt: E:/21kbProjekty/OpenWorldProductionStage4_20261001. Powtórzenie:
-  build/perf-release/bin/kb_openworld_perf.exe generate E:/21kbProjekty/OpenWorldProductionStage4_20261001
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite compare
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite capacity
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite foliage
-  python benchmarks/openworld/run_compare.py --build build/perf-release --project E:/21kbProjekty/OpenWorldProductionStage4_20261001 --output E:/21kbProjekty/OpenWorldProductionStage4_20261001 --suite production --fixed-step
-  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage3_20261001 --after E:/21kbProjekty/OpenWorldProductionStage4_20261001
+Projekt: <workdir>/OpenWorldProductionStage4_20261001. Powtórzenie:
+  build/perf-release/bin/kb_openworld_perf.exe generate <workdir>/OpenWorldProductionStage4_20261001
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldProductionStage4_20261001 --output <workdir>/OpenWorldProductionStage4_20261001 --suite compare
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldProductionStage4_20261001 --output <workdir>/OpenWorldProductionStage4_20261001 --suite capacity
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldProductionStage4_20261001 --output <workdir>/OpenWorldProductionStage4_20261001 --suite foliage
+  python benchmarks/openworld/run_compare.py --build build/perf-release --project <workdir>/OpenWorldProductionStage4_20261001 --output <workdir>/OpenWorldProductionStage4_20261001 --suite production --fixed-step
+  python benchmarks/openworld/report_production.py --before <workdir>/OpenWorldProductionStage3_20261001 --after <workdir>/OpenWorldProductionStage4_20261001
 
 Aktualne bramki pełnego celu: bulk total_ms średnia i P99 <=16.67 ms; city fixed
 wall_frame_ms P99 <=16.67 ms; mixed fixed warm_wall_frame_ms P99 <=16.67 ms.
@@ -220,11 +218,11 @@ w raporcie. FAIL oznacza dalszą pracę; pliki historyczne zachowują stare bram
 
 Etap 5 (2026-10-01): runtime SyncStructural po zmianie topologii zamiast pełnego Sync.
 Bieżące zmiany proxy są odbierane również po uzgodnieniu struktury.
-Projekt: E:/21kbProjekty/OpenWorldProductionStage5_20261001.
+Projekt: <workdir>/OpenWorldProductionStage5_20261001.
 Odtworzenie: polecenia etapu 4 z Stage5 zamiast Stage4 w ścieżkach; identyczne
 suite compare, capacity, foliage, production --fixed-step i generator.
 Porównanie:
-  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage4_20261001 --after E:/21kbProjekty/OpenWorldProductionStage5_20261001
+  python benchmarks/openworld/report_production.py --before <workdir>/OpenWorldProductionStage4_20261001 --after <workdir>/OpenWorldProductionStage5_20261001
 Pełny raport: PRODUCTION_RESULTS_STAGE5_20261001.txt; dane: production_stage5_summary.csv.
 Bramki pozostają bez zmian. Wynik reportera exit 1 zachowuje otwartą pracę.
 
@@ -233,7 +231,7 @@ odroczone seenEpoch statycznych ciał. Projekt OpenWorldProductionStage6_2026100
 Odtworzenie: generator i polecenia etapu 4 ze Stage6 zamiast Stage4. Uruchamiaj
 kolejno suite compare, capacity, foliage, production --fixed-step; bez buildów
 w trakcie pomiaru. Porównanie do etapu 5:
-  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage5_20261001 --after E:/21kbProjekty/OpenWorldProductionStage6_20261001
+  python benchmarks/openworld/report_production.py --before <workdir>/OpenWorldProductionStage5_20261001 --after <workdir>/OpenWorldProductionStage6_20261001
 Pełny raport: PRODUCTION_RESULTS_STAGE6_20261001.txt; production_stage6_summary.csv.
 Results/pilot_native_lookup_full zachowuje serię przed ostatnią zmianą fizyki,
 w tym P99 bulk 19.9395 ms przy tym samym kodzie bulk, oraz alarm collider +7.46%.
@@ -251,7 +249,7 @@ Profiler zapisuje render_camera_x/y/z/valid z istniejącego feedbacku renderera.
 benchmark_validation.py odrzuca city/mixed z brakującą, starą lub nieprawidłową
 kamerą w dowolnej klatce. Wszystkie nowe powtórki oraz reporter wykonują tę
 samą walidację, bez drugiej implementacji trasy.
-Projekt: E:/21kbProjekty/OpenWorldProductionStage7_20261001.
+Projekt: <workdir>/OpenWorldProductionStage7_20261001.
 Odtworzenie: polecenia etapu 4 ze Stage7 zamiast Stage4. Zachowaj generator,
 compare, capacity, foliage oraz production --fixed-step i wszystkie próbki.
 Porównanie do etapu 6 jest diagnostyczne dla city/mixed; bazą następnej
@@ -266,10 +264,10 @@ Etap 8 (2026-10-01): zachowanie diagnostyki, selekcji i liczników LOD przy
 odrzucaniu generowanych klastrów. Niezależny obowiązkowy test używa wspieranej
 siatki P3N3UV2 i sprawdza 256 brakujących materiałów poza widokiem. Mutant bez
 warunku ochronnego nie przechodzi; pełny build/suite przechodzi po poprawce.
-Projekt: E:/21kbProjekty/OpenWorldProductionStage8_20261001.
+Projekt: <workdir>/OpenWorldProductionStage8_20261001.
 Odtworzenie: polecenia etapu 4 ze Stage8 zamiast Stage4, bez zmiany generatora.
 Porównanie do poprawnej kamery etapu 7:
-  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage7_20261001 --after E:/21kbProjekty/OpenWorldProductionStage8_20261001
+  python benchmarks/openworld/report_production.py --before <workdir>/OpenWorldProductionStage7_20261001 --after <workdir>/OpenWorldProductionStage8_20261001
 Raport: PRODUCTION_RESULTS_STAGE8_20261001.txt; production_stage8_summary.csv.
 Results/raw zawiera finalne 54 pomiary; pilot_clusters i rejected_native_clusters
 zachowują 18 parowych procesów oraz patch odrzuconej optymalizacji zwykłych stron.
@@ -287,10 +285,10 @@ Testy pikseli D3D11 builtin/graph x ForwardPlus/Deferred obejmują 512 i 1024
 punktowe, maskę, ruch, usuwanie i dwa różne zestawy w tej samej klatce.
 Mutant cap32 nie przechodzi, produkcja przechodzi. 12 shaderów zbudowano dla
 sześciu backendów; pełne duże warianty materiałów nadal wymagają odbioru GPU.
-Projekt: E:/21kbProjekty/OpenWorldProductionStage9_20261001.
+Projekt: <workdir>/OpenWorldProductionStage9_20261001.
 Odtworzenie: polecenia etapu 4 ze Stage9 zamiast Stage4, generator bez zmian.
 Porównanie:
-  python benchmarks/openworld/report_production.py --before E:/21kbProjekty/OpenWorldProductionStage8_20261001 --after E:/21kbProjekty/OpenWorldProductionStage9_20261001
+  python benchmarks/openworld/report_production.py --before <workdir>/OpenWorldProductionStage8_20261001 --after <workdir>/OpenWorldProductionStage9_20261001
 Raport: PRODUCTION_RESULTS_STAGE9_20261001.txt; production_stage9_summary.csv.
 Results/raw: 54 CSV obciążeń +18 CSV setup. verify_measurements.py niezależnie
 sprawdza 28260 klatek, 13860 kamer, 9 mixed i 9 async cykli oraz 638 hashy.

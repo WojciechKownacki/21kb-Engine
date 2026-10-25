@@ -7,7 +7,7 @@ Metoda
 Windows, i7-13700F, RTX 4070 12 GB, 64 GB RAM, sterownik 591.74.
 Release /O2 /DNDEBUG, D3D11 1920×1080, ForwardPlus. Wszystkie procesy headless.
 Ten sam generator scen i odbiorca kontaktów co w etapie 3. Nowy samodzielny projekt:
-E:/21kbProjekty/OpenWorldProductionStage4_20261001.
+<workdir>/OpenWorldProductionStage4_20261001.
 54 procesy: 18 scenariuszy × 3 niezależne powtórki. Wszystkie zakończyły się kodem 0.
 Serie kolejno po pełnej kompilacji i testach; bez równoległego buildu ani trace.
 CPU: 180 rozgrzewki + 360 próbek/proces. Render: 120 rozgrzewki + 480 próbek.
@@ -103,5 +103,4 @@ Otwarte bramki i następna praca
 5. Zimny start wymaga workera dla I/O/dekodowania oraz budżetu publikacji.
 
 Reporter celowo zwraca 1 dla otwartych bramek bulk i mixed; testy i captures zwróciły 0.
-Nie zmieniano referencji D:/Projekty/verthengineprod ani D:/UE5.
-Polecenia odtworzenia: README.txt. Kontynuacja: PRODUCTION_PROMPT.txt.
+Polecenia odtworzenia: README.txt. Kontynuacja: README.txt.

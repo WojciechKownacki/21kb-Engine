@@ -35,7 +35,7 @@ scheduler i snapshot scale: exit 0. Snapshot i katalog obejmują milion encji.
 Sondy czasowe/kamery usunięto przed pomiarami. Referencyjne silniki bez zmian.
 
 Metoda
-Projekt: E:/21kbProjekty/OpenWorldProductionStage7_20261001.
+Projekt: <workdir>/OpenWorldProductionStage7_20261001.
 i7-13700F, RTX 4070 12 GB, 64 GB RAM, sterownik 591.74, Release /O2 /DNDEBUG.
 D3D11 1920x1080, ForwardPlus, headless. Bez widocznego edytora/przejmowania wejścia.
 54 finalne procesy: 18 scenariuszy x 3, wszystkie exit 0. Osobno 3 kontrole świata.

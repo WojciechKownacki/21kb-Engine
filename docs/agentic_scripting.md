@@ -18,7 +18,7 @@ The binary lands in `build\bin\Debug\kb_cli.exe`.
 **Once per project** — prepare the project for agents:
 
 ```powershell
-kb_cli init-agent --project H:\MyGame
+kb_cli init-agent --project <project dir>
 ```
 
 This adds `AGENTS.md` (instructions the agent reads automatically) and an API reference
@@ -30,7 +30,7 @@ with editor autocompletion support.
 2. Connect the engine to your MCP-compatible agent:
 
 ```powershell
-<agent-cli> mcp add kb-engine -- <path>\kb_cli.exe mcp --project H:\MyGame
+<agent-cli> mcp add kb-engine -- <path>\kb_cli.exe mcp --project <project dir>
 ```
 
 ## How to work

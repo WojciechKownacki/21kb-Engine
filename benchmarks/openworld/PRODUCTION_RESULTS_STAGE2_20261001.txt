@@ -1,11 +1,11 @@
 21kb — drugi etap weryfikacji produkcyjnych ścieżek (01.10.2026)
-Stan: wszystkie jawne bramki PRODUCTION_PROMPT.txt zaliczone; brak regresji średniej >5%.
+Stan: wszystkie jawne bramki produkcyjne zaliczone; brak regresji średniej >5%.
 Nie jest to certyfikat równoważności całego silnika z silnikami studyjnymi.
 
 Pochodzenie danych i metoda
 Baza kodu: 3f4a9fc630f7f9413a35942e600ba9a01d014eef.
-Przed: E:/21kbProjekty/OpenWorldProductionBeforeCorrected_20261001.
-Po: E:/21kbProjekty/OpenWorldProductionStage2_20261001.
+Przed: <workdir>/OpenWorldProductionBeforeCorrected_20261001.
+Po: <workdir>/OpenWorldProductionStage2_20261001.
 CPU bazy ponownie zbudowano i zmierzono po dodaniu odbiorcy kontaktów.
 Archiwalny pierwszy etap kumulował nieodebrane kontakty, więc nie był
 porównaniem stałego obciążenia. Zachowano stare próbki i odtworzono bazę.

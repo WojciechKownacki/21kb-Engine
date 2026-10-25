@@ -13,7 +13,7 @@ Mixed: wszystkie 3420 klatek/proces, także zimny start, 3 procesy.
 P99 to najbliższy wyższy rangą percentyl z połączonych próbek. Trace nie
 wchodzi do raportu. Wszystkie serie wykonano kolejno po testach, bez buildów
 i innych benchmarków równolegle. Generator scen i obciążenia pozostają takie
-jak w etapie 2; nowy samodzielny projekt w E:/21kbProjekty/OpenWorldProductionStage3_20261001.
+jak w etapie 2; nowy samodzielny projekt w <workdir>/OpenWorldProductionStage3_20261001.
 CPU fizyki odbiera kontakty w każdej klatce tak samo jak poprawiona baza.
 Zachowano oryginalną poprawioną bazę 3f4a9fc6 oraz wszystkie próbki etapu 2.
 Manifest z hashami zmienionych źródeł: Results/capture_manifest.json.
@@ -123,7 +123,7 @@ Pozostała praca nad pełnym celem jakości studyjnej
 Nie przypisujemy tym pomiarom porównania gotowych gier ani równoważności
 z innymi silnikami. Kolejne etapy mają usunąć powyższe konkretne ograniczenia.
 
-Odtworzenie: README.txt; prompt: PRODUCTION_PROMPT.txt.
+Odtworzenie: README.txt.
 Pełne metryki każdej powtórki: Results/production_summary_vs_3f4a9fc6.json
 oraz Results/production_summary_vs_7ac37d78.json. Kompaktowe metryki w repo:
-production_stage3_summary.csv. Projekty referencyjne pozostają read only.
+production_stage3_summary.csv.
