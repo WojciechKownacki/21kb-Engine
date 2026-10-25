@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "CliProgram.hpp"
 #include "engine/core/JsonValue.hpp"
 
 #include "engine/assets/AssetId.hpp"
@@ -51,6 +52,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <optional>
 #include <memory>
@@ -4007,6 +4009,106 @@ void RunMaterialGraphUtilityNodeCommandTests() {
 }
 #endif
 
+struct CliRun {
+    int exitCode = 0;
+    std::string out;
+    std::string err;
+};
+
+[[nodiscard]] CliRun RunCliProgram(std::initializer_list<std::string_view> words) {
+    const std::vector<std::string> arguments{ words.begin(), words.end() };
+    std::istringstream in;
+    std::ostringstream out;
+    std::ostringstream err;
+    const int exitCode = kb::cli::RunCli(arguments, in, kb::cli::CommandIo{ .out = out, .err = err });
+    return CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
+}
+
+// The one result object --json prints for a command that has no JSON of its own.
+[[nodiscard]] JsonValue ParseCliResult(const CliRun& run) {
+    JsonValue result;
+    std::string error;
+    Require(JsonValue::Parse(run.out, result, error) && result.GetKind() == JsonValue::Kind::Object,
+        "kb_cli --json did not print one JSON object: " + run.out);
+    Require(result.Find("schema") != nullptr && result.Find("schema")->AsString() == "21kb.cli-result/v1",
+        "kb_cli --json result has no schema");
+    Require(result.Find("ok") != nullptr && result.Find("exitCode") != nullptr && result.Find("command") != nullptr &&
+            result.Find("output") != nullptr && result.Find("errors") != nullptr &&
+            result.Find("errors")->GetKind() == JsonValue::Kind::Array,
+        "kb_cli --json result misses a field: " + run.out);
+    return result;
+}
+
+void RunCliJsonTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+
+    // Without --json nothing changes: text, the error on stderr, the usage after it, exit code 1.
+    const CliRun unknownText = RunCliProgram({ "no-such-command" });
+    Require(unknownText.exitCode == 1 && unknownText.out.empty() &&
+            Contains(unknownText.err, "error: unknown command 'no-such-command'") && Contains(unknownText.err, "Exit codes:"),
+        "an unknown command must print the error and the usage on stderr and exit 1");
+
+    // An unknown command with --json: one object, the exit code in the process and in the object.
+    const CliRun unknown = RunCliProgram({ "--json", "no-such-command" });
+    const JsonValue unknownResult = ParseCliResult(unknown);
+    Require(unknown.exitCode == 1 && unknown.err.empty(), "an unknown command with --json must exit 1 and keep stderr empty");
+    Require(!unknownResult.Find("ok")->AsBool() && unknownResult.Find("exitCode")->AsNumber() == unknown.exitCode,
+        "the result of an unknown command must be not ok and carry the exit code");
+    Require(unknownResult.Find("command")->AsString() == "no-such-command" && unknownResult.Find("output")->AsString().empty(),
+        "the result must name the command");
+    Require(unknownResult.Find("errors")->Size() == 1U &&
+            unknownResult.Find("errors")->At(0U)->AsString() == "unknown command 'no-such-command'",
+        "the result must list the error without the 'error: ' prefix and without the usage");
+
+    // A command that succeeds: ok, exit code 0, its text in "output".
+    const CliRun valid = RunCliProgram({ "validate", "--project", root, "Assets/Logic/Player.lua", "--json" });
+    const JsonValue validResult = ParseCliResult(valid);
+    Require(valid.exitCode == 0 && validResult.Find("ok")->AsBool() && validResult.Find("exitCode")->AsNumber() == 0.0,
+        "a command that succeeds must report ok and exit code 0: " + valid.out);
+    Require(Contains(validResult.Find("output")->AsString(), "OK") && validResult.Find("errors")->Size() == 0U,
+        "the result must carry the text the command printed");
+    Require(valid.err.empty(), "--json must not print on stderr when the command prints nothing there");
+
+    // A command that fails after it printed: both streams are kept apart.
+    const CliRun broken = RunCliProgram({ "validate", "--json", "--project", root, "Assets/Logic/Player.lua", "Assets/Logic/Broken.lua" });
+    const JsonValue brokenResult = ParseCliResult(broken);
+    Require(broken.exitCode == 1 && !brokenResult.Find("ok")->AsBool() && brokenResult.Find("exitCode")->AsNumber() == 1.0,
+        "a failing command must report not ok and exit code 1");
+    Require(Contains(brokenResult.Find("output")->AsString(), "OK") && brokenResult.Find("errors")->Size() == 1U &&
+            Contains(brokenResult.Find("errors")->At(0U)->AsString(), "FAIL Assets/Logic/Broken.lua"),
+        "stdout goes to output and the stderr lines to errors");
+
+    // Bad arguments and non-ASCII command names still give one object.
+    const CliRun missingValue = RunCliProgram({ "validate", "--json", "--project" });
+    Require(missingValue.exitCode == 1 && !ParseCliResult(missingValue).Find("ok")->AsBool(), "an option without a value must fail with a result");
+    const CliRun unicode = RunCliProgram({ "--json", "polecenie-\xC5\xBC\xC3\xB3\xC5\x82w" });
+    Require(ParseCliResult(unicode).Find("command")->AsString() == "polecenie-\xC5\xBC\xC3\xB3\xC5\x82w",
+        "a command name with letters must come back unchanged");
+
+    // help: the exit codes are documented in it, as text and as a result.
+    const CliRun help = RunCliProgram({ "help" });
+    Require(help.exitCode == 0 && Contains(help.out, "Exit codes: 0 on success, 1 on any failure") && Contains(help.out, "--json"),
+        "help must document --json and the exit codes");
+    const CliRun helpJson = RunCliProgram({ "help", "--json" });
+    Require(helpJson.exitCode == 0 && ParseCliResult(helpJson).Find("ok")->AsBool() &&
+            Contains(ParseCliResult(helpJson).Find("output")->AsString(), "Exit codes:"),
+        "help --json must wrap the usage");
+    Require(RunCliProgram({}).exitCode == 0, "no command must print the usage and exit 0");
+
+    // A command with JSON of its own keeps it, not wrapped; its failures are still a result.
+    const CliRun mixer = RunCliProgram({ "audio-mixer", "new", "--project", root, "--name", "CliJson", "--bus", "Output", "--json" });
+    JsonValue mixerResult;
+    std::string error;
+    Require(mixer.exitCode == 0 && JsonValue::Parse(mixer.out, mixerResult, error) &&
+            mixerResult.Find("schema") != nullptr && mixerResult.Find("schema")->AsString() == "21kb.audio-mixer/v1" &&
+            mixerResult.Find("exitCode") == nullptr,
+        "a command that prints its own JSON must keep it: " + mixer.out + mixer.err);
+    const CliRun mixerMissing = RunCliProgram({ "audio-mixer", "show", "--project", root, "--mixer", "/Game/Audio/Missing.kbmixer", "--json" });
+    Require(mixerMissing.exitCode == 1 && !ParseCliResult(mixerMissing).Find("ok")->AsBool(),
+        "a failing command with JSON of its own must report the failure as a result");
+}
+
 int main(int argc, char** argv) {
 #if KB_CLI_RENDERER
     kb::render::tests::InstallRendererAssertionPolicy();
@@ -4021,8 +4123,13 @@ int main(int argc, char** argv) {
         RunAudioMixerCommandTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "cli-json") {
+        RunCliJsonTests();
+        return EXIT_SUCCESS;
+    }
     if (argc != 1) return EXIT_FAILURE;
     RunAudioMixerCommandTests();
+    RunCliJsonTests();
     RunMiniJsonTests();
     RunArgumentListTests();
     RunFlexibleAssetPathTests();

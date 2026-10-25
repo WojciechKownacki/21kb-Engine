@@ -60,6 +60,32 @@ scene in the editor and press Play.
 | `kb_cli scene-attach --project <dir> --scene <path> --node <name> --script <path>` | attach a script to a node |
 | `kb_cli run --project <dir> --scene <path> --frames <n>` | run a scene without the editor and report errors |
 
+## Scripting `kb_cli` without a person at the keyboard
+
+Every command runs without prompts: all input comes from its options, and `kb_cli help`
+lists them. Two things make it safe to drive from a script or an agent.
+
+**Exit codes.** `0` means success. `1` means any failure: bad or missing arguments, an
+unknown command, a check, build or run that failed, a file that could not be read or written.
+No other code is returned. `help`, `--help`, `-h` and a bare `kb_cli` print the usage and exit 0.
+
+**`--json`.** Add it to any command and it prints one JSON object on stdout instead of text:
+
+```json
+{"schema":"21kb.cli-result/v1","ok":false,"exitCode":1,"command":"validate",
+ "output":"OK   Assets/Logic/Player.lua
+","errors":["FAIL Assets/Logic/Broken.lua: ..."]}
+```
+
+- `ok` is `exitCode == 0`, and `exitCode` is also the process exit code.
+- `output` is what the command printed on stdout; `errors` has one entry per line it wrote on
+  stderr (without the `error: ` prefix). On success `errors` may still hold warnings.
+- A command that prints a JSON object of its own (`audio-mixer ... --json`, `run --report ...`,
+  `api --print json`) keeps it unchanged and is not wrapped; its failures that print nothing
+  on stdout still come as the object above.
+- The whole output is collected first, so a long command prints nothing until it ends.
+  `mcp` ignores `--json`; it speaks JSON-RPC on stdout.
+
 ## Good to know
 
 - Headless runs have no keyboard/gamepad — the agent tests logic; you test controls in

@@ -5,6 +5,7 @@ add_library(kb_cli_core STATIC
     src/CliApiCommands.cpp
     src/CliAudioCommands.cpp
     src/CliCommon.cpp
+    src/CliDispatch.cpp
     src/CliEntityCommands.cpp
     src/CliImportCommand.cpp
     src/CliMcpCommand.cpp
@@ -20,6 +21,7 @@ add_library(kb_cli_core STATIC
     src/CliWorldCommands.cpp
     src/private/CliCommands.hpp
     src/private/CliCommon.hpp
+    src/private/CliProgram.hpp
 )
 
 target_include_directories(kb_cli_core PUBLIC src/private)
