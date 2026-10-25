@@ -29,3 +29,24 @@ Frame validation counts active layout components from the same typed reads that
 validate their values. It does not issue separate presence queries for those
 components. Invalid values and multiple layouts still refuse the frame; existing
 frame-content and timing regressions remain the acceptance checks.
+
+Frame builds resolve each UI component type ID once and reuse it for later
+entities in that build. For entities held by native storage, component reads go
+through its checked entity lookup; absent components do not search the backend
+mirror. Other entities retain the scene query path. The cache is rebuilt for each
+frame, so component additions, removals, edits and entity generations remain
+visible. It adds one fixed array of 31 component IDs and no heap allocations.
+
+An x64 MSVC measurement of the workload above gave these wall-time percentiles
+in milliseconds, before and after reusing native component lookups:
+
+| Configuration | Before p50 / p95 / p99 | After p50 / p95 / p99 |
+| --- | --- | --- |
+| Release | 0.0234 / 0.0242 / 0.0257 | 0.0108 / 0.0110 / 0.0114 |
+| Debug ASan | 1.2843 / 1.5452 / 2.2792 | 0.9513 / 1.2092 / 1.8693 |
+
+Allocation counts and bytes were unchanged, with no allocations of 16 KiB or
+more. The complete `scene-ui` suite also passed in both configurations, including
+the recorded frame hash, component lifetimes and existing timing budgets. These
+local measurements do not qualify Linux timing or packaged browser performance;
+the original CI regression must still pass on its own runner.

@@ -280,7 +280,8 @@ void SetTextClipped(UIText& text, std::string_view value) noexcept {
 // share their results; every builder starts with fresh state for the next frame.
 class FrameUIComponentQueries {
   public:
-    explicit FrameUIComponentQueries(SceneUIComponentQueries source) noexcept : source_(source) {}
+    explicit FrameUIComponentQueries(const Scene& scene) noexcept
+        : source_(scene.Components().UI()), world_(SceneAccess::State(scene).world), native_(world_.NativeStorage()) {}
 
     template <SceneUIComponent T>
     [[nodiscard]] const T* TryGet(SceneEntity entity) const noexcept {
@@ -289,7 +290,10 @@ class FrameUIComponentQueries {
         const auto bit = std::uint64_t{1U} << index;
         UseEntity(entity);
         if ((queried_ & bit) == 0U) {
-            components_[index] = source_.TryGet<T>(entity);
+            // Authored UI components live in native storage; the backend is their mirror.
+            const auto id = ComponentIdFor<T>();
+            components_[index] = nativeEntity_
+                ? (id == 0U ? nullptr : native_.TryGetComponentData(entity, id)) : source_.TryGet<T>(entity);
             queried_ |= bit;
         }
         return static_cast<const T*>(components_[index]);
@@ -302,21 +306,38 @@ class FrameUIComponentQueries {
         const auto bit = std::uint64_t{1U} << index;
         UseEntity(entity);
         if ((hasQueried_ & bit) == 0U) {
-            if (source_.Has<T>(entity)) present_ |= bit;
+            const auto id = ComponentIdFor<T>();
+            if (nativeEntity_ ? id != 0U && native_.HasComponent(entity, id) : source_.Has<T>(entity)) present_ |= bit;
             hasQueried_ |= bit;
         }
         return (present_ & bit) != 0U;
     }
 
   private:
+    template <SceneUIComponent T>
+    kb::ecs::ComponentId ComponentIdFor() const noexcept {
+        constexpr auto index = static_cast<std::size_t>(UIComponentTypeOf<T>::value);
+        const auto bit = std::uint64_t{1U} << index;
+        if ((idsQueried_ & bit) == 0U) {
+            componentIds_[index] = world_.Component<T>();
+            idsQueried_ |= bit;
+        }
+        return componentIds_[index];
+    }
     void UseEntity(SceneEntity entity) const noexcept {
         if (entity != entity_) {
             entity_ = entity;
+            nativeEntity_ = native_.IsAlive(entity);
             queried_ = hasQueried_ = present_ = 0U;
         }
     }
     static constexpr auto kComponentCount = static_cast<std::size_t>(UIComponentType::WidgetSwitcher) + 1U;
     SceneUIComponentQueries source_;
+    const kb::ecs::World& world_;
+    const kb::ecs::NativeArchetypeStorage& native_;
+    mutable std::array<kb::ecs::ComponentId, kComponentCount> componentIds_{};
+    mutable std::uint64_t idsQueried_ = 0U;
+    mutable bool nativeEntity_ = false;
     mutable SceneEntity entity_{};
     mutable std::array<const void*, kComponentCount> components_{};
     mutable std::uint64_t queried_ = 0U;
@@ -327,7 +348,7 @@ class FrameUIComponentQueries {
 class FrameBuilder {
   public:
     FrameBuilder(const Scene& scene, Vec2 viewport)
-        : scene_(scene), state_(SceneAccess::State(scene)), ui_(scene.Components().UI()), viewport_(viewport) {
+        : scene_(scene), state_(SceneAccess::State(scene)), ui_(scene), viewport_(viewport) {
         frame_.viewportSize = viewport;
     }
 
