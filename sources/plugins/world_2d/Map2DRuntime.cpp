@@ -1,4 +1,5 @@
 #include "Map2DRuntime.hpp"
+#include "Camera2D.hpp"
 #include "Map2DView.hpp"
 #include "Map2DEditing.hpp"
 
@@ -16,9 +17,11 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "kb/render/resources/RenderMap2DMeshBuilder.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <set>
@@ -72,8 +75,14 @@ struct Map2DRuntime::State {
         kb::scene::TilemapColliderComponent collider{};
         std::optional<kb::scene::MeshRendererComponent> originalRenderer;
         std::optional<kb::math::DVec3> cameraOrigin;
+        // The play camera's centre in the map plane before it is snapped to whole pixels, so that slow smoothing
+        // is not rounded away; empty until the camera has been driven.
+        std::optional<std::array<float, 2>> cameraCentre;
+        SceneEntity cameraTarget{};
+        bool cameraStarted = false;
     };
     std::map<SceneEntity, Instance> instances;
+    std::set<SceneEntity> camerasDriven;
     std::size_t rebuilt = 0U;
 
     static void Release(kb::scene::Scene& scene, Instance& instance) {
@@ -87,6 +96,97 @@ struct Map2DRuntime::State {
         instance.chunks.clear();
     }
 };
+
+namespace {
+
+[[nodiscard]] SceneEntity FindNamedEntity(kb::scene::Scene& scene, SceneEntity from, std::string_view name) {
+    if (scene.Entities().Name(from) == name) return from;
+    for (const auto child : scene.Hierarchy().ChildEntities(from)) {
+        if (const auto found = FindNamedEntity(scene, child, name); found.IsValid()) return found;
+    }
+    return {};
+}
+
+// Frames the map's play camera: a pixel perfect height from the viewport, and the follow behaviour of the
+// map's camera settings. A map camera is driven once per frame however many layers of the map ask for it.
+template <class Instance>
+void DriveCamera(kb::scene::Scene& scene, SceneEntity owner, Instance& instance, float deltaSeconds, std::set<SceneEntity>& driven) {
+    const Map2DCamera& settings = instance.map.camera;
+    if (settings.pixelsPerUnit <= 0.0F && settings.followTarget.empty()) return;
+    const auto query = std::as_const(scene).Components();
+    const auto parent = scene.Hierarchy().Parent(owner);
+    const SceneEntity container = query.Grids().Has(parent) && !query.Tilemaps().Has(parent) ? parent : owner;
+    SceneEntity cameraEntity{};
+    for (const auto child : scene.Hierarchy().ChildEntities(container)) {
+        if (scene.Entities().Name(child) == kMap2DCameraName && query.Cameras().Has(child)) cameraEntity = child;
+    }
+    if (!cameraEntity.IsValid() || !driven.insert(cameraEntity).second) return;
+    auto lens = *query.Cameras().TryGet(cameraEntity);
+    if (lens.projection != kb::scene::CameraProjection::Orthographic) return;
+
+    const bool wall = instance.map.orientation == Map2DOrientation::Wall;
+    const float size = instance.map.tileSize;
+    const float wanted = static_cast<float>(instance.map.viewHeight) * size;
+    const auto viewport = scene.UI().Frame().viewportSize;
+    const PixelPerfectView view = settings.pixelsPerUnit > 0.0F
+        ? ComputePixelPerfectView(viewport.y, settings.pixelsPerUnit, wanted) : PixelPerfectView{ .orthographicHeight = wanted };
+    if (view.pixelPerfect && lens.orthographicHeight != view.orthographicHeight) {
+        lens.orthographicHeight = view.orthographicHeight;
+        scene.Components().Cameras().Set(cameraEntity, lens);
+    }
+    const float halfHeight = lens.orthographicHeight * 0.5F;
+    const float aspect = viewport.x > 0.0F && viewport.y > 0.0F ? viewport.x / viewport.y
+        : static_cast<float>(instance.map.viewWidth) / static_cast<float>(std::max(1U, instance.map.viewHeight));
+
+    auto transform = scene.Transforms().Get(cameraEntity);
+    const auto origin = scene.Transforms().WorldTranslation(container);
+    if (!instance.cameraCentre) {
+        instance.cameraCentre = std::array<float, 2>{ transform.localPosition.x, wall ? transform.localPosition.y : transform.localPosition.z };
+    }
+    Camera2DFollow frame;
+    frame.current = *instance.cameraCentre;
+    frame.target = frame.current;
+    frame.started = true;
+    frame.halfWidth = halfHeight * aspect;
+    frame.halfHeight = halfHeight;
+    frame.deadZoneWidth = settings.deadZoneWidth * size;
+    frame.deadZoneHeight = settings.deadZoneHeight * size;
+    frame.smoothingSeconds = settings.smoothingSeconds;
+    frame.deltaSeconds = deltaSeconds;
+    frame.teleportDistance = static_cast<float>(std::max(instance.map.viewWidth, instance.map.viewHeight)) * size;
+    frame.clamp = settings.clampToMap;
+    const float width = static_cast<float>(instance.map.width) * size;
+    const float height = static_cast<float>(instance.map.height) * size;
+    frame.area = wall ? Camera2DArea{ -width * 0.5F, 0.0F, width * 0.5F, height } : Camera2DArea{ -width * 0.5F, -height * 0.5F, width * 0.5F, height * 0.5F };
+
+    if (!settings.followTarget.empty()) {
+        if (!scene.Entities().IsAlive(instance.cameraTarget) || scene.Entities().Name(instance.cameraTarget) != settings.followTarget) {
+            instance.cameraTarget = {};
+            for (const auto root : scene.Hierarchy().RootEntities()) {
+                if (const auto found = FindNamedEntity(scene, root, settings.followTarget); found.IsValid()) { instance.cameraTarget = found; break; }
+            }
+        }
+        if (instance.cameraTarget.IsValid()) {
+            const auto position = scene.Transforms().WorldTranslation(instance.cameraTarget) - origin;
+            frame.target = { static_cast<float>(position.x), static_cast<float>(wall ? position.y : position.z) };
+            frame.started = instance.cameraStarted;
+            frame.current = *instance.cameraCentre;
+            instance.cameraCentre = StepCamera2DFollow(frame);
+            instance.cameraStarted = true;
+        }
+    } else if (settings.clampToMap) {
+        instance.cameraCentre = StepCamera2DFollow(frame);
+    }
+    auto centre = *instance.cameraCentre;
+    if (view.pixelPerfect) { centre[0] = SnapToPixels(centre[0], view.unitsPerPixel); centre[1] = SnapToPixels(centre[1], view.unitsPerPixel); }
+    if (transform.localPosition.x != centre[0] || (wall ? transform.localPosition.y : transform.localPosition.z) != centre[1]) {
+        transform.localPosition.x = centre[0];
+        (wall ? transform.localPosition.y : transform.localPosition.z) = centre[1];
+        scene.Transforms().Set(cameraEntity, transform);
+    }
+}
+
+} // namespace
 
 Map2DRuntime::Map2DRuntime() : state_(std::make_unique<State>()) {}
 Map2DRuntime::~Map2DRuntime() = default;
@@ -186,7 +286,10 @@ void Map2DRuntime::OnUpdateEnd(kb::scene::SceneSystemContext& context) {
 }
 void Map2DRuntime::Refresh(kb::scene::SceneSystemContext& context, bool advanceTime) {
     auto& scene = context.GetScene();
-    if (advanceTime) state_->rebuilt = 0U;
+    if (advanceTime) {
+        state_->rebuilt = 0U;
+        state_->camerasDriven.clear();
+    }
     if (!scene.Runtime().IsPlaying()) {
         if (!state_->instances.empty()) OnDestroy(context);
         return;
@@ -253,6 +356,8 @@ void Map2DRuntime::Refresh(kb::scene::SceneSystemContext& context, bool advanceT
             instance.cells.clear();
             instance.dirty.clear();
             instance.cameraOrigin.reset();
+            instance.cameraCentre.reset();
+            instance.cameraStarted = false;
             instance.seconds = 0.0;
             instance.map = std::move(*loaded);
             instance.source = source;
@@ -265,7 +370,10 @@ void Map2DRuntime::Refresh(kb::scene::SceneSystemContext& context, bool advanceT
             auto empty = Header(instance.map);
             if (!SetUpMap2DCollision(scene, owner, empty, nullptr, &error)) { context.ReportError(error); continue; }
         }
-        if (advanceTime) instance.seconds += std::max(0.0F, context.DeltaSeconds());
+        if (advanceTime) {
+            instance.seconds += std::max(0.0F, context.DeltaSeconds());
+            DriveCamera(scene, owner, instance, std::max(0.0F, context.DeltaSeconds()), state_->camerasDriven);
+        }
         const auto* renderer = query.TilemapRenderers().TryGet(owner);
         const auto* collider = query.TilemapColliders().TryGet(owner);
         const auto renderSettings = renderer ? *renderer : kb::scene::TilemapRendererComponent{ .enabled = false };

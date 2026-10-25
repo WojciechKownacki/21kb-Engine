@@ -5,6 +5,8 @@ endif()
 
 # Map editing (tilesets, brushes, automatic borders) shared by the editor window and kb_cli.
 add_library(kb_world2d_core STATIC
+    Camera2D.hpp
+    Camera2D.cpp
     Map2DTileset.hpp
     Map2DTileset.cpp
     Map2DEditing.hpp

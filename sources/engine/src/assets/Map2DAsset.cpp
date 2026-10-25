@@ -253,6 +253,16 @@ bool IsMap2DAssetValid(const Map2DAsset& map, std::string* error) {
         return false;
     }
     if (!std::isfinite(map.parallaxX) || !std::isfinite(map.parallaxY) || std::abs(map.parallaxX) > 100.0F || std::abs(map.parallaxY) > 100.0F) { SetError(error, "Invalid parallax factor"); return false; }
+    {
+        const Map2DCamera& camera = map.camera;
+        const auto inRange = [](float value, float highest) { return std::isfinite(value) && value >= 0.0F && value <= highest; };
+        if (!inRange(camera.pixelsPerUnit, 4096.0F) || !inRange(camera.smoothingSeconds, 60.0F) || !inRange(camera.deadZoneWidth, 255.0F) ||
+            !inRange(camera.deadZoneHeight, 255.0F) || camera.followTarget.size() > 128U ||
+            camera.followTarget.find_first_of("\"\r\n") != std::string::npos) {
+            SetError(error, "Invalid map camera settings");
+            return false;
+        }
+    }
     if (map.sheets.size() > Map2DAsset::MaximumSheets) {
         SetError(error, "Map uses more than " + std::to_string(Map2DAsset::MaximumSheets) + " sprite sheets");
         return false;
@@ -462,6 +472,14 @@ std::optional<Map2DAsset> Map2DAssetIO::Parse(std::string_view text, std::string
             if (words.size() != 2U || !ParseBool(words[1], map.sortByY)) return fail("sortByY needs true or false");
         } else if (keyword == "lit") {
             if (words.size() != 2U || !ParseBool(words[1], map.lit)) return fail("lit needs true or false");
+        } else if (keyword == "camera") {
+            // camera <pixelsPerUnit> <smoothingSeconds> <deadZoneWidth> <deadZoneHeight> <clamp> "<followTarget>"
+            if (words.size() != 7U || !ParseNumber(words[1], map.camera.pixelsPerUnit) || !ParseNumber(words[2], map.camera.smoothingSeconds) ||
+                !ParseNumber(words[3], map.camera.deadZoneWidth) || !ParseNumber(words[4], map.camera.deadZoneHeight) ||
+                !ParseBool(words[5], map.camera.clampToMap)) {
+                return fail("camera needs <pixelsPerUnit> <smoothingSeconds> <deadZoneWidth> <deadZoneHeight> <clamp> \"<followTarget>\"");
+            }
+            map.camera.followTarget = std::string{ words[6] };
         } else if (keyword == "layout" || keyword == "definition" || keyword == "frames" || keyword == "shape" || keyword == "defaultData") {
             std::uint32_t sheetIndex = 0U, cell = 0U;
             if (words.size() < 3U || !ParseNumber(words[1], sheetIndex) || sheetIndex >= map.sheets.size()) return fail("unknown sheet");
@@ -563,6 +581,13 @@ std::string Map2DAssetIO::Write(const Map2DAsset& map) {
     output << "parallax " << FloatText(map.parallaxX) << ' ' << FloatText(map.parallaxY) << '\n';
     output << "sortByY " << map.sortByY << '\n';
     output << "lit " << map.lit << '\n';
+    if (map.camera != Map2DCamera{}) {
+        output << "camera " << FloatText(map.camera.pixelsPerUnit) << ' ' << FloatText(map.camera.smoothingSeconds) << ' '
+               << FloatText(map.camera.deadZoneWidth) << ' ' << FloatText(map.camera.deadZoneHeight) << ' '
+               << (map.camera.clampToMap ? "true" : "false") << ' ';
+        WriteQuoted(output, map.camera.followTarget);
+        output << '\n';
+    }
     std::size_t sheetIndex = 0;
     for (const Map2DSheet& sheet : map.sheets) {
         output << "sheet " << sheet.cellSize << ' ' << sheet.columns << ' ' << sheet.rows << ' ';

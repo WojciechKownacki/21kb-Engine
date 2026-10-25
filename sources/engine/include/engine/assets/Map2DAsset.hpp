@@ -116,6 +116,24 @@ enum class Map2DOrientation : std::uint8_t {
     Wall,
 };
 
+// How the map's play camera frames and follows. Every default keeps the plain camera: the view height
+// of the map, still, centred on the map.
+struct Map2DCamera {
+    // Above zero the camera is pixel perfect: one world unit is this many texels of the sprites, the view
+    // height is a whole number of screen pixels per texel, and the camera rests on whole screen pixels.
+    float pixelsPerUnit = 0.0F;
+    // The entity the camera follows, by name; empty keeps the camera still.
+    std::string followTarget;
+    // Seconds in which the camera closes about two thirds of its distance to the target (0 = at once).
+    float smoothingSeconds = 0.0F;
+    // The drag margins in tiles: the target may roam this far across and up from the camera's centre.
+    float deadZoneWidth = 0.0F;
+    float deadZoneHeight = 0.0F;
+    // Keeps the view inside the map (a map smaller than the view stays centred).
+    bool clampToMap = false;
+    friend bool operator==(const Map2DCamera&, const Map2DCamera&) = default;
+};
+
 struct Map2DAsset {
     static constexpr std::uint32_t CurrentVersion = 2U;
     static constexpr std::uint32_t MaximumSize = 4096U;
@@ -140,6 +158,7 @@ struct Map2DAsset {
     float parallaxY = 1.0F;
     bool sortByY = false;
     bool lit = false;
+    Map2DCamera camera;
     // Non-empty tiles by Map2DTileKey.
     std::map<std::uint64_t, Map2DTile> tiles;
 };

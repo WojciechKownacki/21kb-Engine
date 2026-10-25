@@ -1,3 +1,4 @@
+#include "Camera2D.hpp"
 #include "Map2DCollision.hpp"
 #include "Map2DEditing.hpp"
 #include "Map2DTileset.hpp"
@@ -25,6 +26,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneUI.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "kb/render/resources/RenderMap2DMeshBuilder.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
@@ -49,7 +51,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <limits>
+#include <memory>
 #include <set>
 #include <variant>
 
@@ -1267,6 +1271,285 @@ int main() {
         Require(blocked.Succeeded() && !blocked.Output("found")->AsBool() && blocked.Output("x")->AsInt() == 2 && blocked.Output("y")->AsInt() == 3,
             "NextStep stays where it is when the target cannot be reached");
         Require(kb::assets::Map2DAssetIO::Load(file)->tiles == map.tiles, "script cell edits never change the source asset");
+    }
+    // Pixel perfect view: for every viewport and density the view is a whole number of screen pixels per
+    // texel, as large as the wanted height allows, and never changes the picture's proportions.
+    {
+        std::size_t checked = 0U;
+        for (const float viewport : { 180.0F, 240.0F, 360.0F, 540.0F, 576.0F, 720.0F, 768.0F, 900.0F, 1000.0F, 1080.0F, 1200.0F, 1440.0F, 2160.0F }) {
+            for (const float density : { 8.0F, 16.0F, 32.0F, 100.0F }) {
+                for (const float wanted : { 6.0F, 11.0F, 15.5F }) {
+                    const kb::world2d::PixelPerfectView view = kb::world2d::ComputePixelPerfectView(viewport, density, wanted);
+                    Require(view.pixelPerfect && view.zoom >= 1U, "a valid viewport gives a pixel perfect view");
+                    const double pixelsPerUnit = static_cast<double>(density) * view.zoom;
+                    Require(std::abs(static_cast<double>(view.orthographicHeight) * pixelsPerUnit - viewport) <= viewport * 1.0e-6,
+                        "the view height is a whole number of pixels per texel");
+                    Require(std::abs(static_cast<double>(view.unitsPerPixel) * pixelsPerUnit - 1.0) <= 1.0e-6, "one screen pixel is 1/zoom of a texel");
+                    if (viewport >= wanted * density) {
+                        Require(view.orthographicHeight >= wanted - 1.0e-4F, "the view shows at least the wanted height");
+                        Require(viewport < wanted * density * static_cast<float>(view.zoom + 1U) + 1.0e-3F, "the zoom is the largest that shows it");
+                    } else {
+                        Require(view.zoom == 1U, "a viewport shorter than the wanted height shows one pixel per texel");
+                    }
+                    ++checked;
+                }
+            }
+        }
+        Require(checked == 13U * 4U * 3U, "every combination was checked");
+        // A window drag: every height keeps whole pixels per texel and the zoom never shrinks as the window grows.
+        std::uint32_t previousZoom = 0U;
+        for (float viewport = 120.0F; viewport <= 2400.0F; viewport += 1.0F) {
+            const kb::world2d::PixelPerfectView view = kb::world2d::ComputePixelPerfectView(viewport, 16.0F, 11.0F);
+            Require(std::abs(static_cast<double>(view.orthographicHeight) * 16.0 * view.zoom - viewport) <= viewport * 1.0e-6 && view.zoom >= previousZoom,
+                "resizing the window keeps whole pixels per texel and a zoom that only grows");
+            previousZoom = view.zoom;
+        }
+        for (const float bad : { 0.0F, -1.0F, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+            Require(!kb::world2d::ComputePixelPerfectView(bad, 16.0F, 11.0F).pixelPerfect && !kb::world2d::ComputePixelPerfectView(720.0F, bad, 11.0F).pixelPerfect &&
+                    !kb::world2d::ComputePixelPerfectView(720.0F, 16.0F, bad).pixelPerfect,
+                "values that are not positive numbers give no pixel perfect view");
+        }
+        Require(kb::world2d::ComputePixelPerfectView(720.0F, 0.0F, 11.0F).orthographicHeight == 11.0F, "without a pixel density the wanted height is kept");
+    }
+    // Resting on whole screen pixels: a slow fractional move steps one pixel at a time, never back, never
+    // between pixels, so that the sprites do not shimmer.
+    {
+        const float pixel = 1.0F / 48.0F;
+        float previous = kb::world2d::SnapToPixels(-1.0F, pixel);
+        std::size_t steps = 0U;
+        for (int index = -1000; index <= 1000; ++index) {
+            const float x = static_cast<float>(index) * 0.001F;
+            const float snapped = kb::world2d::SnapToPixels(x, pixel);
+            const double pixels = static_cast<double>(snapped) / pixel;
+            Require(std::abs(pixels - std::round(pixels)) < 1.0e-3, "a snapped position is a whole number of pixels");
+            Require(std::abs(snapped - x) <= pixel * 0.5F + 1.0e-6F, "snapping moves at most half a pixel");
+            Require(snapped >= previous, "snapping never moves backwards");
+            Require(snapped - previous < pixel * 1.5F, "snapping moves at most one pixel at a time");
+            Require(kb::world2d::SnapToPixels(snapped, pixel) == snapped, "a snapped position stays where it is");
+            if (snapped != previous) ++steps;
+            previous = snapped;
+        }
+        Require(steps >= 95U && steps <= 97U, "two units of movement make 96 pixel steps");
+        Require(kb::world2d::SnapToPixels(0.37F, 0.0F) == 0.37F && kb::world2d::SnapToPixels(0.37F, -1.0F) == 0.37F, "no pixel size leaves the position alone");
+        Require(kb::world2d::SnapToPixels(123456.789F, pixel) > 123456.0F, "a far position still snaps");
+    }
+    // The follow camera: drag margins, smoothing that does not depend on the frame rate, teleports, map bounds.
+    {
+        using kb::world2d::Camera2DFollow;
+        Camera2DFollow frame;
+        frame.halfWidth = 5.0F;
+        frame.halfHeight = 5.0F;
+        frame.clamp = true;
+        frame.area = { -10.0F, -10.0F, 10.0F, 10.0F };
+        frame.target = { 100.0F, -100.0F };
+        auto at = kb::world2d::StepCamera2DFollow(frame);
+        Require(at[0] == 5.0F && at[1] == -5.0F, "the first frame goes to the target, kept inside the map");
+        frame.target = { 2.0F, 3.0F };
+        at = kb::world2d::StepCamera2DFollow(frame);
+        Require(at[0] == 2.0F && at[1] == 3.0F, "a target inside the map is followed exactly");
+        frame.halfWidth = 15.0F;
+        at = kb::world2d::StepCamera2DFollow(frame);
+        Require(at[0] == 0.0F && at[1] == 3.0F, "a map narrower than the view stays centred across");
+        frame.halfWidth = 5.0F;
+        frame.clamp = false;
+        frame.target = { 100.0F, 0.0F };
+        Require(kb::world2d::StepCamera2DFollow(frame)[0] == 100.0F, "without bounds the camera follows anywhere");
+
+        Camera2DFollow still;
+        still.started = true;
+        still.deadZoneWidth = 2.0F;
+        still.deadZoneHeight = 1.0F;
+        still.target = { 0.9F, 0.4F };
+        at = kb::world2d::StepCamera2DFollow(still);
+        Require(at[0] == 0.0F && at[1] == 0.0F, "a target inside the drag margins does not move the camera");
+        still.target = { 3.0F, -2.0F };
+        at = kb::world2d::StepCamera2DFollow(still);
+        Require(std::abs(at[0] - 2.0F) < 1.0e-6F && std::abs(at[1] - -1.5F) < 1.0e-6F, "a target past the margins drags the camera, which keeps the margin");
+
+        Camera2DFollow smooth;
+        smooth.started = true;
+        smooth.smoothingSeconds = 0.5F;
+        smooth.target = { 10.0F, 0.0F };
+        Camera2DFollow once = smooth;
+        once.deltaSeconds = 0.1F;
+        const auto single = kb::world2d::StepCamera2DFollow(once);
+        Camera2DFollow half = smooth;
+        half.deltaSeconds = 0.05F;
+        auto twice = kb::world2d::StepCamera2DFollow(half);
+        half.current = twice;
+        twice = kb::world2d::StepCamera2DFollow(half);
+        Require(std::abs(single[0] - twice[0]) < 1.0e-4F && single[0] > 1.0F && single[0] < 2.0F, "smoothing gives the same result at any frame rate");
+        Camera2DFollow second = smooth;
+        second.deltaSeconds = 0.5F;
+        Require(std::abs(kb::world2d::StepCamera2DFollow(second)[0] - 10.0F * (1.0F - std::exp(-1.0F))) < 1.0e-4F, "after the smoothing time about two thirds of the way is covered");
+        Camera2DFollow frozen = smooth;
+        frozen.deltaSeconds = 0.0F;
+        Require(kb::world2d::StepCamera2DFollow(frozen)[0] == 0.0F, "no time passing means no movement");
+        Camera2DFollow instant = smooth;
+        instant.smoothingSeconds = 0.0F;
+        instant.deltaSeconds = 0.0F;
+        Require(kb::world2d::StepCamera2DFollow(instant)[0] == 10.0F, "no smoothing lands on the target");
+        Camera2DFollow jump = smooth;
+        jump.deltaSeconds = 1.0F / 60.0F;
+        jump.teleportDistance = 15.0F;
+        jump.target = { 50.0F, 0.0F };
+        Require(kb::world2d::StepCamera2DFollow(jump)[0] == 50.0F, "a teleport is not smoothed");
+        jump.target = { 14.0F, 0.0F };
+        Require(kb::world2d::StepCamera2DFollow(jump)[0] < 1.0F, "a move shorter than the teleport distance is smoothed");
+
+        Camera2DFollow converge = smooth;
+        converge.smoothingSeconds = 0.2F;
+        converge.deltaSeconds = 1.0F / 60.0F;
+        for (int frameIndex = 0; frameIndex < 600; ++frameIndex) converge.current = kb::world2d::StepCamera2DFollow(converge);
+        Require(std::abs(converge.current[0] - 10.0F) < 1.0e-3F, "the camera comes to rest on the target");
+        // The window gets smaller: the same map and the same target keep the view inside the map.
+        Camera2DFollow resized;
+        resized.started = true;
+        resized.clamp = true;
+        resized.area = { -20.0F, -15.0F, 20.0F, 15.0F };
+        resized.target = { 19.0F, 14.0F };
+        for (const float viewHalf : { 5.0F, 8.0F, 11.25F, 14.0F, 16.0F }) {
+            resized.halfHeight = viewHalf;
+            resized.halfWidth = viewHalf * 16.0F / 9.0F;
+            const auto position = kb::world2d::StepCamera2DFollow(resized);
+            Require(position[1] + viewHalf <= 15.0F + 1.0e-4F || position[1] == 0.0F, "the view stays inside the map as the window changes");
+            Require(position[0] + resized.halfWidth <= 20.0F + 1.0e-4F || position[0] == 0.0F, "and across");
+        }
+    }
+    // The camera settings are part of the map file: they keep their values, an old file has none, and nonsense is refused.
+    {
+        auto map = kb::assets::MakeEmptyMap2DAsset(12U, 8U);
+        std::string error;
+        const auto plain = kb::assets::Map2DAssetIO::Write(map);
+        Require(plain.find("camera") == std::string::npos, "a map without camera settings writes no camera line");
+        map.camera = { .pixelsPerUnit = 16.0F, .followTarget = "Hero One", .smoothingSeconds = 0.25F, .deadZoneWidth = 1.5F, .deadZoneHeight = 0.5F, .clampToMap = true };
+        const auto loaded = kb::assets::Map2DAssetIO::Parse(kb::assets::Map2DAssetIO::Write(map), &error);
+        Require(loaded.has_value() && loaded->camera == map.camera, "camera settings survive the file");
+        const auto without = kb::assets::Map2DAssetIO::Parse(plain, &error);
+        Require(without.has_value() && without->camera == kb::assets::Map2DCamera{}, "a file without a camera line keeps the plain camera");
+        for (const auto& change : std::initializer_list<void (*)(kb::assets::Map2DCamera&)>{
+                 [](kb::assets::Map2DCamera& camera) { camera.pixelsPerUnit = -1.0F; },
+                 [](kb::assets::Map2DCamera& camera) { camera.pixelsPerUnit = std::numeric_limits<float>::quiet_NaN(); },
+                 [](kb::assets::Map2DCamera& camera) { camera.smoothingSeconds = 61.0F; },
+                 [](kb::assets::Map2DCamera& camera) { camera.deadZoneWidth = -0.5F; },
+                 [](kb::assets::Map2DCamera& camera) { camera.deadZoneHeight = 300.0F; },
+                 [](kb::assets::Map2DCamera& camera) { camera.followTarget = std::string(129U, 'n'); },
+                 [](kb::assets::Map2DCamera& camera) { camera.followTarget = "bad\"name"; } }) {
+            auto broken = map;
+            change(broken.camera);
+            Require(!kb::assets::IsMap2DAssetValid(broken), "camera settings that are not sensible are refused");
+        }
+        std::string text = kb::assets::Map2DAssetIO::Write(map);
+        const std::size_t at = text.find("camera ");
+        Require(at != std::string::npos, "the camera line is written");
+        text.replace(at, 7U, "camera x ");
+        Require(!kb::assets::Map2DAssetIO::Parse(text).has_value(), "a camera line with a word instead of a number is refused");
+    }
+    // At runtime: the play camera of both presets frames the viewport in whole pixels per texel, follows its target,
+    // stays on whole pixels, is bounded by the map, does not smooth a teleport and still frames the view after a resize.
+    {
+        struct Rig {
+            kb::scene::Scene scene;
+            kb::scene::SceneEntity owner{};
+            kb::scene::SceneEntity camera{};
+            kb::scene::SceneEntity hero{};
+        };
+        int rigNumber = 0;
+        const auto build = [&](kb::assets::Map2DOrientation orientation, kb::assets::Map2DCamera settings) {
+            auto rig = std::make_unique<Rig>();
+            auto& scene = rig->scene;
+            auto& manager = scene.Assets().Manager();
+            Require(manager.Mounts().Mount("Game", assets), "mount camera assets");
+            Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()), "register camera renderer");
+            auto map = kb::assets::MakeEmptyMap2DAsset(40U, 30U);
+            map.background = false;
+            map.orientation = orientation;
+            map.camera = std::move(settings);
+            map.sheets.push_back({ .texture = "/Game/Sprites/ground.png", .material = "/Game/Maps/Materials/Test.kbmat", .columns = 4, .rows = 2 });
+            map.tiles[Map2DTileKey(1U, 1U, 0)].ground = { .sheet = 0, .cell = 0 };
+            const auto file = root / ("Camera" + std::to_string(++rigNumber) + ".kbmap2d");
+            Require(kb::assets::Map2DAssetIO::Save(file, map), "save the camera map");
+            const kb::assets::AssetId source{ 8900U + static_cast<std::uint64_t>(rigNumber) };
+            Require(manager.RegisterAsset({ .id = source, .type = "RenderMesh", .virtualPath = "/Game/Camera" + std::to_string(rigNumber) + ".kbmap2d",
+                .physicalPath = file, .contentHash = 1U }), "register the camera map");
+            rig->owner = scene.Entities().CreateEntity({ .name = "CameraMap" });
+            kb::world2d::SetUpMap2DComponents(scene, rig->owner, source.value, map);
+            kb::world2d::Map2DViewResult view{};
+            Require(kb::world2d::SetUpMap2DView(scene, rig->owner, map, assets, &view), "the camera preset must be set up");
+            rig->camera = view.camera;
+            rig->hero = scene.Entities().CreateEntity({ .name = "Hero" });
+            static_cast<void>(scene.Runtime().AddSceneSystem(std::make_unique<kb::world2d::Map2DRuntime>()));
+            return rig;
+        };
+        const auto place = [](Rig& rig, double across, double up, bool wall) {
+            rig.scene.Transforms().SetLocalTranslation(rig.hero, kb::math::DVec3{ across, wall ? up : 0.0, wall ? 0.0 : up });
+        };
+        const auto frames = [](Rig& rig, int count, float width, float height) {
+            for (int index = 0; index < count; ++index) {
+                static_cast<void>(rig.scene.UI().SetViewport(width, height));
+                static_cast<void>(rig.scene.Runtime().Update(1.0F / 60.0F));
+            }
+            Require(rig.scene.Runtime().DrainSceneSystemErrors().empty(), "the camera map runs without errors");
+        };
+        const auto position = [](Rig& rig, bool wall) {
+            const auto local = rig.scene.Transforms().Get(rig.camera).localPosition;
+            return std::array<float, 2>{ local.x, wall ? local.y : local.z };
+        };
+        const auto height = [](Rig& rig) { return rig.scene.Components().Cameras().TryGet(rig.camera)->orthographicHeight; };
+
+        for (const bool wall : { false, true }) {
+            const auto orientation = wall ? kb::assets::Map2DOrientation::Wall : kb::assets::Map2DOrientation::Flat;
+            auto rig = build(orientation, { .pixelsPerUnit = 16.0F, .followTarget = "Hero", .clampToMap = true });
+            place(*rig, 3.3, wall ? 12.2 : 2.2, wall);
+            frames(*rig, 3, 1280.0F, 720.0F);
+            // 11 wanted tiles are 176 texels: 4 pixels per texel fit in 720.
+            Require(std::abs(height(*rig) - 11.25F) < 1.0e-5F, "the view is 720 pixels at 4 pixels per texel");
+            const auto at = position(*rig, wall);
+            Require(std::abs(at[0] - 211.0F / 64.0F) < 1.0e-5F && std::abs(at[1] - (wall ? 12.2F : 2.2F)) <= 1.0F / 128.0F + 1.0e-5F,
+                "the camera follows the target and rests on whole pixels");
+            const double pixels = at[1] * 64.0;
+            Require(std::abs(pixels - std::round(pixels)) < 1.0e-3, "also up the screen");
+
+            // The target creeps by a fraction of a pixel: the camera stays or steps one pixel, and never moves back.
+            float previous = at[0];
+            for (int index = 1; index <= 120; ++index) {
+                place(*rig, 3.3 + index * 0.002, wall ? 12.2 : 2.2, wall);
+                frames(*rig, 1, 1280.0F, 720.0F);
+                const float now = position(*rig, wall)[0];
+                Require(now >= previous && now - previous < 1.0F / 64.0F * 1.5F, "a creeping target moves the camera a pixel at a time");
+                previous = now;
+            }
+            // Another window: 1000 pixels is 5 pixels per texel and a view of 12.5 units.
+            frames(*rig, 2, 1778.0F, 1000.0F);
+            Require(std::abs(height(*rig) - 12.5F) < 1.0e-5F, "a taller window changes the pixels per texel, not the pixel grid");
+            // Bounds: the map is 40 x 30; the view is 12.5 high and 22.2 wide.
+            place(*rig, 500.0, 500.0, wall);
+            frames(*rig, 2, 1778.0F, 1000.0F);
+            const auto corner = position(*rig, wall);
+            const float halfWidth = 12.5F * 0.5F * (1778.0F / 1000.0F);
+            Require(std::abs(corner[0] - (20.0F - halfWidth)) < 0.02F, "the camera stops where the view meets the edge of the map");
+            Require(std::abs(corner[1] - (wall ? 30.0F - 6.25F : 15.0F - 6.25F)) < 0.02F, "and the top");
+        }
+
+        // Smoothing is not applied to a teleport; a short move is eased.
+        auto eased = build(kb::assets::Map2DOrientation::Flat, { .followTarget = "Hero", .smoothingSeconds = 1.0F });
+        place(*eased, 0.0, 0.0, false);
+        frames(*eased, 2, 1280.0F, 720.0F);
+        place(*eased, 4.0, 0.0, false);
+        frames(*eased, 1, 1280.0F, 720.0F);
+        const float step = position(*eased, false)[0];
+        Require(step > 0.01F && step < 0.2F, "a short move of the target is smoothed");
+        place(*eased, 18.0, 0.0, false);
+        frames(*eased, 1, 1280.0F, 720.0F);
+        Require(std::abs(position(*eased, false)[0] - 18.0F) < 1.0e-4F, "a teleport of the target is followed at once");
+        Require(std::abs(height(*eased) - 11.0F) < 1.0e-5F, "without a pixel density the view keeps the height of the map's view");
+
+        // No settings: the camera stays where the preset put it.
+        auto plain = build(kb::assets::Map2DOrientation::Flat, {});
+        place(*plain, 7.0, 7.0, false);
+        frames(*plain, 3, 1280.0F, 720.0F);
+        Require(position(*plain, false)[0] == 0.0F && position(*plain, false)[1] == 0.0F && std::abs(height(*plain) - 11.0F) < 1.0e-5F,
+            "a map without camera settings keeps its still camera");
     }
     // Golden: the borders of a plus-shaped grass patch on an empty map, as every cell lists them (x,y:ground+borders). A change
     // here changes how existing maps look: update it only on purpose.
