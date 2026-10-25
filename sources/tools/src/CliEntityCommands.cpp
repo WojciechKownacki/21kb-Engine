@@ -1,4 +1,5 @@
 #include "CliCommands.hpp"
+#include "CliPlayerPreset.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
@@ -563,8 +564,10 @@ void ListProperties(std::string_view component, std::ostream& out) {
 [[nodiscard]] int EntityAdd(const ArgumentList& arguments, CommandIo io) {
     const std::optional<std::string> create = arguments.Option("--create");
     const kb::scene::SceneCreateItem* createItem = create.has_value() ? kb::scene::SceneCreateMenu::Find(*create) : nullptr;
+    const bool playerPreset = create.has_value() && IsPlayerPreset(*create);
     const std::optional<std::string> name = arguments.Option("--name").has_value() ? arguments.Option("--name")
-        : createItem != nullptr ? std::optional<std::string>{ std::string{ createItem->name } } : create;
+        : createItem != nullptr ? std::optional<std::string>{ std::string{ createItem->name } }
+        : playerPreset ? std::optional<std::string>{ "Player" } : create;
     if (!name.has_value() || name->empty()) {
         io.err << "error: entity add requires --name <Name> or --create <Item>\n";
         return 1;
@@ -586,7 +589,14 @@ void ListProperties(std::string_view component, std::ostream& out) {
         return 1;
     }
     kb::scene::SceneEntity entity{};
-    if (create.has_value()) {
+    if (playerPreset) {
+        entity = AddPlayerPreset(scene, Utf8Path(arguments.Option("--project").value_or("")), *create, *name, io);
+        if (!entity.IsValid()) return 1;
+        if (parent.has_value() && !scene.Hierarchy().SetParent(entity, *parent)) {
+            io.err << "error: '" << *name << "' could not be parented\n";
+            return 1;
+        }
+    } else if (create.has_value()) {
         const kb::scene::SceneCreateResult created =
             kb::scene::SceneCreateMenu::Create(scene, *create, *name, session->descriptor, parent.value_or(kb::scene::SceneEntity{}));
         if (!created.entity.IsValid()) {
@@ -1392,7 +1402,7 @@ int RunSchemaCommand(const ArgumentList& arguments, CommandIo io) {
     for (const kb::assets::BuiltInShapeDesc& shape : kb::assets::BuiltInShapes()) io.out << ' ' << shape.virtualPath;
     io.out << "\nentity add --create items:";
     for (const kb::scene::SceneCreateItem& item : kb::scene::SceneCreateMenu::Items()) io.out << " '" << item.id << '\'';
-    io.out << '\n';
+    io.out << " 'Platformer Player' 'Top Down Player'\n";
     for (const kb::scene::SceneComponentKind& kind : kb::scene::SceneComponentAuthoring::Kinds()) {
         io.out << kind.id;
         if (kind.displayName != kind.id) io.out << " (" << kind.displayName << ')';

@@ -12,6 +12,7 @@ add_library(kb_cli_core STATIC
     src/CliMcpCommand.cpp
     src/CliNavMeshCommands.cpp
     src/CliPackSetCommands.cpp
+    src/CliPlayerPreset.cpp
     src/CliPhysicsCommands.cpp
     src/CliQualityCommands.cpp
     src/CliRunCommand.cpp
@@ -22,6 +23,7 @@ add_library(kb_cli_core STATIC
     src/CliWorldCommands.cpp
     src/private/CliCommands.hpp
     src/private/CliCommon.hpp
+    src/private/CliPlayerPreset.hpp
     src/private/CliProgram.hpp
 )
 

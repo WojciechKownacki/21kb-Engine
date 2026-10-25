@@ -245,7 +245,12 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  (--create makes what the editor's Create menu makes: Cube, Sphere, Capsule,
                  Cylinder, Cone, Plane, Quad, Directional Light, Point Light, Spot Light,
                  Area Light, Camera, Environment, Particle System, Audio Source, Audio Listener;
-                 --name then defaults to the item)
+                 --name then defaults to the item. --create 'Platformer Player' or 'Top Down Player'
+                 makes a ready-made 2D player named Player: a CharacterController, a copy of
+                 Platformer2DPlayer.lua or TopDown2DPlayer.lua in Assets/Scripts (never overwritten;
+                 speed, jumpSpeed, coyoteTime, jumpBuffer are its @expose lines), default Move and
+                 Jump input when the project has no input context, and every map of the scene
+                 following the player; see docs/world_2d_presets.md)
                  remove --project <dir> [--scene <path>] --name <Name>
                  rename --project <dir> [--scene <path>] --name <Name> --to <NewName>
                         [--occurrence <n>]

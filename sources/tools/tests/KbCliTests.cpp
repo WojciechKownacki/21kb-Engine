@@ -4261,6 +4261,62 @@ void RunMap2DCameraCliTests() {
 }
 #endif
 
+#if KB_CLI_RENDERER
+// `entity add --create 'Platformer Player'` and 'Top Down Player': the entity, its script, its input and the map cameras.
+void RunPlayerPresetCliTests() {
+    const std::filesystem::path parent = TestRoot() / "player_preset";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Game", "--template", "Empty" }).exitCode == 0, "new failed");
+    const std::filesystem::path root = parent / "Game";
+    const std::string project = root.string();
+    Require(RunCliProgram({ "map2d", "new", "--project", project, "--name", "World", "--size", "32x24", "--orientation", "wall" }).exitCode == 0, "map2d new failed");
+    const auto read = [](const std::filesystem::path& file) {
+        std::ifstream input{ file, std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+
+    const CliRun added = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--position", "2,3,0" });
+    Require(added.exitCode == 0, "the Platformer Player preset failed: " + added.out + added.err);
+    const std::filesystem::path script = root / "Assets" / "Scripts" / "Platformer2DPlayer.lua";
+    Require(std::filesystem::exists(script) && Contains(read(script), "@expose coyoteTime") && Contains(read(script), "@expose jumpBuffer"),
+        "the preset must write the platformer script, with its tunables");
+    for (const char* file : { "Move.21kbinputaction", "Jump.21kbinputaction", "PlayerInput.21kbinputcontext" }) {
+        Require(std::filesystem::exists(root / "Assets" / "Input" / file), std::string{ "the preset must write the input asset " } + file);
+    }
+    Require(kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root)).settings.inputMappingContext ==
+                "/Game/Input/PlayerInput.21kbinputcontext", "the project's input context must be the preset's");
+    const CliRun listed = RunCliProgram({ "scene-list", "--project", project });
+    Require(listed.exitCode == 0 && Contains(listed.out, "Player") && Contains(listed.out, "CharacterController"),
+        "the scene must hold a Player with a CharacterController: " + listed.out);
+    const CliRun behaviours = RunCliProgram({ "validate", "--project", project, "Assets/Scripts/Platformer2DPlayer.lua" });
+    Require(behaviours.exitCode == 0, "the preset script must validate: " + behaviours.out + behaviours.err);
+    const CliRun info = RunCliProgram({ "map2d", "info", "--project", project, "--map", "/Game/Maps/World.kbmap2d" });
+    Require(Contains(info.out, "follows Player") && Contains(info.out, "kept inside the map"), "the map camera must follow the Player: " + info.out);
+
+    // The script is the project's: a second player keeps the edited file, takes the camera, and a name is not used twice.
+    {
+        std::ofstream out{ script, std::ios::binary | std::ios::app };
+        out << "-- edited by the author\n";
+    }
+    const std::string edited = read(script);
+    const CliRun second = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--name", "Hero" });
+    Require(second.exitCode == 0 && read(script) == edited, "a second preset must keep the edited script: " + second.out + second.err);
+    Require(Contains(RunCliProgram({ "map2d", "info", "--project", project, "--map", "/Game/Maps/World.kbmap2d" }).out, "follows Hero"),
+        "the map camera follows the latest player");
+    const CliRun again = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player" });
+    Require(again.exitCode == 1 && Contains(again.err, "already exists"), "a second entity named Player must be refused: " + again.err);
+    const CliRun topDown = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player", "--name", "Walker" });
+    Require(topDown.exitCode == 0 && topDown.out.find("note:") != std::string::npos && Contains(topDown.out, "TopDown2DPlayer.lua"),
+        "the top-down preset works and notes that the map is a platformer map: " + topDown.out + topDown.err);
+    Require(Contains(read(root / "Assets" / "Scripts" / "TopDown2DPlayer.lua"), "@expose eightWay"), "the preset must write the top-down script");
+
+    // The project runs with the new players.
+    const CliRun run = RunCliProgram({ "run", "--project", project, "--frames", "30" });
+    Require(run.exitCode == 0 && Contains(run.out, "0 diagnostics"), "the scene with the players must run cleanly: " + run.out + run.err);
+}
+#endif
+
 int main(int argc, char** argv) {
 #if KB_CLI_RENDERER
     kb::render::tests::InstallRendererAssertionPolicy();
@@ -4298,6 +4354,7 @@ int main(int argc, char** argv) {
     RunMaterialAuthoringCommandTests();
     RunMaterialGraphUtilityNodeCommandTests();
     RunMap2DCameraCliTests();
+    RunPlayerPresetCliTests();
 #endif
     RunSceneCommandTests();
     RunRunCommandTests();

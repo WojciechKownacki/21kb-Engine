@@ -1,0 +1,55 @@
+# Ready-made 2D players
+
+`kb_cli entity add --create 'Platformer Player'` and `--create 'Top Down Player'` put a playable character into the
+scene of a project that has a 2D map ([docs/world_2d_camera.md](world_2d_camera.md) describes the map camera):
+
+```
+kb_cli map2d new --project <dir> --name World --orientation wall          # a Map Platformer
+kb_cli entity add --project <dir> --create 'Platformer Player' [--name Hero] [--position 2,3,0]
+kb_cli run --project <dir> --frames 120
+```
+
+What the preset makes, in one command:
+
+- An entity (named `Player` unless `--name` is given) with a **CharacterController** (a capsule; gravity on for the
+  platformer, off for the top-down player, which stays at its level) and a **behaviour** that runs the project's copy
+  of `Assets/Scripts/Platformer2DPlayer.lua` or `Assets/Scripts/TopDown2DPlayer.lua`. The Lua file is an ordinary asset of
+  the project: edit it freely. It is written when missing and never overwritten.
+- **Input**: when the project has no input context yet, `Assets/Input/Move`, `Jump` and `PlayerInput` are written and
+  set as the project's input context. Move is WASD, the arrow keys, the pad's left stick and D-pad; Jump is Space and the
+  pad's A button. A project that already has an input context keeps it; it then needs a `Move` (Axis2D) and a
+  `Jump` (Bool) action.
+- **Camera**: every map of the scene gets the player as its camera's follow target, smoothed and kept inside the map
+  (`kb_cli map2d set --camera-follow none` and the other `--camera-*` options change it; add `--camera-pixels-per-unit 16`
+  for pixel perfect).
+
+## The platformer script
+
+Wall maps (`Map Platformer`): x runs across, y up. `Platformer2DPlayer.lua` reads `Move` (left and right) and `Jump`:
+
+| `@expose` | Default | Meaning |
+|---|---|---|
+| `speed` | 6.0 | Walking speed in m/s |
+| `jumpSpeed` | 9.0 | Upward speed at take-off (about 4 m high with a full jump) |
+| `coyoteTime` | 0.1 | Seconds after walking off an edge in which Jump still works; the engine allows up to 0.1 |
+| `jumpBuffer` | 0.12 | Seconds before landing in which a Jump press is remembered |
+| `releaseGravity` | 3.0 | Gravity multiplier while rising with Jump released: a tap is a short hop |
+| `fallGravity` | 1.5 | Gravity multiplier while falling |
+
+Gravity, ground contact, walls, steps and slopes come from the CharacterController. A jump asked for within 0.1 s of leaving
+the ground succeeds once (the engine's coyote time for every CharacterController, `Physics.CharacterJump`); a jump in the
+air, or a second one, does not.
+
+## The top-down script
+
+Flat maps (`Map Top Down`): x runs across, z up the screen. `TopDown2DPlayer.lua` reads `Move` and moves with
+`Physics.CharacterMove`, so solid tiles stop it: `speed` (5.0) and `eightWay` (true). A diagonal is normalized to the speed
+of one axis; with `eightWay` false only the stronger axis counts (four directions).
+
+## Not covered
+
+- The editor's Create menu does not list these items yet (it would need the project folder to write the script, and an
+  editor build); use the command line.
+- One-way platforms, slopes and moving platforms work in the character controller but are not exercised by the preset
+  scripts' tests.
+- The scripts assume the player's map is not rotated or scaled.
