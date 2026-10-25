@@ -2,6 +2,7 @@
 
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/audio/AudioPlayback.hpp"
+#include "engine/audio/AudioMetering.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -393,6 +394,47 @@ ScriptFunctionCallResult AudioDspState(const ScriptFunctionCallContext& context,
             {"sampleRate", ScriptValue{static_cast<int>(report.sampleRate)}}, {"channels", ScriptValue{static_cast<int>(report.channels)}}}};
     }
     return Error("DSP bus has not been initialized: " + bus->AsString());
+}
+
+ScriptFunctionCallResult AudioConfigureMeters(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("audio api requires an active scene");
+    const auto* enabled = FindArg(arguments, "enabled");
+    if (enabled == nullptr || enabled->Type() != ScriptValueType::Bool) return Error("audio meter capture requires a boolean");
+    if (!kb::audio::AudioMetering::Configure(*context.scene, enabled->AsBool())) return Error("audio provider could not configure signal meters");
+    return {.executed = true, .outputs = {{"configured", ScriptValue{true}}}};
+}
+
+ScriptFunctionCallResult AudioResetMeters(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    static_cast<void>(arguments);
+    if (context.scene == nullptr) return Error("audio api requires an active scene");
+    if (!kb::audio::AudioMetering::Reset(*context.scene)) return Error("audio provider could not reset signal meters");
+    return {.executed = true, .outputs = {{"reset", ScriptValue{true}}}};
+}
+
+ScriptFunctionCallResult AudioMeter(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("audio api requires an active scene");
+    const auto* bus = FindArg(arguments, "bus");
+    const auto channel = IntArg(arguments, "channel", -1);
+    if (bus == nullptr || bus->Type() != ScriptValueType::String || channel < 0 || channel >= 8)
+        return Error("audio meter requires a bus name and a channel index between 0 and 7");
+    const auto report = kb::audio::AudioMetering::Report(*context.scene);
+    if (!report.backendAvailable || !report.supported) return Error("audio provider does not support signal meters");
+    if (!report.initialized) return Error("audio signal meters are not initialized");
+    const kb::audio::AudioMeterReading* reading = &report.master;
+    if (!bus->AsString().empty()) {
+        const auto found = std::find_if(report.buses.begin(), report.buses.end(), [&](const auto& item) { return item.bus == bus->AsString(); });
+        if (found == report.buses.end()) return Error("audio meter bus has not been initialized: " + bus->AsString());
+        reading = &*found;
+    }
+    if (!reading->available) return Error("audio meter snapshot is unavailable or busy; retry the read");
+    if (static_cast<std::uint32_t>(channel) >= reading->channels) return Error("audio meter channel is outside the active format");
+    const auto& value = reading->channel[static_cast<std::size_t>(channel)];
+    return {.executed = true, .outputs = {{"capturing", ScriptValue{report.captureEnabled}},
+        {"channels", ScriptValue{reading->channels}}, {"sampleRate", ScriptValue{report.sampleRate}},
+        {"blockFrames", ScriptValue{reading->blockFrames}}, {"processedFrames", ScriptValue{std::to_string(reading->processedFrames)}},
+        {"peak", ScriptValue{static_cast<double>(value.peak)}}, {"rms", ScriptValue{static_cast<double>(value.rms)}},
+        {"heldPeak", ScriptValue{static_cast<double>(value.heldPeak)}}, {"clippedSamples", ScriptValue{std::to_string(value.clippedSamples)}},
+        {"nonFiniteSamples", ScriptValue{std::to_string(value.nonFiniteSamples)}}, {"mixerAssetId", ScriptValue{std::to_string(report.mixerAssetId)}}}};
 }
 
 ScriptFunctionCallResult AudioSetListenerLocalUser(
@@ -842,6 +884,29 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         {"error", ScriptValueType::String, true}, {"sampleRate", ScriptValueType::Int, true}, {"channels", ScriptValueType::Int, true}};
     dspState.callback = &AudioDspState;
     if (!host.RegisterFunction(std::move(dspState))) return false;
+
+    ScriptFunctionDesc configureMeters;
+    configureMeters.signature.name = "Audio.ConfigureMeters";
+    configureMeters.signature.inputs = {{"enabled", ScriptValueType::Bool, true}};
+    configureMeters.signature.outputs = {{"configured", ScriptValueType::Bool, true}};
+    configureMeters.callback = &AudioConfigureMeters;
+    if (!host.RegisterFunction(std::move(configureMeters))) return false;
+    ScriptFunctionDesc resetMeters;
+    resetMeters.signature.name = "Audio.ResetMeters";
+    resetMeters.signature.outputs = {{"reset", ScriptValueType::Bool, true}};
+    resetMeters.callback = &AudioResetMeters;
+    if (!host.RegisterFunction(std::move(resetMeters))) return false;
+    ScriptFunctionDesc meter;
+    meter.signature.name = "Audio.Meter";
+    meter.signature.inputs = {{"bus", ScriptValueType::String, true}, {"channel", ScriptValueType::Int, true}};
+    meter.signature.outputs = {{"capturing", ScriptValueType::Bool, true}, {"channels", ScriptValueType::UInt32, true},
+        {"sampleRate", ScriptValueType::UInt32, true}, {"blockFrames", ScriptValueType::UInt32, true},
+        {"processedFrames", ScriptValueType::String, true}, {"peak", ScriptValueType::Double, true},
+        {"rms", ScriptValueType::Double, true}, {"heldPeak", ScriptValueType::Double, true},
+        {"clippedSamples", ScriptValueType::String, true}, {"nonFiniteSamples", ScriptValueType::String, true},
+        {"mixerAssetId", ScriptValueType::String, true}};
+    meter.callback = &AudioMeter;
+    if (!host.RegisterFunction(std::move(meter))) return false;
 
     ScriptFunctionDesc setListenerLocalUser;
     setListenerLocalUser.signature.name = "Audio.SetListenerLocalUser";

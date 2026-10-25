@@ -3128,7 +3128,7 @@ void RunScriptAudioSourceAndDeviceApiTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Script audio source/device API host did not initialize");
-    for (const char* name : { "Audio.PlaySource", "Audio.PauseSource", "Audio.ResumeSource", "Audio.StopSource", "Audio.IsSourcePlaying", "Audio.DeviceStatus", "Audio.Reinitialize", "Audio.SetListenerLocalUser", "Audio.ListenerLocalUser", "Audio.ConfigureOffline", "Audio.RenderOffline", "Audio.DspState" }) {
+    for (const char* name : { "Audio.PlaySource", "Audio.PauseSource", "Audio.ResumeSource", "Audio.StopSource", "Audio.IsSourcePlaying", "Audio.DeviceStatus", "Audio.Reinitialize", "Audio.SetListenerLocalUser", "Audio.ListenerLocalUser", "Audio.ConfigureOffline", "Audio.RenderOffline", "Audio.DspState", "Audio.ConfigureMeters", "Audio.ResetMeters", "Audio.Meter" }) {
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr,
             "Script audio source/device API did not register a function");
         kb::tests::Require(host.VisualGraphRuntimeBindings().Find(
@@ -3179,6 +3179,13 @@ void RunScriptAudioSourceAndDeviceApiTest() {
 
     ProbeAudioPlaybackBackend backend;
     kb::audio::AudioPlayback::RegisterBackend(scene, backend);
+    const std::array meterCapture{kb::script::ScriptFunctionArgument{"enabled", kb::script::ScriptValue{true}}};
+    const std::array meterRead{kb::script::ScriptFunctionArgument{"bus", kb::script::ScriptValue{std::string{}}},
+        kb::script::ScriptFunctionArgument{"channel", kb::script::ScriptValue{0}}};
+    kb::tests::Require(!host.Functions().Call("Audio.ConfigureMeters", meterCapture, context).Succeeded()
+            && !host.Functions().Call("Audio.ResetMeters", {}, context).Succeeded()
+            && !host.Functions().Call("Audio.Meter", meterRead, context).Succeeded(),
+        "Script meters fabricated capability for a playback-only backend");
     const kb::script::ScriptFunctionCallResult selfPlay = host.Functions().Call("Audio.PlaySource", {}, context);
     kb::tests::Require(selfPlay.Output("succeeded").value_or(kb::script::ScriptValue{ false }).AsBool()
             && selfPlay.Output("playing").value_or(kb::script::ScriptValue{ false }).AsBool()

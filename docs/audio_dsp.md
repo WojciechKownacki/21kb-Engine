@@ -321,5 +321,22 @@ the simple case's coarse counter varied between 15.63 and 31.25 ms. Active RSS
 was about 11.1 MiB and 17.6 MiB respectively; capture-mode differences were
 within 72 KiB and are not a memory-saving claim. These are local sampled values,
 not allocation sizes, measured peaks or device deadline guarantees. Full live
-editor meters/preview controls, script meter access, packaged meter assertions,
-physical-device timing and other platform integration remain pending.
+editor meters/preview controls, physical-device timing and other platform
+integration remain pending.
+
+Scripts use `Audio.ConfigureMeters(true)`, `Audio.ResetMeters()` and
+`Audio.Meter(bus, channel)`. An empty bus names master; channel indices start at
+zero and must fit the actual format. Meter tables expose capture state, format,
+last-block peak/RMS, held peak, block frames and cumulative counters. Frame,
+clipping and non-finite counters, and the mixer asset ID, are exact decimal
+strings. Unsupported, missing, busy and malformed requests return `nil, error`
+in Lua. Configure/reset preserve transport and effects. Reading does not enable
+capture; disabled or freshly reset history has zero processed frames.
+
+The native packaged test executes these Lua calls through the actual provider
+DLL using cooked mixer, scene and clip assets. Both master channels match an
+independent PCM readback, bus gain matches the analytic effect response, mute
+produces zero meters, reset clears counters, and disabling capture preserves
+playback. Invalid bus/channel/type, fractional, non-finite and oversized numeric
+arguments must return ordinary errors while the process continues. Separate
+incorrect DSP and meter assertions must each terminate the player with code 1.

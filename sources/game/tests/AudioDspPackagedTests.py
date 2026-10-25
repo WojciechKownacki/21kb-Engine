@@ -162,19 +162,52 @@ def main():
     script = project / "Assets/Scripts/DspProbe.lua"
     script.write_text(('''function Ready(self, dt)
     assert(Audio.ConfigureOffline(), "offline audio provider")
+    assert(Audio.ConfigureMeters(true), "enable actual signal meters")
     Audio.RenderOffline(8192)
+    assert(Audio.ResetMeters(), "reset actual meter history")
+    assert(Audio.Meter("", 0).processedFrames == "0", "reset preserves exact empty history")
     local pcm = Audio.RenderOffline(8192)
     local state = Audio.DspState("Effects")
     assert(state.current and state.activeEffects == @ACTIVE@ and state.error == "", "installed DSP chain")
     assert(state.sampleRate == 48000 and state.channels == 2, "actual PCM format")
     assert(pcm.frames == 8192 and math.abs(pcm.peak - @PEAK@) < @TOL@ and
            math.abs(pcm.rms - @RMS@) < @TOL@, "packaged DSP PCM gain")
+    for channel = 0, 1 do
+        local master = Audio.Meter("", channel)
+        local bus = Audio.Meter("Effects", channel)
+        assert(master.capturing and master.channels == 2 and master.sampleRate == 48000 and
+               master.processedFrames == "8192" and master.blockFrames == 8192, "packaged master actual format and frames")
+        assert(math.abs(master.peak - pcm.peak) < 1e-7 and math.abs(master.rms - pcm.rms) < 1e-7 and
+               math.abs(master.heldPeak - pcm.peak) < 1e-7, "packaged master meter matches actual PCM")
+        assert(bus.capturing and tonumber(bus.processedFrames) >= 8192 and
+               math.abs(bus.heldPeak - @PEAK@) < @TOL@ and bus.mixerAssetId == master.mixerAssetId and
+               bus.clippedSamples == "0" and master.clippedSamples == "0" and
+               bus.nonFiniteSamples == "0" and master.nonFiniteSamples == "0", "packaged bus meter signal")
+    end
+    local missing, missingError = Audio.Meter("MissingBus", 0)
+    assert(missing == nil and string.find(missingError, "bus"), "missing meter bus must fail")
+    local invalid, invalidError = Audio.Meter("", 2)
+    assert(invalid == nil and string.find(invalidError, "channel"), "channel outside actual format must fail")
+    local survived, rejected, argumentError = pcall(Audio.Meter, "", -1)
+    assert(survived and rejected == nil and string.find(argumentError, "channel"), "invalid meter index returns an ordinary error")
+    local survivedCapture, rejectedCapture, captureError = pcall(Audio.ConfigureMeters, "true")
+    assert(survivedCapture and rejectedCapture == nil and string.find(captureError, "boolean"), "invalid capture type returns an ordinary error")
+    for _, invalid in ipairs({{false, 0}, {"", false}, {"", "0"}, {"", 0.25}, {"", 0/0}, {"", math.huge}, {"", 1e300}, {"", 8}}) do
+        local ok, value, message = pcall(Audio.Meter, invalid[1], invalid[2])
+        assert(ok and value == nil and type(message) == "string", "malformed meter arguments return errors without terminating the runtime")
+    end
     assert(Audio.SetBusVolume("Effects", 0), "post DSP mute")
     Audio.RenderOffline(512)
+    assert(Audio.ResetMeters())
     assert(Audio.RenderOffline(4096).peak == 0, "post DSP mute PCM")
+    assert(Audio.Meter("", 0).heldPeak == 0 and Audio.Meter("Effects", 0).heldPeak == 0, "post DSP mute meters")
     assert(Audio.SetBusVolume("Effects", @VOLUME@), "post DSP unmute")
     Audio.RenderOffline(512)
     assert(math.abs(Audio.RenderOffline(4096).peak - @PEAK@) < @TOL@, "post DSP unmute PCM")
+    assert(Audio.ConfigureMeters(false))
+    assert(Audio.RenderOffline(512).peak > 0, "disabling meters preserves playback")
+    assert(not Audio.Meter("", 0).capturing and Audio.Meter("", 0).processedFrames == "0", "disabled capture stays empty")
+    Log("packaged meters PCM verified")
     Log("packaged DSP PCM verified")
 end
 function Destroyed(self, dt)
@@ -199,6 +232,7 @@ end
     require(not (output / "Assets").exists(), "Runtime used loose assets")
     text = run(player, "--headless", "--frames=3", "--width=64", "--height=64", "--uncapped", cwd=output)
     require(text.count("kb_game: script: packaged DSP PCM verified") == 1 and
+            text.count("kb_game: script: packaged meters PCM verified") == 1 and
             text.count("kb_game: script: packaged DSP stopped") == 1 and
             "rendered=3" in text and "shutdown=clean" in text, "Packaged PCM or script lifecycle was not verified")
     script.write_text('''function Ready(self, dt)
@@ -210,8 +244,17 @@ end
     cook()
     run(player, "--headless", "--frames=3", "--width=64", "--height=64", "--uncapped", cwd=output, expected=1)
     require("DSP negative control" in history[-1]["stderr"] + history[-1]["stdout"], "Negative assertion was not executed")
+    script.write_text('''function Ready(self, dt)
+    assert(Audio.ConfigureOffline() and Audio.ConfigureMeters(true))
+    Audio.RenderOffline(4096)
+    assert(Audio.Meter("", 0).processedFrames == "1", "meter negative control")
+end
+''', encoding="utf8")
+    cook()
+    run(player, "--headless", "--frames=3", "--width=64", "--height=64", "--uncapped", cwd=output, expected=1)
+    require("meter negative control" in history[-1]["stderr"] + history[-1]["stdout"], "Negative meter assertion was not executed")
     (root / "result.json").write_text(json.dumps(dict(result="PASS", pcm=report, meters=meters, inspectorAuthored=bool(args.editor_tests),
-        inspectorPcm=ui_report if args.editor_tests else None, negativeScriptExit=1,
+        inspectorPcm=ui_report if args.editor_tests else None, negativeScriptExit=1, packagedMeters=True, negativeMeterExit=1,
         limitation="Offline native PCM and a hidden Windows player; no physical audio device or other platform qualification."), indent=2), encoding="utf8")
     print(f"PASS: authored effects, actual CLI PCM and cooked runtime PCM; {root}")
 

@@ -347,6 +347,45 @@ int LuaAudioConfigureOffline(lua_State* state) { return LuaAudioDspCall(state, "
 int LuaAudioRenderOffline(lua_State* state) { return LuaAudioDspCall(state, "Audio.RenderOffline", "frames"); }
 int LuaAudioDspState(lua_State* state) { return LuaAudioDspCall(state, "Audio.DspState", "bus"); }
 
+int LuaAudioMeterCall(lua_State* state, const char* function, const char* output = nullptr) {
+    auto* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state); lua_pushliteral(state, "lua script execution context is not available"); return 2;
+    }
+    const bool configure = std::string_view{function} == "Audio.ConfigureMeters";
+    const bool read = std::string_view{function} == "Audio.Meter";
+    int integer = 0;
+    const auto channel = read ? lua_tointegerx(state, 2, &integer) : 0;
+    // Return ordinary call errors before constructing C++ arguments. Lua
+    // nonlocal argument-error exits must not unwind through this adapter.
+    if ((configure && lua_type(state, 1) != LUA_TBOOLEAN)
+        || (read && (lua_type(state, 1) != LUA_TSTRING || lua_type(state, 2) != LUA_TNUMBER
+            || integer == 0 || channel < 0 || channel >= 8))) {
+        lua_pushnil(state);
+        lua_pushstring(state, configure ? "audio meter capture requires a boolean"
+            : "audio meter requires a bus string and an integer channel between 0 and 7");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (configure) {
+        arguments.push_back(Arg("enabled", ScriptValue{lua_toboolean(state, 1) != 0}));
+    } else if (read) {
+        std::size_t length = 0U; const auto* bus = lua_tolstring(state, 1, &length);
+        arguments.push_back(Arg("bus", ScriptValue{std::string{bus, length}}));
+        arguments.push_back(Arg("channel", ScriptValue{static_cast<int>(channel)}));
+    }
+    const auto result = context->CallFunction(function, arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "audio meter request failed");
+    if (output != nullptr) {
+        lua_pushboolean(state, result.Output(output).value_or(ScriptValue{false}).AsBool() ? 1 : 0); return 1;
+    }
+    return PushAudioResultTable(state, result);
+}
+
+int LuaAudioConfigureMeters(lua_State* state) { return LuaAudioMeterCall(state, "Audio.ConfigureMeters", "configured"); }
+int LuaAudioResetMeters(lua_State* state) { return LuaAudioMeterCall(state, "Audio.ResetMeters", "reset"); }
+int LuaAudioMeter(lua_State* state) { return LuaAudioMeterCall(state, "Audio.Meter"); }
+
 int LuaAudioSetListenerLocalUser(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -3451,6 +3490,9 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaAudioConfigureOffline,
     &LuaAudioRenderOffline,
     &LuaAudioDspState,
+    &LuaAudioConfigureMeters,
+    &LuaAudioResetMeters,
+    &LuaAudioMeter,
     &LuaAudioSetListenerLocalUser,
     &LuaAudioListenerLocalUser,
     &LuaAudioSetBusVolume,
