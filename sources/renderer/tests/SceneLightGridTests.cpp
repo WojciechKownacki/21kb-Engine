@@ -1,5 +1,6 @@
 #include "RendererTestSupport.hpp"
 #include "scene/lighting/SceneLightGrid.hpp"
+#include "shadow/PointShadowPassPlanner.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -8,6 +9,72 @@
 #include <vector>
 
 namespace kb::render::tests {
+namespace {
+
+// More shadow-casting lights than the atlas holds: the nearest ones keep their shadow in a stable order, the rest
+// are counted as dropped, the tiles shrink in steps and a light that cannot cast (hidden, no range, directional,
+// masked out) never counts.
+void PointShadowSelectionKeepsTheNearestAndCountsTheRest() {
+    RenderScene scene;
+    constexpr std::uint32_t kLights = ScenePointShadowBinding::kMaxLights + 9U;
+    for (std::uint32_t id = 1U; id <= kLights; ++id) {
+        LightRenderProxyDesc light{.entityId = id};
+        light.kind = RenderLightKind::Point;
+        light.castsShadow = true;
+        light.intensity = 1.0F;
+        light.range = 10.0F;
+        light.position = {static_cast<float>(id), 0.0F, 0.0F};
+        static_cast<void>(scene.UpsertLight(light));
+    }
+    LightRenderProxyDesc hidden{.entityId = 900U};
+    hidden.kind = RenderLightKind::Point;
+    hidden.castsShadow = true;
+    hidden.visible = false;
+    hidden.range = 10.0F;
+    hidden.intensity = 1.0F;
+    static_cast<void>(scene.UpsertLight(hidden));
+    LightRenderProxyDesc rangeless = hidden;
+    rangeless.entityId = 901U;
+    rangeless.visible = true;
+    rangeless.range = 0.0F;
+    static_cast<void>(scene.UpsertLight(rangeless));
+    LightRenderProxyDesc sun = hidden;
+    sun.entityId = 902U;
+    sun.visible = true;
+    sun.kind = RenderLightKind::Directional;
+    static_cast<void>(scene.UpsertLight(sun));
+
+    const std::array<float, 3> camera{0.0F, 0.0F, 0.0F};
+    const PointShadowLightSelection selection = PointShadowPassPlanner::Select(scene, &camera, ~0U);
+    Require(selection.count == ScenePointShadowBinding::kMaxLights && selection.droppedCount == 9U,
+        "the planner must keep kMaxLights shadow lights and count the other nine as dropped");
+    for (std::uint32_t slot = 0U; slot < selection.count; ++slot) {
+        Require(selection.entityIds[slot] == slot + 1U, "the planner must order the kept shadow lights nearest first");
+    }
+    // The nearest lights stay when the camera is at the far end.
+    const std::array<float, 3> far{static_cast<float>(kLights), 0.0F, 0.0F};
+    const PointShadowLightSelection reverse = PointShadowPassPlanner::Select(scene, &far, ~0U);
+    Require(reverse.entityIds[0] == kLights && reverse.droppedCount == 9U && reverse.entityIds[reverse.count - 1U] == kLights - reverse.count + 1U,
+        "the planner must follow the camera when it picks the lights that keep a shadow");
+    const PointShadowLightSelection masked = PointShadowPassPlanner::Select(scene, &camera, 0U);
+    Require(masked.count == 0U && masked.droppedCount == 0U, "lights outside the camera's culling mask must not count");
+
+    SceneRenderLightingConfig config;
+    config.shadowsEnabled = true;
+    config.shadowMapSize = 2048U;
+    const PointShadowSetup setup = PointShadowPassPlanner::Build(scene, config, &camera, ~0U, BGFX_INVALID_HANDLE);
+    Require(setup.valid && setup.lightCount == ScenePointShadowBinding::kMaxLights && setup.droppedLights == 9U,
+        "the shadow setup must report the lights it dropped");
+    const std::uint32_t full = PointShadowPassPlanner::TileSizeFor(config, 4U);
+    Require(PointShadowPassPlanner::TileSizeFor(config, 5U) == full / 2U && PointShadowPassPlanner::TileSizeFor(config, 9U) == full / 4U &&
+            PointShadowPassPlanner::TileSizeFor(config, 32U) == full / 4U,
+        "shadow tiles must halve beyond four lights and again beyond eight");
+    Require(setup.tileSize * ScenePointShadowBinding::kMaxLights == setup.atlasHeight,
+        "the atlas of a full light set must hold one row of tiles per light");
+}
+
+} // namespace
+
 namespace {
 std::vector<std::uint32_t> CellLights(const SceneLightGrid& grid, std::array<float, 3> position) {
     const auto atlas = grid.Atlas();
@@ -22,6 +89,7 @@ std::vector<std::uint32_t> CellLights(const SceneLightGrid& grid, std::array<flo
 }
 
 void RunSceneLightGridTests() {
+    PointShadowSelectionKeepsTheNearestAndCountsTheRest();
     RenderScene scene;
     SceneRenderLightingConfig config{};
     config.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;

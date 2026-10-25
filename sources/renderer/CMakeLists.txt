@@ -902,6 +902,14 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         add_test(NAME kb_renderer_sky_reflection COMMAND $<TARGET_FILE:kb_renderer_tests> sky-reflection)
         set_tests_properties(kb_renderer_sky_reflection PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;sky" TIMEOUT 180)
+        # Screen-space ambient occlusion, reflections and bounce light, and the voxel grid built from mesh geometry.
+        add_test(NAME kb_renderer_screen_space COMMAND $<TARGET_FILE:kb_renderer_tests> screen-space)
+        set_tests_properties(kb_renderer_screen_space PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;screen-space" TIMEOUT 180)
+        # Point, spot, directional and cascaded shadows, and GPU mesh particles, with image readback.
+        add_test(NAME kb_renderer_shadows_particle_mesh COMMAND $<TARGET_FILE:kb_renderer_tests> particle-mesh-submit)
+        set_tests_properties(kb_renderer_shadows_particle_mesh PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;shadows" TIMEOUT 300)
     endif()
     set_tests_properties(kb_renderer_tests PROPERTIES
         FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
