@@ -553,6 +553,16 @@ void RunWorldTelemetrySnapshotTest() {
     kb::tests::Require(telemetryJson.find("\"query_estimated_gigabytes_per_second\"") != std::string::npos, "ECS telemetry JSON export omitted GB/s");
     kb::tests::Require(telemetryJson.find("\"query_kernel_estimated_gigabytes_per_second\"") != std::string::npos, "ECS telemetry JSON export omitted query kernel GB/s");
     kb::tests::Require(telemetryJson.find("\"query_average_bytes_per_entity\"") != std::string::npos, "ECS telemetry JSON export omitted bytes/entity");
+    // The estimate must not be readable as DRAM bandwidth, and missing hardware counters are reported as unavailable.
+    kb::tests::Require(telemetryJson.find("\"metric_basis\"") != std::string::npos &&
+            telemetryJson.find("\"hardware_counters\": \"unavailable\"") != std::string::npos &&
+            telemetryJson.find("\"dram_bandwidth\": \"unavailable\"") != std::string::npos &&
+            telemetryJson.find("not DRAM bandwidth") != std::string::npos,
+        "ECS telemetry JSON export did not mark bandwidth as an estimate and hardware counters as unavailable");
+    for (const char* estimatedKey : { "query_bytes_touched", "query_estimated_gigabytes_per_second", "query_kernel_estimated_gigabytes_per_second" }) {
+        kb::tests::Require(telemetryJson.find(std::string{ "\"" } + estimatedKey + "\"", telemetryJson.find("\"estimated\": [")) != std::string::npos,
+            "ECS telemetry JSON export did not list an estimated metric as estimated");
+    }
     kb::tests::Require(telemetryJson.find("\"sparse_chunk_percent\"") != std::string::npos, "ECS telemetry JSON export omitted chunk pressure");
     kb::tests::Require(telemetryJson.find("\"preferred_kernel_backend\"") != std::string::npos, "ECS telemetry JSON export omitted preferred kernel backend");
     kb::tests::Require(telemetryJson.find("\"avx2_kernel_backend_auto_selectable\"") != std::string::npos, "ECS telemetry JSON export omitted AVX2 backend auto-select status");
