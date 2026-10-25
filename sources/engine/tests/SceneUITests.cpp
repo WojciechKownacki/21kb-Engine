@@ -526,6 +526,84 @@ void TestClippingGroupsSortingAndScaling() {
         FindElement(scene.UI().Frame(), upper.Entity())->traversalOrder, "Sibling traversal order must remain authored hierarchy order");
 }
 
+// Editing text by the characters a player sees: an accent typed after a letter joins it, Backspace and Delete remove a
+// whole letter with its accents or a whole emoji with its skin tone or family, the arrow keys step over it, and the
+// character limit counts them, not code points or bytes.
+void TestInputFieldEditsGraphemeClusters() {
+    kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
+    const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet components = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::InputField);
+    components.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject field = AddUI(scene, canvas, components);
+    kb::tests::Require(scene.UI().Update(200.0F, 100.0F, {}, 0.016F) && scene.UI().SetFocus(field.Entity()), "The input field must take focus");
+    const auto content = [&] {
+        return std::string{kb::scene::UITextContent(*scene.Components().UI().TryGet<kb::scene::UIText>(field.Entity()))};
+    };
+    const auto type = [&](std::u32string_view text) {
+        kb::scene::SceneUIInput input;
+        input.textInput = std::span<const char32_t>{text.data(), text.size()};
+        static_cast<void>(scene.UI().Update(200.0F, 100.0F, input, 0.016F));
+        static_cast<void>(scene.UI().Update(200.0F, 100.0F, {}, 0.016F));
+    };
+    const auto press = [&](auto setKey) {
+        kb::scene::SceneUIInput input;
+        setKey(input);
+        static_cast<void>(scene.UI().Update(200.0F, 100.0F, input, 0.016F));
+        static_cast<void>(scene.UI().Update(200.0F, 100.0F, {}, 0.016F));
+    };
+    const auto backspace = [&] { press([](kb::scene::SceneUIInput& input) { input.backspaceDown = true; }); };
+    const auto left = [&] { press([](kb::scene::SceneUIInput& input) { input.navigateLeft = true; }); };
+    const auto remove = [&] { press([](kb::scene::SceneUIInput& input) { input.deleteDown = true; }); };
+    // UTF-8 of: e with an acute accent, a with a diaeresis, the diaeresis and a circumflex, a thumb with a skin tone,
+    // a flag of two regional indicators.
+    const std::string acuteE = "e\xCC\x81";
+    const std::string diaeresisA = "a\xCC\x88";
+    const std::string circumflex = "\xCC\x82";
+    const std::string thumb = "\xF0\x9F\x91\x8D\xF0\x9F\x8F\xBD";
+    const std::string flag = "\xF0\x9F\x87\xB5\xF0\x9F\x87\xB1";
+
+    type(U"e\u0301");
+    kb::tests::Require(content() == acuteE, "A combining accent typed after a letter must join the text");
+    backspace();
+    kb::tests::Require(content().empty(), "Backspace must remove a letter together with its combining accent");
+
+    type(U"x\U0001F468\u200D\U0001F469\u200D\U0001F467");
+    backspace();
+    kb::tests::Require(content() == "x", "Backspace must remove a whole joined family, not one of its members");
+
+    type(U"\U0001F44D\U0001F3FD");
+    left();
+    type(U"y");
+    kb::tests::Require(content() == "xy" + thumb, "An arrow key must step over an emoji and its skin tone together");
+    remove();
+    kb::tests::Require(content() == "xy", "Delete before an emoji must remove it with its skin tone");
+    backspace();
+    backspace();
+    backspace();
+    kb::tests::Require(content().empty(), "Backspace on empty text must leave it empty");
+
+    // The limit counts characters as seen: two letters with accents fit a limit of two and a third does not.
+    kb::scene::UIInputField limited = *scene.Components().UI().TryGet<kb::scene::UIInputField>(field.Entity());
+    limited.characterLimit = 2U;
+    scene.Components().UI().Set(field.Entity(), limited);
+    type(U"e\u0301");
+    type(U"a\u0308");
+    kb::tests::Require(content() == acuteE + diaeresisA, "Accents must not use up places of the character limit");
+    type(U"z");
+    kb::tests::Require(content() == acuteE + diaeresisA, "A third character must be refused at a limit of two");
+    type(U"\u0302");
+    kb::tests::Require(content() == acuteE + diaeresisA + circumflex, "An accent typed at the limit must still join the last character");
+    // A flag is one character: two regional indicators fit a limit of one.
+    for (int guard = 0; guard < 8 && !content().empty(); ++guard) backspace();
+    kb::tests::Require(content().empty(), "The field must be emptied before the flag check");
+    limited.characterLimit = 1U;
+    scene.Components().UI().Set(field.Entity(), limited);
+    type(U"\U0001F1F5\U0001F1F1");
+    kb::tests::Require(content() == flag, "A flag must count as one character");
+    type(U"q");
+    kb::tests::Require(content() == flag, "A second character must be refused at a limit of one");
+}
+
 void TestInteractionAndEditing() {
     kb::scene::Scene scene{kb::scene::SceneMode::PrefabPrivate};
     const kb::scene::SceneObject canvas = AddUI(scene, {}, CanvasComponents());
@@ -2017,6 +2095,7 @@ void RunSceneUITests() {
     TestWidgetSettingsPersistence();
     TestFrameAmongManyRootsMatchesRecordedFrame();
     TestFrameNextToMillionRootsIsCheap();
+    TestInputFieldEditsGraphemeClusters();
     RunUITextLineBreakingTests();
 }
 

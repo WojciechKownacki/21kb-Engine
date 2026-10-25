@@ -863,6 +863,7 @@ add_library(kb_engine STATIC
     src/scene/ui/SceneUIHierarchyPresets.cpp
     src/ui/UIComponentValidation.cpp
     src/ui/UITextLineBreaking.cpp
+    src/ui/UITextGraphemes.cpp
     src/ui/UIComponentCatalog.cpp
     src/ui/UIComponentPropertyCatalog.cpp
     src/scene/asset/io/components/SceneAssetUIComponentCodec.cpp

@@ -18,6 +18,7 @@
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/ui/UIComponentValidation.hpp"
+#include "engine/ui/visual/UITextGraphemes.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityCounter.hpp"
@@ -801,11 +802,12 @@ class FrameBuilder {
                     element.text->color.a *= 0.5F;
                     element.textCaretByteOffset = 0U;
                 } else if (type == UIInputContentType::Password || type == UIInputContentType::Pin) {
-                    // One dot per character; the caret keeps its place in character terms.
-                    const std::size_t caret = std::min<std::size_t>(element.textCaretByteOffset, content.size());
+                    // One dot per character as the player sees it (a letter with its accent is one); the caret keeps
+                    // its place in character terms.
+                    const std::size_t caret = SnapToUITextGraphemeBoundary(content, std::min<std::size_t>(element.textCaretByteOffset, content.size()));
                     element.textCaretByteOffset =
-                        static_cast<std::uint32_t>(Utf8CodePointCount(std::string_view{content}.substr(0U, caret)));
-                    SetTextClipped(*element.text, std::string(Utf8CodePointCount(content), '*'));
+                        static_cast<std::uint32_t>(UITextGraphemeCount(std::string_view{content}.substr(0U, caret)));
+                    SetTextClipped(*element.text, std::string(UITextGraphemeCount(content), '*'));
                 }
             }
         }
@@ -1489,15 +1491,6 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     return result;
 }
 
-[[nodiscard]] std::size_t PreviousUtf8Boundary(std::string_view text, std::size_t offset) noexcept {
-    if (offset == 0U)
-        return 0U;
-    --offset;
-    while (offset > 0U && (static_cast<unsigned char>(text[offset]) & 0xC0U) == 0x80U)
-        --offset;
-    return offset;
-}
-
 [[nodiscard]] std::size_t NextUtf8Boundary(std::string_view text, std::size_t offset) noexcept {
     if (offset >= text.size())
         return text.size();
@@ -1572,15 +1565,13 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         return false;
 
     std::string buffer{UITextContent(*text)};
-    state.uiTextCursorByteOffset = std::min(state.uiTextCursorByteOffset, buffer.size());
-    while (state.uiTextCursorByteOffset > 0U && state.uiTextCursorByteOffset < buffer.size() &&
-           (static_cast<unsigned char>(buffer[state.uiTextCursorByteOffset]) & 0xC0U) == 0x80U) {
-        --state.uiTextCursorByteOffset;
-    }
+    // The caret stands between characters as the player sees them: never inside a letter with its accent, an emoji
+    // with its skin tone or a joined family, so an arrow key, Backspace or Delete moves over or removes the whole of it.
+    state.uiTextCursorByteOffset = SnapToUITextGraphemeBoundary(buffer, std::min(state.uiTextCursorByteOffset, buffer.size()));
     if (moveLeft)
-        state.uiTextCursorByteOffset = PreviousUtf8Boundary(buffer, state.uiTextCursorByteOffset);
+        state.uiTextCursorByteOffset = PreviousUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
     if (moveRight)
-        state.uiTextCursorByteOffset = NextUtf8Boundary(buffer, state.uiTextCursorByteOffset);
+        state.uiTextCursorByteOffset = NextUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
     if (field->readOnly)
         return false;
 
@@ -1590,7 +1581,7 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     const auto eraseBack = [&] {
         if (state.uiTextCursorByteOffset == 0U)
             return;
-        const std::size_t previous = PreviousUtf8Boundary(buffer, state.uiTextCursorByteOffset);
+        const std::size_t previous = PreviousUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
         buffer.erase(previous, state.uiTextCursorByteOffset - previous);
         state.uiTextCursorByteOffset = previous;
         changed = true;
@@ -1598,7 +1589,7 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
     const auto eraseForward = [&] {
         if (state.uiTextCursorByteOffset >= buffer.size())
             return;
-        const std::size_t next = NextUtf8Boundary(buffer, state.uiTextCursorByteOffset);
+        const std::size_t next = NextUITextGraphemeBoundary(buffer, state.uiTextCursorByteOffset);
         buffer.erase(state.uiTextCursorByteOffset, next - state.uiTextCursorByteOffset);
         changed = true;
     };
@@ -1620,12 +1611,18 @@ template <typename T> [[nodiscard]] SceneEntity ClosestAncestorWith(const Scene&
         }
         if (codePoint != U'\n' && !AcceptsCharacter(field->contentType, buffer, state.uiTextCursorByteOffset, codePoint))
             continue;
-        if (field->characterLimit > 0U && Utf8CodePointCount(buffer) >= field->characterLimit)
-            continue;
         std::array<char, 4U> encoded{};
         const std::size_t encodedSize = EncodeUtf8(codePoint, encoded);
         if (encodedSize == 0U || buffer.size() + encodedSize >= UIText::MaxUtf8Bytes)
             continue;
+        if (field->characterLimit > 0U) {
+            // The limit counts characters as the player sees them: an accent or a skin tone typed after a letter or
+            // an emoji joins it and does not use up a place, while a new character at the limit is refused.
+            std::string candidate = buffer;
+            candidate.insert(state.uiTextCursorByteOffset, encoded.data(), encodedSize);
+            if (UITextGraphemeCount(candidate) > field->characterLimit)
+                continue;
+        }
         buffer.insert(state.uiTextCursorByteOffset, encoded.data(), encodedSize);
         state.uiTextCursorByteOffset += encodedSize;
         changed = true;

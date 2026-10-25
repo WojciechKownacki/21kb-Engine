@@ -1,8 +1,10 @@
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
+#include "engine/ui/visual/UITextGraphemes.hpp"
 #include "engine/ui/visual/UITextLineBreaking.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -127,12 +129,119 @@ void TestCjkTextWrapsBetweenIdeographsWithKinsoku() {
         "Kinsoku tables must classify brackets, stops and small kana");
 }
 
+// UTF-8 text from code points, so the tests state what they mean instead of byte escapes.
+[[nodiscard]] std::string Utf8(std::u32string_view text) {
+    std::string result;
+    for (const char32_t c : text) {
+        const auto value = static_cast<std::uint32_t>(c);
+        if (value < 0x80U) {
+            result.push_back(static_cast<char>(value));
+        } else if (value < 0x800U) {
+            result.push_back(static_cast<char>(0xC0U | (value >> 6U)));
+            result.push_back(static_cast<char>(0x80U | (value & 0x3FU)));
+        } else if (value < 0x10000U) {
+            result.push_back(static_cast<char>(0xE0U | (value >> 12U)));
+            result.push_back(static_cast<char>(0x80U | ((value >> 6U) & 0x3FU)));
+            result.push_back(static_cast<char>(0x80U | (value & 0x3FU)));
+        } else {
+            result.push_back(static_cast<char>(0xF0U | (value >> 18U)));
+            result.push_back(static_cast<char>(0x80U | ((value >> 12U) & 0x3FU)));
+            result.push_back(static_cast<char>(0x80U | ((value >> 6U) & 0x3FU)));
+            result.push_back(static_cast<char>(0x80U | (value & 0x3FU)));
+        }
+    }
+    return result;
+}
+
+// What a player sees as one character is one cluster: a letter with its accent, a thumb with its skin tone, a family
+// of joined emoji, a flag, a Hangul syllable written as jamo; and a boundary never falls inside one.
+void TestGraphemeClusters() {
+    using namespace kb::scene;
+    struct Case {
+        const char* name;
+        std::u32string text;
+        std::size_t clusters;
+    };
+    const Case cases[] = {
+        { "plain letters", U"abc", 3U },
+        { "precomposed accent", U"\u00E9", 1U },
+        { "letter and combining accent", U"e\u0301", 1U },
+        { "letter with two combining marks", U"a\u0323\u0302", 1U },
+        { "thumbs up with skin tone", U"\U0001F44D\U0001F3FD", 1U },
+        { "family joined by zero width joiners", U"\U0001F468\u200D\U0001F469\u200D\U0001F467", 1U },
+        { "heart with variation selector", U"\u2764\uFE0F", 1U },
+        { "one flag", U"\U0001F1F5\U0001F1F1", 1U },
+        { "two flags", U"\U0001F1F5\U0001F1F1\U0001F1E9\U0001F1EA", 2U },
+        { "three regional indicators", U"\U0001F1F5\U0001F1F1\U0001F1E9", 2U },
+        { "hangul jamo syllable", U"\u1112\u1161\u11AB", 1U },
+        { "hangul precomposed syllable and a final consonant", U"\uD55C\u11AB", 1U },
+        { "thai consonant with vowel mark", U"\u0E01\u0E35", 1U },
+        { "devanagari consonant with vowel sign", U"\u0915\u093E", 1U },
+        { "carriage return and line feed", U"\r\n", 1U },
+        { "two line feeds", U"\n\n", 2U },
+        { "emoji then letter", U"\U0001F600x", 2U },
+        { "joiner without a pictograph after it", U"a\u200Db", 2U },
+        { "keycap sequence", U"1\uFE0F\u20E3", 1U },
+    };
+    for (const Case& c : cases) {
+        const std::string text = Utf8(c.text);
+        const std::size_t clusters = UITextGraphemeCount(text);
+        Require(clusters == c.clusters, (std::string{ "Grapheme count of " } + c.name + " is " + std::to_string(clusters)).c_str());
+        // Walking forward and backward visits the same boundaries, and every boundary lies between code points.
+        std::vector<std::size_t> forward{ 0U };
+        for (std::size_t offset = 0U; offset < text.size();) {
+            offset = NextUITextGraphemeBoundary(text, offset);
+            forward.push_back(offset);
+        }
+        Require(forward.size() == c.clusters + 1U && forward.back() == text.size(), c.name);
+        std::vector<std::size_t> backward{ text.size() };
+        for (std::size_t offset = text.size(); offset > 0U;) {
+            offset = PreviousUITextGraphemeBoundary(text, offset);
+            backward.push_back(offset);
+        }
+        std::ranges::reverse(backward);
+        Require(forward == backward, (std::string{ "Forward and backward boundaries differ for " } + c.name).c_str());
+        // An offset in the middle of any cluster snaps back to its start.
+        for (std::size_t index = 0U; index + 1U < forward.size(); ++index) {
+            for (std::size_t offset = forward[index]; offset < forward[index + 1U]; ++offset) {
+                Require(SnapToUITextGraphemeBoundary(text, offset) == forward[index], c.name);
+            }
+        }
+    }
+    Require(IsUITextGraphemeExtender(0x0301U) && IsUITextGraphemeExtender(0x200DU) && IsUITextGraphemeExtender(0xFE0FU) &&
+            !IsUITextGraphemeExtender(U'a') && !IsUITextGraphemeExtender(0x1F600U),
+        "Extender classification is wrong");
+
+    // Invalid UTF-8 never crashes or loops: every byte of a broken sequence is a cluster of its own and the walk ends.
+    std::uint32_t state = 0x9E3779B9U;
+    for (int round = 0; round < 300; ++round) {
+        std::string noise;
+        const std::size_t length = static_cast<std::size_t>(round % 40);
+        for (std::size_t index = 0U; index < length; ++index) {
+            state = state * 1664525U + 1013904223U;
+            noise.push_back(static_cast<char>(state >> 24U));
+        }
+        std::size_t steps = 0U;
+        for (std::size_t offset = 0U; offset < noise.size(); ++steps) {
+            const std::size_t next = NextUITextGraphemeBoundary(noise, offset);
+            Require(next > offset && next <= noise.size(), "A grapheme step on random bytes must advance and stay inside the text");
+            Require(PreviousUITextGraphemeBoundary(noise, next) <= offset, "The boundary before a step must not lie after its start");
+            offset = next;
+        }
+        Require(steps == UITextGraphemeCount(noise) && steps <= noise.size(), "The step count of random bytes must equal the grapheme count");
+    }
+    Require(NextUITextGraphemeBoundary("\xC3", 0U) == 1U && NextUITextGraphemeBoundary("\xF0\x9F", 0U) == 1U &&
+            UITextGraphemeCount(std::string_view{}) == 0U && PreviousUITextGraphemeBoundary("abc", 0U) == 0U,
+        "Truncated sequences and empty text have fixed answers");
+}
+
 } // namespace
 
 void RunUITextLineBreakingTests() {
     TestExplicitLineBreaksSurviveWordWrap();
     TestWordWrapBreaksAtSpacesAndSplitsLongWords();
     TestCjkTextWrapsBetweenIdeographsWithKinsoku();
+    TestGraphemeClusters();
 }
 
 } // namespace kb::tests
