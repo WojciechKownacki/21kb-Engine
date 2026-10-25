@@ -1208,6 +1208,66 @@ int main() {
             "a value of a new type under an existing name replaces the old one");
         Require(kb::assets::Map2DAssetIO::Load(file)->tiles == map.tiles, "script writes never change the source asset");
     }
+    // The cell functions of the script API: read a cell with its pathfinding obstruction, replace and erase its
+    // ground, refuse a bad sprite or a cell outside the map, and ask for the next step towards a target.
+    {
+        using namespace kb::scene;
+        using namespace kb::script;
+        Scene scene;
+        auto& manager = scene.Assets().Manager();
+        Require(manager.Mounts().Mount("Game", assets), "mount script cell assets");
+        Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()), "register script cell renderer");
+        auto map = kb::assets::MakeEmptyMap2DAsset(8U, 8U);
+        map.background = false;
+        map.sheets.push_back({ .texture = "/Game/Sprites/ground.png", .material = "/Game/Maps/Materials/Test.kbmat", .columns = 4, .rows = 2 });
+        map.tiles[Map2DTileKey(3U, 3U, 0)].ground = { .sheet = 0, .cell = 0 };
+        for (std::uint32_t y = 0U; y < 7U; ++y) map.tiles[Map2DTileKey(4U, y, 0)].solid = true;
+        const auto file = root / "ScriptCells.kbmap2d";
+        Require(kb::assets::Map2DAssetIO::Save(file, map), "save the script cell map");
+        const kb::assets::AssetId source{ 8790U };
+        Require(manager.RegisterAsset({ .id = source, .type = "RenderMesh", .virtualPath = "/Game/ScriptCells.kbmap2d", .physicalPath = file, .contentHash = 1U }),
+            "register the script cell map");
+        const auto owner = scene.Entities().CreateEntity({ .name = "ScriptCells" });
+        kb::world2d::SetUpMap2DComponents(scene, owner, source.value, map);
+        static_cast<void>(scene.Runtime().AddSceneSystem(std::make_unique<kb::world2d::Map2DRuntime>()));
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(scene.Runtime().DrainSceneSystemErrors().empty(), "the script cell map runs without errors");
+        ScriptRuntimeHost host(scene);
+        Require(host.Succeeded(), "the script host installs the cell functions");
+        const auto call = [&](const char* function, int x, int y, std::vector<ScriptFunctionArgument> extra = {}) {
+            std::vector<ScriptFunctionArgument> args{ { "entity", ScriptValue{ owner.Id(), ScriptValueType::Entity } }, { "x", ScriptValue{ x } }, { "y", ScriptValue{ y } } };
+            args.insert(args.end(), extra.begin(), extra.end());
+            return host.Functions().Call(function, args, { .scene = &scene });
+        };
+        const auto ground = call("Map2D.Get", 3, 3);
+        Require(ground.Succeeded() && ground.Output("present")->AsBool() && ground.Output("sprite")->AsString() == "0:0" && !ground.Output("blocked")->AsBool(),
+            "Get reads a painted cell that does not block");
+        const auto wall = call("Map2D.Get", 4, 3);
+        Require(wall.Succeeded() && wall.Output("present")->AsBool() && wall.Output("blocked")->AsBool(), "Get reports a solid cell as blocked");
+        const auto empty = call("Map2D.Get", 0, 0);
+        Require(empty.Succeeded() && !empty.Output("present")->AsBool() && empty.Output("sprite")->AsString().empty(), "Get reports an empty cell as absent");
+        Require(!call("Map2D.Get", 8, 0).Succeeded() && !call("Map2D.Get", -1, 0).Succeeded(), "Get refuses a cell outside the map");
+
+        const auto set = call("Map2D.Set", 1, 1, { { "sprite", ScriptValue{ std::string{ "0:5" } } } });
+        Require(set.Succeeded() && set.Output("applied")->AsBool(), "Set replaces the ground of a cell");
+        Require(call("Map2D.Get", 1, 1).Output("sprite")->AsString() == "0:5", "Get reads what Set wrote");
+        Require(!call("Map2D.Set", 1, 1, { { "sprite", ScriptValue{ std::string{ "garbage" } } } }).Succeeded() &&
+                !call("Map2D.Set", 1, 1, { { "sprite", ScriptValue{ std::string{ "0:99" } } } }).Succeeded(),
+            "Set refuses text that is not a sprite and a sprite outside the sheet");
+        Require(call("Map2D.Get", 1, 1).Output("sprite")->AsString() == "0:5", "a refused Set leaves the cell as it was");
+        const auto erased = call("Map2D.Erase", 1, 1);
+        Require(erased.Succeeded() && erased.Output("applied")->AsBool() && !call("Map2D.Get", 1, 1).Output("present")->AsBool(), "Erase clears the cell");
+
+        // The wall of column 4 has its only gap in the bottom row.
+        const auto step = call("Map2D.NextStep", 2, 3, { { "targetX", ScriptValue{ 6 } }, { "targetY", ScriptValue{ 3 } } });
+        Require(step.Succeeded() && step.Output("found")->AsBool() && step.Output("cells")->AsInt() >= 6, "NextStep finds a way around the wall");
+        Require(std::abs(step.Output("x")->AsInt() - 2) <= 1 && std::abs(step.Output("y")->AsInt() - 3) <= 1 &&
+                (step.Output("x")->AsInt() != 2 || step.Output("y")->AsInt() != 3), "NextStep names a neighbouring cell as the next step");
+        const auto blocked = call("Map2D.NextStep", 2, 3, { { "targetX", ScriptValue{ 4 } }, { "targetY", ScriptValue{ 3 } } });
+        Require(blocked.Succeeded() && !blocked.Output("found")->AsBool() && blocked.Output("x")->AsInt() == 2 && blocked.Output("y")->AsInt() == 3,
+            "NextStep stays where it is when the target cannot be reached");
+        Require(kb::assets::Map2DAssetIO::Load(file)->tiles == map.tiles, "script cell edits never change the source asset");
+    }
     // Golden: the borders of a plus-shaped grass patch on an empty map, as every cell lists them (x,y:ground+borders). A change
     // here changes how existing maps look: update it only on purpose.
     {
