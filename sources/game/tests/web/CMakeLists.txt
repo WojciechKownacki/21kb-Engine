@@ -19,7 +19,7 @@ set_property(TARGET kb_web_input_tests APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURR
 add_executable(kb_web_background_tests BackgroundLoadTests.cpp
     ../../../engine/src/assets/streaming/BackgroundLoadService.cpp)
 target_compile_features(kb_web_background_tests PRIVATE cxx_std_23)
-target_include_directories(kb_web_background_tests PRIVATE ../../../engine/include)
+target_include_directories(kb_web_background_tests PRIVATE ../../../engine/include ../../src/private)
 target_compile_options(kb_web_background_tests PRIVATE
     -Wall -Wextra -Wpedantic -Werror -Wno-missing-field-initializers -fsanitize=address,undefined -g)
 target_link_options(kb_web_background_tests PRIVATE

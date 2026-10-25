@@ -33,6 +33,24 @@ After the server restores the complete response, a normal reload of the same
 URL must recover native script readiness and hardware rendering. A real button
 click must then save both domains and complete their browser transaction.
 
+The `Game.kbpack` request stops with `fetch-timeout` after 30 seconds without
+additional received bytes. Duplicate progress notifications and headers alone
+do not extend that idle deadline. A transfer with continuing byte progress can
+last longer. The watchdog is cancelled when the body finishes and during
+shutdown. Cancelling the SDK request preserves the original timeout cause.
+Reload starts a new request for the complete package.
+
+`run_game_download_timeout_tests.py` exercises that real deadline. Two owned
+browser profiles run concurrently: one local response sends a quarter of the
+body and stalls; the other sends chunks at zero, 26 and 32 seconds. The stalled
+request must fail before a native frame, while the longer active transfer must
+render normally on hardware. Reloading the failed URL after restoring its full
+response must recover rendering, button input and save/settings persistence.
+The report retains actual chunk byte counts and times. The sanitized policy
+test also checks the exact idle boundary, increasing versus duplicate byte
+counts and deadline reset for a new request. These checks cover the package
+request after WASM startup, rather than a stalled download of the WASM module.
+
 The `21kb.web-game-loading/v1` result retains package/runtime hashes, native
 observations, browser events, resource and heap measurements and four GPU
 captures. WASM capacity and JavaScript heap samples do not measure process RSS,

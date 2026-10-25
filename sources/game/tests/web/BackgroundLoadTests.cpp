@@ -1,4 +1,5 @@
 #include "engine/assets/streaming/BackgroundLoadService.hpp"
+#include "WebDownloadProgress.hpp"
 
 #include <emscripten/emscripten.h>
 
@@ -106,6 +107,23 @@ void CheckYield(void*) {
 } // namespace
 
 int main() {
+    {
+        using namespace std::chrono_literals;
+        kb::game::WebDownloadProgress progress;
+        const kb::game::WebDownloadProgress::Clock::time_point start{};
+        progress.Start(start);
+        Require(progress.Remaining(start + 29999ms) == 1ms && progress.Remaining(start + 30s) == 0ms,
+            "Download idle deadline boundary differs");
+        progress.Observe(10, start + 29s);
+        Require(progress.Remaining(start + 31s) == 28s,
+            "Received bytes did not extend the idle deadline for a longer active transfer");
+        progress.Observe(10, start + 50s);
+        progress.Observe(9, start + 51s);
+        Require(progress.Remaining(start + 59s) == 0ms,
+            "Duplicate or regressing progress incorrectly extended the download deadline");
+        progress.Start(start + 60s);
+        Require(progress.Remaining(start + 60s) == 30s, "A new download retained the preceding deadline");
+    }
     deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
     service = BackgroundLoadService::Shared();
     const auto low = service->Run([](std::string&) { order.push_back(1); return true; }, 1);

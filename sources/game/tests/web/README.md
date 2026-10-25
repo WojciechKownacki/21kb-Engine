@@ -210,3 +210,12 @@ Build `kb_web_background_tests` in the standalone Web test project and run
 with ASan and UBSan. It verifies queued execution, priorities, cancellation,
 real memory/file reads, transforms, lane draining, explicit waits and safe
 dispatch lifetimes. The CI Web job runs it automatically.
+
+`run_game_download_timeout_tests.py` uses the same arguments and reports
+`21kb.web-game-download-timeout/v1`. It checks the real 30-second package idle
+deadline alongside a 32-second transfer that continues delivering bytes. The
+two cases run concurrently in owned profiles. The first must preserve its
+timeout diagnostic when the request is cancelled; the second must reach native
+readiness and hardware-rendered UI. Restoring the stalled response and normally
+reloading must also recover rendering, input and persistence. The standalone
+sanitized test covers the production idle policy's boundary and progress rules.

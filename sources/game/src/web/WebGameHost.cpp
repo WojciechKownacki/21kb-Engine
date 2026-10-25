@@ -1,6 +1,7 @@
 #include "GameProjectRuntime.hpp"
 #include "PackagedGameRuntime.hpp"
 #include "WebTouchInput.hpp"
+#include "WebDownloadProgress.hpp"
 
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/assets/bake/RuntimeAssetPack.hpp"
@@ -17,6 +18,7 @@
 
 #include <bgfx/bgfx.h>
 #include <emscripten/emscripten.h>
+#include <emscripten/eventloop.h>
 #include <emscripten/fetch.h>
 #include <emscripten/html5.h>
 #include <emscripten/html5_webgl.h>
@@ -31,6 +33,7 @@
 #include <span>
 #include <sstream>
 #include <string_view>
+#include <utility>
 
 extern "C" EMSCRIPTEN_KEEPALIVE int kb_web_append_committed_text(
     void* host, std::uint32_t codePoint) noexcept;
@@ -269,6 +272,7 @@ public:
     ~WebGameHost() { Shutdown(); }
 
     void StartFetch() {
+        downloadProgress_.Start(kb::game::WebDownloadProgress::Clock::now());
         emscripten_fetch_attr_t attributes{};
         emscripten_fetch_attr_init(&attributes);
         std::snprintf(attributes.requestMethod, sizeof(attributes.requestMethod), "GET");
@@ -276,14 +280,49 @@ public:
         attributes.userData = this;
         attributes.onsuccess = &WebGameHost::OnFetchSuccess;
         attributes.onerror = &WebGameHost::OnFetchError;
+        attributes.onprogress = &WebGameHost::OnFetchProgress;
         fetch_ = emscripten_fetch(&attributes, kAssetPackUrl);
         if (fetch_ == nullptr) Fail("fetch-start", "asset pack request could not be started");
+        else ScheduleFetchWatchdog();
     }
 
 private:
+    void CancelFetchWatchdog() noexcept {
+        if (fetchWatchdog_ >= 0) {
+            emscripten_clear_timeout(fetchWatchdog_);
+            fetchWatchdog_ = -1;
+        }
+    }
+
+    void ScheduleFetchWatchdog() {
+        const auto remaining = downloadProgress_.Remaining(kb::game::WebDownloadProgress::Clock::now());
+        fetchWatchdog_ = emscripten_set_timeout(&WebGameHost::CheckFetchProgress,
+            static_cast<double>(remaining.count()), this);
+    }
+
+    static void CheckFetchProgress(void* pointer) {
+        auto* host = static_cast<WebGameHost*>(pointer);
+        host->fetchWatchdog_ = -1;
+        if (host->shuttingDown_ || host->fetch_ == nullptr) return;
+        if (host->downloadProgress_.Remaining(kb::game::WebDownloadProgress::Clock::now()).count() == 0) {
+            host->Fail("fetch-timeout", "asset pack download made no progress for 30 seconds; reload to retry");
+        } else {
+            host->ScheduleFetchWatchdog();
+        }
+    }
+
+    static void OnFetchProgress(emscripten_fetch_t* fetch) {
+        auto* host = static_cast<WebGameHost*>(fetch->userData);
+        if (host != nullptr && !host->shuttingDown_) {
+            // In LOAD_TO_MEMORY mode the SDK reports cumulative received bytes in dataOffset.
+            host->downloadProgress_.Observe(fetch->dataOffset, kb::game::WebDownloadProgress::Clock::now());
+        }
+    }
+
     static void OnFetchSuccess(emscripten_fetch_t* fetch) {
         auto* host = static_cast<WebGameHost*>(fetch->userData);
-        if (host != nullptr) {
+        if (host != nullptr && !host->shuttingDown_) {
+            host->CancelFetchWatchdog();
             EM_ASM({ location.hash = 'kb-pack-loaded'; });
             host->Initialize(fetch);
         }
@@ -291,7 +330,7 @@ private:
 
     static void OnFetchError(emscripten_fetch_t* fetch) {
         auto* host = static_cast<WebGameHost*>(fetch->userData);
-        if (host != nullptr) {
+        if (host != nullptr && !host->shuttingDown_) {
             std::ostringstream message;
             message << "asset pack request failed: HTTP " << fetch->status;
             host->Fail("fetch-http", message.str());
@@ -630,6 +669,7 @@ private:
 
     void Shutdown() noexcept {
         shuttingDown_ = true;
+        CancelFetchWatchdog();
         emscripten_cancel_main_loop();
         UnregisterGraphicsEvents();
         touches_.Detach();
@@ -642,13 +682,14 @@ private:
         if (pack_ != nullptr) pack_->Unmount();
         pack_.reset();
         if (fetch_ != nullptr) {
-            emscripten_fetch_close(fetch_);
-            fetch_ = nullptr;
+            emscripten_fetch_close(std::exchange(fetch_, nullptr));
         }
     }
 
     WebRenderSurface surface_;
     emscripten_fetch_t* fetch_ = nullptr;
+    kb::game::WebDownloadProgress downloadProgress_;
+    int fetchWatchdog_ = -1;
     std::shared_ptr<kb::assets::bake::RuntimeAssetPack> pack_;
     kb::render::Renderer renderer_;
     kb::game::PackagedGameRuntime runtime_;
