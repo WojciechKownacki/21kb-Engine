@@ -264,3 +264,21 @@ requests or a measured memory peak. Unavailable counters say `unavailable`.
 This offline workload is a baseline for changes; it does not establish device
 callback deadlines, audible latency, real-time scheduling or a performance
 budget on other machines. Sanitized runs check correctness, not release speed.
+
+The private `MiniaudioMeterNode` building block observes a native graph through
+a passthrough node. `kb_audio_meter_tests` compares actual graph PCM bit for bit
+with a graph without a tap, including a single-frame source at EOF, mono,
+stereo and eight channels. Capture is explicit and disabled capture does not
+accumulate history. Peak and RMS describe the last processed block per channel;
+peak hold, clipping sample counts (`abs(sample) > 1.0`) and non-finite sample
+counts accumulate until reset. Non-finite samples contribute zero energy to
+RMS, whose denominator remains the complete block frame count. Observation
+never repairs or changes the audio. Counters saturate rather than wrap.
+
+One PCM writer publishes coherent snapshots using lock-free atomics. A reader
+makes at most eight attempts and reports busy without replacing its previous
+snapshot. Configuration, reset and node destruction require exclusion from
+the PCM writer; ordinary snapshots do not. Tests cover allocation failure,
+shutdown, concurrent native reads and Wasm ASan/UBSan graph execution. The
+standalone kernel does not yet expose live mixer meters, CLI reports or editor
+preview controls; these require integration into the production bus graph.
