@@ -94,7 +94,11 @@ object that says how to read the numbers:
   monitoring counters yet.
 
 The export has a fixed size, so a long session does not grow it. Units follow the key suffix.
-There is no `kb_cli` command that prints it yet. Test: `EcsInspectionTests.cpp` (`metric_basis`).
+`kb_cli run --project <dir> --report ecs` runs the scene for `--frames` frames (default 60) and prints it,
+read only, as one JSON object on stdout (`schema` `21kb.ecs-telemetry/v1`, `succeeded`, the frame counts and
+the snapshot under `telemetry`); logs stay on stderr. The number of ECS worker threads is not a
+setting of the scene yet, so there is no CLI option for it.
+Tests: `EcsInspectionTests.cpp` (`metric_basis`) and `RunParticleReportCommandTests` in `KbCliTests.cpp` (the ecs report).
 
 ## ProfilerCounters
 

@@ -3,6 +3,8 @@
 #include "CliAudioMeterJson.hpp"
 
 #include "engine/core/JsonValue.hpp"
+#include "engine/ecs/World.hpp"
+#include "engine/ecs/WorldTelemetryExport.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
@@ -163,7 +165,8 @@ struct DiagnosticPrinter {
     return report;
 }
 
-int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr) {
+int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr,
+    std::ostream* ecsReport = nullptr) {
     const bool requireMeters = arguments.Option("--report") == std::optional<std::string>{"audio-meters"};
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
@@ -478,6 +481,29 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
             return 1;
         }
     }
+    if (ecsReport != nullptr) {
+        // Read only: the telemetry of the scene's ECS world after the frames ran. Which numbers are measured,
+        // which are estimates and which are unavailable is stated in its metric_basis object.
+        using kb::core::JsonValue;
+        JsonValue telemetry;
+        std::string parseError;
+        if (!JsonValue::Parse(kb::ecs::WorldTelemetrySnapshotToJson(scene.Runtime().EcsWorld().TelemetrySnapshot()), telemetry, parseError)) {
+            io.err << "error: the ECS telemetry could not be formatted: " << parseError << '\n';
+            return 1;
+        }
+        auto report = JsonValue::MakeObject();
+        report.Set("schema", JsonValue::MakeString("21kb.ecs-telemetry/v1"));
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U));
+        report.Set("simulation_frames", JsonValue::MakeNumber(frames));
+        report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
+        report.Set("diagnostics", JsonValue::MakeNumber(static_cast<double>(printer.total)));
+        report.Set("telemetry", std::move(telemetry));
+        *ecsReport << report.Dump() << '\n';
+        if (!ecsReport->good()) {
+            io.err << "error: the ECS telemetry report could not be written" << '\n';
+            return 1;
+        }
+    }
     if (audioReport != nullptr) {
         auto report = AudioRuntimeJson(audioSnapshot);
         using kb::core::JsonValue;
@@ -505,14 +531,15 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
 int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     const auto report = arguments.Option("--report");
     if (arguments.Flag("--dry-run")) { io.err << "error: run does not support --dry-run\n"; return 1; }
-    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio or audio-meters\n"; return 1; }
+    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters or ecs\n"; return 1; }
     if (arguments.Option("--pcm-frames").has_value() && (!report || (*report != "audio" && *report != "audio-meters"))) {
         io.err << "error: --pcm-frames requires --report audio or audio-meters\n"; return 1;
     }
-    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters") {
-        io.err << "error: --report expects particles, audio or audio-meters\n";
+    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs") {
+        io.err << "error: --report expects particles, audio, audio-meters or ecs\n";
         return 1;
     }
+    if (report && *report == "ecs") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, &io.out);
     if (report && (*report == "audio" || *report == "audio-meters")) return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, &io.out);
     return report ? RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, &io.out)
                   : RunSceneRuntime(arguments, io, nullptr);

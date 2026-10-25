@@ -428,6 +428,29 @@ void RunParticleReportCommandTests() {
     Require(Run(&kb::cli::RunRunCommand, {"--project", TestRoot().string(), "--report", "unknown"}).exitCode != 0,
         "run accepted an unknown report format");
 
+    // The ECS telemetry report is read only and says how to read its numbers.
+    {
+        const std::vector<std::string> raw{"--project", TestRoot().string(), "--frames", "3", "--report", "ecs"};
+        const kb::cli::ArgumentList arguments{raw, kFlagNames};
+        std::ostringstream out;
+        std::ostringstream err;
+        Require(kb::cli::RunRunCommand(arguments, {.out = out, .err = err}) == 0, "ECS telemetry report failed: " + err.str());
+        JsonValue report;
+        std::string error;
+        Require(JsonValue::Parse(out.str(), report, error), "ECS telemetry stdout was not clean JSON: " + error);
+        const JsonValue* telemetry = report.Find("telemetry");
+        Require(report.Find("schema") && report.Find("schema")->AsString() == "21kb.ecs-telemetry/v1" &&
+            report.Find("succeeded") && report.Find("succeeded")->AsBool() && telemetry != nullptr &&
+            telemetry->Find("schema") && telemetry->Find("schema")->AsString() == "kb.ecs.world_telemetry.v1",
+            "ECS telemetry report has no versioned contract");
+        const JsonValue* basis = telemetry->Find("metric_basis");
+        Require(basis != nullptr && basis->Find("hardware_counters") && basis->Find("hardware_counters")->AsString() == "unavailable" &&
+            basis->Find("estimated") && basis->Find("estimated")->Size() > 0U && telemetry->Find("committed_bytes") != nullptr &&
+            telemetry->Find("query_estimated_gigabytes_per_second") != nullptr,
+            "ECS telemetry report does not separate measured, estimated and unavailable numbers");
+        Require(Contains(err.str(), "done:"), "ECS telemetry report lost the stderr log");
+    }
+
     std::istringstream requests{R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_scene","arguments":{"scene":"/Game/Scenes/Main.21kbscene","frames":1,"report":"particles"}}})"};
     std::ostringstream mcpOut;
     std::ostringstream mcpErr;

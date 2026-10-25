@@ -306,7 +306,7 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
 R"(  run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on any error.
                  --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>]
-                 [--quiet] [--report particles|audio] [--pcm-frames <n>]
+                 [--quiet] [--report particles|audio|audio-meters|ecs] [--pcm-frames <n>]
                Reports are versioned JSON on stdout; logs go to stderr.
                Audio probes use explicit offline PCM rendering (up to 600 ticks
                and 1920000 total PCM frames). --pcm-frames overrides audio frames
