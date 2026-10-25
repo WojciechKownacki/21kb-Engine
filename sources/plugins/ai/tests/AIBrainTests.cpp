@@ -64,7 +64,45 @@ void Run(kb::scene::Scene& scene, float seconds) {
 
 } // namespace
 
+// The brain says why it acts: the rule it took, its condition and action, and the enemy; a brain whose rules never hold
+// reports no rule and idles without errors; a decision follows the situation, not the preset.
+void RunDecisionReasonTest() {
+    kb::scene::Scene scene;
+    auto system = std::make_unique<kb::ai_plugin::AIBrainSystem>();
+    const kb::ai_plugin::AIBrainSystem* const brains = system.get();
+    Require(scene.Runtime().AddSceneSystem(std::move(system)).IsValid(), "the AI system could not be added");
+    const kb::scene::SceneEntity goblin = Spawn(scene, "Goblin", { 0.0F, 0.0F, 10.0F }, 2U);
+    Brain(scene, goblin, kb::scene::AIBrainPreset::Melee);
+    const kb::scene::SceneEntity idler = Spawn(scene, "Idler", { 60.0F, 0.0F, 60.0F }, 2U);
+    kb::scene::AIBrainComponent silent{};
+    for (kb::scene::AIRule& rule : silent.rules) rule = kb::scene::AIRule{};
+    Require(scene.Components().AIBrains().Set(idler, silent), "a silent brain could not be authored");
+    scene.Runtime().SetPlaying(true);
+    Run(scene, 1.0F);
+    const kb::scene::AIBrainComponent* melee = scene.Components().AIBrains().TryGet(goblin);
+    const auto alone = brains->LastDecision(goblin);
+    Require(alone.has_value() && alone->ruleIndex >= 0 && !alone->enemy.IsValid(), "a monster with nobody around must report the rule it follows and no enemy");
+    Require(melee->rules[static_cast<std::size_t>(alone->ruleIndex)].action == alone->action &&
+                melee->rules[static_cast<std::size_t>(alone->ruleIndex)].when == alone->condition &&
+                alone->action != kb::scene::AIAction::Chase,
+        "the reported rule must be the one whose action the monster is doing, and it cannot be a chase with no enemy");
+    const kb::scene::SceneEntity hero = Spawn(scene, "Hero", { 0.0F, 0.0F, 0.0F }, 1U, 500.0F);
+    Run(scene, 1.0F);
+    const auto hunting = brains->LastDecision(goblin);
+    Require(hunting.has_value() && hunting->enemy == hero && hunting->ruleIndex != alone->ruleIndex && hunting->action != alone->action,
+        "a monster that senses an enemy must report another rule, its action and that enemy");
+    Require(melee->rules[static_cast<std::size_t>(hunting->ruleIndex)].action == hunting->action, "the reported rule must match the action of the monster");
+    const auto silentDecision = brains->LastDecision(idler);
+    Require(silentDecision.has_value() && silentDecision->ruleIndex == -1 && silentDecision->action == kb::scene::AIAction::Idle &&
+                !silentDecision->enemy.IsValid(),
+        "a brain whose rules never hold must report no rule and idle");
+    Require(!brains->LastDecision(hero).has_value(), "an object without a brain has no decision");
+    static_cast<void>(scene.Gameplay().ApplyDamage(goblin, 1000.0F));
+    Run(scene, 1.0F);
+}
+
 int main() {
+    RunDecisionReasonTest();
     // A melee monster runs to the hero and hits it; a rabbit (no team) runs from the hero; a guard
     // attacks only what comes near and goes back to its post; the dead stop thinking.
     {

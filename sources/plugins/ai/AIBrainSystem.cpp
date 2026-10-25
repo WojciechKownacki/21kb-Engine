@@ -201,13 +201,27 @@ void AIBrainSystem::Think(kb::scene::Scene& scene, Mind& mind, const kb::scene::
     mind.action = AIAction::Idle;
     mind.actionValue = 0.0F;
     mind.enemy = enemy.has_value() ? enemy->entity : kb::scene::SceneEntity{};
-    for (const kb::scene::AIRule& rule : brain.rules) {
+    mind.ruleIndex = -1;
+    mind.ruleCondition = AICondition::Never;
+    mind.thought = true;
+    for (std::size_t index = 0U; index < brain.rules.size(); ++index) {
+        const kb::scene::AIRule& rule = brain.rules[index];
         if (holds(rule) && doable(rule)) {
             mind.action = rule.action;
             mind.actionValue = rule.actionValue;
+            mind.ruleIndex = static_cast<int>(index);
+            mind.ruleCondition = rule.when;
             return;
         }
     }
+}
+
+std::optional<AIBrainSystem::Decision> AIBrainSystem::LastDecision(kb::scene::SceneEntity entity) const {
+    const auto found = minds_.find(entity.Id());
+    if (found == minds_.end() || !found->second.thought) return std::nullopt;
+    const Mind& mind = found->second;
+    return Decision{ .ruleIndex = mind.ruleIndex, .condition = mind.ruleCondition, .action = mind.action,
+                     .actionValue = mind.actionValue, .enemy = mind.enemy };
 }
 
 void AIBrainSystem::Act(kb::scene::Scene& scene, Mind& mind, const kb::scene::AIBrainComponent& brain, float deltaSeconds) {
