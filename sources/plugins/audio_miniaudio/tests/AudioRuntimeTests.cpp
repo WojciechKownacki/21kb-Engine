@@ -535,8 +535,7 @@ void RunVorbisUnicodePathTest() {
     Require(frames > 0U && energy > 1.0, "Unicode Vorbis stream produced silent PCM");
 }
 
-void RunSnapshotTransitionPcmTest() {
-    const auto tonePath = TestRoot() / "SnapshotTone.wav";
+void WriteToneWav(const std::filesystem::path& tonePath) {
     {
         std::ofstream output{tonePath, std::ios::binary | std::ios::trunc};
         output.write("RIFF", 4); WriteU32(output, 36U + 96000U); output.write("WAVEfmt ", 8);
@@ -550,6 +549,133 @@ void RunSnapshotTransitionPcmTest() {
         }
         Require(output.good(), "Snapshot PCM tone could not be written");
     }
+}
+
+void RunBusTopologyPcmTest() {
+    const auto tonePath = TestRoot() / "RoutingTone.wav";
+    WriteToneWav(tonePath);
+    kb::scene::Scene scene;
+    Require(scene.Assets().MountProject(TestRoot() / "RoutingPcmProject"), "Bus PCM project did not mount");
+    const std::array files{tonePath};
+    const auto imported = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), files, "/Game/Audio");
+    Require(imported.Succeeded() && imported.items.size() == 1U, "Bus PCM tone did not import");
+    const auto clipId = imported.items.front().id;
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses = {{.name = "Output", .volume = 0.5F}, {.name = "Effects", .parentBus = "Output", .volume = 0.5F}};
+    const auto mixerPath = TestRoot() / "RoutingMixer.kbmixer";
+    constexpr kb::assets::AssetId mixerId{9401U};
+    Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixer), "Bus PCM mixer did not save");
+    Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = mixerId, .type = kb::audio::kAudioMixerAssetType, .name = "RoutingMixer",
+        .virtualPath = "/Game/Audio/RoutingMixer.kbmixer", .physicalPath = mixerPath, .contentHash = 1U,
+    }), "Bus PCM mixer did not register");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerId.value);
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Bus PCM backend must use its actual offline engine");
+    kb::audio::AudioPlayDesc desc{.clipAssetId = clipId.value, .volume = 0.25F, .loop = true, .spatial = false};
+    desc.outputBus = "Effects";
+    const auto play = [&] {
+        const auto result = backend.PlayOneShotForTesting(scene, desc);
+        Require(result.Succeeded() && backend.IsVoicePlaying(scene, result.voiceId), "Bus PCM voice did not start");
+        Require(!backend.VoiceUsesResourceManagerStreamForTesting(result.voiceId), "Imported bus PCM tone must use owned encoded bytes");
+        return result.voiceId;
+    };
+    const auto measure = [&](std::string_view phase, double gain) {
+        const double expected = (3276.0 / 32768.0) * gain * 2.0 / 3.141592653589793;
+        std::size_t good = 0U;
+        double mean = 0.0;
+        for (std::size_t attempt = 0U; attempt < 8U && good < 4U; ++attempt) {
+            const auto block = backend.PumpFramesForTesting(2048U);
+            Require(block.frames == 2048U && std::isfinite(block.energy), "Bus PCM block is incomplete or non-finite");
+            mean = block.energy / (2.0 * static_cast<double>(block.frames));
+            const bool matches = expected == 0.0 ? mean < 0.000001 : std::abs(mean / expected - 1.0) < 0.02;
+            good = matches ? good + 1U : 0U;
+        }
+        std::cout << "Bus PCM " << phase << " gain=" << gain << " mean=" << mean << " expected=" << expected << " blocks=" << good << '\n';
+        Require(good == 4U, "Live mixer edit did not produce the expected PCM");
+    };
+    const auto save = [&] {
+        Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixer), "Bus PCM edit did not save");
+        Require(scene.Assets().Manager().Unload(mixerId), "Bus PCM edit did not invalidate the mixer cache");
+        Require(scene.Assets().Manager().Load<kb::audio::AudioMixerAsset>(mixerId).IsLoaded(), "Bus PCM edit did not reload");
+    };
+    const auto trigger = [&] {
+        auto silent = desc;
+        silent.volume = 0.0F;
+        return backend.PlayOneShotForTesting(scene, silent);
+    };
+    auto voice = play();
+    measure("initial", 0.0625);
+    mixer.buses[0].volume = 0.25F;
+    save();
+    const auto silent = trigger();
+    Require(silent.Succeeded() && backend.IsVoicePlaying(scene, voice), "Gain-only edit stopped an active voice");
+    Require(backend.StopVoice(scene, silent.voiceId), "Gain-only edit trigger did not stop");
+    measure("gain-edit", 0.03125);
+    mixer.buses[1].parentBus.clear();
+    save();
+    const auto reparented = trigger();
+    Require(reparented.Succeeded() && !backend.IsVoicePlaying(scene, voice), "Topology replacement must stop existing one-shot voices");
+    Require(backend.StopVoice(scene, reparented.voiceId), "Reparent trigger did not stop");
+    voice = play();
+    measure("reparented", 0.125);
+    mixer.buses.erase(mixer.buses.begin());
+    save();
+    const auto removedParent = trigger();
+    Require(removedParent.Succeeded() && !backend.IsVoicePlaying(scene, voice), "Removing an unused parent retained an old voice");
+    Require(backend.StopVoice(scene, removedParent.voiceId), "Parent removal trigger did not stop");
+    voice = play();
+    measure("parent-removed", 0.125);
+    mixer.buses.clear();
+    save();
+    const auto missing = trigger();
+    Require(!missing.Succeeded() && missing.error.find("unknown") != std::string::npos
+        && !backend.IsVoicePlaying(scene, voice) && backend.ResourcesForTesting().voices == 0U,
+        "Removing an active bus must reject its route and stop its old voice");
+    // Keep a real, explicitly silent master source connected while reading output after
+    // refusal. An empty offline engine can finish without producing any PCM frames.
+    const auto silenceControl = [&] {
+        auto quiet = desc;
+        quiet.volume = 0.0F;
+        quiet.outputBus.clear();
+        const auto result = backend.PlayOneShotForTesting(scene, quiet);
+        Require(result.Succeeded(), "Silent master control did not start");
+        return result.voiceId;
+    };
+    const auto removedControl = silenceControl();
+    measure("bus-removed", 0.0);
+    Require(backend.StopVoice(scene, removedControl), "Removed-bus silence control did not stop");
+    mixer.buses = {{.name = "Output", .volume = 0.5F}, {.name = "Effects", .parentBus = "Output", .volume = 0.5F}};
+    save();
+    voice = play();
+    measure("restored", 0.0625);
+    const auto before = ReadFileBytes(mixerPath);
+    auto cyclic = mixer;
+    cyclic.buses[0].parentBus = "Effects";
+    Require(!kb::audio::AudioMixerAssetIO::Save(mixerPath, cyclic) && ReadFileBytes(mixerPath) == before
+        && backend.IsVoicePlaying(scene, voice), "Rejected cyclic edit changed disk or the playing voice");
+    measure("cycle-refused", 0.0625);
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 0U);
+    const auto unavailable = trigger();
+    Require(!unavailable.Succeeded() && unavailable.error.find("not available") != std::string::npos
+        && !backend.IsVoicePlaying(scene, voice), "Clearing the mixer must not redirect a named route to master");
+    const auto clearedControl = silenceControl();
+    measure("mixer-cleared", 0.0);
+    Require(backend.StopVoice(scene, clearedControl), "Cleared-mixer silence control did not stop");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerId.value);
+    static_cast<void>(play());
+    measure("mixer-restored", 0.0625);
+    backend.Shutdown();
+    const auto resources = backend.ResourcesForTesting();
+    Require(resources.sourceSounds == 0U && resources.voices == 0U && resources.buses == 0U
+        && resources.decoders == 0U && resources.encodedPayloads == 0U
+        && backend.PumpFramesForTesting(2048U).frames == 0U, "Bus PCM shutdown retained native resources");
+}
+
+void RunSnapshotTransitionPcmTest() {
+    const auto tonePath = TestRoot() / "SnapshotTone.wav";
+    WriteToneWav(tonePath);
     kb::scene::Scene scene;
     kb::audio::AudioMixerAsset mixer;
     mixer.buses = {{.name = "Output", .volume = 0.5F}, {.name = "Effects", .parentBus = "Output", .volume = 0.5F}};
@@ -2732,6 +2858,9 @@ int RunTests(int argc, char** argv) {
     }
     if (filter.empty() || filter == "vorbis-transport") {
         RunVorbisTransportTest();
+    }
+    if (filter.empty() || filter == "bus-topology") {
+        RunBusTopologyPcmTest();
     }
     if (filter.empty() || filter == "snapshot-transition") {
         RunSnapshotTransitionPcmTest();

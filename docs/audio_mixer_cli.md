@@ -81,3 +81,21 @@ and silence output, followed by successful autoplay when the valid child route
 is restored. All thirteen phases retain one audio context and require the same
 PCM criteria. This covers live source routing changes; it does not establish
 gapless switching or runtime replacement of a mixer's graph topology.
+
+`kb_audio_runtime_tests bus-topology` separately exercises saved mixer edits
+through the production playback backend and its offline PCM engine. An imported
+440 Hz WAV supplies owned encoded data. Gain-only edits keep the playing one-shot;
+reparenting or removing a bus replaces the graph and stops existing one-shots.
+A new voice on the rebuilt route must produce the expected product gain.
+Removing the requested bus refuses playback rather than choosing master output.
+An invalid cyclic save preserves both file bytes and the active voice. Clearing
+and restoring the selected mixer also checks refusal, silence and recovered gain.
+
+Nine phases each require four consecutive 2048-frame native PCM blocks. Their
+mean absolute amplitude must agree with the sine-wave reference within 2%; silent
+phases must stay below 0.000001. An explicitly silent master control keeps the
+offline engine producing real PCM frames after route refusal. Shutdown must leave
+zero native sounds, voices, bus groups, decoders and encoded payloads. This test
+passed in MSVC Release and Debug ASan. It does not establish editor-output parity,
+physical output, browser topology replacement or uninterrupted one-shot playback
+across structural graph edits.
