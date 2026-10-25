@@ -360,6 +360,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
     include/engine/scene/SceneSystem.hpp
+    include/engine/scene/ParallelSceneSystem.hpp
     include/engine/scene/SceneSystemHandle.hpp
     include/engine/scene/SceneSystemContext.hpp
     include/engine/scene/SceneSystemQueryAccess.hpp
@@ -1508,6 +1509,7 @@ add_library(kb_engine STATIC
     src/private/scene/prefab/ScenePrefabVariantMaterializer.hpp
     src/private/scene/prefab/ScenePrefabVariantRefreshService.hpp
     src/private/scene/prefab/ScenePrefabValidator.hpp
+    src/private/scene/systems/SceneSystemParallel.hpp
     src/private/scene/systems/SceneSystemScheduler.hpp
     src/private/scene/systems/AnimatorSceneSystem.hpp
     src/private/scene/systems/TimelineSceneSystem.hpp
@@ -1920,6 +1922,7 @@ if(BUILD_TESTING)
         tests/SceneStreamingTests.cpp
         tests/SceneRuntimeTests.cpp
         tests/SceneSystemTestSuites.hpp
+        tests/SceneSystemParallelTests.cpp
         tests/SceneSystemTests.cpp
         tests/SceneSystemTransformSyncTests.cpp
         tests/ScriptApiCatalogTests.cpp

@@ -104,3 +104,33 @@ when it ends, with its start, duration and nesting depth, also when the scope is
 exception. Storage is bounded: at most 4096 timeline events and 256 counter names are kept, and
 what does not fit is counted in `DroppedTimelineEvents()` and `DroppedCounters()`. Test:
 `EngineLibraryTests.cpp` (profiler block).
+
+## Parallel scene systems
+
+Scene systems normally run one after another on the thread that calls `SceneRuntime::Update`. A system
+can opt in to running at the same time as others by implementing `IParallelSceneSystem`
+(`engine/scene/ParallelSceneSystem.hpp`) next to `SceneSystem` and declaring the resource names its
+`OnUpdate` and `OnFixedUpdate` read and write.
+
+* Systems still run in registration order. The scheduler runs a group of consecutive systems together
+  only when every one of them opted in and no two conflict (one writes a name the other reads or
+  writes). A system that did not opt in is a barrier: everything before it finishes first and
+  everything after it starts later. A conflicting system ends the group and starts the next one.
+* The result therefore equals the serial result as long as the declared access is true. The scheduler
+  cannot check that; a system that touches something it did not declare breaks the guarantee. A system
+  that creates or destroys entities, adds or removes components or reparents declares
+  `kSceneStructureResource` as a write.
+* Errors from a group are recorded after it has finished, in registration order. The error lists are
+  guarded by a mutex because a system may call `SceneSystemContext::ReportError` from a worker.
+* Each scheduler that has a parallel system owns a worker pool (created at the first group of two or
+  more) with the default worker count; with fewer than two workers the group runs serially.
+  A scheduler without parallel systems takes the same serial loop as before.
+* No built-in system opts in yet: the animator, transform, navigation and particle systems already
+  split their own work across worker pools, and each would need an audit of what it really touches
+  before it can declare access. A measured example: four independent systems of about 3.6 ms each
+  took 14.4 ms in a frame serially and 3.7 ms in parallel on a 24 thread machine
+  (`kb_engine_tests scene-system-parallel-bench`).
+
+Tests: `SceneSystemParallelTests.cpp` (`kb_engine_tests scene-system-parallel`): identical results
+serial and parallel, systems really overlapping, conflicts and barriers keeping order, errors in
+registration order, removal and shutdown.

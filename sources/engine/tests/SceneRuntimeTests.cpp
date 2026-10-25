@@ -97,6 +97,10 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneUIBuildFrameProfile();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
+    } else if (suite == "scene-system-parallel") {
+        kb::tests::RunSceneSystemParallelTests();
+    } else if (suite == "scene-system-parallel-bench") {
+        kb::tests::RunSceneSystemParallelBenchmark();
     } else if (suite == "physics-one-way") {
         kb::tests::RunPhysicsOneWayOnlyTest();
     } else if (suite == "physics-replay") {

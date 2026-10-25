@@ -8,6 +8,7 @@ void RunSceneSystemTests() {
     RunSceneSystemTransformSyncTests();
     RunPhysicsSceneSystemTests();
     RunAudioSceneSystemTests();
+    RunSceneSystemParallelTests();
 }
 
 } // namespace kb::tests
