@@ -96,9 +96,10 @@ class StorageScenario(TouchScenario):
 
 
 class BrowserSession:
-    def __init__(self, args, root, profile, report, origin, label, script="", route=""):
+    def __init__(self, args, root, profile, report, origin, label, script="", route="", scenario_type=StorageScenario):
         self.args, self.root, self.profile, self.report = args, root, profile, report
         self.origin, self.label, self.script, self.route = origin, label, script, route
+        self.scenario_type = scenario_type
         self.client = self.process = self.scenario = self.log = None
 
     def __enter__(self):
@@ -131,7 +132,7 @@ class BrowserSession:
                 deviceScaleFactor=1, mobile=False)
             self.client.call("Page.addScriptToEvaluateOnNewDocument", source=OBSERVER + self.script)
             self.client.call("Page.navigate", url=self.origin + self.route + "/Game.html")
-            self.scenario = StorageScenario(self.client, self.root, self.report)
+            self.scenario = self.scenario_type(self.client, self.root, self.report)
             return self.scenario
         except BaseException as error:
             self.__exit__(type(error), error, error.__traceback__)

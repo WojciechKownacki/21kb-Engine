@@ -2,6 +2,12 @@
 
 #include "script/ScriptUIComponentApi.hpp"
 
+#include "engine/assets/AssetKind.hpp"
+#include "engine/scene/AudioListenerComponent.hpp"
+#include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneAudioListenerComponents.hpp"
+#include "engine/scene/SceneAudioSourceComponents.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/SceneComponentAuthoring.hpp"
 #include "engine/scene/CameraComponent.hpp"
@@ -295,7 +301,9 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 41> kComponentNames{
+constexpr std::array<std::string_view, 43> kComponentNames{
+    "AudioSource",
+    "AudioListener",
     "Transform",
     "Visibility",
     "Camera",
@@ -549,6 +557,32 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kCameraPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "clearColor.x", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "clearColor.y", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "clearColor.z", ScriptValueType::Float },
+};
+
+constexpr std::array<std::string_view, 4> kAudioAttenuationNames{ "None", "Inverse", "Linear", "Exponential" };
+constexpr std::array<ScriptSceneComponentPropertyDesc, 16> kAudioSourcePropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "clipAssetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "volume", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "pitch", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "loop", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "spatial", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "autoplay", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "mute", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "pan", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "spatialBlend", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "attenuationModel", ScriptValueType::Int, true, kAudioAttenuationNames },
+    ScriptSceneComponentPropertyDesc{ "minDistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "maxDistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "rolloff", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "dopplerFactor", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "outputBus", ScriptValueType::String },
+};
+constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kAudioListenerPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "localUser", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "primary", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 20> kLightPropertyDescs{
@@ -867,6 +901,63 @@ constexpr std::array<FieldBinding, 3> kVisibilityFields{
             visibility.visible = value.AsBool();
             return true;
         } },
+};
+
+constexpr std::array<FieldBinding, 16> kAudioSourceFields{
+    FieldBinding{ "clipAssetId",
+        [](const void* c) noexcept -> ScriptValue {
+            return ScriptValue{ static_cast<const kb::scene::AudioSourceComponent*>(c)->clipAssetId, ScriptValueType::Hash };
+        },
+        [](void* c, const ScriptValue& v) noexcept -> bool {
+            if (v.Type() != ScriptValueType::Hash) return false;
+            static_cast<kb::scene::AudioSourceComponent*>(c)->clipAssetId = v.AsUInt64();
+            return true;
+        } },
+    KB_FLOAT(kb::scene::AudioSourceComponent, volume),
+    KB_FLOAT(kb::scene::AudioSourceComponent, pitch),
+    KB_BOOL(kb::scene::AudioSourceComponent, loop),
+    KB_BOOL(kb::scene::AudioSourceComponent, spatial),
+    KB_BOOL(kb::scene::AudioSourceComponent, autoplay),
+    KB_BOOL(kb::scene::AudioSourceComponent, enabled),
+    KB_BOOL(kb::scene::AudioSourceComponent, mute),
+    KB_FLOAT(kb::scene::AudioSourceComponent, pan),
+    KB_FLOAT(kb::scene::AudioSourceComponent, spatialBlend),
+    FieldBinding{ "attenuationModel",
+        [](const void* c) noexcept -> ScriptValue {
+            return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AudioSourceComponent*>(c)->attenuationModel) };
+        },
+        [](void* c, const ScriptValue& v) noexcept -> bool {
+            if (v.Type() != ScriptValueType::Int) return false;
+            static_cast<kb::scene::AudioSourceComponent*>(c)->attenuationModel = static_cast<kb::audio::AudioAttenuationModel>(v.AsInt());
+            return true;
+        } },
+    KB_FLOAT(kb::scene::AudioSourceComponent, minDistance),
+    KB_FLOAT(kb::scene::AudioSourceComponent, maxDistance),
+    KB_FLOAT(kb::scene::AudioSourceComponent, rolloff),
+    KB_FLOAT(kb::scene::AudioSourceComponent, dopplerFactor),
+    FieldBinding{ "outputBus",
+        [](const void* c) noexcept -> ScriptValue {
+            return ScriptValue{ std::string{kb::scene::AudioSourceOutputBus(*static_cast<const kb::scene::AudioSourceComponent*>(c))} };
+        },
+        [](void* c, const ScriptValue& v) noexcept -> bool {
+            return v.Type() == ScriptValueType::String && kb::scene::SetAudioSourceOutputBus(
+                *static_cast<kb::scene::AudioSourceComponent*>(c), v.AsString());
+        } },
+};
+constexpr std::array<FieldBinding, 4> kAudioListenerFields{
+    KB_INT(kb::scene::AudioListenerComponent, priority),
+    FieldBinding{ "localUser",
+        [](const void* c) noexcept -> ScriptValue {
+            return ScriptValue{ static_cast<const kb::scene::AudioListenerComponent*>(c)->localUser.value };
+        },
+        [](void* c, const ScriptValue& v) noexcept -> bool {
+            if (v.Type() != ScriptValueType::UInt32 && (v.Type() != ScriptValueType::Int || v.AsInt() < 0)) return false;
+            const auto user = v.Type() == ScriptValueType::UInt32 ? v.AsUInt32() : static_cast<std::uint32_t>(v.AsInt());
+            static_cast<kb::scene::AudioListenerComponent*>(c)->localUser = kb::input::LocalUserId{user};
+            return true;
+        } },
+    KB_BOOL(kb::scene::AudioListenerComponent, primary),
+    KB_BOOL(kb::scene::AudioListenerComponent, enabled),
 };
 
 constexpr std::array<FieldBinding, 13> kCameraFields{
@@ -1609,11 +1700,21 @@ void MarkFacingPanelModified(kb::scene::Scene& scene, kb::scene::SceneEntity ent
 void MarkSpaceStrokeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().SpaceStrokes().MarkModified(entity); }
 void MarkHistoryRibbonModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().HistoryRibbons().MarkModified(entity); }
 void MarkParticleEffectModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ParticleEffects().MarkModified(entity); }
+void MarkAudioSourceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AudioSources().MarkModified(entity); }
+void MarkAudioListenerModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AudioListeners().MarkModified(entity); }
 void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().LensEchoes().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
         return {};
+    }
+    if (componentName == "AudioSource") {
+        auto* component = scene.Components().AudioSources().TryGet(entity);
+        return ComponentAccess{ component, component, kAudioSourceFields, &MarkAudioSourceModified };
+    }
+    if (componentName == "AudioListener") {
+        auto* component = scene.Components().AudioListeners().TryGet(entity);
+        return ComponentAccess{ component, component, kAudioListenerFields, &MarkAudioListenerModified };
     }
     if (componentName == "Transform") {
         kb::scene::TransformComponent* component = scene.Transforms().TryGet(entity);
@@ -1780,6 +1881,8 @@ std::span<const std::string_view> ScriptSceneComponentApi::ComponentNames() noex
 
 std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::ComponentProperties(std::string_view componentName) noexcept {
     componentName = kb::scene::SceneComponentAuthoring::CanonicalName(componentName);
+    if (componentName == "AudioSource") return kAudioSourcePropertyDescs;
+    if (componentName == "AudioListener") return kAudioListenerPropertyDescs;
     if (ScriptUIComponentApi::IsComponent(componentName)) {
         return ScriptUIComponentApi::ComponentProperties(componentName);
     }
@@ -1901,6 +2004,22 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
     const ScriptSceneComponentPropertyDesc* property = FindPropertyDesc(ComponentProperties(componentName), propertyName);
     if (property != nullptr && !property->writable) {
         return ScriptSceneComponentMutationResult{ .error = "component property is read-only for scripts" };
+    }
+
+    if (componentName == "AudioSource") {
+        auto candidate = *static_cast<const kb::scene::AudioSourceComponent*>(component.immutable);
+        if (!field->write(&candidate, value)) {
+            return ScriptSceneComponentMutationResult{ .error = "value does not match the audio property type or format" };
+        }
+        if (!kb::scene::IsAudioSourceComponentPersistable(candidate)) {
+            return ScriptSceneComponentMutationResult{ .error = "Audio Source values must remain finite and within valid playback and distance ranges" };
+        }
+        if (propertyName == "clipAssetId" && candidate.clipAssetId != 0U) {
+            const auto* metadata = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{candidate.clipAssetId});
+            if (metadata == nullptr || !kb::assets::AssetMatchesKind(*metadata, kb::assets::AssetKind::Audio)) {
+                return ScriptSceneComponentMutationResult{ .error = "audio clip must reference an existing audio asset" };
+            }
+        }
     }
 
     if (componentName == "Region Portal" && (propertyName == "sourceCell" || propertyName == "targetCell")) {

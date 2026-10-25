@@ -290,6 +290,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
 // written once (`localPosition=0,2,-8`, `color=1,0.9,0.8`), or Transform's `rotation` in degrees.
 [[nodiscard]] bool ApplySetting(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view component,
     std::string_view setting, CommandIo io) {
+    component = kb::scene::SceneComponentAuthoring::CanonicalName(component);
     const std::size_t equals = setting.find('=');
     if (equals == std::string_view::npos || equals == 0U) {
         io.err << "error: --set expects name=value, got '" << setting << "'\n";
@@ -390,23 +391,23 @@ void ListProperties(std::string_view component, std::ostream& out) {
         return true;
     }
 
-    // A UI asset reference (an image, a font, a material) by its path, as the Mesh Renderer's.
-    if (const kb::scene::UIComponentDescriptor* ui = kb::scene::FindUIComponentDescriptor(component); ui != nullptr) {
-        const kb::scene::UIComponentPropertyDescriptor* property = kb::scene::FindUIComponentProperty(ui->type, name);
-        if (property != nullptr && property->type == kb::scene::UIComponentPropertyType::Asset && value.starts_with('/')) {
-            const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(value));
-            if (metadata == nullptr) {
-                io.err << "error: " << component << '.' << name << " '" << value << "' is not an asset of the project\n";
-                return false;
-            }
-            const auto set = kb::script::ScriptSceneComponentApi::SetProperty(scene, entity, component, name,
-                kb::script::ScriptValue{ metadata->id.value, kb::script::ScriptValueType::Hash });
-            if (!set.succeeded) {
-                io.err << "error: " << component << '.' << name << ": " << set.error << '\n';
-                return false;
-            }
-            return true;
+    // An authored asset reference by its project path, as the Mesh Renderer's.
+    const kb::scene::UIComponentDescriptor* ui = kb::scene::FindUIComponentDescriptor(component);
+    const auto* uiProperty = ui != nullptr ? kb::scene::FindUIComponentProperty(ui->type, name) : nullptr;
+    if (((component == "AudioSource" && name == "clipAssetId") ||
+        (uiProperty != nullptr && uiProperty->type == kb::scene::UIComponentPropertyType::Asset)) && value.starts_with('/')) {
+        const kb::assets::AssetMetadata* metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(value));
+        if (metadata == nullptr) {
+            io.err << "error: " << component << '.' << name << " '" << value << "' is not an asset of the project\n";
+            return false;
         }
+        const auto set = kb::script::ScriptSceneComponentApi::SetProperty(scene, entity, component, name,
+            kb::script::ScriptValue{ metadata->id.value, kb::script::ScriptValueType::Hash });
+        if (!set.succeeded) {
+            io.err << "error: " << component << '.' << name << ": " << set.error << '\n';
+            return false;
+        }
+        return true;
     }
 
     // The other body of a joint, by its name (empty = the world), as the editor's Connected Body.

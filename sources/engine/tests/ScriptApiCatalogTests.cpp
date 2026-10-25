@@ -235,11 +235,14 @@ void RunAgentProjectFilesTest() {
 
 namespace kb::tests {
 
+void RunScriptComponentPropertyTests();
+
 void RunScriptApiCatalogTests() {
     RunCatalogBuildTest();
     RunCatalogExportTest();
     RunFunctionDescriptionIsRequiredAtRegistrationTest();
     RunAgentProjectFilesTest();
+    RunScriptComponentPropertyTests();
 }
 
 } // namespace kb::tests

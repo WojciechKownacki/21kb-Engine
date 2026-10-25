@@ -42,6 +42,8 @@
 #include "engine/input/InputHaptics.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioListenerAccess.hpp"
+#include "engine/scene/SceneAudioListenerComponents.hpp"
+#include "engine/scene/SceneAudioSourceComponents.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
@@ -12611,6 +12613,53 @@ end
         "A consumed button event must not be delivered again on the next frame");
 }
 
+void RunScriptAudioComponentPropertiesTest() {
+    using Api = kb::script::ScriptSceneComponentApi;
+    using Value = kb::script::ScriptValue;
+    kb::scene::Scene scene;
+    const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Audio Properties" });
+    const auto entity = object.Entity();
+    scene.Components().AudioSources().Set(entity, kb::scene::AudioSourceComponent{});
+    scene.Components().AudioListeners().Set(entity, kb::scene::AudioListenerComponent{});
+    kb::tests::Require(Api::HasComponent(scene, entity, "Audio Source") && Api::HasComponent(scene, entity, "AudioListener") &&
+        Api::ComponentProperties("AudioSource").size() == 16 && Api::ComponentProperties("Audio Listener").size() == 4,
+        "Audio components must expose every authored property through their canonical and display names");
+    kb::tests::Require(Api::SetProperty(scene, entity, "Audio Source", "volume", Value{0.25F}).succeeded &&
+        Api::GetProperty(scene, entity, "AudioSource", "volume").value.AsFloat() == 0.25F,
+        "Audio source volume did not round-trip through the shared property surface");
+    const auto reject = [&](std::string_view field, const Value& value) {
+        const auto before = Api::GetProperty(scene, entity, "AudioSource", field);
+        const auto mutation = Api::SetProperty(scene, entity, "AudioSource", field, value);
+        const auto after = Api::GetProperty(scene, entity, "AudioSource", field);
+        kb::tests::Require(before.succeeded && after.succeeded && !mutation.succeeded && before.value == after.value,
+            "An invalid audio source property changed the live component");
+    };
+    reject("volume", Value{-0.1F});
+    reject("volume", Value{std::numeric_limits<float>::quiet_NaN()});
+    reject("volume", Value{std::numeric_limits<float>::infinity()});
+    reject("pitch", Value{0.0F});
+    reject("pan", Value{1.1F});
+    reject("spatialBlend", Value{-0.1F});
+    reject("minDistance", Value{1000.0F});
+    reject("maxDistance", Value{0.5F});
+    reject("rolloff", Value{-1.0F});
+    reject("dopplerFactor", Value{-1.0F});
+    reject("attenuationModel", Value{99});
+    reject("clipAssetId", Value{std::uint64_t{123U}, kb::script::ScriptValueType::Hash});
+    kb::tests::Require(Api::SetProperty(scene, entity, "AudioSource", "outputBus", Value{std::string{"Effects"}}).succeeded,
+        "A valid audio routing token could not be authored");
+    reject("outputBus", Value{std::string{"invalid bus"}});
+    reject("outputBus", Value{std::string(64, 'a')});
+    kb::tests::Require(Api::SetProperty(scene, entity, "AudioListener", "localUser", Value{std::uint32_t{0xFFFFFFFFU}}).succeeded &&
+        Api::GetProperty(scene, entity, "Audio Listener", "localUser").value.AsUInt32() == 0xFFFFFFFFU,
+        "Audio listener local user id was truncated");
+    kb::tests::Require(Api::SetProperty(scene, entity, "AudioListener", "localUser", Value{3}).succeeded &&
+        Api::GetProperty(scene, entity, "AudioListener", "localUser").value.AsUInt32() == 3U &&
+        !Api::SetProperty(scene, entity, "AudioListener", "localUser", Value{-1}).succeeded &&
+        Api::GetProperty(scene, entity, "AudioListener", "localUser").value.AsUInt32() == 3U,
+        "Audio listener integer user id conversion lost or changed its value");
+}
+
 // LIB-077: exhaustive, name-driven coverage that the generated-accessor
 // FieldBinding mechanism (ScriptSceneComponentApi.cpp's KB_BOOL/KB_INT/
 // KB_UINT32/KB_FLOAT/KB_NESTED_FLOAT/KB_TICKGROUP/KB_CAMERA_PROJECTION/
@@ -12664,6 +12713,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().HistoryRibbons().Set(object.Entity(), kb::scene::HistoryRibbonComponent{ .meshAssetId = 98U });
     scene.Components().LensEchoes().Set(object.Entity(), kb::scene::LensEchoComponent{});
     scene.Components().ParticleEffects().Set(object.Entity(), kb::scene::ParticleEffectComponent{ .effectAssetId = 17U });
+    scene.Components().AudioSources().Set(object.Entity(), kb::scene::AudioSourceComponent{});
+    scene.Components().AudioListeners().Set(object.Entity(), kb::scene::AudioListenerComponent{});
     AttachAllUIComponents(scene, object.Entity());
 
     std::size_t fieldsChecked = 0U;
@@ -12690,7 +12741,11 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             }
 
             kb::script::ScriptValue validValue;
-            if (IsUIComponentName(componentName)) {
+            if (componentName == "AudioSource" && property.name == "clipAssetId") {
+                validValue = kb::script::ScriptValue{std::uint64_t{0U}, kb::script::ScriptValueType::Hash};
+            } else if (componentName == "AudioSource" && (property.name == "pan" || property.name == "spatialBlend")) {
+                validValue = kb::script::ScriptValue{0.5F};
+            } else if (IsUIComponentName(componentName)) {
                 const kb::script::ScriptSceneComponentPropertyResult current =
                     kb::script::ScriptSceneComponentApi::GetProperty(scene, object.Entity(), componentName, property.name);
                 kb::tests::Require(current.succeeded,
@@ -12751,7 +12806,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             } else if (property.type == kb::script::ScriptValueType::UInt32) {
                 kb::tests::Require(get.value.AsUInt32() == 3U, ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::Hash) {
-                kb::tests::Require(get.value.AsUInt64() == 17U, ("Script component API did not round-trip " + fieldLabel).c_str());
+                kb::tests::Require(get.value.AsUInt64() == validValue.AsUInt64(), ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::Bool) {
                 kb::tests::Require(get.value.AsBool(), ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::String) {
@@ -12777,7 +12832,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // WorldBackdrop grew eleven procedural sky fields, and the older names of Line Renderer
     // (10), Trail Renderer (9) and Lens Flare (7) are accepted aliases: 628 -> 665.
     // Animator (5), DeformedGeometry (8), SocketAttachment (9), Combatant (26) and AIBrain (37) fields: 681 -> 766.
-    kb::tests::Require(fieldsChecked == 766U, "Script component API generated accessor coverage test did not exercise the expected total field count (766, including collision mesh assets and the compatibility aliases)");
+    kb::tests::Require(fieldsChecked == 786U, "Script component API generated accessor coverage test did not exercise the expected total field count (786, including audio fields and the compatibility aliases)");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -12834,6 +12889,8 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().HistoryRibbons().Set(object.Entity(), kb::scene::HistoryRibbonComponent{ .meshAssetId = 98U });
     scene.Components().LensEchoes().Set(object.Entity(), kb::scene::LensEchoComponent{});
     scene.Components().ParticleEffects().Set(object.Entity(), kb::scene::ParticleEffectComponent{ .effectAssetId = 17U });
+    scene.Components().AudioSources().Set(object.Entity(), kb::scene::AudioSourceComponent{});
+    scene.Components().AudioListeners().Set(object.Entity(), kb::scene::AudioListenerComponent{});
     AttachAllUIComponents(scene, object.Entity());
 
     std::size_t propertiesChecked = 0U;
@@ -12864,7 +12921,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 766U, "LIB-082 raw-pointer audit did not exercise the expected total field count (766, including collision mesh assets and the compatibility aliases)");
+    kb::tests::Require(propertiesChecked == 786U, "LIB-082 raw-pointer audit did not exercise the expected total field count (786, including audio fields and the compatibility aliases)");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -16743,6 +16800,13 @@ void RunScriptNativeHeaderReloadTest() {
     RunScriptRuntimeHostNativeDescriptorBindingTest();
 }
 
+void RunScriptComponentPropertyTests() {
+    RunScriptSceneComponentApiTest();
+    RunScriptAudioComponentPropertiesTest();
+    RunScriptSceneComponentGeneratedAccessorCoverageTest();
+    RunScriptSceneComponentPropertiesNeverExposeRawPointerTest();
+}
+
 void RunScriptRuntimeTests() {
     RunScriptTouchApiTest();
     RunNativeScriptRuntimeDispatchTest();
@@ -16894,6 +16958,7 @@ void RunScriptRuntimeTests() {
     RunScriptRuntimeHostNativeDescriptorBindingTest();
     RunScriptRuntimeHostFrameSettingsTest();
     RunScriptSceneComponentApiTest();
+    RunScriptAudioComponentPropertiesTest();
     RunScriptUIApiTest();
     RunScriptUIEventDispatchTest();
     RunScriptSceneComponentGeneratedAccessorCoverageTest();

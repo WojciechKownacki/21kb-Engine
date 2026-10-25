@@ -253,3 +253,12 @@ All three require native readiness, hardware shader/draw checks and real button
 pixels. Each page lacks a default module file; the report must observe one
 complete module request and one custom instantiation, rather than an ignored
 option or duplicate download.
+
+`run_game_audio_property_tests.py` takes the full game fixture arguments and
+reports `21kb.web-game-audio-properties/v1`. It generates a WAV, imports it and
+authors source/listener settings through the CLI. The cooked native script must
+read the authored values and mutate volume and pitch through the shared
+property API. A real hardware-rendered UI capture is required. The report
+explicitly excludes audio-output acceptance; this scenario checks authoring,
+save/cook/load and script properties. See
+[audio properties](../../../../docs/audio_component_properties.md).
