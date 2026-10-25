@@ -1599,7 +1599,16 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
     for (const auto& [item, command] : commands) {
         const std::string id{ item->id };
         if (!EditorRightButtonDownRouter::ExecuteHierarchyMenuCommand(command, context_)) return fail(id + ": creation failed");
-        const kb::scene::SceneEntity entity = context_.SelectedEntity();
+        kb::scene::SceneEntity entity = context_.SelectedEntity();
+        // A map is a Grid with four tilemap layers and a Map Camera (six rows); the menu selects its Terrain layer, ready to paint.
+        const bool map = item->id == "Map Top Down" || item->id == "Map Platformer";
+        if (map) {
+            const kb::scene::SceneEntity root = context_.Scene().Hierarchy().Parent(entity);
+            if (context_.Scene().Entities().Name(entity) != "Terrain" || !root.IsValid() ||
+                context_.Scene().Components().Grids().TryGet(root) == nullptr ||
+                context_.Scene().Components().Tilemaps().TryGet(entity) == nullptr) return fail(id + ": not a map with a Terrain layer");
+            entity = root;
+        }
         if (context_.Scene().Entities().Name(entity) != item->name) return fail(id + ": wrong name");
         const auto has = [&](std::string_view component) { return kb::scene::SceneComponentAuthoring::Has(context_.Scene(), entity, component); };
         const bool shape = kb::assets::FindBuiltInShape(item->id) != nullptr;
@@ -1615,8 +1624,9 @@ bool EditorHeadlessAutomation::VerifySceneCreationMenu() {
         if (shape && context_.Scene().Components().MeshRenderers().TryGet(entity)->meshAssetId !=
                 kb::assets::BuiltInShapeId(kb::assets::FindBuiltInShape(item->id)->shape).value)
             return fail(id + ": not the engine shape");
-        if (context_.HierarchyRows().size() != baseline + 1U || !context_.UndoSceneCommand() ||
-            context_.HierarchyRows().size() != baseline) return fail(id + ": not one undo step");
+        const std::size_t created = context_.HierarchyRows().size() - baseline;
+        if (created != (map ? 6U : 1U)) return fail(id + ": created " + std::to_string(created) + " rows");
+        if (!context_.UndoSceneCommand() || context_.HierarchyRows().size() != baseline) return fail(id + ": not one undo step");
         Trace("scene_creation_menu", true, id);
     }
     return true;

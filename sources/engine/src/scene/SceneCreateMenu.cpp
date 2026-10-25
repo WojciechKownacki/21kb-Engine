@@ -28,8 +28,8 @@ constexpr std::string_view kLight = "Light";
 
 constexpr std::array<SceneCreateItem, 19> kItems{ {
     { "Empty", "Create Empty", "Entity", {}, "Ctrl+Shift+N" },
-    { "Map Top Down", "Map — Top Down", "Map", "2D Object", {} },
-    { "Map Platformer", "Map — Platformer", "Map", "2D Object", {} },
+    { "Map Top Down", "Map - Top Down", "Map", "2D Object", {} },
+    { "Map Platformer", "Map - Platformer", "Map", "2D Object", {} },
     { "Cube", "Cube", "Cube", k3DObject, "1 m" },
     { "Sphere", "Sphere", "Sphere", k3DObject, "1 m" },
     { "Capsule", "Capsule", "Capsule", k3DObject, "2 m" },
