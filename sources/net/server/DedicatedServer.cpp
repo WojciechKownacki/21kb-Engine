@@ -12,6 +12,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/security/Crypto.hpp"
 #include "kb/net/SceneReplication.hpp"
+#include "kb/net/ScriptBridge.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -233,6 +234,7 @@ struct DedicatedServer::Impl {
         case NetEventType::Message:
             break;
         }
+        net->HandleEvent(event);
         replication->HandleEvent(event, now);
     }
 
@@ -259,6 +261,7 @@ struct DedicatedServer::Impl {
     StaticKeyTable keys;
     std::unique_ptr<kb::scene::Scene> scene;
     std::unique_ptr<kb::script::ScriptRuntimeHost> scripts;
+    std::unique_ptr<ScriptNetworkRuntime> net;
     std::unique_ptr<ReplicationRegistry> components;
     std::unique_ptr<RpcRegistry> rpcs;
     std::unique_ptr<IDatagramTransport> transport;
@@ -387,9 +390,14 @@ bool DedicatedServer::Start(std::string& error) {
         error = "the script host failed: " + (s.scripts->Diagnostics().empty() ? std::string{ "unknown error" } : s.scripts->Diagnostics().front());
         return false;
     }
+    // Net.* is attached before the scripts start, so that their Created and Ready can declare RPCs and mark entities.
+    s.net = std::make_unique<ScriptNetworkRuntime>(ScriptNetworkRuntime::Role::Server, *s.scene);
     if (!s.scripts->InstallSceneSystem()) {
         error = "the script scene system could not be installed";
         return false;
+    }
+    for (const std::string& problem : s.scene->Runtime().DrainSceneSystemErrors()) {
+        s.Log("[scene system error] " + problem);
     }
 
     // The network.
@@ -400,6 +408,9 @@ bool DedicatedServer::Start(std::string& error) {
     }
     s.rpcs = std::make_unique<RpcRegistry>();
     DefineStandardRpcs(*s.rpcs);
+    if (!s.net->Freeze(*s.rpcs, error)) {
+        return false;
+    }
     std::string bindError;
     s.transport = CreateUdpTransport(Endpoint{ address, options.port }, bindError);
     if (s.transport == nullptr) {
@@ -416,6 +427,7 @@ bool DedicatedServer::Start(std::string& error) {
         return false;
     }
     s.replication = std::make_unique<ReplicationServer>(*s.host, s.scene->Runtime().EcsWorld(), *s.components, *s.rpcs);
+    s.net->BindServer(*s.replication);
     s.replication->SetRpcHandler("Ping", [&s](std::uint64_t caller, std::span<const RpcValue> args) {
         const std::vector<RpcValue> reply{ std::get<std::uint32_t>(args[0]) };
         static_cast<void>(s.replication->CallRpc(caller, "Pong", reply));

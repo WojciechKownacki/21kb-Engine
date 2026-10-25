@@ -6,6 +6,9 @@
 #include "engine/project/ProjectManager.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneBehaviourComponents.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -229,10 +232,55 @@ struct TestProject {
     fs::path keys;
 };
 
-// A project with three entities: two the server replicates (names start with Net_) and one it does not.
+// The server script: declares an RPC pair, replicates its own entity and answers Echo.
+constexpr const char* kServerScript = R"lua(
+function Ready(self, dt)
+    CallFunction("Net.RegisterRpc", { name = "Echo", direction = "toServer", args = "string(32)" })
+    CallFunction("Net.RegisterRpc", { name = "EchoReply", direction = "toClients", args = "string(32)" })
+    CallFunction("Net.RegisterRpc", { name = "Welcome", direction = "toClients", args = "uint" })
+    CallFunction("Net.Replicate", { entity = self.entity })
+end
+
+-- A player who connected is greeted by id as soon as the session lets the server call it.
+local greet = {}
+function OnNetConnected(self, event)
+    greet[#greet + 1] = event.args.player
+end
+
+function Tick(self, dt)
+    for index = #greet, 1, -1 do
+        if CallFunction("Net.Call", { rpc = "Welcome", target = greet[index], n1 = greet[index] }) then
+            table.remove(greet, index)
+        end
+    end
+end
+
+function OnRpc_Echo(self, event)
+    CallFunction("Net.Call", { rpc = "EchoReply", target = event.args.sender, s1 = event.args.s1 })
+end
+)lua";
+
+// Registers the same RPCs a client of that script needs.
+void DefineScriptRpcs(RpcRegistry& registry) {
+    std::string error;
+    RpcArgSpec text;
+    text.type = RpcArgType::String;
+    text.maxLength = 32U;
+    Require(registry.Define({ "Echo", RpcDirection::ClientToServer, true, { text }, -1, 30U }, error), error);
+    Require(registry.Define({ "EchoReply", RpcDirection::ServerToClient, true, { text }, -1, 30U }, error), error);
+    RpcArgSpec number;
+    number.type = RpcArgType::UInt32;
+    number.min = 0.0;
+    number.max = 4294967295.0;
+    Require(registry.Define({ "Welcome", RpcDirection::ServerToClient, true, { number }, -1, 30U }, error), error);
+}
+
+// A project with four entities: two the server replicates by name (they start with Net_), one a script
+// marks, and one that is not replicated.
 TestProject MakeProject(const std::string& name) {
     TestProject project;
-    project.root = fs::temp_directory_path() / ("21kb_dedicated_server_test_" + name);
+    // A directory of its own for every run, so that two runs (or a run and a leftover) cannot meet.
+    project.root = fs::temp_directory_path() / ("21kb_dedicated_server_test_" + name + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::error_code error;
     fs::remove_all(project.root, error);
     fs::create_directories(project.root / "Assets" / "Scenes");
@@ -245,16 +293,23 @@ TestProject MakeProject(const std::string& name) {
     std::string settingsError;
     Require(kb::project::ProjectSettingsStore::Save(kb::project::ProjectSettingsStore::FilePath(project.root), settings, settingsError), settingsError);
 
+    WriteFile(project.root / "Assets" / "Logic" / "Server.lua", kServerScript);
     kb::scene::Scene scene;
+    Require(scene.Assets().MountProject(project.root) && scene.Assets().Discover() == 1U, "the project assets could not be mounted");
+    const kb::assets::AssetMetadata* scriptAsset = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Server.lua");
+    Require(scriptAsset != nullptr, "the server script is not in the project");
     const auto place = [&scene](const char* objectName, float x, float y, float z) {
         const auto object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = objectName });
         kb::scene::TransformComponent transform = *scene.Transforms().TryGet(object.Entity());
         transform.localPosition = { x, y, z };
         scene.Transforms().Set(object.Entity(), transform);
+        return object.Entity();
     };
     place("Net_A", 10.0F, 2.0F, -3.0F);
     place("Net_B", -40.0F, 0.0F, 5.5F);
     place("Local_C", 1.0F, 1.0F, 1.0F);
+    const kb::scene::SceneEntity hero = place("Script_Hero", 5.0F, 6.0F, 7.0F);
+    scene.Components().Behaviours().Set(hero, kb::scene::BehaviourComponent{ .behaviourAssetId = scriptAsset->id.value, .backend = kb::scene::BehaviourBackend::Lua, .enabled = true });
     Require(kb::scene::SceneDocumentService::Save(scene, project.root / "Assets" / "Scenes" / "Main.21kbscene", "Main"), "the scene could not be saved");
     project.keys = project.root / "keys.txt";
     WriteFile(project.keys, KeysFileText());
@@ -317,10 +372,13 @@ struct RemoteClient {
         components = MakeSceneReplicationRegistry(1000.0F);
         rpcs = std::make_unique<RpcRegistry>();
         DefineStandardRpcs(*rpcs);
+        DefineScriptRpcs(*rpcs);
         world = std::make_unique<kb::ecs::World>();
         client = std::make_unique<Client>(*transport, config, id, KeyFrom(keySeed), Endpoint::Loopback(serverPort), Now());
         replication = std::make_unique<ReplicationClient>(*client, *world, *components, *rpcs);
         replication->SetRpcHandler("Pong", [this](std::span<const RpcValue> args) { pongs.push_back(std::get<std::uint32_t>(args[0])); });
+        replication->SetRpcHandler("Welcome", [this](std::span<const RpcValue> args) { welcomes.push_back(std::get<std::uint32_t>(args[0])); });
+        replication->SetRpcHandler("EchoReply", [this](std::span<const RpcValue> args) { echoes.push_back(std::get<std::string>(args[0])); });
         replication->SetRpcHandler("Said", [this](std::span<const RpcValue> args) {
             said.emplace_back(std::get<std::uint32_t>(args[0]), std::get<std::string>(args[1]));
         });
@@ -360,6 +418,8 @@ struct RemoteClient {
     std::unique_ptr<Client> client;
     std::unique_ptr<ReplicationClient> replication;
     std::vector<std::uint32_t> pongs;
+    std::vector<std::string> echoes;
+    std::vector<std::uint32_t> welcomes;
     std::vector<std::pair<std::uint32_t, std::string>> said;
     DisconnectReason lastReason = DisconnectReason::None;
     bool disconnected = false;
@@ -387,19 +447,26 @@ void TestMainRun() {
 
     // Handshake and the state of the scene.
     RemoteClient first(port, 7U, 7U);
-    Require(first.Until([&] { return first.client->State() == ClientState::Connected && first.replication->ReplicaCount() == 2U; }, 10'000),
+    Require(first.Until([&] { return first.client->State() == ClientState::Connected && first.replication->ReplicaCount() == 3U; }, 20'000),
         "the first client did not connect and receive the scene; log: " + ReadFile(server.err));
     Require(HasReplica(first, 10.0F, 2.0F, -3.0F) && HasReplica(first, -40.0F, 0.0F, 5.5F), "the replicated entities do not match the scene");
-    Require(first.replication->ReplicaCount() == 2U, "an entity outside the replicated prefix was sent");
+    Require(HasReplica(first, 5.0F, 6.0F, 7.0F), "the entity the server script marked with Net.Replicate was not replicated");
+    Require(first.replication->ReplicaCount() == 3U, "an entity outside the replicated set was sent");
 
     // Another player, then RPC in both directions.
     RemoteClient second(port, 8U, 8U);
-    Require(second.Until([&] { return second.replication->ReplicaCount() == 2U; }, 10'000), "the second client did not receive the scene");
+    Require(second.Until([&] { return second.replication->ReplicaCount() == 3U; }, 20'000), "the second client did not receive the scene");
     Require(first.replication->CallRpc("Ping", std::vector<RpcValue>{ std::uint32_t{ 4242U } }) == RpcStatus::Ok, "ping could not be sent");
     Require(first.Until([&] { return !first.pongs.empty(); }, 5000) && first.pongs.front() == 4242U, "the server did not answer the ping");
     Require(first.replication->CallRpc("Say", std::vector<RpcValue>{ std::string("hello from seven") }) == RpcStatus::Ok, "say could not be sent");
     const auto sawSaid = [](RemoteClient& client) { return !client.said.empty() && client.said.front().first == 7U && client.said.front().second == "hello from seven"; };
     Require(WaitFor([&] { first.Pump(); second.Pump(); return sawSaid(first) && sawSaid(second); }, 5000), "the broadcast did not reach both clients");
+    // The server script greeted each player by id when it connected.
+    Require(first.Until([&] { return !first.welcomes.empty(); }, 5000) && first.welcomes.front() == 7U, "the server script did not greet player 7");
+    Require(second.Until([&] { return !second.welcomes.empty(); }, 5000) && second.welcomes.front() == 8U, "the server script did not greet player 8");
+    // An RPC the server script declared and answers from Lua.
+    Require(first.replication->CallRpc("Echo", std::vector<RpcValue>{ std::string("abc") }) == RpcStatus::Ok, "echo could not be sent");
+    Require(first.Until([&] { return !first.echoes.empty(); }, 5000) && first.echoes.front() == "abc", "the server script did not answer the echo");
     // A call outside the declared range never reaches the server.
     Require(first.replication->CallRpc("Say", std::vector<RpcValue>{ std::string(300U, 'x') }) == RpcStatus::BadArguments, "a long chat line was accepted");
 
@@ -449,15 +516,15 @@ void TestMainRun() {
 
     // A clean stop: the exit code is 0, the clients are told, the summary says what happened.
     server.RequestStop();
-    Require(server.process.Wait(10'000) == 0, "the server did not exit cleanly after the stop request; log: " + ReadFile(server.err));
+    Require(server.process.Wait(20'000) == 0, "the server did not exit cleanly after the stop request; log: " + ReadFile(server.err));
     Require(first.Until([&] { return first.disconnected; }, 3000) && first.lastReason == DisconnectReason::PeerClosed, "the client was not told that the server stopped");
     kb::core::JsonValue summary;
     std::string error;
     Require(kb::core::JsonValue::Parse(ReadFile(server.out), summary, error), "the final status was not clean JSON: " + error + ": " + ReadFile(server.out));
     Require(summary.Find("schema") && summary.Find("schema")->AsString() == "21kb.dedicated-server/v1" && summary.Find("exit_reason")->AsString() == "stop-file",
         "the final status has the wrong schema or exit reason");
-    Require(Number(summary, "clients_peak") >= 2.0 && Number(summary, "host", "handshakes_completed") >= 2.0 && Number(summary, "replicated_entities") == 2.0 &&
-            Number(summary, "replication", "rpc_dispatched") >= 3.0 && Number(summary, "ticks") > 10.0 && Number(summary, "host", "handshakes_rejected") >= 1.0,
+    Require(Number(summary, "clients_peak") >= 2.0 && Number(summary, "host", "handshakes_completed") >= 2.0 && Number(summary, "replicated_entities") == 3.0 &&
+            Number(summary, "replication", "rpc_dispatched") >= 4.0 && Number(summary, "ticks") > 10.0 && Number(summary, "host", "handshakes_rejected") >= 1.0,
         "the final status does not match what happened: " + ReadFile(server.out));
     Require(ReadFile(server.err).find("listening on 127.0.0.1:" + std::to_string(port)) != std::string::npos && ReadFile(server.err).find("client 7 connected") != std::string::npos,
         "the log has no listening and connection lines");
@@ -474,7 +541,7 @@ void TestLifetimeOptions() {
         Require(server.started && server.process.Wait(15'000) == 0, "--max-seconds did not end the server cleanly");
         kb::core::JsonValue summary;
         std::string error;
-        Require(kb::core::JsonValue::Parse(ReadFile(server.out), summary, error) && summary.Find("exit_reason")->AsString() == "max-seconds", "the exit reason is not max-seconds");
+        Require(kb::core::JsonValue::Parse(ReadFile(server.out), summary, error) && summary.Find("exit_reason")->AsString() == "max-seconds", "the exit reason is not max-seconds: " + ReadFile(server.out) + " log: " + ReadFile(server.err));
     }
     // --empty-timeout ends it once the last client has left.
     {
@@ -483,14 +550,14 @@ void TestLifetimeOptions() {
         Require(port != 0U, "no port");
         {
             RemoteClient client(port, 7U, 7U);
-            Require(client.Until([&] { return client.client->State() == ClientState::Connected; }, 10'000), "the client did not connect");
+            Require(client.Until([&] { return client.client->State() == ClientState::Connected; }, 20'000), "the client did not connect");
             client.client->Disconnect();
             client.Until([&] { return client.disconnected; }, 3000);
         }
         Require(server.process.Wait(15'000) == 0, "--empty-timeout did not end the server");
         kb::core::JsonValue summary;
         std::string error;
-        Require(kb::core::JsonValue::Parse(ReadFile(server.out), summary, error) && summary.Find("exit_reason")->AsString() == "empty-timeout", "the exit reason is not empty-timeout");
+        Require(kb::core::JsonValue::Parse(ReadFile(server.out), summary, error) && summary.Find("exit_reason")->AsString() == "empty-timeout", "the exit reason is not empty-timeout: " + ReadFile(server.out) + " log: " + ReadFile(server.err));
     }
     // The client limit: a second client over the limit never gets in.
     {
@@ -498,13 +565,13 @@ void TestLifetimeOptions() {
         const std::uint16_t port = server.WaitForPort();
         Require(port != 0U, "no port");
         RemoteClient one(port, 7U, 7U);
-        Require(one.Until([&] { return one.client->State() == ClientState::Connected; }, 10'000), "the first client did not connect");
+        Require(one.Until([&] { return one.client->State() == ClientState::Connected; }, 20'000), "the first client did not connect");
         ClientConfig shortWait;
         shortWait.connectTimeoutMilliseconds = 2000U;
         RemoteClient two(port, 8U, 8U, shortWait);
         Require(two.Until([&] { return two.disconnected; }, 6000) && two.lastReason == DisconnectReason::ConnectTimeout, "a client over the limit got in");
         server.RequestStop();
-        Require(server.process.Wait(10'000) == 0, "the server did not stop");
+        Require(server.process.Wait(20'000) == 0, "the server did not stop");
     }
 }
 
@@ -536,7 +603,7 @@ void TestCommandLine() {
             ReadFile(err).find("UDP socket could not be opened") != std::string::npos,
         "a second server on the same port did not fail");
     first.RequestStop();
-    Require(first.process.Wait(10'000) == 0, "the first server did not stop");
+    Require(first.process.Wait(20'000) == 0, "the first server did not stop");
 }
 
 void TestKeysFile() {

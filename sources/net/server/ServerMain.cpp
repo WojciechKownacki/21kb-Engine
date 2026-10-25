@@ -185,7 +185,7 @@ int main(int argc, char** argv) {
     }
     const ParsedArguments parsed = Parse(arguments);
     if (parsed.help) {
-        std::cout << kUsage;
+        std::cout << kUsage << std::flush;
         return 0;
     }
     if (!parsed.error.empty()) {
@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
         }
         const int code = server.Run(g_stop);
         if (parsed.json) {
-            std::cout << kb::net::server::SummaryJson(parsed.options, server.Summary()) << '\n';
+            std::cout << kb::net::server::SummaryJson(parsed.options, server.Summary()) << std::endl;
         }
         return code;
     } catch (const std::exception& error) {

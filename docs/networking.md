@@ -188,6 +188,8 @@ renderer, steps it at a fixed rate, and replicates it over UDP.
   whose name starts with a prefix, or none. An entity is judged once, when it is first seen. The server
   also defines the standard RPCs `Ping`/`Pong` and `Say`/`Said` (`DefineStandardRpcs`); a client builds the
   same registries (`MakeSceneReplicationRegistry`, `DefineStandardRpcs`) and uses `ReplicationClient`.
+* **Scripts.** The server's scripts see `Net.*`: they can declare RPCs, call clients, mark entities with `Net.Replicate`, and react to
+  `OnNetConnected` and `OnRpc_<name>` (see Scripts above). The test project's script greets each player by id and answers an `Echo` RPC.
 * **Loop.** The scene (and its scripts) advance by a fixed step of `1 / tick-rate`; replication runs at the
   same rate; the loop catches up at most five steps behind and then drops the backlog.
 * **Limits.** `--max-clients` (a further client is not accepted), `--idle-timeout` (a client silent for this
