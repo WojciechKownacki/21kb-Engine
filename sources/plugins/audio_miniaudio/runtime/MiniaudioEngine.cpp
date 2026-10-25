@@ -93,6 +93,12 @@ void MiniaudioEngine::Initialize(bool forceNoDevice, ma_context* context) {
     } else {
         const auto lock = LockGraph();
         static_cast<void>(masterMeter_.Configure(ma_engine_get_channels(&engine_), false));
+        // The scene is left-handed (+x is to the right of a listener that faces +z, which is the direction the
+        // listener synchronizer passes), while miniaudio assumes a right-handed system by default. Without this
+        // a source on the scene's right would sound on the left.
+        for (ma_uint32 listener = 0U; listener < ma_engine_get_listener_count(&engine_); ++listener) {
+            engine_.listeners[listener].config.handedness = ma_handedness_left;
+        }
     }
 }
 

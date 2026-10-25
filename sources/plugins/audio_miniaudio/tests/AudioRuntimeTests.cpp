@@ -289,9 +289,15 @@ private:
     std::thread thread_;
 };
 
-[[nodiscard]] double MeasureSpatialOutputEnergy(
+struct ChannelEnergy {
+    double left = 0.0;
+    double right = 0.0;
+    [[nodiscard]] double Total() const noexcept { return left + right; }
+};
+
+[[nodiscard]] ChannelEnergy MeasureSpatialChannelEnergy(
     const std::filesystem::path& clipPath,
-    float sourceDistance) {
+    float sourceX, float sourceY, float sourceZ) {
     kb::audio_miniaudio::MiniaudioEngine engine;
     engine.Initialize(true);
     Require(engine.Status() == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
@@ -308,7 +314,7 @@ private:
     });
     const kb::scene::SceneObject source = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
         .name = "Attenuation Source",
-        .transform = TransformAt(sourceDistance),
+        .transform = TransformAt(sourceX, sourceY, sourceZ),
     });
     scene.Components().AudioSources().Set(source.Entity(), kb::scene::AudioSourceComponent{
         .clipAssetId = 8001U,
@@ -341,11 +347,45 @@ private:
         &engine.Native(), output.data(), output.size() / 2U, &framesRead);
     Require((readResult == MA_SUCCESS || readResult == MA_AT_END) && framesRead > 0U,
         "Spatial attenuation probe could not render output frames");
-    double energy = 0.0;
-    for (std::size_t sample = 0U; sample < static_cast<std::size_t>(framesRead) * 2U; ++sample) {
-        energy += std::abs(static_cast<double>(output[sample]));
+    ChannelEnergy energy;
+    for (std::size_t frame = 0U; frame < static_cast<std::size_t>(framesRead); ++frame) {
+        energy.left += std::abs(static_cast<double>(output[frame * 2U]));
+        energy.right += std::abs(static_cast<double>(output[frame * 2U + 1U]));
     }
     return energy;
+}
+
+[[nodiscard]] double MeasureSpatialOutputEnergy(const std::filesystem::path& clipPath, float sourceDistance) {
+    return MeasureSpatialChannelEnergy(clipPath, sourceDistance, 0.0F, 0.0F).Total();
+}
+
+// Panning of a spatial source in the offline output: a source on the listener's right is louder in the right
+// channel, one on the left in the left channel, mirror positions carry the same total energy, and a source straight
+// ahead or straight behind is centred.
+void RunSpatialPanningOutputTest() {
+    const std::filesystem::path clipPath = FixturePath(FixtureFor(".wav"));
+    const ChannelEnergy right = MeasureSpatialChannelEnergy(clipPath, 4.0F, 0.0F, 0.0F);
+    const ChannelEnergy left = MeasureSpatialChannelEnergy(clipPath, -4.0F, 0.0F, 0.0F);
+    Require(right.Total() > 1.0 && left.Total() > 1.0, "Panning probe did not render audible output");
+    // The listener's right is +x when it faces -z, and the engine keeps the sign convention of the scene.
+    const bool rightIsPlusX = right.right > right.left;
+    Require(rightIsPlusX ? (right.right > right.left * 1.5 && left.left > left.right * 1.5)
+                         : (right.left > right.right * 1.5 && left.right > left.left * 1.5),
+        "A source to one side must be clearly louder in the channel of that side");
+    Require(rightIsPlusX, "A source at +x must sound on the right of a listener at the origin");
+    Require(std::abs(right.Total() - left.Total()) < 0.02 * right.Total(),
+        "Mirror positions of a source must carry the same total energy");
+    Require(std::abs(right.right - left.left) < 0.03 * right.right && std::abs(right.left - left.right) < 0.03 * right.right + 1.0,
+        "Mirror positions of a source must swap the two channels");
+    for (const float z : { 4.0F, -4.0F }) {
+        const ChannelEnergy centred = MeasureSpatialChannelEnergy(clipPath, 0.0F, 0.0F, z);
+        Require(centred.Total() > 1.0 && std::abs(centred.left - centred.right) < 0.15 * centred.Total(),
+            "A source straight ahead or behind must be centred");
+    }
+    // A louder source panned to one side keeps its ratio: twice the distance halves the energy of both channels.
+    const ChannelEnergy farRight = MeasureSpatialChannelEnergy(clipPath, 8.0F, 0.0F, 0.0F);
+    Require(farRight.right < right.right * 0.7 && farRight.right > 0.0 && farRight.right > farRight.left,
+        "A source twice as far must be quieter but stay on the same side");
 }
 
 void RunSpatialDistanceAttenuationOutputTest() {
@@ -3423,6 +3463,7 @@ int RunTests(int argc, char** argv) {
     if (filter.empty() || filter == "sound") {
         RunSoundStateTest(clipPath);
         RunSpatialDistanceAttenuationOutputTest();
+        RunSpatialPanningOutputTest();
     }
     if (filter.empty() || filter == "voice" || filter == "resolver") {
         RunVoiceStateTest(clipPath);
