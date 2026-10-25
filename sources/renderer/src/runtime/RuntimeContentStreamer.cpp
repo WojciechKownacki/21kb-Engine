@@ -50,6 +50,8 @@ struct RuntimeContentStreamer::Record {
     RenderMeshHandle meshHandle{};
     std::uint32_t floor = 0U;
     std::uint32_t uploadedLevel = 0U;
+    // Bytes of the GPU resource that is alive now; a rebuild keeps it next to the new one until the frame ends.
+    std::uint64_t gpuBytes = 0U;
     // The bytes of every streamed level that is resident: one mip, or one level's chunks.
     std::vector<std::vector<std::vector<std::uint8_t>>> levelData;
     std::uint64_t requestFrame = std::numeric_limits<std::uint64_t>::max();
@@ -142,6 +144,7 @@ void RuntimeContentStreamer::TrackTexture(
     record->textureHandle = handle;
     record->floor = layout.streamedMipCount;
     record->uploadedLevel = layout.streamedMipCount;
+    record->gpuBytes = record->tail->gpuBlocks->blocks.size();
     record->levelData.resize(layout.streamedMipCount + 1U);
     textureIds_.emplace(key, id);
     EnsureReader(*record->pack);
@@ -181,6 +184,7 @@ void RuntimeContentStreamer::TrackMesh(
     record->meshHandle = handle;
     record->floor = layout.firstLod;
     record->uploadedLevel = layout.firstLod;
+    record->gpuBytes = layout.lodGeometryBytes[layout.firstLod];
     record->levelData.resize(levels);
     record->levelData[layout.firstLod] = layout.chunks;
     record->materialSlots = std::move(materialSlots);
@@ -542,15 +546,21 @@ void RuntimeContentStreamer::Rebuild(
     });
     std::uint32_t rebuilt = 0U;
     std::uint64_t uploaded = 0U;
+    std::uint64_t transient = 0U;
     for (Record* record : due) {
         if (rebuilt >= settings_.maxRebuildsPerFrame ||
-            (uploaded != 0U && uploaded >= settings_.maxUploadBytesPerFrame)) {
+            (uploaded != 0U && uploaded >= settings_.maxUploadBytesPerFrame) ||
+            (transient != 0U && settings_.maxTransientBytesPerFrame != 0U && transient >= settings_.maxTransientBytesPerFrame)) {
             break;
         }
         const std::uint32_t level = residency_.ResidentLevel(record->id);
+        const std::uint64_t uploadedBefore = uploaded;
         const bool succeeded = record->texture ? RebuildTexture(*record, sceneRenderer, textures, level, uploaded)
                                                : RebuildMesh(*record, sceneRenderer, meshes, level, uploaded);
         if (succeeded) {
+            const std::uint64_t newBytes = uploaded - uploadedBefore;
+            transient += record->gpuBytes + newBytes;
+            record->gpuBytes = newBytes;
             record->uploadedLevel = level;
             ++rebuilt;
             ++counters_.rebuilds;
@@ -560,6 +570,12 @@ void RuntimeContentStreamer::Rebuild(
         }
     }
     counters_.uploadedBytes += uploaded;
+    if (transient != 0U) {
+        const kb::assets::streaming::StreamingResidencyStats residency = residency_.Stats();
+        counters_.peakRebuildTransientBytes = std::max(counters_.peakRebuildTransientBytes, transient);
+        counters_.peakCommittedWithTransientBytes = std::max(counters_.peakCommittedWithTransientBytes,
+            residency.residentBytes + residency.inFlightBytes + transient);
+    }
 }
 
 void RuntimeContentStreamer::Update(

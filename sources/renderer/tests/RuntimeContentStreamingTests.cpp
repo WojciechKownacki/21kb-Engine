@@ -698,6 +698,57 @@ void UploadLimitsSpreadRebuildsWithoutStarving() {
     }
 }
 
+// Red when: the memory a rebuild holds beyond the resident levels (the old GPU resource and the staging copy of the new
+// one) is not measured; the transient limit does not spread the rebuilds of one frame; or the measured peak with the
+// transient bytes falls below the resident bytes.
+void RebuildTransientMemoryIsMeasuredAndBounded() {
+    std::uint64_t limitedPeak = 0U;
+    std::uint64_t unlimitedPeak = 0U;
+    for (const bool limited : { true, false }) {
+        // Rebuilds wait until both level loads have landed, so both resources are due in the same frame.
+        WithStreamingRig(RuntimeContentStreamingSettings{ .budgetBytes = 64ULL * 1024ULL * 1024ULL, .maxRebuildsPerFrame = 0U,
+                             .meshMaxScreenErrorPixels = 1.0e-6F },
+            false, [&](StreamingRig& rig) {
+                const SceneRenderCamera closeCamera = CameraAt(2.0F);
+                const std::uint64_t initialResident = rig.streamer.Stats().residency.residentBytes;
+                const bool landed = rig.Run(closeCamera,
+                    [&] {
+                        const RuntimeContentStreamingStats stats = rig.streamer.Stats();
+                        return stats.loadsInFlight == 0U && stats.residency.residentBytes > initialResident;
+                    },
+                    [](const RuntimeContentStreamingStats&) {});
+                Require(landed, "The level loads did not land");
+                Require(rig.streamer.Stats().peakRebuildTransientBytes == 0U, "Nothing rebuilt yet, so no transient bytes");
+                rig.streamer.Configure(RuntimeContentStreamingSettings{ .budgetBytes = 64ULL * 1024ULL * 1024ULL,
+                    .maxRebuildsPerFrame = 8U, .maxTransientBytesPerFrame = limited ? 1U : 0U, .meshMaxScreenErrorPixels = 1.0e-6F });
+                std::uint64_t previousRebuilds = 0U;
+                std::uint64_t largestStep = 0U;
+                const bool streamedIn = rig.Run(closeCamera,
+                    [&] { return rig.streamer.UploadedLevel(rig.textureKey) == 0 && rig.streamer.UploadedLevel(rig.meshKey) == 0; },
+                    [&](const RuntimeContentStreamingStats& stats) {
+                        largestStep = std::max(largestStep, stats.rebuilds - previousRebuilds);
+                        previousRebuilds = stats.rebuilds;
+                    });
+                Require(streamedIn, "The resources did not reach their finest level");
+                const RuntimeContentStreamingStats stats = rig.streamer.Stats();
+                Require(stats.peakRebuildTransientBytes >= stats.uploadedBytes / std::max<std::uint64_t>(stats.rebuilds, 1U),
+                    "The transient bytes of a rebuild must cover at least the new resource it uploads");
+                Require(stats.peakCommittedWithTransientBytes > stats.peakRebuildTransientBytes,
+                    "The committed peak must include the resident levels next to the transient bytes");
+                if (limited) {
+                    Require(largestStep == 1U, "A transient limit must admit one rebuild per frame when each one exceeds it");
+                    limitedPeak = stats.peakRebuildTransientBytes;
+                } else {
+                    Require(largestStep >= 2U, "Without a transient limit both due resources rebuild in the same frame");
+                    unlimitedPeak = stats.peakRebuildTransientBytes;
+                }
+                rig.sceneRenderer.Resources().DestroyTexture(rig.textures.at(rig.textureKey).handle);
+                rig.sceneRenderer.Resources().DestroyMesh(rig.meshes.at(rig.meshKey).handle);
+            });
+    }
+    Require(unlimitedPeak > limitedPeak, "Rebuilding both at once must hold more transient memory than one after the other");
+}
+
 // Red when: the streamer drops, rebuilds or crashes a resource whose level data cannot be read; the failure is not
 // counted; or the coarse level that is still resident stops being drawable.
 void MissingLevelDataKeepsTheTailDrawable() {
@@ -733,6 +784,7 @@ void RunRuntimeContentStreamingTests() {
     PackagedTexturesAndMeshesStreamUnderTheBudget();
     UploadLimitsSpreadRebuildsWithoutStarving();
     MissingLevelDataKeepsTheTailDrawable();
+    RebuildTransientMemoryIsMeasuredAndBounded();
 }
 
 } // namespace kb::render::tests

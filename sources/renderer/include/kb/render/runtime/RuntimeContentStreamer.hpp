@@ -43,6 +43,10 @@ struct RuntimeContentStreamingSettings {
     // so a burst of arrivals is spread over frames instead of stalling one.
     std::uint32_t maxRebuildsPerFrame = 8U;
     std::uint64_t maxUploadBytesPerFrame = 64ULL * 1024ULL * 1024ULL;
+    // A rebuild holds the old GPU resource and a staging copy of the new one at the same time. Once the rebuilds of a
+    // frame have held this many such bytes, the rest wait for the next frame; the first rebuild of a frame is always
+    // admitted. 0 means no limit beyond the two limits above.
+    std::uint64_t maxTransientBytesPerFrame = 0ULL;
     // A mesh level is detailed enough once its simplification error projects to at most this
     // many pixels.
     float meshMaxScreenErrorPixels = 1.0F;
@@ -61,6 +65,11 @@ struct RuntimeContentStreamingStats {
     // Time from issuing a level load to having its decoded bytes on the render thread.
     double lastLoadMilliseconds = 0.0;
     double maxLoadMilliseconds = 0.0;
+    // Memory a rebuild holds beyond the resident levels: the old GPU resource (alive until the frame ends) plus the
+    // staging copy of the new one. Largest sum over the rebuilds of one frame, and the largest resident + in flight +
+    // that sum at the end of a frame -- the true peak the budget has to cover while resources are swapped.
+    std::uint64_t peakRebuildTransientBytes = 0U;
+    std::uint64_t peakCommittedWithTransientBytes = 0U;
 };
 
 // One frame of what the renderer sees, for streaming decisions.
