@@ -71,6 +71,14 @@ streaming instantiation for `application/wasm` and binary instantiation for
 other MIME types. It preserves the public `locateFile` and `wasmBinary` options;
 a supplied custom instantiator retains control of its own loading policy.
 
+`run_game_wasm_options_tests.py` configures those three public options in an
+exported page: an alternate module URL through `locateFile`, an actual preloaded
+`wasmBinary`, and a custom `instantiateWasm` callback. Each must start the native
+game and render its button on hardware. The default module file is absent from
+each page directory, so silently ignoring an option fails. Resource timing must
+record exactly one complete module download, and the custom callback must run
+once. The `locateFile` case also checks its script-directory prefix.
+
 The `21kb.web-game-loading/v1` result retains package/runtime hashes, native
 observations, browser events, resource and heap measurements and four GPU
 captures. WASM capacity and JavaScript heap samples do not measure process RSS,

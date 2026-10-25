@@ -245,3 +245,11 @@ three WASM failure cases before native startup. Its report explicitly excludes
 native runtime and GPU rendering acceptance; the unused empty package sentinel
 must never be requested. The CI Web player job builds `kb_game_webgl` and runs
 this command. Complete cooked game/GPU checks remain separate.
+
+`run_game_wasm_options_tests.py` takes the full game fixture arguments and
+reports `21kb.web-game-wasm-options/v1`. It verifies `Module.locateFile`, a
+preloaded `Module.wasmBinary` and an existing `Module.instantiateWasm` callback.
+All three require native readiness, hardware shader/draw checks and real button
+pixels. Each page lacks a default module file; the report must observe one
+complete module request and one custom instantiation, rather than an ignored
+option or duplicate download.
