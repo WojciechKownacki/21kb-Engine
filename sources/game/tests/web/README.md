@@ -279,3 +279,9 @@ previous contexts closed and no amplitude doubling. An owned second tab must
 hide the player while PCM continues; restoring focus must preserve both PCM
 and native UI rendering. OS interruption and automatic recovery are separate
 coverage.
+
+`run_game_audio_autoplay_tests.py` reports `21kb.web-game-audio-autoplay/v1`.
+It requires queued authored autoplay before activation, then actual PCM after a
+trusted click without a script play request. Live volume, mute, pitch and
+enabled writes through the shared property API must change measured PCM as
+expected, retaining one context and a hardware-rendered native UI capture.

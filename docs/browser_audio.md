@@ -57,3 +57,14 @@ and explicit native backend recovery passed. OS interruption, automatic
 interruption recovery, device switching and physical mobile routes remain
 unverified. Restart can briefly stop output; this scenario does not establish
 gapless recovery or an acoustic latency bound.
+
+`run_game_audio_autoplay_tests.py` checks a separate normally authored and
+cooked scene with `autoplay=true`. Before activation, the native source must
+retain playing intent while the device reports suspended, with no PCM callbacks.
+Its first trusted UI click only unlocks the browser; the controller never calls
+`Audio.PlaySource`. Real 440 Hz PCM must then appear at the authored gain.
+Further native UI property writes double the volume (matching doubled RMS),
+mute and unmute, double pitch to 880 Hz, disable the source and re-enable
+autoplay. Each phase must match the same analytic amplitude/frequency or silence
+criteria. These updates must retain one audio context. This scenario passed on
+the same desktop Chromium backend; it does not expand physical-device coverage.

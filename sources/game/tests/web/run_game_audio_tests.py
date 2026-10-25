@@ -43,18 +43,18 @@ window.kbReadAudio = () => ({count:kbAudioReadback.count,blocks:kbAudioReadback.
 """
 
 
-def author_fixture(args, root):
+def author_fixture(args, root, *, autoplay=False, script_name="AudioFlow"):
     tone = root / "Tone.wav"
     write_tone(tone)
 
     def configure(run, component, project):
         run(args.cli, "import", "--project", project, "--destination", "/Game/Audio", tone)
         component("CanvasRoot/SaveButton", "Audio Source", "clipAssetId=/Game/Audio/Tone.21kb",
-            "volume=0.25", "pitch=1", "loop=true", "spatial=false", "autoplay=false")
+            "volume=0.25", "pitch=1", "loop=true", "spatial=false", "autoplay=" + str(autoplay).lower())
         component("MainCamera", "Audio Listener", "localUser=0", "primary=true")
 
-    return author_storage(args, root, script_name="AudioFlow",
-        script_source=Path(__file__).with_name("fixtures") / "AudioFlow.lua", configure=configure)
+    return author_storage(args, root, script_name=script_name,
+        script_source=Path(__file__).with_name("fixtures") / (script_name + ".lua"), configure=configure)
 
 
 class AudioScenario(StorageScenario):
@@ -63,7 +63,7 @@ class AudioScenario(StorageScenario):
     def audio(self):
         return self.client.evaluate("kbReadAudio()")
 
-    def output(self, label, after, sounding, reference=None):
+    def output(self, label, after, sounding, reference=None, *, volume=0.25, frequency=440):
         deadline = time.monotonic() + 8
         while True:
             self.states()
@@ -71,9 +71,9 @@ class AudioScenario(StorageScenario):
             blocks = [b for b in value["blocks"] if b["index"] > after][-4:]
             if len(blocks) == 4:
                 if sounding:
-                    expected_rms = (3276 / 32768) * 0.25 / math.sqrt(2)
+                    expected_rms = (3276 / 32768) * volume / math.sqrt(2)
                     passed = all(b["contextState"] == "running" and abs(b["rms"] / expected_rms - 1) < 0.02 and
-                        abs(b["frequency"] - 440) < 30 for b in blocks)
+                        abs(b["frequency"] - frequency) < 30 for b in blocks)
                     if reference is not None:
                         passed = passed and all(abs(b["rms"] / reference - 1) < 0.1 for b in blocks)
                 else:
