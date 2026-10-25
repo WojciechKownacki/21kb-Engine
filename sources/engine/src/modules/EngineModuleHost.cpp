@@ -4,6 +4,7 @@
 #include "engine/modules/EngineModuleContext.hpp"
 #include "engine/modules/EngineModuleExports.hpp"
 
+#include <exception>
 #include <algorithm>
 #include <cstddef>
 #include <filesystem>
@@ -320,13 +321,40 @@ void EngineModuleHost::Load(kb::ecs::World& world) {
 
     active_ = ResolveOrder(entries, diagnostics_);
 
+    // Loading is a transaction: a module that throws from OnLoad or OnEnable undoes the steps that already completed
+    // (disable the enabled ones, unload the loaded ones, newest first), leaves the host unloaded with a diagnostic that
+    // names the module and the step, and lets the next Load start again from a clean state.
     EngineModuleContext context{ world, project_ };
-    for (IEngineModule* module : active_) {
-        module->OnLoad(context);
+    std::size_t loadedCount = 0U;
+    std::size_t enabledCount = 0U;
+    const char* step = "OnLoad";
+    IEngineModule* failing = nullptr;
+    try {
+        for (IEngineModule* module : active_) {
+            failing = module;
+            module->OnLoad(context);
+            ++loadedCount;
+        }
+        step = "OnEnable";
+        for (IEngineModule* module : active_) {
+            failing = module;
+            module->OnEnable();
+            ++enabledCount;
+        }
+        return;
+    } catch (const std::exception& error) {
+        diagnostics_.push_back("module '" + failing->Metadata().name + "' failed in " + step + ": " + error.what() + "; loading was rolled back");
+    } catch (...) {
+        diagnostics_.push_back("module '" + failing->Metadata().name + "' failed in " + step + " with an unknown error; loading was rolled back");
     }
-    for (IEngineModule* module : active_) {
-        module->OnEnable();
+    for (std::size_t index = enabledCount; index > 0U; --index) {
+        try { active_[index - 1U]->OnDisable(); } catch (...) {}
     }
+    for (std::size_t index = loadedCount; index > 0U; --index) {
+        try { active_[index - 1U]->OnUnload(); } catch (...) {}
+    }
+    active_.clear();
+    loaded_ = false;
 }
 
 void EngineModuleHost::AttachScene(kb::scene::Scene& scene) {

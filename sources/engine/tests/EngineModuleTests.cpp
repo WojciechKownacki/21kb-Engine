@@ -63,6 +63,7 @@ struct ModuleProbe {
     int unloadCount = 0;
     int attachCount = 0;
     int detachCount = 0;
+    std::vector<std::string> unloadOrder;
 };
 
 class ProbeSystem final : public kb::ecs::System {
@@ -158,6 +159,69 @@ void RunActiveByDefaultTest() {
     host.AttachScene(scene);
     static_cast<void>(scene.Runtime().Update(0.016F));
     kb::tests::Require(probe.sceneSystemUpdates == 1, "active module's scene system should tick");
+}
+
+// A module that fails while loading or enabling takes nothing with it: the steps already done are undone in reverse
+// order, the diagnostic names the module and the step, the host is left unloaded, and the next Load with the fault
+// fixed starts clean.
+class FaultyModule final : public kb::modules::IEngineModule {
+public:
+    enum class Fault : std::uint8_t { None, Load, Enable };
+    FaultyModule(std::string name, std::vector<std::string> dependencies, ModuleProbe& probe, const Fault* fault)
+        : name_(std::move(name)), dependencies_(std::move(dependencies)), probe_(probe), fault_(fault) {}
+    [[nodiscard]] kb::modules::EngineModuleMetadata Metadata() const override {
+        return kb::modules::EngineModuleMetadata{ name_, 1U, dependencies_, Phase::Default };
+    }
+    void OnLoad(kb::modules::EngineModuleContext&) override {
+        if (fault_ != nullptr && *fault_ == Fault::Load) throw std::runtime_error("load exploded");
+        probe_.loadOrder.push_back(name_);
+    }
+    void OnEnable() override {
+        if (fault_ != nullptr && *fault_ == Fault::Enable) throw std::runtime_error("enable exploded");
+        ++probe_.enableCount;
+    }
+    void OnDisable() override { ++probe_.disableCount; probe_.unloadOrder.push_back("disable:" + name_); }
+    void OnUnload() override { ++probe_.unloadCount; probe_.unloadOrder.push_back("unload:" + name_); }
+private:
+    std::string name_;
+    std::vector<std::string> dependencies_;
+    ModuleProbe& probe_;
+    const Fault* fault_ = nullptr;
+};
+
+void RunModuleLoadRollsBackOnFailureTest() {
+    for (const FaultyModule::Fault kind : { FaultyModule::Fault::Load, FaultyModule::Fault::Enable }) {
+        ModuleProbe probe;
+        FaultyModule::Fault fault = kind;
+        kb::scene::Scene scene;
+        EngineModuleHost host{ kb::project::ProjectDescriptor{} };
+        host.Add(std::make_unique<FaultyModule>("First", std::vector<std::string>{}, probe, nullptr));
+        host.Add(std::make_unique<FaultyModule>("Second", std::vector<std::string>{ "First" }, probe, &fault));
+        host.Load(scene.Runtime().EcsWorld());
+        const bool inLoad = kind == FaultyModule::Fault::Load;
+        kb::tests::Require(host.ActiveCount() == 0U && !host.IsActive("First") && !host.IsActive("Second"), "a failed load must leave no module active");
+        bool named = false;
+        for (const std::string& line : host.Diagnostics()) {
+            named = named || (line.find("module 'Second' failed in ") != std::string::npos && line.find(inLoad ? "OnLoad" : "OnEnable") != std::string::npos &&
+                              line.find(inLoad ? "load exploded" : "enable exploded") != std::string::npos);
+        }
+        kb::tests::Require(named, "the diagnostic must name the module, the step and the cause");
+        if (inLoad) {
+            kb::tests::Require(probe.unloadOrder == std::vector<std::string>{ "unload:First" }, "only the module that had loaded is unloaded");
+        } else {
+            kb::tests::Require(probe.unloadOrder == std::vector<std::string>{ "disable:First", "unload:Second", "unload:First" },
+                "the enabled module is disabled and the loaded modules are unloaded, newest first");
+        }
+        // The fault is fixed: the next Load works from a clean state.
+        fault = FaultyModule::Fault::None;
+        probe.loadOrder.clear();
+        host.Load(scene.Runtime().EcsWorld());
+        kb::tests::Require(host.ActiveCount() == 2U && host.IsActive("First") && host.IsActive("Second") &&
+                probe.loadOrder == std::vector<std::string>{ "First", "Second" },
+            "after the fault is fixed the modules load again, in dependency order");
+        host.Unload();
+        kb::tests::Require(host.ActiveCount() == 0U, "an unload after a successful retry leaves nothing active");
+    }
 }
 
 // An explicit disabled plugin reference removes the module from the runtime entirely.
@@ -621,6 +685,7 @@ namespace kb::tests {
 void RunEngineModuleTests() {
     RunActiveByDefaultTest();
     RunDisabledByProjectTest();
+    RunModuleLoadRollsBackOnFailureTest();
     RunOptInDefaultTest();
     RunSceneStaticModuleInjectionTest();
     RunStaticModuleReplacesConfiguredDynamicBinaryTest();
