@@ -44,6 +44,8 @@ add_library(kb_audio_miniaudio_plugin ${KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE}
     runtime/MiniaudioPlaybackBackend.cpp
     runtime/MiniaudioSound.hpp
     runtime/MiniaudioSound.cpp
+    runtime/MiniaudioFilterChain.hpp
+    runtime/MiniaudioFilterChain.cpp
     scene/MiniaudioBusRegistry.hpp
     scene/MiniaudioBusRegistry.cpp
     scene/MiniaudioListenerSynchronizer.hpp
@@ -76,6 +78,13 @@ endif()
 kb_apply_quality_gates(kb_audio_miniaudio_plugin)
 
 if(BUILD_TESTING)
+    add_executable(kb_audio_filter_tests tests/AudioFilterTests.cpp runtime/MiniaudioFilterChain.cpp)
+    target_include_directories(kb_audio_filter_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(kb_audio_filter_tests PRIVATE miniaudio)
+    target_compile_features(kb_audio_filter_tests PRIVATE cxx_std_20)
+    add_test(NAME kb_audio_filter_tests COMMAND $<TARGET_FILE:kb_audio_filter_tests>)
+    kb_apply_quality_gates(kb_audio_filter_tests)
+
     add_executable(kb_audio_runtime_tests
         tests/AudioRuntimeTests.cpp
         assets/MiniaudioEncodingFormat.hpp
