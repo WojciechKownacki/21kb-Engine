@@ -317,7 +317,10 @@ void SceneStreamingService::Pump(Scene& scene) {
     if (!state.streaming) return;
     auto& streaming = *state.streaming;
     const auto start = Clock::now();
+    const SceneStreamingStats previous = streaming.stats;
     streaming.stats = {};
+    streaming.stats.overBudgetFrames = previous.overBudgetFrames;
+    streaming.stats.longestFrameMilliseconds = previous.longestFrameMilliseconds;
     scene.Assets().Manager().PumpAsyncLoads();
     // Acquire strong ownership before switching the decoded cache to weak
     // retention. Several cells can request the same source concurrently.
@@ -376,6 +379,10 @@ void SceneStreamingService::Pump(Scene& scene) {
         idle = operations == 0U ? idle + 1U : 0U;
     }
     streaming.stats.milliseconds = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    if (streaming.stats.milliseconds > static_cast<double>(streaming.settings.maxMillisecondsPerFrame)) {
+        ++streaming.stats.overBudgetFrames;
+    }
+    streaming.stats.longestFrameMilliseconds = std::max(streaming.stats.longestFrameMilliseconds, streaming.stats.milliseconds);
 }
 SceneLoadStatus SceneStreamingService::Status(const Scene& scene, std::uint64_t id) noexcept {
     const auto* job = Find(scene, id);
