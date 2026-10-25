@@ -262,3 +262,13 @@ property API. A real hardware-rendered UI capture is required. The report
 explicitly excludes audio-output acceptance; this scenario checks authoring,
 save/cook/load and script properties. See
 [audio properties](../../../../docs/audio_component_properties.md).
+
+`run_game_audio_tests.py` uses the same full fixture arguments and reports
+`21kb.web-game-audio/v1`. Its generated mono 440 Hz WAV passes through normal
+import, cook, native playback and WebAudio. Five trusted UI clicks exercise
+play, pause, resume, stop and play again. A read-only output observer requires
+four consecutive real PCM blocks per phase, checking frequency, authored gain,
+silence and stable resumed amplitude. It also requires real native UI GPU
+pixels. It does not unlock audio itself or bypass browser activation policy.
+See [browser audio verification](../../../../docs/browser_audio.md) for the
+measurement bounds and remaining platform coverage.

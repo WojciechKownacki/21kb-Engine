@@ -9,12 +9,16 @@ from run_game_storage_tests import BrowserSession, StorageScenario, author_fixtu
 from run_game_touch_tests import require
 
 
-def author_fixture(args, root):
-    tone = root / "Tone.wav"
+def write_tone(tone):
     with wave.open(str(tone), "wb") as audio:
         audio.setparams((1, 2, 48000, 0, "NONE", "not compressed"))
         audio.writeframes(b"".join(struct.pack("<h", round(3276 * math.sin(2 * math.pi * 440 * frame / 48000)))
             for frame in range(48000)))
+
+
+def author_fixture(args, root):
+    tone = root / "Tone.wav"
+    write_tone(tone)
 
     def configure(run, component, project):
         run(args.cli, "import", "--project", project, "--destination", "/Game/Audio", tone)
