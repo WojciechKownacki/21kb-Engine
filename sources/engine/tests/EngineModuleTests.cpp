@@ -224,6 +224,56 @@ void RunModuleLoadRollsBackOnFailureTest() {
     }
 }
 
+// A module set with a missing dependency, a dependency cycle, a duplicate name or a plugin binary that does not exist
+// still loads what it can and says what is wrong, naming the module.
+void RunModuleSetFaultsAreReportedTest() {
+    const auto hasDiagnostic = [](const EngineModuleHost& host, const std::string& text) {
+        return std::ranges::any_of(host.Diagnostics(), [&](const std::string& line) { return line.find(text) != std::string::npos; });
+    };
+    {
+        ModuleProbe probe;
+        kb::scene::Scene scene;
+        EngineModuleHost host{ kb::project::ProjectDescriptor{} };
+        host.Add(std::make_unique<ProbeModule>("Needs.Missing", Phase::Default, std::vector<std::string>{ "Not.There" }, probe));
+        host.Load(scene.Runtime().EcsWorld());
+        kb::tests::Require(hasDiagnostic(host, "module 'Needs.Missing' depends on inactive or unknown module 'Not.There'"),
+            "A missing dependency must be named in the diagnostics");
+        kb::tests::Require(host.IsActive("Needs.Missing") && probe.loadOrder.size() == 1U, "A module with a missing dependency still loads");
+    }
+    {
+        ModuleProbe probe;
+        kb::scene::Scene scene;
+        EngineModuleHost host{ kb::project::ProjectDescriptor{} };
+        host.Add(std::make_unique<ProbeModule>("Cycle.A", Phase::Default, std::vector<std::string>{ "Cycle.B" }, probe));
+        host.Add(std::make_unique<ProbeModule>("Cycle.B", Phase::Default, std::vector<std::string>{ "Cycle.A" }, probe));
+        host.Load(scene.Runtime().EcsWorld());
+        kb::tests::Require(hasDiagnostic(host, "dependency cycle among modules: Cycle.A, Cycle.B"), "A dependency cycle must name its modules");
+        kb::tests::Require(probe.loadOrder == std::vector<std::string>{ "Cycle.A", "Cycle.B" },
+            "The modules of a cycle still load, in registration order");
+    }
+    {
+        ModuleProbe probe;
+        kb::scene::Scene scene;
+        EngineModuleHost host{ kb::project::ProjectDescriptor{} };
+        host.Add(std::make_unique<ProbeModule>("Twin", Phase::Default, std::vector<std::string>{}, probe));
+        host.Add(std::make_unique<ProbeModule>("Twin", Phase::Default, std::vector<std::string>{}, probe));
+        host.Load(scene.Runtime().EcsWorld());
+        kb::tests::Require(hasDiagnostic(host, "module 'Twin' is registered more than once"), "A duplicate module name must be reported");
+        kb::tests::Require(probe.loadOrder.size() == 1U && host.ActiveCount() == 1U, "A duplicate must not load the module twice");
+    }
+    {
+        kb::project::ProjectDescriptor project;
+        project.disableEnginePluginsByDefault = true;
+        project.plugins.push_back(kb::project::ProjectPluginReference{ .name = "Plugin.Missing", .binaryPath = "no-such-folder/no-such-plugin.dll", .enabled = true });
+        kb::scene::Scene scene;
+        EngineModuleHost host{ project };
+        host.Load(scene.Runtime().EcsWorld());
+        kb::tests::Require(!host.Diagnostics().empty() && host.ActiveCount() == 0U && !host.IsActive("Plugin.Missing"),
+            "A plugin binary that does not exist must be reported and leave no module active");
+        kb::tests::Require(hasDiagnostic(host, "no-such-plugin"), "The diagnostic must name the missing binary");
+    }
+}
+
 // An explicit disabled plugin reference removes the module from the runtime entirely.
 void RunDisabledByProjectTest() {
     ModuleProbe probe;
@@ -686,6 +736,7 @@ void RunEngineModuleTests() {
     RunActiveByDefaultTest();
     RunDisabledByProjectTest();
     RunModuleLoadRollsBackOnFailureTest();
+    RunModuleSetFaultsAreReportedTest();
     RunOptInDefaultTest();
     RunSceneStaticModuleInjectionTest();
     RunStaticModuleReplacesConfiguredDynamicBinaryTest();

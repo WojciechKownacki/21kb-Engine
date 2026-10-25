@@ -113,8 +113,9 @@ private:
         loaded.library.Reset();
         return nullptr;
     }
-    if (abiVersion() != kEngineModuleAbiVersion) {
-        diagnostics.push_back("plugin '" + path.string() + "' has unsupported engine module ABI version");
+    if (const std::uint32_t pluginAbi = static_cast<std::uint32_t>(abiVersion()); pluginAbi != kEngineModuleAbiVersion) {
+        diagnostics.push_back("plugin '" + path.string() + "' has unsupported engine module ABI version (plugin ABI " +
+            std::to_string(pluginAbi) + ", engine ABI " + std::to_string(kEngineModuleAbiVersion) + ")");
         loaded.library.Reset();
         return nullptr;
     }
@@ -314,6 +315,12 @@ void EngineModuleHost::Load(kb::ecs::World& world) {
     for (const std::unique_ptr<IEngineModule>& candidate : candidates_) {
         EngineModuleMetadata metadata = candidate->Metadata();
         if (!IsEnabledByProject(metadata)) {
+            continue;
+        }
+        // One module per name: a second registration would load the same module twice, so the first one wins.
+        const bool duplicate = std::ranges::any_of(entries, [&](const ResolveEntry& entry) { return entry.metadata.name == metadata.name; });
+        if (duplicate) {
+            diagnostics_.push_back("module '" + metadata.name + "' is registered more than once; the later registration is ignored");
             continue;
         }
         entries.push_back(ResolveEntry{ candidate.get(), std::move(metadata), entries.size(), false });
