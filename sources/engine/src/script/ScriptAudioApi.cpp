@@ -15,6 +15,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -354,6 +355,44 @@ ScriptFunctionCallResult AudioReinitialize(const ScriptFunctionCallContext& cont
         return Error("audio api requires an active scene");
     }
     return DeviceStatusResult(kb::audio::AudioPlayback::Reinitialize(*context.scene));
+}
+
+ScriptFunctionCallResult AudioConfigureOffline(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    static_cast<void>(arguments);
+    if (context.scene == nullptr) return Error("audio api requires an active scene");
+    if (!kb::audio::AudioPlayback::ConfigureOffline(*context.scene)) return Error("audio provider could not configure offline rendering");
+    return {.executed = true, .outputs = {{"configured", ScriptValue{true}}}};
+}
+
+ScriptFunctionCallResult AudioRenderOffline(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("audio api requires an active scene");
+    const auto frames = IntArg(arguments, "frames", 0);
+    if (frames < 1 || frames > static_cast<int>(kb::audio::kMaxOfflineAudioFramesPerRead)) return Error("offline audio frames must be between 1 and 384000");
+    const auto pcm = kb::audio::AudioPlayback::RenderOffline(*context.scene, static_cast<std::uint32_t>(frames));
+    if (!pcm.succeeded || pcm.frames != static_cast<std::uint64_t>(frames)) return Error(pcm.error.empty() ? "no complete offline audio PCM block was produced" : pcm.error);
+    double energy = 0.0, peak = 0.0;
+    for (float sample : pcm.samples) {
+        const double value = sample; energy += value * value;
+        peak = std::max(peak, std::abs(value));
+    }
+    const auto rms = pcm.samples.empty() ? 0.0 : std::sqrt(energy / static_cast<double>(pcm.samples.size()));
+    return {.executed = true, .outputs = {{"frames", ScriptValue{frames}}, {"peak", ScriptValue{static_cast<float>(peak)}},
+        {"rms", ScriptValue{static_cast<float>(rms)}}}};
+}
+
+ScriptFunctionCallResult AudioDspState(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("audio api requires an active scene");
+    const auto* bus = FindArg(arguments, "bus");
+    if (bus == nullptr || bus->Type() != ScriptValueType::String) return Error("DSP state requires a bus name");
+    const auto report = kb::audio::AudioPlayback::DspReport(*context.scene);
+    if (!report.backendAvailable) return Error("audio backend is unavailable");
+    for (const auto& state : report.buses) {
+        if (state.bus != bus->AsString()) continue;
+        return {.executed = true, .outputs = {{"current", ScriptValue{state.initialized && state.settingsCurrent}},
+            {"activeEffects", ScriptValue{static_cast<int>(state.activeEffects)}}, {"error", ScriptValue{state.error}},
+            {"sampleRate", ScriptValue{static_cast<int>(report.sampleRate)}}, {"channels", ScriptValue{static_cast<int>(report.channels)}}}};
+    }
+    return Error("DSP bus has not been initialized: " + bus->AsString());
 }
 
 ScriptFunctionCallResult AudioSetListenerLocalUser(
@@ -782,6 +821,27 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
     if (!host.RegisterFunction(std::move(reinitialize))) {
         return false;
     }
+
+    ScriptFunctionDesc offline;
+    offline.signature.name = "Audio.ConfigureOffline";
+    offline.signature.outputs = {{"configured", ScriptValueType::Bool, true}};
+    offline.callback = &AudioConfigureOffline;
+    if (!host.RegisterFunction(std::move(offline))) return false;
+
+    ScriptFunctionDesc renderOffline;
+    renderOffline.signature.name = "Audio.RenderOffline";
+    renderOffline.signature.inputs = {{"frames", ScriptValueType::Int, true}};
+    renderOffline.signature.outputs = {{"frames", ScriptValueType::Int, true}, {"peak", ScriptValueType::Float, true}, {"rms", ScriptValueType::Float, true}};
+    renderOffline.callback = &AudioRenderOffline;
+    if (!host.RegisterFunction(std::move(renderOffline))) return false;
+
+    ScriptFunctionDesc dspState;
+    dspState.signature.name = "Audio.DspState";
+    dspState.signature.inputs = {{"bus", ScriptValueType::String, true}};
+    dspState.signature.outputs = {{"current", ScriptValueType::Bool, true}, {"activeEffects", ScriptValueType::Int, true},
+        {"error", ScriptValueType::String, true}, {"sampleRate", ScriptValueType::Int, true}, {"channels", ScriptValueType::Int, true}};
+    dspState.callback = &AudioDspState;
+    if (!host.RegisterFunction(std::move(dspState))) return false;
 
     ScriptFunctionDesc setListenerLocalUser;
     setListenerLocalUser.signature.name = "Audio.SetListenerLocalUser";

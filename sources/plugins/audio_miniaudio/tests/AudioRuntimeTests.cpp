@@ -9,6 +9,7 @@
 #include "engine/audio/AudioClipFormats.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/audio/AudioMixerAssetIO.hpp"
+#include "engine/audio/AudioMixerEffectEditing.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -236,7 +237,17 @@ public:
         : thread_([this, &engine]() {
               std::array<float, 512U> frames{};
               while (!stop_.load(std::memory_order_relaxed)) {
-                  static_cast<void>(ma_engine_read_pcm_frames(&engine.Native(), frames.data(), frames.size() / 2U, nullptr));
+                  ma_uint64 read = 0U;
+                  const auto result = engine.ReadPcm(frames.data(), frames.size() / 2U, &read);
+                  if ((result != MA_SUCCESS && result != MA_AT_END) || read > frames.size() / 2U) finite_.store(false, std::memory_order_relaxed);
+                  const auto count = std::min<std::size_t>(static_cast<std::size_t>(read) * 2U, frames.size());
+                  std::uint64_t nonzero = 0U;
+                  for (std::size_t i = 0U; i < count; ++i) {
+                      if (!std::isfinite(frames[i])) finite_.store(false, std::memory_order_relaxed);
+                      if (std::abs(frames[i]) > 1e-9F) ++nonzero;
+                  }
+                  frames_.fetch_add(read, std::memory_order_relaxed);
+                  nonzero_.fetch_add(nonzero, std::memory_order_relaxed);
                   std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
               }
           }) {}
@@ -252,12 +263,18 @@ public:
         stop_.store(true, std::memory_order_relaxed);
         thread_.join();
     }
+    [[nodiscard]] bool Finite() const noexcept { return finite_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t Frames() const noexcept { return frames_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t Nonzero() const noexcept { return nonzero_.load(std::memory_order_relaxed); }
 
     OfflineEnginePump(const OfflineEnginePump&) = delete;
     OfflineEnginePump& operator=(const OfflineEnginePump&) = delete;
 
 private:
     std::atomic<bool> stop_{ false };
+    std::atomic<bool> finite_{true};
+    std::atomic<std::uint64_t> frames_{0U};
+    std::atomic<std::uint64_t> nonzero_{0U};
     std::thread thread_;
 };
 
@@ -301,7 +318,7 @@ private:
     Require(listenerSynchronizer.Sync(engine.Native(), context).active,
         "Spatial attenuation probe did not activate its scene listener");
     kb::audio_miniaudio::MiniaudioClipResolver resolver;
-    kb::audio_miniaudio::MiniaudioBusRegistry buses;
+    kb::audio_miniaudio::MiniaudioBusRegistry buses{engine};
     kb::audio_miniaudio::MiniaudioSourceRegistry sources;
     sources.Sync(engine.Native(), context, resolver, buses, nullptr, {}, true);
     Require(sources.IsSourcePlaying(scene, source.Entity(), true).playing,
@@ -356,7 +373,7 @@ void RunSpatialDistanceAttenuationOutputTest() {
     Require(state.active && std::abs(state.position.x) <= 1024.0F && std::abs(state.position.z) <= 1024.0F,
         "The listener was not placed near the audio origin");
     kb::audio_miniaudio::MiniaudioClipResolver resolver;
-    kb::audio_miniaudio::MiniaudioBusRegistry buses;
+    kb::audio_miniaudio::MiniaudioBusRegistry buses{engine};
     kb::audio_miniaudio::MiniaudioSourceRegistry sources;
     sources.SetAudioSpace(&space);
     sources.Sync(engine.Native(), context, resolver, buses, nullptr, state.position, true);
@@ -551,6 +568,260 @@ void WriteToneWav(const std::filesystem::path& tonePath) {
     }
 }
 
+void RunMixerDspAssetTest() {
+    using Kind = kb::audio::AudioDspKind;
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses = {{.name = "Output", .volume = 0.123456791F}};
+    std::size_t index = 0U;
+    for (const auto kind : {Kind::LowPass, Kind::HighPass, Kind::PeakingEqualizer, Kind::Delay, Kind::Reverb, Kind::Compressor, Kind::Limiter}) {
+        Require(kb::audio::AddAudioMixerEffect(mixer, "Output", "Stage" + std::to_string(index++), kind).empty(), "DSP kind could not be authored");
+    }
+    Require(kb::audio::AddAudioMixerEffect(mixer, "Output", "SecondDelay", Kind::Delay).empty(), "Repeated DSP kind could not be authored");
+    const auto edit = [&](std::string_view id, std::string_view field, std::string_view value) {
+        Require(kb::audio::SetAudioMixerEffectField(mixer, "Output", id, field, value).empty(), "DSP field edit failed");
+    };
+    edit("Stage0", "cutoffHz", "1234.5678901234567"); edit("Stage0", "order", "8");
+    edit("Stage2", "gainDb", "-3.123456789012345"); edit("Stage2", "quality", "2.718281828459045");
+    edit("Stage3", "delayMs", "12.345678901234567"); edit("Stage3", "feedback", "0.7"); edit("Stage3", "wet", "0.333");
+    edit("Stage4", "roomSize", "0.8"); edit("Stage4", "damping", "0.6"); edit("Stage4", "width", "0.2");
+    edit("Stage5", "thresholdDb", "-30.1234567890123"); edit("Stage5", "ratio", "3.141592653589793");
+    edit("Stage6", "ceilingDb", "-1.1234567890123"); edit("Stage6", "releaseMs", "123.4567890123456");
+    edit("SecondDelay", "bypass", "true"); edit("SecondDelay", "delayMs", "2000");
+    Require(kb::audio::MoveAudioMixerEffect(mixer, "Output", "SecondDelay", 0U).empty(), "DSP reorder failed");
+    const auto path = TestRoot() / "DspRoundTrip.kbmixer";
+    Require(kb::audio::AudioMixerAssetIO::Save(path, mixer), "DSP mixer did not save");
+    const auto loaded = kb::audio::AudioMixerAssetIO::Load(path);
+    Require(loaded.has_value() && loaded->buses[0].effects == mixer.buses[0].effects
+        && loaded->buses[0].volume == mixer.buses[0].volume, "DSP serialization lost exact parameters, order, IDs or bypass");
+    const auto before = ReadFileBytesU8(path);
+    Require(std::string{before.begin(), before.begin() + 10}.starts_with("kbmixer 2"), "DSP assets must require the effect format version");
+    for (int failure = 0; failure < 5; ++failure) {
+        auto invalid = mixer;
+        if (failure == 0) invalid.buses[0].effects[0].id = invalid.buses[0].effects[1].id;
+        if (failure == 1) invalid.buses[0].effects[0].id = "bad#id";
+        if (failure == 2) invalid.buses[0].effects.resize(17U, invalid.buses[0].effects[0]);
+        if (failure == 3) invalid.buses[0].effects[0].parameters.delayMs = std::numeric_limits<double>::quiet_NaN();
+        if (failure == 4) invalid.buses[0].effects[0].parameters.gainDb = 1.0;
+        Require(!kb::audio::ValidateAudioMixerAsset(invalid).empty() && !kb::audio::AudioMixerAssetIO::Save(path, invalid)
+            && ReadFileBytesU8(path) == before, "Invalid DSP save changed the existing asset bytes");
+    }
+    const auto retained = mixer.buses[0].effects;
+    Require(!kb::audio::SetAudioMixerEffectField(mixer, "Output", "Stage0", "gainDb", "0").empty()
+        && !kb::audio::SetAudioMixerEffectField(mixer, "Output", "Stage0", "cutoffHz", "nan").empty()
+        && !kb::audio::MoveAudioMixerEffect(mixer, "Output", "Stage0", 99U).empty()
+        && mixer.buses[0].effects == retained, "Rejected DSP edit mutated authored state");
+    std::size_t malformed = 0U;
+    for (const auto text : {"kbmixer 1\nbus Output - 1 0\neffect Output X limiter 0 -1 100\n",
+            "kbmixer 2\neffect Output X limiter 0 -1 100\n", "kbmixer 2\nbus Output - 1 0\neffect Output X unknown 0\n",
+            "kbmixer 2\nbus Output - 1 0\neffect Output X delay 0 10 0 1\n",
+            "kbmixer 2\nbus Output - 1 0\neffect Output X lowpass 0 1000 2.5\n",
+            "kbmixer 2\nbus Output - 1 0\neffect Output X compressor 0 nan 4 10 100 0\n",
+            "kbmixer 2\nbus Output - 1 0\neffect Output X limiter 0 -1 100 extra\n",
+            "kbmixer 2\nbus Output - 1 0\neffect Output X limiter 0 -1 100\neffect Output X limiter 0 -2 100\n"}) {
+        const auto bytes = std::string_view{text};
+        Require(!kb::audio::AudioMixerAssetIO::Load(std::span{reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()}).has_value(),
+            "Malformed DSP record was ignored or silently downgraded"); ++malformed;
+    }
+    std::cout << "Mixer DSP asset exactStages=" << retained.size() << " invalidSaves=5 malformed=" << malformed << '\n';
+}
+
+void RunMixerDspRuntimeTest() {
+    using Kind = kb::audio::AudioDspKind;
+    using Playback = kb::audio::AudioPlayback;
+    const auto tonePath = TestRoot() / "DspTone.wav"; WriteToneWav(tonePath);
+    kb::scene::Scene scene;
+    Require(scene.Assets().MountProject(TestRoot() / "DspProject"), "DSP project did not mount");
+    const auto imported = kb::assets::AssetImportService::ImportFiles(scene.Assets().Manager(), std::array{tonePath}, "/Game/Audio");
+    Require(imported.Succeeded() && imported.items.size() == 1U, "DSP tone did not import");
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses = {{.name = "Output", .volume = 0.5F}, {.name = "Effects", .parentBus = "Output", .volume = 0.5F}};
+    const auto path = TestRoot() / "DspMixer.kbmixer";
+    constexpr kb::assets::AssetId mixerId{9501U};
+    Require(kb::audio::AudioMixerAssetIO::Save(path, mixer), "DSP mixer did not save");
+    Require(scene.Assets().Manager().RegisterAsset({.id = mixerId, .type = kb::audio::kAudioMixerAssetType, .name = "DspMixer",
+        .virtualPath = "/Game/Audio/DspMixer.kbmixer", .physicalPath = path, .contentHash = 1U}), "DSP mixer did not register");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerId.value);
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    Playback::RegisterBackend(scene, backend);
+    Require(Playback::ConfigureOffline(scene), "Actual provider did not enter explicit offline mode");
+    const auto play = Playback::PlayOneShot(scene, {.clipAssetId = imported.items.front().id.value, .outputBus = "Effects", .volume = 1.0F, .loop = true, .spatial = false});
+    Require(play.Succeeded(), "Public offline playback did not start the imported clip");
+    const auto save = [&] {
+        Require(kb::audio::AudioMixerAssetIO::Save(path, mixer) && scene.Assets().Manager().Unload(mixerId)
+            && scene.Assets().Manager().Load<kb::audio::AudioMixerAsset>(mixerId).IsLoaded(), "DSP edit did not save, invalidate and reload");
+    };
+    std::uint64_t frames = 0U;
+    const auto render = [&] {
+        auto pcm = Playback::RenderOffline(scene, 2048U);
+        Require(pcm.succeeded && pcm.frames == 2048U && pcm.channels == 2U && pcm.sampleRate == 48000U
+            && pcm.samples.size() == 4096U, "Public DSP render did not return actual complete PCM"); frames += pcm.frames;
+        return pcm.samples;
+    };
+    const auto measure = [&](std::string_view phase, double gain) {
+        const double expected = (3276.0 / 32768.0) * gain * 2.0 / 3.141592653589793;
+        std::size_t good = 0U; double mean = 0.0;
+        for (std::size_t attempt = 0U; attempt < 12U && good < 4U; ++attempt) {
+            const auto pcm = render(); mean = 0.0;
+            for (float sample : pcm) mean += std::abs(sample);
+            mean /= static_cast<double>(pcm.size());
+            good = std::abs(mean / expected - 1.0) < 0.02 ? good + 1U : 0U;
+        }
+        Require(good == 4U && Playback::IsVoicePlaying(scene, play.voiceId), "DSP edit changed the wrong PCM or restarted its playing voice");
+        std::cout << "Mixer DSP PCM " << phase << " mean=" << mean << " expected=" << expected << '\n';
+    };
+    measure("direct", 0.25);
+    mixer.buses[1].effects = {{.id = "EchoA", .parameters = {.kind = Kind::Delay, .delayMs = 25.0, .wet = 0.25F, .dry = 0.5F}},
+        {.id = "EchoB", .parameters = {.kind = Kind::Delay, .delayMs = 50.0, .wet = 0.5F, .dry = 0.25F}}}; save();
+    measure("repeated-delay", 0.25 * 0.75 * 0.75);
+    auto report = Playback::DspReport(scene);
+    Require(report.backendAvailable && report.offline && report.buses.size() == 2U && report.buses[1].activeEffects == 2U
+        && report.buses[1].settingsCurrent && report.buses[1].appliedEffects == mixer.buses[1].effects && report.renderedFrames == frames,
+        "DSP diagnostics reported requested settings instead of actual executed state");
+    mixer.buses[1].effects[0].parameters.bypass = true; save(); measure("bypass-one", 0.25 * 0.75);
+    mixer.buses[1].effects = {{.id = "Equalizer", .parameters = {.kind = Kind::PeakingEqualizer, .cutoffHz = 440.0, .gainDb = 6.0}},
+        {.id = "Gain", .parameters = {.kind = Kind::Compressor, .ratio = 1.0, .makeupDb = 6.0}}}; save();
+    measure("equalizer-compressor", 0.25 * std::pow(10.0, 12.0 / 20.0));
+    const auto applied = mixer.buses[1].effects;
+    mixer.buses[1].effects = {{.id = "UnsupportedRate", .parameters = {.kind = Kind::LowPass, .cutoffHz = 94080.0}}}; save();
+    measure("failed-edit-retains-PCM", 0.25 * std::pow(10.0, 12.0 / 20.0));
+    report = Playback::DspReport(scene);
+    Require(!report.buses[1].settingsCurrent && !report.buses[1].error.empty() && report.buses[1].appliedEffects == applied,
+        "Failed DSP edit was presented as active or silently bypassed");
+    mixer.buses[1].effects = applied; save(); measure("restored-settings", 0.25 * std::pow(10.0, 12.0 / 20.0));
+    Require(Playback::DspReport(scene).buses[1].settingsCurrent, "Returning to applied settings left a stale DSP error");
+    const double frequencyRatio = std::tan(3.141592653589793 * 440.0 / 48000.0)
+        / std::tan(3.141592653589793 * 1000.0 / 48000.0);
+    const double denominator = std::sqrt(1.0 + std::pow(frequencyRatio, 4.0));
+    mixer.buses[1].effects = {{.id = "Low", .parameters = {.kind = Kind::LowPass, .cutoffHz = 1000.0}}};
+    save(); measure("lowpass", 0.25 / denominator);
+    mixer.buses[1].effects = {{.id = "High", .parameters = {.kind = Kind::HighPass, .cutoffHz = 1000.0}}};
+    save(); measure("highpass", 0.25 * frequencyRatio * frequencyRatio / denominator);
+    mixer.buses[1].effects = {{.id = "RoomA", .parameters = {.kind = Kind::Reverb, .wet = 0.0F, .dry = 0.5F}},
+        {.id = "RoomB", .parameters = {.kind = Kind::Reverb, .wet = 0.0F, .dry = 0.5F}}};
+    save(); measure("repeated-reverb-dry", 0.25 * 0.25);
+    const auto peak = [](const auto& pcm) { double result = 0.0; for (float sample : pcm) result = std::max(result, std::abs(static_cast<double>(sample))); return result; };
+    mixer.buses[1].effects = {{.id = "Boost", .parameters = {.kind = Kind::Compressor, .ratio = 1.0, .makeupDb = 12.0}},
+        {.id = "Ceiling", .parameters = {.kind = Kind::Limiter, .releaseMs = 1.0, .ceilingDb = -24.0}}};
+    save(); static_cast<void>(render());
+    const double limited = peak(render());
+    const double ceiling = 0.25 * std::pow(10.0, -24.0 / 20.0);
+    Require(std::abs(limited - ceiling) < 1e-6, "Actual bus limiter did not apply its sample ceiling");
+    std::swap(mixer.buses[1].effects[0], mixer.buses[1].effects[1]); save(); static_cast<void>(render());
+    const double boosted = peak(render());
+    Require(std::abs(boosted - ceiling * std::pow(10.0, 12.0 / 20.0)) < 1e-5
+        && boosted > limited * 3.9 && Playback::IsVoicePlaying(scene, play.voiceId),
+        "Nonlinear effect reorder did not change actual PCM in the authored order");
+    std::cout << "Mixer DSP nonlinear limited=" << limited << " reordered=" << boosted << '\n';
+    mixer.buses[1].effects = {{.id = "Tail", .parameters = {.kind = Kind::Delay, .delayMs = 25.0, .feedback = 0.8F, .wet = 1.0F, .dry = 0.0F}}}; save();
+    for (int block = 0; block < 8; ++block) static_cast<void>(render());
+    Require(Playback::StopVoice(scene, play.voiceId), "DSP source did not stop");
+    Require(peak(render()) > 1e-4, "Stopping a source removed its actual delay tail");
+    mixer.buses[1].mute = true; save(); static_cast<void>(render());
+    Require(peak(render()) == 0.0, "Bus mute did not silence post-effect tails");
+    mixer.buses[1].mute = false; save(); Require(peak(render()) > 1e-6, "Unmuting discarded retained DSP state");
+    mixer.buses[1].effects = {{.id = "Room", .parameters = {.kind = Kind::Reverb, .wet = 1.0F, .dry = 0.0F}}}; save();
+    const auto roomVoice = Playback::PlayOneShot(scene, {.clipAssetId = imported.items.front().id.value, .outputBus = "Effects",
+        .volume = 1.0F, .loop = true, .spatial = false});
+    Require(roomVoice.Succeeded(), "Actual reverb source did not start");
+    for (int block = 0; block < 8; ++block) static_cast<void>(render());
+    Require(Playback::StopVoice(scene, roomVoice.voiceId) && peak(render()) > 1e-5, "Source stop removed the actual reverb tail");
+    mixer.buses[1].mute = true; save(); static_cast<void>(render());
+    Require(peak(render()) == 0.0, "Post-effect mute leaked the reverb tail");
+    mixer.buses[1].mute = false; save(); Require(peak(render()) > 1e-6, "Post-effect unmute discarded the reverb tail");
+    Require(!Playback::RenderOffline(scene, 0U).succeeded && !Playback::RenderOffline(scene, 384001U).succeeded,
+        "Offline PCM frame limits were bypassed");
+    Playback::UnregisterBackend(scene, backend); backend.Shutdown();
+    const auto resources = backend.ResourcesForTesting();
+    Require(resources.buses == 0U && resources.voices == 0U && resources.sourceSounds == 0U, "DSP shutdown retained native routing resources");
+    std::cout << "Mixer DSP runtime realFrames=" << frames << " voicePreserved=1 failedEditPreserved=1 mutedTail=0 shutdownBuses=0\n";
+}
+
+void RunMixerDspConcurrentTest(bool deviceCallback) {
+    struct Context {
+        ma_context native{}; bool ready = false;
+        ~Context() { if (ready) ma_context_uninit(&native); }
+    } context;
+    if (deviceCallback) {
+        const ma_backend backend = ma_backend_null;
+        context.ready = ma_context_init(&backend, 1U, nullptr, &context.native) == MA_SUCCESS;
+        Require(context.ready, "Native null audio device context did not initialize");
+    }
+    kb::scene::Scene scene;
+    kb::audio_miniaudio::MiniaudioEngine engine;
+    engine.Initialize(!deviceCallback, deviceCallback ? &context.native : nullptr);
+    Require(engine.IsInitialized() && (!deviceCallback || engine.IsPlaybackAvailable()),
+        "DSP device callback test fell back instead of starting its native device");
+    kb::audio_miniaudio::MiniaudioBusRegistry buses{engine};
+    kb::audio::AudioMixerAsset mixer; mixer.buses = {{.name = "Output", .volume = 0.5F}};
+    const auto path = TestRoot() / (deviceCallback ? "DspDeviceThread.kbmixer" : "DspReadThread.kbmixer");
+    constexpr kb::assets::AssetId mixerId{9601U};
+    Require(kb::audio::AudioMixerAssetIO::Save(path, mixer)
+        && scene.Assets().Manager().RegisterAsset({.id = mixerId, .type = kb::audio::kAudioMixerAssetType,
+            .name = "ConcurrentMixer", .virtualPath = "/Game/Audio/ConcurrentMixer.kbmixer", .physicalPath = path, .contentHash = 1U}),
+        "Concurrent DSP mixer did not register");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerId.value);
+    Require(buses.Sync(scene, true), "Concurrent DSP bus did not initialize");
+    const auto group = buses.Resolve("Output").group;
+    Require(group != nullptr, "Concurrent DSP route is unavailable");
+    struct Source {
+        kb::audio_miniaudio::MiniaudioEngine& engine;
+        ma_waveform wave{}; ma_data_source_node node{};
+        bool waveReady = false, nodeReady = false;
+        ~Source() {
+            const auto lock = engine.LockGraph();
+            if (nodeReady) ma_data_source_node_uninit(&node, nullptr);
+            if (waveReady) ma_waveform_uninit(&wave);
+        }
+    } source{engine};
+    const auto rate = ma_engine_get_sample_rate(&engine.Native());
+    const auto channels = ma_engine_get_channels(&engine.Native());
+    Require(channels == 2U, "Concurrent DSP fixture requires the configured stereo output");
+    const auto waveConfig = ma_waveform_config_init(ma_format_f32, channels, rate, ma_waveform_type_sine,
+        deviceCallback ? 0.0 : 0.02, 440.0);
+    source.waveReady = ma_waveform_init(&waveConfig, &source.wave) == MA_SUCCESS;
+    Require(source.waveReady, "Concurrent DSP source did not initialize");
+    const auto nodeConfig = ma_data_source_node_config_init(&source.wave);
+    source.nodeReady = ma_data_source_node_init(ma_engine_get_node_graph(&engine.Native()), &nodeConfig, nullptr, &source.node) == MA_SUCCESS;
+    Require(source.nodeReady, "Concurrent DSP source node did not initialize");
+    {
+        const auto lock = engine.LockGraph();
+        Require(ma_node_attach_output_bus(&source.node, 0U, group, 0U) == MA_SUCCESS, "Concurrent DSP source did not attach");
+    }
+    std::unique_ptr<OfflineEnginePump> pump;
+    if (!deviceCallback) pump = std::make_unique<OfflineEnginePump>(engine);
+    const auto waitForRead = [&](std::uint64_t previous) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{500};
+        while (engine.RenderedFrames() <= previous && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+        Require(engine.RenderedFrames() > previous, "DSP processing thread did not execute actual PCM reads");
+    };
+    waitForRead(0U);
+    const auto previous = engine.RenderedFrames(); const auto generation = buses.Generation();
+    for (std::size_t edit = 0U; edit < 64U; ++edit) {
+        kb::audio::AudioDspParameters parameters{.kind = static_cast<kb::audio::AudioDspKind>(edit % 7U)};
+        parameters.bypass = edit % 5U == 0U;
+        mixer.buses[0].effects = {{.id = "Stage", .parameters = parameters}};
+        if (edit % 3U == 0U) mixer.buses[0].effects.push_back({.id = "Echo", .parameters = {
+            .kind = kb::audio::AudioDspKind::Delay, .delayMs = 1.0, .feedback = 0.5F}});
+        if (edit % 4U == 0U) mixer.buses[0].effects.clear();
+        Require(kb::audio::AudioMixerAssetIO::Save(path, mixer) && scene.Assets().Manager().Unload(mixerId)
+            && scene.Assets().Manager().Load<kb::audio::AudioMixerAsset>(mixerId).IsLoaded(), "Concurrent DSP edit did not reload");
+        Require(!buses.Sync(scene, true) && buses.Generation() == generation && buses.Resolve("Output").group == group,
+            "DSP-only edit rebuilt the native group while PCM was running");
+        const auto report = buses.DspReport();
+        Require(report.buses[0].initialized && report.buses[0].settingsCurrent && report.buses[0].error.empty()
+            && report.buses[0].appliedEffects == mixer.buses[0].effects, "Concurrent DSP edit was skipped or bypassed");
+    }
+    waitForRead(previous);
+    if (pump != nullptr) {
+        pump->Stop();
+        Require(pump->Finite() && pump->Frames() > 0U && pump->Nonzero() > 0U,
+            "Concurrent DSP readback was non-finite, silent or did not execute");
+    }
+    std::cout << "Mixer DSP concurrent deviceCallback=" << deviceCallback << " edits=64 actualFrames=" << engine.RenderedFrames()
+        << " finiteReadback=" << (pump != nullptr ? "verified" : "separate-offline-test") << " groupPreserved=1\n";
+}
+
 void RunBusTopologyPcmTest() {
     const auto tonePath = TestRoot() / "RoutingTone.wav";
     WriteToneWav(tonePath);
@@ -694,8 +965,8 @@ void RunSnapshotTransitionPcmTest() {
     Require(Access::SetActiveSnapshot(scene, "Quiet"), "Snapshot PCM selection failed");
     kb::audio_miniaudio::MiniaudioEngine engine;
     engine.Initialize(true);
-    kb::audio_miniaudio::MiniaudioBusRegistry buses;
-    Require(buses.Sync(engine.Native(), scene, true), "Snapshot PCM graph could not initialize");
+    kb::audio_miniaudio::MiniaudioBusRegistry buses{engine};
+    Require(buses.Sync(scene, true), "Snapshot PCM graph could not initialize");
     const auto route = buses.Resolve("Effects");
     Require(route.Succeeded() && route.group != nullptr, "Snapshot PCM route is unavailable");
     auto encoded = std::make_shared<kb::audio::AudioClipAsset>();
@@ -711,7 +982,7 @@ void RunSnapshotTransitionPcmTest() {
     sound.Apply(kb::audio_miniaudio::MiniaudioSoundSettings{.volume = 0.25F, .loop = true, .spatial = false});
     Require(sound.Start() == MA_SUCCESS, "Snapshot PCM sound could not start");
     const auto measure = [&](std::string_view label, double expectedGain) {
-        Require(!buses.Sync(engine.Native(), scene, true), "A snapshot edit unnecessarily rebuilt the routing graph");
+        Require(!buses.Sync(scene, true), "A snapshot edit unnecessarily rebuilt the routing graph");
         const double expected = (3276.0 / 32768.0) * expectedGain / std::sqrt(2.0);
         std::size_t consecutive = 0U;
         double rms = 0.0;
@@ -2205,7 +2476,7 @@ void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std
     WriteTruncatedAudio(corruptPath);
     RegisterClip(scene, 8303U, corruptPath);
     kb::audio_miniaudio::MiniaudioClipResolver resolver;
-    kb::audio_miniaudio::MiniaudioBusRegistry buses;
+    kb::audio_miniaudio::MiniaudioBusRegistry buses{engine};
     kb::audio_miniaudio::MiniaudioSourceRegistry sources;
     OfflineEnginePump pump{ engine };
 
@@ -2428,7 +2699,7 @@ void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std
             }),
         "Audio test mixer registration failed");
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 8399U);
-    Require(buses.Sync(engine.Native(), scene, true), "Audio test mixer topology was not built");
+    Require(buses.Sync(scene, true), "Audio test mixer topology was not built");
     Require(buses.Resolve("Effects").status == kb::audio_miniaudio::MiniaudioBusRegistry::RouteStatus::Routed
             && buses.Resolve("Missing").status == kb::audio_miniaudio::MiniaudioBusRegistry::RouteStatus::UnknownBus,
         "Mixer route query did not distinguish routed and unknown buses");
@@ -2626,10 +2897,10 @@ void RunMultiSourceStressTest(const std::filesystem::path& clipPath) {
     }
 
     kb::audio_miniaudio::MiniaudioClipResolver resolver;
-    kb::audio_miniaudio::MiniaudioBusRegistry buses;
+    kb::audio_miniaudio::MiniaudioBusRegistry buses{engine};
     kb::audio_miniaudio::MiniaudioSourceRegistry sources;
     OfflineEnginePump pump{ engine };
-    Require(buses.Sync(engine.Native(), scene, true),
+    Require(buses.Sync(scene, true),
         "Multi-source stress routing graph was not created");
     for (std::size_t index = 0U; index < kSourceCount; index += 6U) {
         Require(sources.PlaySource(engine.Native(), scene, entities[index], resolver, buses, true).Succeeded(),
@@ -2849,6 +3120,14 @@ int RunTests(int argc, char** argv) {
     const std::filesystem::path clipPath = TestRoot() / "Runtime.wav";
     WriteSilentWav(clipPath);
     const std::string_view filter = argc > 1 ? std::string_view{ argv[1] } : std::string_view{};
+    if (filter.empty() || filter == "mixer-dsp") {
+        RunMixerDspAssetTest();
+        RunMixerDspRuntimeTest();
+    }
+    if (filter.empty() || filter == "mixer-dsp-concurrent") {
+        RunMixerDspConcurrentTest(false);
+        RunMixerDspConcurrentTest(true);
+    }
     if (filter.empty() || filter == "formats") {
         RunAdvertisedFormatDecodeTest();
         RunFormatRejectionTest();

@@ -21,7 +21,7 @@ namespace {
     for (std::size_t index = 0U; index < left.buses.size(); ++index) {
         const kb::audio::AudioMixerBus& a = left.buses[index];
         const kb::audio::AudioMixerBus& b = right.buses[index];
-        if (a.name != b.name || a.parentBus != b.parentBus || a.volume != b.volume || a.mute != b.mute) {
+        if (a.name != b.name || a.parentBus != b.parentBus || a.volume != b.volume || a.mute != b.mute || a.effects != b.effects) {
             return false;
         }
     }

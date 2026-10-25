@@ -1,4 +1,5 @@
 #include "scene/MiniaudioBusRegistry.hpp"
+#include "runtime/MiniaudioEngine.hpp"
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <span>
+#include <new>
 
 namespace kb::audio_miniaudio {
 namespace {
@@ -24,7 +26,8 @@ MiniaudioBusRegistry::~MiniaudioBusRegistry() {
     DestroyGroups();
 }
 
-bool MiniaudioBusRegistry::Sync(ma_engine& engine, kb::scene::Scene& scene, bool playbackAvailable) {
+bool MiniaudioBusRegistry::Sync(kb::scene::Scene& scene, bool playbackAvailable) {
+    ma_engine& engine = engine_.Native();
     const std::uint64_t mixerAssetId = kb::scene::SceneAudioMixerAccess::ActiveMixer(scene);
     if (!playbackAvailable || mixerAssetId == 0U) {
         return TearDown();
@@ -85,6 +88,7 @@ bool MiniaudioBusRegistry::Sync(ma_engine& engine, kb::scene::Scene& scene, bool
                     }
                 }
                 auto group = std::make_unique<ma_sound_group>();
+                const auto lock = engine_.LockGraph();
                 if (ma_sound_group_init(&engine, 0U, parentGroup, group.get()) == MA_SUCCESS) {
                     buses_.push_back(BusRecord{ .name = bus.name, .parent = bus.parentBus, .group = std::move(group) });
                 } else {
@@ -149,9 +153,88 @@ bool MiniaudioBusRegistry::Sync(ma_engine& engine, kb::scene::Scene& scene, bool
                 break;
             }
         }
-        ma_sound_group_set_volume(record.group.get(), bus->mute ? 0.0F : volume);
+        SyncEffects(record, bus->effects, bus->mute ? 0.0F : volume);
     }
     return rebuilt;
+}
+
+void MiniaudioBusRegistry::SyncEffects(BusRecord& record,
+    const std::vector<kb::audio::AudioDspEffect>& requested, float volume) {
+    if (record.effects != nullptr && record.appliedEffects == requested) {
+        record.effectError.clear();
+        record.settingsCurrent = true;
+        static_cast<void>(record.effects->SetOutputVolume(volume, record.group.get()));
+        return;
+    }
+    record.settingsCurrent = false;
+    const auto now = std::chrono::steady_clock::now();
+    if (record.attemptedEffects == requested && now < record.nextEffectAttempt) {
+        if (record.effectError.empty()) record.effectError = "DSP update is awaiting retry";
+        if (record.effects != nullptr) static_cast<void>(record.effects->SetOutputVolume(volume, record.group.get()));
+        return;
+    }
+    record.nextEffectAttempt = now + std::chrono::seconds{1};
+    ma_node* target = ma_engine_get_endpoint(&engine_.Native());
+    if (!record.parent.empty()) {
+        const auto parent = std::find_if(buses_.begin(), buses_.end(), [&](const auto& bus) { return bus.name == record.parent; });
+        if (parent == buses_.end() || parent->group == nullptr) {
+            record.effectError = "DSP parent bus is unavailable";
+            return;
+        }
+        target = parent->group.get();
+    }
+    std::unique_ptr<MiniaudioFilterChain> candidate;
+    std::vector<kb::audio::AudioDspEffect> accepted;
+    ma_result result = MA_OUT_OF_MEMORY;
+    try {
+        accepted = requested;
+        record.attemptedEffects = requested;
+        std::vector<MiniaudioFilterDesc> parameters;
+        parameters.reserve(requested.size());
+        for (const auto& effect : requested) parameters.push_back(effect.parameters);
+        candidate = std::make_unique<MiniaudioFilterChain>();
+        result = candidate->Initialize(*ma_engine_get_node_graph(&engine_.Native()),
+            ma_engine_get_sample_rate(&engine_.Native()), parameters);
+    } catch (const std::bad_alloc&) {
+        result = MA_OUT_OF_MEMORY;
+    }
+    if (result == MA_SUCCESS) {
+        // Candidate construction stays outside the read exclusion. The callback
+        // sees either complete routing, and old state is freed after detachment.
+        const auto lock = engine_.LockGraph();
+        if (record.effects != nullptr) result = record.effects->DetachOutput(record.group.get());
+        else result = ma_node_detach_output_bus(record.group.get(), 0U);
+        if (result == MA_SUCCESS) result = ma_node_set_output_bus_volume(record.group.get(), 0U,
+            candidate->ActiveNodeCount() == 0U ? volume : 1.0F);
+        if (result == MA_SUCCESS) result = candidate->SetOutputVolume(volume, record.group.get());
+        if (result == MA_SUCCESS) result = candidate->Attach(record.group.get(), target);
+        if (result != MA_SUCCESS) {
+            static_cast<void>(candidate->DetachOutput(record.group.get()));
+            if (record.effects != nullptr) {
+                static_cast<void>(ma_node_set_output_bus_volume(record.group.get(), 0U,
+                    record.effects->ActiveNodeCount() == 0U ? volume : 1.0F));
+                if (record.effects->Attach(record.group.get(), target) == MA_SUCCESS) {
+                    static_cast<void>(record.effects->SetOutputVolume(volume, record.group.get()));
+                } else {
+                    record.effects.reset();
+                }
+            }
+        }
+    }
+    if (result == MA_SUCCESS) {
+        record.effects.swap(candidate);
+        record.appliedEffects.swap(accepted);
+        record.effectError.clear();
+        record.settingsCurrent = true;
+    } else {
+        record.effectError = ma_result_description(result);
+        if (record.effects == nullptr) {
+            const auto lock = engine_.LockGraph();
+            static_cast<void>(ma_node_set_output_bus_volume(record.group.get(), 0U, 0.0F));
+        } else {
+            static_cast<void>(record.effects->SetOutputVolume(volume, record.group.get()));
+        }
+    }
 }
 
 bool MiniaudioBusRegistry::RoutingWillChange(kb::scene::Scene& scene, bool playbackAvailable) const {
@@ -187,6 +270,14 @@ MiniaudioBusRegistry::Route MiniaudioBusRegistry::Resolve(std::string_view busNa
     }
     for (BusRecord& record : buses_) {
         if (record.name == busName) {
+            const BusRecord* current = &record;
+            for (std::size_t depth = 0U; depth < buses_.size(); ++depth) {
+                if (current->effects == nullptr) return Route{.status = RouteStatus::InitializationFailed};
+                if (current->parent.empty()) break;
+                const auto parent = std::find_if(buses_.begin(), buses_.end(), [&](const auto& bus) { return bus.name == current->parent; });
+                if (parent == buses_.end()) return Route{.status = RouteStatus::InitializationFailed};
+                current = &*parent;
+            }
             return Route{ .status = RouteStatus::Routed, .group = record.group.get() };
         }
     }
@@ -197,9 +288,23 @@ void MiniaudioBusRegistry::StopAll() noexcept {
     static_cast<void>(TearDown());
 }
 
+kb::audio::AudioDspRuntimeReport MiniaudioBusRegistry::DspReport() const {
+    kb::audio::AudioDspRuntimeReport report{.backendAvailable = true, .mixerAssetId = activeMixerAssetId_};
+    report.buses.reserve(buses_.size());
+    for (const auto& bus : buses_) {
+        report.buses.push_back({.bus = bus.name, .initialized = bus.effects != nullptr,
+            .settingsCurrent = bus.effects != nullptr && bus.settingsCurrent,
+            .activeEffects = bus.effects != nullptr ? bus.effects->ActiveNodeCount() : 0U,
+            .appliedEffects = bus.appliedEffects, .error = bus.effectError});
+    }
+    return report;
+}
+
 void MiniaudioBusRegistry::DestroyGroups() noexcept {
+    const auto lock = engine_.LockGraph();
     // Children before parents - creation appended parents first, so destroy in reverse.
     for (auto iterator = buses_.rbegin(); iterator != buses_.rend(); ++iterator) {
+        iterator->effects.reset();
         if (iterator->group != nullptr) {
             ma_sound_group_uninit(iterator->group.get());
         }

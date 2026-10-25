@@ -1,6 +1,9 @@
 #include "CliCommands.hpp"
+#include "CliAudioJson.hpp"
 
 #include "engine/core/JsonValue.hpp"
+#include "engine/audio/AudioPlayback.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/assets/AssetRegistry.hpp"
@@ -16,6 +19,8 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
 #include <filesystem>
+#include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <optional>
 #include <string>
@@ -157,7 +162,7 @@ struct DiagnosticPrinter {
     return report;
 }
 
-int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport) {
+int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr) {
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
         io.err << "error: run requires --project <dir>\n";
@@ -177,7 +182,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     float deltaSeconds = 1.0F / 60.0F;
     if (const std::optional<std::string> dtOption = arguments.Option("--dt"); dtOption.has_value()) {
         const std::optional<float> parsed = ParseFloat(*dtOption);
-        if (!parsed.has_value() || *parsed <= 0.0F) {
+        if (!parsed.has_value() || !std::isfinite(*parsed) || *parsed <= 0.0F) {
             io.err << "error: --dt expects a positive number of seconds\n";
             return 1;
         }
@@ -185,6 +190,9 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     }
 
     const bool quiet = arguments.Flag("--quiet");
+    if (audioReport != nullptr && frames > 600) {
+        io.err << "error: an audio execution probe accepts at most 600 simulation frames\n"; return 1;
+    }
 
     std::error_code pathError;
     const std::filesystem::path projectRoot =
@@ -313,6 +321,25 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         return 1;
     }
 
+    std::uint32_t pcmFramesPerTick = 0U;
+    if (audioReport != nullptr) {
+        if (!kb::audio::AudioPlayback::ConfigureOffline(scene)) {
+            io.err << "error: the active audio provider could not configure offline rendering\n"; return 1;
+        }
+        const auto format = kb::audio::AudioPlayback::DspReport(scene);
+        double requested = std::round(static_cast<double>(format.sampleRate) * deltaSeconds);
+        if (const auto option = arguments.Option("--pcm-frames"); option.has_value()) {
+            const auto parsed = ParseInt(*option);
+            if (!parsed.has_value()) { io.err << "error: --pcm-frames requires a positive integer\n"; return 1; }
+            requested = *parsed;
+        }
+        if (requested < 1.0 || requested > kb::audio::kMaxOfflineAudioFramesPerRead
+            || requested * frames > 1920000.0) {
+            io.err << "error: audio probes require 1..384000 PCM frames per tick and at most 1920000 total frames\n"; return 1;
+        }
+        pcmFramesPerTick = static_cast<std::uint32_t>(requested);
+    }
+
     kb::script::ScriptRuntimeHost host{ scene };
     RegisterStdoutLog(host, io.out);
     if (!host.Succeeded()) {
@@ -350,11 +377,35 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     static_cast<void>(host.DrainSceneSystemDiagnostics());
 
     std::uint64_t updateWallNanoseconds = 0U;
+    std::uint64_t audioFrames = 0U, audioSamples = 0U, audioAboveUnit = 0U, mixWallNanoseconds = 0U;
+    double audioEnergy = 0.0, audioPeak = 0.0;
+    bool audioSucceeded = true;
+    std::string audioError;
+    int completedFrames = 0;
     for (int frame = 1; frame <= frames; ++frame) {
         const auto updateStarted = std::chrono::steady_clock::now();
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
         updateWallNanoseconds += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - updateStarted).count());
+        ++completedFrames;
+        if (audioReport != nullptr) {
+            const auto started = std::chrono::steady_clock::now();
+            const auto pcm = kb::audio::AudioPlayback::RenderOffline(scene, pcmFramesPerTick);
+            mixWallNanoseconds += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started).count());
+            audioFrames += pcm.frames;
+            audioSamples += pcm.samples.size();
+            for (const float sample : pcm.samples) {
+                const double value = sample;
+                audioPeak = std::max(audioPeak, std::abs(value)); audioEnergy += value * value;
+                if (std::abs(value) > 1.0) ++audioAboveUnit;
+            }
+            if (!pcm.succeeded || pcm.frames != pcmFramesPerTick) {
+                audioSucceeded = false;
+                audioError = pcm.error.empty() ? "no complete audio PCM block was produced" : pcm.error;
+                io.err << "error: " << audioError << '\n';
+            }
+        }
         const kb::script::ScriptRuntimeExecutionResult* result = host.InstalledSceneSystemLastResult();
         const kb::script::ScriptRuntimeAssetPrepareResult* prepare = host.InstalledSceneSystemLastPrepareResult();
         if (result == nullptr || prepare == nullptr) {
@@ -373,11 +424,23 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         printer.PrintPrepare(prepare->diagnostics, static_cast<std::size_t>(frame));
         printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), static_cast<std::size_t>(frame));
         static_cast<void>(host.DrainSceneSystemDiagnostics());
+        if (!audioSucceeded) break;
     }
 
     const auto particleSnapshot = particleReport != nullptr
         ? kb::particles::ParticlePlayback::ReadRenderSnapshot(scene) : nullptr;
     const bool particleProviderAvailable = kb::particles::ParticlePlayback::HasBackend(scene);
+    const auto audioSnapshot = audioReport != nullptr ? kb::audio::AudioPlayback::DspReport(scene) : kb::audio::AudioDspRuntimeReport{};
+    if (audioReport != nullptr) {
+        audioSucceeded = audioSucceeded && audioSnapshot.backendAvailable && audioFrames > 0U
+            && audioSnapshot.mixerAssetId == kb::scene::SceneAudioMixerAccess::ActiveMixer(scene);
+        for (const auto& bus : audioSnapshot.buses) {
+            if (!bus.initialized || !bus.settingsCurrent) {
+                audioSucceeded = false;
+                io.err << "error: bus " << bus.bus << " DSP is not current: " << bus.error << '\n';
+            }
+        }
+    }
     if (!host.DispatchShutdownLifecycle(0.0F)) {
         io.err << "error: installed script scene system could not dispatch shutdown\n";
         return 1;
@@ -391,7 +454,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     printer.PrintScript(shutdown->diagnostics, static_cast<std::size_t>(frames) + 1U);
     printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), static_cast<std::size_t>(frames) + 1U);
 
-    io.out << "done: " << frames << " frames, " << executedBehaviours << " behaviour executions, "
+    io.out << "done: " << completedFrames << " frames, " << executedBehaviours << " behaviour executions, "
            << emittedEvents << " events, " << printer.total << " diagnostics\n";
     if (particleReport != nullptr) {
         *particleReport << ParticleExecutionReport(particleSnapshot, particleProviderAvailable,
@@ -401,17 +464,38 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
             return 1;
         }
     }
-    return printer.total == 0U ? 0 : 1;
+    if (audioReport != nullptr) {
+        auto report = AudioRuntimeJson(audioSnapshot);
+        using kb::core::JsonValue;
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && audioSucceeded));
+        report.Set("error", JsonValue::MakeString(audioError));
+        report.Set("simulation_frames", JsonValue::MakeNumber(frames));
+        report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
+        report.Set("pcm_frames", JsonValue::MakeNumber(static_cast<double>(audioFrames)));
+        report.Set("peak", JsonValue::MakeNumber(audioPeak));
+        report.Set("rms", JsonValue::MakeNumber(audioSamples == 0U ? 0.0 : std::sqrt(audioEnergy / static_cast<double>(audioSamples))));
+        report.Set("above_unit_samples", JsonValue::MakeNumber(static_cast<double>(audioAboveUnit)));
+        report.Set("mix_wall_ns", JsonValue::MakeString(std::to_string(mixWallNanoseconds)));
+        *audioReport << report.Dump() << '\n';
+        if (!audioReport->good()) { io.err << "error: audio execution report could not be written\n"; return 1; }
+    }
+    return printer.total == 0U && audioSucceeded ? 0 : 1;
 }
 
 } // namespace
 
 int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     const auto report = arguments.Option("--report");
-    if (report && *report != "particles") {
-        io.err << "error: --report expects particles\n";
+    if (arguments.Flag("--dry-run")) { io.err << "error: run does not support --dry-run\n"; return 1; }
+    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles or audio\n"; return 1; }
+    if (arguments.Option("--pcm-frames").has_value() && (!report || *report != "audio")) {
+        io.err << "error: --pcm-frames requires --report audio\n"; return 1;
+    }
+    if (report && *report != "particles" && *report != "audio") {
+        io.err << "error: --report expects particles or audio\n";
         return 1;
     }
+    if (report && *report == "audio") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, &io.out);
     return report ? RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, &io.out)
                   : RunSceneRuntime(arguments, io, nullptr);
 }

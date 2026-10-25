@@ -171,6 +171,25 @@ AudioDeviceStatus AudioPlayback::Reinitialize(kb::scene::Scene& scene) noexcept 
     return backend == nullptr ? AudioDeviceStatus::BackendUnavailable : backend->Reinitialize(scene);
 }
 
+bool AudioPlayback::ConfigureOffline(kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread(scene);
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->ConfigureOffline(scene);
+}
+
+AudioOfflinePcm AudioPlayback::RenderOffline(kb::scene::Scene& scene, std::uint32_t frames) {
+    AssertOwnerThread(scene);
+    if (frames == 0U || frames > kMaxOfflineAudioFramesPerRead) return {.error = "offline audio frame count must be between 1 and 384000"};
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend == nullptr ? AudioOfflinePcm{.error = "audio backend is unavailable"} : backend->RenderOffline(scene, frames);
+}
+
+AudioDspRuntimeReport AudioPlayback::DspReport(kb::scene::Scene& scene) {
+    AssertOwnerThread(scene);
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend == nullptr ? AudioDspRuntimeReport{} : backend->DspReport(scene);
+}
+
 bool AudioPlayback::StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
     AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);

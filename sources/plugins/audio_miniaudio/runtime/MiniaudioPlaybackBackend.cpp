@@ -4,6 +4,9 @@
 #include "engine/scene/SceneSystemContext.hpp"
 
 #include <cassert>
+#include <algorithm>
+#include <cmath>
+#include <new>
 #if !defined(NDEBUG)
 #include <thread>
 #endif
@@ -47,7 +50,7 @@ void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) 
 
     // A device can disappear between ticks. Use one availability snapshot for the whole
     // update so routing, source and voice decisions cannot disagree within this tick.
-    const bool playbackAvailable = engine_.IsPlaybackAvailable();
+    const bool playbackAvailable = PlaybackAvailable();
     // LIB-150: advance the snapshot transition with the scene's own delta time BEFORE the
     // bus sync consumes it - deterministic, never wall clock.
     static_cast<void>(kb::scene::SceneAudioMixerAccess::AdvanceSnapshotTransition(context.GetScene(), context.DeltaSeconds()));
@@ -116,6 +119,7 @@ void MiniaudioPlaybackBackend::Shutdown() noexcept {
     listenerSynchronizer_.Reset();
     audioSpace_.Reset();
     engine_.Shutdown();
+    offline_ = false;
 }
 
 void MiniaudioPlaybackBackend::SyncRouting(kb::scene::Scene& scene, bool routingAvailable) {
@@ -123,7 +127,7 @@ void MiniaudioPlaybackBackend::SyncRouting(kb::scene::Scene& scene, bool routing
         sourceRegistry_.ReleaseNativeResources();
         voicePool_.StopAll();
     }
-    static_cast<void>(busRegistry_.Sync(engine_.Native(), scene, routingAvailable));
+    static_cast<void>(busRegistry_.Sync(scene, routingAvailable));
 }
 
 kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShot(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc) {
@@ -135,7 +139,7 @@ kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShot(kb::scene::Scen
     if (!engine_.IsInitialized()) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio backend is not initialized" };
     }
-    if (!engine_.IsPlaybackAvailable()) {
+    if (!PlaybackAvailable()) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio playback device is not available" };
     }
     return PlayOneShotInternal(scene, desc, true);
@@ -180,7 +184,7 @@ kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::PlaySource(kb::sce
     if (!engine_.IsInitialized()) {
         return { .status = kb::audio::AudioSourceControlStatus::DeviceUnavailable };
     }
-    return PlaySourceInternal(scene, entity, engine_.IsPlaybackAvailable());
+    return PlaySourceInternal(scene, entity, PlaybackAvailable());
 }
 
 kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::PlaySourceInternal(
@@ -193,22 +197,22 @@ kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::PlaySourceInternal
 
 kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::PauseSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
     AssertOwnerThread();
-    return sourceRegistry_.PauseSource(scene, entity, engine_.IsPlaybackAvailable());
+    return sourceRegistry_.PauseSource(scene, entity, PlaybackAvailable());
 }
 
 kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::ResumeSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
     AssertOwnerThread();
-    return sourceRegistry_.ResumeSource(scene, entity, engine_.IsPlaybackAvailable());
+    return sourceRegistry_.ResumeSource(scene, entity, PlaybackAvailable());
 }
 
 kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::StopSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
     AssertOwnerThread();
-    return sourceRegistry_.StopSource(scene, entity, engine_.IsPlaybackAvailable());
+    return sourceRegistry_.StopSource(scene, entity, PlaybackAvailable());
 }
 
 kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::IsSourcePlaying(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
     AssertOwnerThread();
-    return sourceRegistry_.IsSourcePlaying(scene, entity, engine_.IsPlaybackAvailable());
+    return sourceRegistry_.IsSourcePlaying(scene, entity, PlaybackAvailable());
 }
 
 kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::DeviceStatus() const noexcept {
@@ -231,8 +235,60 @@ kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeInternal(kb::
     listenerSynchronizer_.Reset();
     audioSpace_.Reset();
     engine_.Shutdown();
+    offline_ = false;
     engine_.Initialize(forceNoDevice);
     return engine_.Status();
+}
+
+bool MiniaudioPlaybackBackend::PlaybackAvailable() const noexcept {
+    return engine_.IsPlaybackAvailable() || (offline_ && engine_.IsInitialized());
+}
+
+bool MiniaudioPlaybackBackend::ConfigureOffline(kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread();
+    if (!offline_) static_cast<void>(ReinitializeInternal(scene, true));
+    offline_ = engine_.IsInitialized();
+    return offline_;
+}
+
+kb::audio::AudioOfflinePcm MiniaudioPlaybackBackend::RenderOffline(kb::scene::Scene& scene, std::uint32_t frames) {
+    AssertOwnerThread();
+    if (!offline_ || !engine_.IsInitialized()) return {.error = "configure offline audio before rendering"};
+    if (frames == 0U || frames > kb::audio::kMaxOfflineAudioFramesPerRead) return {.error = "offline audio frame count must be between 1 and 384000"};
+    kb::scene::SceneSystemContext context{scene, 0.0F};
+    OnUpdate(context);
+    kb::audio::AudioOfflinePcm output{.sampleRate = ma_engine_get_sample_rate(&engine_.Native()), .channels = ma_engine_get_channels(&engine_.Native())};
+    try {
+        output.samples.resize(static_cast<std::size_t>(frames) * output.channels);
+    } catch (const std::bad_alloc&) {
+        output.error = "offline PCM allocation failed";
+        return output;
+    }
+    ma_uint64 read = 0U;
+    const auto result = engine_.ReadPcm(output.samples.data(), frames, &read);
+    if ((result != MA_SUCCESS && result != MA_AT_END) || read > frames) {
+        output.samples.clear(); output.error = ma_result_description(result); return output;
+    }
+    output.samples.resize(static_cast<std::size_t>(read) * output.channels);
+    if (!std::all_of(output.samples.begin(), output.samples.end(), [](float value) { return std::isfinite(value); })) {
+        output.samples.clear(); output.error = "audio graph produced non-finite PCM"; return output;
+    }
+    output.frames = read;
+    output.succeeded = true;
+    return output;
+}
+
+kb::audio::AudioDspRuntimeReport MiniaudioPlaybackBackend::DspReport(kb::scene::Scene& scene) {
+    AssertOwnerThread();
+    static_cast<void>(scene); // Observe installed state without committing a pending edit.
+    auto report = busRegistry_.DspReport();
+    report.offline = offline_;
+    report.renderedFrames = engine_.RenderedFrames();
+    if (engine_.IsInitialized()) {
+        report.sampleRate = ma_engine_get_sample_rate(&engine_.Native());
+        report.channels = ma_engine_get_channels(&engine_.Native());
+    }
+    return report;
 }
 
 #if defined(KB_AUDIO_MINIAUDIO_TESTING)
@@ -300,7 +356,7 @@ MiniaudioPlaybackBackend::PumpResultForTesting MiniaudioPlaybackBackend::PumpFra
     }
     std::vector<float> samples(static_cast<std::size_t>(frameCount) * 2U);
     ma_uint64 framesRead = 0U;
-    const ma_result result = ma_engine_read_pcm_frames(&engine_.Native(), samples.data(), frameCount, &framesRead);
+    const ma_result result = engine_.ReadPcm(samples.data(), frameCount, &framesRead);
     if ((result != MA_SUCCESS && result != MA_AT_END) || framesRead == 0U) {
         return {};
     }

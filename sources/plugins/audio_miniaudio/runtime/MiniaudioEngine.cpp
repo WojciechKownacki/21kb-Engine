@@ -6,6 +6,30 @@
 
 namespace kb::audio_miniaudio {
 
+void MiniaudioEngine::ProcessDevice(ma_device* device, void* output, const void* input, ma_uint32 frames) {
+    static_cast<void>(input);
+    if (output == nullptr) return;
+    auto& engine = *static_cast<ma_engine*>(device->pUserData);
+    auto& self = *static_cast<MiniaudioEngine*>(engine.pProcessUserData);
+    ma_uint64 read = 0U;
+    static_cast<void>(self.ReadPcm(static_cast<float*>(output), frames, &read));
+    if (read < frames) {
+        const auto channels = ma_engine_get_channels(&engine);
+        ma_silence_pcm_frames(static_cast<float*>(output) + read * channels, frames - read, ma_format_f32, channels);
+    }
+}
+
+ma_result MiniaudioEngine::ReadPcm(float* output, ma_uint64 frames, ma_uint64* framesRead) {
+    const auto lock = LockGraph();
+    ma_uint64 read = 0U;
+    const auto result = ma_engine_read_pcm_frames(&engine_, output, frames, &read);
+    renderedFrames_.fetch_add(read, std::memory_order_relaxed);
+    if (framesRead != nullptr) *framesRead = read;
+    return result;
+}
+
+std::unique_lock<std::mutex> MiniaudioEngine::LockGraph() { return std::unique_lock{graphMutex_}; }
+
 #if defined(__EMSCRIPTEN__)
 void MiniaudioEngine::ObserveOutput(void* user, float*, ma_uint64 frameCount) noexcept {
     if (frameCount == 0U) {
@@ -23,12 +47,16 @@ MiniaudioEngine::~MiniaudioEngine() {
     Shutdown();
 }
 
-void MiniaudioEngine::Initialize(bool forceNoDevice) {
+void MiniaudioEngine::Initialize(bool forceNoDevice, ma_context* context) {
     if (initialized_) {
         return;
     }
 
+    renderedFrames_.store(0U, std::memory_order_relaxed);
     ma_engine_config config = ma_engine_config_init();
+    config.pContext = context;
+    config.dataCallback = &MiniaudioEngine::ProcessDevice;
+    config.pProcessUserData = this;
     ma_result result = MA_ERROR;
     if (!forceNoDevice) {
 #if defined(__EMSCRIPTEN__)
@@ -40,6 +68,7 @@ void MiniaudioEngine::Initialize(bool forceNoDevice) {
     }
     if (forceNoDevice || result != MA_SUCCESS) {
         config = ma_engine_config_init();
+        config.pProcessUserData = this;
         config.noDevice = MA_TRUE;
         config.channels = 2U;
         config.sampleRate = 48000U;

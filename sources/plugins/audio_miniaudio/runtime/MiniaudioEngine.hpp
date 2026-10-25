@@ -3,10 +3,8 @@
 #include "engine/audio/AudioPlayback.hpp"
 
 #include <miniaudio.h>
-
-#if defined(__EMSCRIPTEN__)
+#include <mutex>
 #include <atomic>
-#endif
 
 namespace kb::audio_miniaudio {
 
@@ -20,19 +18,26 @@ public:
     MiniaudioEngine(MiniaudioEngine&&) = delete;
     MiniaudioEngine& operator=(MiniaudioEngine&&) = delete;
 
-    void Initialize(bool forceNoDevice = false);
+    // An externally owned context, when supplied, outlives the engine/device.
+    void Initialize(bool forceNoDevice = false, ma_context* context = nullptr);
     void Shutdown() noexcept;
 
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] bool IsPlaybackAvailable() const noexcept;
     [[nodiscard]] kb::audio::AudioDeviceStatus Status() const noexcept;
     [[nodiscard]] ma_engine& Native() noexcept;
+    [[nodiscard]] ma_result ReadPcm(float* output, ma_uint64 frames, ma_uint64* framesRead);
+    [[nodiscard]] std::unique_lock<std::mutex> LockGraph();
+    [[nodiscard]] std::uint64_t RenderedFrames() const noexcept { return renderedFrames_.load(std::memory_order_relaxed); }
 
 private:
+    static void ProcessDevice(ma_device* device, void* output, const void* input, ma_uint32 frames);
 #if defined(__EMSCRIPTEN__)
     static void ObserveOutput(void* user, float* frames, ma_uint64 frameCount) noexcept;
     std::atomic<double> outputActiveUntilMs_{0.0};
 #endif
+    std::mutex graphMutex_;
+    std::atomic<std::uint64_t> renderedFrames_{0U};
     ma_engine engine_{};
     bool initialized_ = false;
     bool playbackAvailable_ = false;

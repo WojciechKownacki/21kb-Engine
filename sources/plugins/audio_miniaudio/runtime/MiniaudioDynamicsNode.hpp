@@ -13,7 +13,6 @@ public:
     MiniaudioDynamicsNode(const MiniaudioDynamicsNode&) = delete;
     MiniaudioDynamicsNode& operator=(const MiniaudioDynamicsNode&) = delete;
 
-    [[nodiscard]] static bool Valid(const MiniaudioFilterDesc& desc) noexcept;
     [[nodiscard]] ma_result Initialize(ma_node_graph& graph, std::uint32_t rate,
         const MiniaudioFilterDesc& desc, const ma_allocation_callbacks* allocations);
     void Reset() noexcept;

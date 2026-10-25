@@ -17,6 +17,9 @@ add_library(kb_engine STATIC
     include/engine/audio/AudioClipAsset.hpp
     include/engine/audio/AudioClipAssetLoader.hpp
     include/engine/audio/AudioMixerAsset.hpp
+    include/engine/audio/AudioDspEffect.hpp
+    include/engine/audio/AudioDspRuntimeReport.hpp
+    include/engine/audio/AudioMixerEffectEditing.hpp
     include/engine/audio/AudioRoutingContract.hpp
     include/engine/audio/AudioMixerAssetIO.hpp
     include/engine/audio/AudioMixerAssetLoader.hpp
@@ -562,6 +565,7 @@ add_library(kb_engine STATIC
     src/core/JsonValue.cpp
     src/audio/AudioClipAssetLoader.cpp
     src/audio/AudioMixerAssetIO.cpp
+    src/audio/AudioMixerEffectEditing.cpp
     src/audio/AudioMixerAssetLoader.cpp
     src/audio/AudioPlayback.cpp
     src/assets/AssetId.cpp

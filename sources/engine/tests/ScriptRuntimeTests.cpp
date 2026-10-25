@@ -3128,7 +3128,7 @@ void RunScriptAudioSourceAndDeviceApiTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Script audio source/device API host did not initialize");
-    for (const char* name : { "Audio.PlaySource", "Audio.PauseSource", "Audio.ResumeSource", "Audio.StopSource", "Audio.IsSourcePlaying", "Audio.DeviceStatus", "Audio.Reinitialize", "Audio.SetListenerLocalUser", "Audio.ListenerLocalUser" }) {
+    for (const char* name : { "Audio.PlaySource", "Audio.PauseSource", "Audio.ResumeSource", "Audio.StopSource", "Audio.IsSourcePlaying", "Audio.DeviceStatus", "Audio.Reinitialize", "Audio.SetListenerLocalUser", "Audio.ListenerLocalUser", "Audio.ConfigureOffline", "Audio.RenderOffline", "Audio.DspState" }) {
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr,
             "Script audio source/device API did not register a function");
         kb::tests::Require(host.VisualGraphRuntimeBindings().Find(
@@ -3172,6 +3172,10 @@ void RunScriptAudioSourceAndDeviceApiTest() {
             && statusOf(noBackendDevice) == static_cast<int>(kb::audio::AudioDeviceStatus::BackendUnavailable)
             && !noBackendDevice.Output("available").value_or(kb::script::ScriptValue{ true }).AsBool(),
         "Script device status fabricated availability without an audio backend");
+    const std::array invalidOfflineFrames{kb::script::ScriptFunctionArgument{"frames", kb::script::ScriptValue{0}}};
+    kb::tests::Require(!host.Functions().Call("Audio.ConfigureOffline", {}, context).Succeeded()
+            && !host.Functions().Call("Audio.RenderOffline", invalidOfflineFrames, context).Succeeded(),
+        "Script offline audio fabricated backend execution or accepted an invalid frame count");
 
     ProbeAudioPlaybackBackend backend;
     kb::audio::AudioPlayback::RegisterBackend(scene, backend);
@@ -4681,13 +4685,13 @@ void RunAudioMixerAssetIOAndAccessTest() {
     WriteTextFile(TestRoot() / "UnknownOnlyMixer.kbmixer", "futureRecord value\n");
     kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "UnknownOnlyMixer.kbmixer").has_value(),
         "An unknown-record-only legacy mixer must not masquerade as a valid empty asset");
-    WriteTextFile(TestRoot() / "FutureMixer.kbmixer", "kbmixer 2\n");
+    WriteTextFile(TestRoot() / "FutureMixer.kbmixer", "kbmixer 3\n");
     kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "FutureMixer.kbmixer").has_value(),
         "An unsupported audio mixer format version must be rejected");
     WriteTextFile(TestRoot() / "TabbedMixer.kbmixer", "kbmixer\t1\n");
     kb::tests::Require(kb::audio::AudioMixerAssetIO::Load(TestRoot() / "TabbedMixer.kbmixer").has_value(),
         "A tab-separated current audio mixer header must parse consistently");
-    WriteTextFile(TestRoot() / "TabbedFutureMixer.kbmixer", "kbmixer\t2\n");
+    WriteTextFile(TestRoot() / "TabbedFutureMixer.kbmixer", "kbmixer\t3\n");
     kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "TabbedFutureMixer.kbmixer").has_value(),
         "A tab-separated unsupported mixer version must not bypass header validation");
 

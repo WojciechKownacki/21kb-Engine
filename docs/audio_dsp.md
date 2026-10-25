@@ -1,8 +1,8 @@
-# Audio DSP primitives
+# Audio mixer effects
 
-The miniaudio provider contains a private filter-chain primitive for ordered
+Audio mixer buses retain ordered
 low-pass, high-pass, peaking equalizer, delay, reverb, compressor and limiter
-stages. It builds actual native graph nodes with the
+stages, with stable effect IDs and independent parameters. The miniaudio provider builds actual native graph nodes with the
 vendored miniaudio API; the dependency's existing license and notices remain
 in its source tree. Repeated stages keep separate parameters and state.
 Bypassed stages retain validated settings and create no processing node.
@@ -155,6 +155,66 @@ instruments engine-owned wrappers and tests; the WebAssembly build also
 instruments the vendor implementations. These figures exclude C++ node
 objects, container storage, source/output buffers and sanitizer overhead.
 
-Mixer asset serialization, editor controls, CLI authoring, cooking, packaged
-bus attachment and concurrent runtime parameter changes remain pending. These
-primitives alone do not qualify bus DSP effects as an end-to-end feature.
+Mixer assets with effects use `kbmixer 2`; routing-only saves retain version 1.
+The loader accepts legacy routing assets and versions 1 and 2, rejects future
+versions and refuses effect records in version 1. Each effect follows its bus
+declaration and retains every applicable parameter, bypass and position.
+Saving validates the complete candidate before atomically replacing the file.
+Duplicate effect IDs, more than sixteen effects per bus, unknown kinds,
+inapplicable fields, non-finite values and invalid ranges are errors.
+The module ABI is 13; rebuild providers against the current headers.
+
+CLI authoring uses the shared `AudioMixerEffectEditing` service:
+
+```text
+kb_cli audio-mixer new --project Sample --name Main --bus Effects
+kb_cli audio-mixer set --project Sample --mixer /Game/Audio/Main.kbmixer --effect-bus Effects --add-effect Tone=equalizer --set-effect Tone.cutoffHz=440 --set-effect Tone.gainDb=6
+kb_cli audio-mixer set --project Sample --mixer /Game/Audio/Main.kbmixer --effect-bus Effects --move-effect Tone=0
+kb_cli audio-mixer show --project Sample --mixer /Game/Audio/Main.kbmixer --json
+kb_cli audio-mixer assign --project Sample --mixer /Game/Audio/Main.kbmixer
+kb_cli run --project Sample --frames 4 --report audio --json --pcm-frames 4096
+```
+
+`--remove-effect Id` removes a stage. Repeating `--add-effect` creates separate
+stages, including repeated kinds. `--set-effect Id.bypass=true` retains its
+parameters. Move indexes start at zero. New/set accept `--dry-run` without
+creating directories or replacing files; new/set/show emit the versioned
+`21kb.audio-mixer/v1` JSON schema with all applicable parameter names.
+
+Runtime DSP-only changes preserve playing voices and bus identities. Candidate
+construction happens outside PCM read exclusion; a short mutex protects the
+actual attachment swap. Unreachable old nodes are then destroyed. This is a
+synchronized control update, with no hard real-time latency guarantee. A failed
+edit retains the prior graph, marks its settings stale and exposes an error;
+retries are limited to once per second. An initially unsupported chain rejects
+the named route instead of silently playing dry. Bus gain, snapshots and mute
+apply after all its effects, including delay and reverb tails. A successful
+replacement resets that bus's effect history; it does not crossfade old tails.
+
+`AudioPlayback::ConfigureOffline` explicitly replaces device playback with a
+48 kHz stereo engine. `RenderOffline` returns actual finite PCM, its format and
+frame count, and refuses reads outside 1–384000 frames. `DspReport` only observes
+the installed settings. Normal device reinitialization leaves offline mode.
+The Lua equivalents are `Audio.ConfigureOffline()`, `Audio.RenderOffline(frames)`
+and `Audio.DspState(bus)`. Configure before starting one-shot voices; changing
+the device mode stops existing one-shots and rebuilds component-owned sources.
+CLI audio reports require a provider and actual complete PCM, reject stale
+settings and report peak, RMS, frames, applied effects and mixing wall time.
+They cap probes at 600 simulation ticks and 1920000 total PCM frames.
+
+`kb_audio_runtime_tests mixer-dsp` verifies all seven effect kinds through actual
+imported WAV playback, saved/reloaded mixers and public PCM readback. It checks
+an independent filter/gain response, nonlinear limiter order, separate repeated
+stages, bypass, failed-edit signal preservation and post-effect tail mute.
+`mixer-dsp-concurrent` checks 64 saved edits while PCM is read on another thread,
+and another 64 through the production device callback using the native null
+device backend. These tests pass in native Release and ASan. A null device is
+a callback concurrency test, with no physical playback qualification.
+
+`kb_game_audio_dsp_package` runs CLI effect edits and real PCM assertions, cooks
+the project, then checks effects and mute/unmute inside a hidden native player
+using packaged assets and the actual provider. A separate incorrect script
+assertion must fail the process. Windows native package execution is checked;
+editor DSP controls, audible device comparison, other packaged platforms,
+memory/latency workload qualification and hosted CI remain pending. The thin
+WebAssembly kernel checks above do not establish browser mixer playback.

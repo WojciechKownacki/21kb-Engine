@@ -123,47 +123,17 @@ ma_result MiniaudioFilterChain::Initialize(ma_node_graph& graph, std::uint32_t s
         return MA_INVALID_ARGS;
     std::uint64_t stateBudget = 32ULL * 1024ULL * 1024ULL;
     for (const auto& filter : filters) {
-        if ((filter.kind != MiniaudioFilterKind::LowPass && filter.kind != MiniaudioFilterKind::HighPass
-                && filter.kind != MiniaudioFilterKind::PeakingEqualizer && filter.kind != MiniaudioFilterKind::Delay
-                && filter.kind != MiniaudioFilterKind::Reverb && filter.kind != MiniaudioFilterKind::Compressor
-                && filter.kind != MiniaudioFilterKind::Limiter)
-            || !std::isfinite(filter.cutoffHz) || filter.cutoffHz < 1.0
-            || filter.cutoffHz > 0.49 * sampleRate || filter.order == 0U || filter.order > MA_MAX_FILTER_ORDER
-            || !std::isfinite(filter.gainDb) || filter.gainDb < -24.0 || filter.gainDb > 24.0
-            || !std::isfinite(filter.quality) || filter.quality < 0.1 || filter.quality > 16.0
-            || (filter.kind == MiniaudioFilterKind::PeakingEqualizer && filter.order != 2U)
-            || (filter.kind != MiniaudioFilterKind::PeakingEqualizer && (filter.gainDb != 0.0 || filter.quality != 1.0)))
-            return MA_INVALID_ARGS;
-        if (!MiniaudioDynamicsNode::Valid(filter)
-            || ((filter.kind == MiniaudioFilterKind::Compressor || filter.kind == MiniaudioFilterKind::Limiter)
-                && (filter.cutoffHz != 1000.0 || filter.order != 2U))) return MA_INVALID_ARGS;
-        if (!std::isfinite(filter.roomSize) || filter.roomSize < 0.0F || filter.roomSize > 1.0F
-            || !std::isfinite(filter.damping) || filter.damping < 0.0F || filter.damping > 1.0F
-            || !std::isfinite(filter.width) || filter.width < 0.0F || filter.width > 1.0F
-            || (filter.kind != MiniaudioFilterKind::Reverb
-                && (filter.roomSize != 0.5F || filter.damping != 0.25F || filter.width != 1.0F))) return MA_INVALID_ARGS;
-        if (!std::isfinite(filter.delayMs) || filter.delayMs <= 0.0 || filter.delayMs > 2000.0
-            || !std::isfinite(filter.feedback) || filter.feedback < 0.0F || filter.feedback > 0.95F
-            || !std::isfinite(filter.wet) || filter.wet < 0.0F || filter.wet > 1.0F
-            || !std::isfinite(filter.dry) || filter.dry < 0.0F || filter.dry > 1.0F)
-            return MA_INVALID_ARGS;
-        if (filter.kind == MiniaudioFilterKind::Delay) {
-            if (filter.cutoffHz != 1000.0 || filter.order != 2U) return MA_INVALID_ARGS;
-            if (!filter.bypass) {
-                const auto bytes = static_cast<std::uint64_t>(DelayFrames(filter.delayMs, sampleRate)) * channels * sizeof(float);
-                if (bytes > stateBudget) return MA_INVALID_ARGS;
-                stateBudget -= bytes;
-            }
-        } else if (filter.kind == MiniaudioFilterKind::Reverb) {
-            if (filter.cutoffHz != 1000.0 || filter.order != 2U || filter.delayMs != 250.0 || filter.feedback != 0.0F)
-                return MA_INVALID_ARGS;
-            if (!filter.bypass) {
-                if (channels > 2U || sampleRate < 22050U || MiniaudioReverbNode::StateBytes() > stateBudget) return MA_INVALID_ARGS;
-                stateBudget -= MiniaudioReverbNode::StateBytes();
-            }
-        } else if (filter.delayMs != 250.0 || filter.feedback != 0.0F || filter.wet != 0.5F || filter.dry != 1.0F) {
-            return MA_INVALID_ARGS;
+        if (!kb::audio::AudioDspParameterError(filter).empty() || filter.cutoffHz > 0.49 * sampleRate
+            || filter.order > MA_MAX_FILTER_ORDER) return MA_INVALID_ARGS;
+        std::uint64_t bytes = 0U;
+        if (!filter.bypass && filter.kind == MiniaudioFilterKind::Delay) {
+            bytes = static_cast<std::uint64_t>(DelayFrames(filter.delayMs, sampleRate)) * channels * sizeof(float);
+        } else if (!filter.bypass && filter.kind == MiniaudioFilterKind::Reverb) {
+            if (channels > 2U || sampleRate < 22050U) return MA_INVALID_ARGS;
+            bytes = MiniaudioReverbNode::StateBytes();
         }
+        if (bytes > stateBudget) return MA_INVALID_ARGS;
+        stateBudget -= bytes;
     }
     std::vector<std::unique_ptr<Node>> candidate;
     try {
@@ -207,6 +177,19 @@ ma_result MiniaudioFilterChain::Attach(ma_node* source, ma_node* target) {
 void MiniaudioFilterChain::Reset() noexcept {
     while (!nodes_.empty()) nodes_.pop_back();
     graph_ = nullptr;
+}
+
+ma_result MiniaudioFilterChain::DetachOutput(ma_node* source) {
+    ma_node* output = nodes_.empty() ? source : nodes_.back()->Output();
+    if (graph_ == nullptr || output == nullptr || ma_node_get_node_graph(output) != graph_) return MA_INVALID_ARGS;
+    return ma_node_detach_output_bus(output, 0U);
+}
+
+ma_result MiniaudioFilterChain::SetOutputVolume(float volume, ma_node* source) {
+    ma_node* output = nodes_.empty() ? source : nodes_.back()->Output();
+    if (graph_ == nullptr || output == nullptr || ma_node_get_node_graph(output) != graph_
+        || !std::isfinite(volume) || volume < 0.0F) return MA_INVALID_ARGS;
+    return ma_node_set_output_bus_volume(output, 0U, volume);
 }
 
 std::size_t MiniaudioFilterChain::ActiveNodeCount() const noexcept { return nodes_.size(); }

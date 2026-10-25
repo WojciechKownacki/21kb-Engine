@@ -12,23 +12,10 @@ const ma_allocation_callbacks* MiniaudioDynamicsNode::Allocator() const noexcept
     return customAllocator_ ? &allocations_ : nullptr;
 }
 
-bool MiniaudioDynamicsNode::Valid(const MiniaudioFilterDesc& desc) noexcept {
-    if (!std::isfinite(desc.thresholdDb) || desc.thresholdDb < -60.0 || desc.thresholdDb > 0.0
-        || !std::isfinite(desc.ratio) || desc.ratio < 1.0 || desc.ratio > 20.0
-        || !std::isfinite(desc.attackMs) || desc.attackMs < 0.0 || desc.attackMs > 200.0
-        || !std::isfinite(desc.releaseMs) || desc.releaseMs < 1.0 || desc.releaseMs > 5000.0
-        || !std::isfinite(desc.makeupDb) || desc.makeupDb < 0.0 || desc.makeupDb > 24.0
-        || !std::isfinite(desc.ceilingDb) || desc.ceilingDb < -24.0 || desc.ceilingDb > 0.0) return false;
-    if (desc.kind == MiniaudioFilterKind::Compressor) return desc.ceilingDb == -1.0;
-    const bool unusedCompressor = desc.thresholdDb == -12.0 && desc.ratio == 4.0 && desc.attackMs == 10.0 && desc.makeupDb == 0.0;
-    if (desc.kind == MiniaudioFilterKind::Limiter) return unusedCompressor;
-    return unusedCompressor && desc.releaseMs == 100.0 && desc.ceilingDb == -1.0;
-}
-
 ma_result MiniaudioDynamicsNode::Initialize(ma_node_graph& graph, std::uint32_t rate,
     const MiniaudioFilterDesc& desc, const ma_allocation_callbacks* allocations) {
     const auto channels = ma_node_graph_get_channels(&graph);
-    if (channels == 0U || channels > 8U || rate < 8000U || rate > 192000U || !Valid(desc)
+    if (channels == 0U || channels > 8U || rate < 8000U || rate > 192000U || !kb::audio::AudioDspParameterError(desc).empty()
         || (desc.kind != MiniaudioFilterKind::Compressor && desc.kind != MiniaudioFilterKind::Limiter)) return MA_INVALID_ARGS;
     Reset();
     customAllocator_ = allocations != nullptr;

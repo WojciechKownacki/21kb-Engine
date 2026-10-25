@@ -97,28 +97,28 @@ kb_apply_quality_gates(kb_audio_miniaudio_plugin)
 
 if(BUILD_TESTING)
     add_executable(kb_audio_filter_tests tests/AudioFilterTests.cpp ${KB_AUDIO_MINIAUDIO_DSP_SOURCES})
-    target_include_directories(kb_audio_filter_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(kb_audio_filter_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/sources/engine/include)
     target_link_libraries(kb_audio_filter_tests PRIVATE miniaudio miniaudio_reverb_node)
     target_compile_features(kb_audio_filter_tests PRIVATE cxx_std_20)
     add_test(NAME kb_audio_filter_tests COMMAND $<TARGET_FILE:kb_audio_filter_tests>)
     kb_apply_quality_gates(kb_audio_filter_tests)
 
     add_executable(kb_audio_delay_tests tests/AudioDelayTests.cpp ${KB_AUDIO_MINIAUDIO_DSP_SOURCES})
-    target_include_directories(kb_audio_delay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(kb_audio_delay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/sources/engine/include)
     target_link_libraries(kb_audio_delay_tests PRIVATE miniaudio miniaudio_reverb_node)
     target_compile_features(kb_audio_delay_tests PRIVATE cxx_std_20)
     add_test(NAME kb_audio_delay_tests COMMAND $<TARGET_FILE:kb_audio_delay_tests>)
     kb_apply_quality_gates(kb_audio_delay_tests)
 
     add_executable(kb_audio_reverb_tests tests/AudioReverbTests.cpp ${KB_AUDIO_MINIAUDIO_DSP_SOURCES})
-    target_include_directories(kb_audio_reverb_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(kb_audio_reverb_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/sources/engine/include)
     target_link_libraries(kb_audio_reverb_tests PRIVATE miniaudio miniaudio_reverb_node)
     target_compile_features(kb_audio_reverb_tests PRIVATE cxx_std_20)
     add_test(NAME kb_audio_reverb_tests COMMAND $<TARGET_FILE:kb_audio_reverb_tests>)
     kb_apply_quality_gates(kb_audio_reverb_tests)
 
     add_executable(kb_audio_dynamics_tests tests/AudioDynamicsTests.cpp ${KB_AUDIO_MINIAUDIO_DSP_SOURCES})
-    target_include_directories(kb_audio_dynamics_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(kb_audio_dynamics_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/sources/engine/include)
     target_link_libraries(kb_audio_dynamics_tests PRIVATE miniaudio miniaudio_reverb_node)
     target_compile_features(kb_audio_dynamics_tests PRIVATE cxx_std_20)
     add_test(NAME kb_audio_dynamics_tests COMMAND $<TARGET_FILE:kb_audio_dynamics_tests>)
@@ -126,6 +126,7 @@ if(BUILD_TESTING)
 
     add_executable(kb_audio_runtime_tests
         tests/AudioRuntimeTests.cpp
+        ${KB_AUDIO_MINIAUDIO_DSP_SOURCES}
         assets/MiniaudioEncodingFormat.hpp
         assets/ResolvedAudioClip.hpp
         assets/MiniaudioClipResolver.cpp
@@ -172,6 +173,7 @@ if(BUILD_TESTING)
         PRIVATE
             kb_engine
             miniaudio
+            miniaudio_reverb_node
     )
 
     add_test(NAME kb_audio_runtime_tests COMMAND $<TARGET_FILE:kb_audio_runtime_tests>)

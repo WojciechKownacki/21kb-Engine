@@ -1,7 +1,9 @@
 #include "CliCommands.hpp"
+#include "CliAudioJson.hpp"
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/audio/AudioMixerAssetIO.hpp"
+#include "engine/audio/AudioMixerEffectEditing.hpp"
 #include "engine/library/EngineLibraryParsing.hpp"
 #include "engine/project/ProjectManager.hpp"
 
@@ -9,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <iomanip>
 #include <optional>
 #include <span>
 #include <string>
@@ -107,6 +110,37 @@ struct MixerFile final {
     return "";
 }
 
+[[nodiscard]] std::string ApplyEffectEdits(kb::audio::AudioMixerAsset& mixer, const ArgumentList& arguments) {
+    const auto bus = arguments.Option("--effect-bus");
+    const auto adds = arguments.Options("--add-effect"), removals = arguments.Options("--remove-effect");
+    const auto moves = arguments.Options("--move-effect"), settings = arguments.Options("--set-effect");
+    if (adds.empty() && removals.empty() && moves.empty() && settings.empty())
+        return bus.has_value() ? "--effect-bus requires an effect edit" : "";
+    if (!bus.has_value()) return "DSP edits require --effect-bus <Bus>";
+    for (const auto& value : adds) {
+        const auto equals = value.rfind('=');
+        if (equals == std::string::npos || equals == 0U) return "--add-effect requires Id=kind";
+        const auto kind = kb::audio::ParseAudioDspKind(std::string_view{value}.substr(equals + 1U));
+        if (!kind.has_value()) return "unknown DSP kind (lowpass, highpass, equalizer, delay, reverb, compressor, limiter)";
+        if (auto error = kb::audio::AddAudioMixerEffect(mixer, *bus, std::string_view{value}.substr(0U, equals), *kind); !error.empty()) return error;
+    }
+    for (const auto& id : removals) if (auto error = kb::audio::RemoveAudioMixerEffect(mixer, *bus, id); !error.empty()) return error;
+    for (const auto& value : moves) {
+        const auto equals = value.rfind('='); std::uint64_t index = 0U;
+        if (equals == std::string::npos || equals == 0U || !kb::library::TryParseUInt64(std::string_view{value}.substr(equals + 1U), index)
+            || index > std::numeric_limits<std::size_t>::max()) return "--move-effect requires Id=index (starting at 0)";
+        if (auto error = kb::audio::MoveAudioMixerEffect(mixer, *bus, std::string_view{value}.substr(0U, equals), static_cast<std::size_t>(index)); !error.empty()) return error;
+    }
+    for (const auto& value : settings) {
+        const auto equals = value.rfind('=');
+        const auto key = std::string_view{value}.substr(0U, equals); const auto dot = key.rfind('.');
+        if (equals == std::string::npos || dot == std::string_view::npos || dot == 0U) return "--set-effect requires Id.parameter=value";
+        if (auto error = kb::audio::SetAudioMixerEffectField(mixer, *bus, key.substr(0U, dot), key.substr(dot + 1U),
+                std::string_view{value}.substr(equals + 1U)); !error.empty()) return error;
+    }
+    return {};
+}
+
 [[nodiscard]] std::string ApplyEdits(kb::audio::AudioMixerAsset& mixer, const ArgumentList& arguments) {
     for (const auto& name : arguments.Options("--bus")) {
         mixer.buses.push_back(kb::audio::AudioMixerBus{.name = name});
@@ -145,14 +179,57 @@ struct MixerFile final {
         }
     }
     if (const auto error = ApplySnapshotEdits(mixer, arguments); !error.empty()) return error;
+    if (const auto error = ApplyEffectEdits(mixer, arguments); !error.empty()) return error;
     return kb::audio::ValidateAudioMixerAsset(mixer);
 }
 
-void ShowMixer(const MixerFile& file, const kb::audio::AudioMixerAsset& mixer, CommandIo io) {
+void ShowMixerJson(const MixerFile& file, const kb::audio::AudioMixerAsset& mixer, CommandIo io, bool dryRun) {
+    using kb::core::JsonValue;
+    auto output = JsonValue::MakeObject();
+    output.Set("schema", JsonValue::MakeString("21kb.audio-mixer/v1"));
+    output.Set("asset", JsonValue::MakeString(file.virtualPath));
+    output.Set("dryRun", JsonValue::MakeBool(dryRun));
+    auto buses = JsonValue::MakeArray();
+    for (const auto& bus : mixer.buses) {
+        auto row = JsonValue::MakeObject();
+        row.Set("name", JsonValue::MakeString(bus.name));
+        row.Set("parent", JsonValue::MakeString(bus.parentBus));
+        row.Set("volume", JsonValue::MakeNumber(bus.volume));
+        row.Set("mute", JsonValue::MakeBool(bus.mute));
+        auto effects = JsonValue::MakeArray();
+        for (const auto& effect : bus.effects) effects.Append(AudioEffectJson(effect));
+        row.Set("effects", std::move(effects)); buses.Append(std::move(row));
+    }
+    output.Set("buses", std::move(buses));
+    auto snapshots = JsonValue::MakeArray();
+    for (const auto& snapshot : mixer.snapshots) {
+        auto row = JsonValue::MakeObject();
+        row.Set("name", JsonValue::MakeString(snapshot.name));
+        auto volumes = JsonValue::MakeArray();
+        for (const auto& volume : snapshot.busVolumes) {
+            auto value = JsonValue::MakeObject();
+            value.Set("bus", JsonValue::MakeString(volume.bus));
+            value.Set("volume", JsonValue::MakeNumber(volume.volume)); volumes.Append(std::move(value));
+        }
+        row.Set("volumes", std::move(volumes)); snapshots.Append(std::move(row));
+    }
+    output.Set("snapshots", std::move(snapshots));
+    io.out << output.Dump() << '\n';
+}
+
+void ShowMixer(const MixerFile& file, const kb::audio::AudioMixerAsset& mixer, CommandIo io, bool json, bool dryRun = false) {
+    if (json) { ShowMixerJson(file, mixer, io, dryRun); return; }
+    if (dryRun) io.out << "dry-run ";
     io.out << file.virtualPath << " buses=" << mixer.buses.size() << " snapshots=" << mixer.snapshots.size() << '\n';
     for (const auto& bus : mixer.buses) {
         io.out << "bus " << bus.name << " parent=" << (bus.parentBus.empty() ? "-" : bus.parentBus)
             << " volume=" << bus.volume << " mute=" << (bus.mute ? "true" : "false") << '\n';
+        for (std::size_t index = 0U; index < bus.effects.size(); ++index) {
+            const auto& effect = bus.effects[index];
+            io.out << "  effect " << index << ' ' << effect.id << " kind=" << kb::audio::AudioDspKindName(effect.parameters.kind);
+            for (const auto field : kb::audio::AudioDspFieldNames(effect.parameters.kind)) io.out << ' ' << field << '=' << kb::audio::AudioDspFieldValue(effect.parameters, field);
+            io.out << '\n';
+        }
     }
     for (const auto& snapshot : mixer.snapshots) {
         io.out << "snapshot " << snapshot.name << '\n';
@@ -172,11 +249,11 @@ int RunAudioMixerCommand(const ArgumentList& arguments, CommandIo io) {
         return 1;
     }
     const auto& action = arguments.Positionals().front();
-    constexpr std::array<std::string_view, 8U> newOptions{"--project", "--name", "--folder", "--bus", "--set",
-        "--add-snapshot", "--snapshot", "--set-snapshot"};
-    constexpr std::array<std::string_view, 10U> setOptions{"--project", "--mixer", "--bus", "--remove-bus", "--set",
-        "--add-snapshot", "--remove-snapshot", "--snapshot", "--set-snapshot", "--clear-snapshot-bus"};
-    constexpr std::array<std::string_view, 2U> showOptions{"--project", "--mixer"};
+    constexpr std::array<std::string_view, 15U> newOptions{"--project", "--name", "--folder", "--bus", "--set",
+        "--add-snapshot", "--snapshot", "--set-snapshot", "--effect-bus", "--add-effect", "--remove-effect", "--move-effect", "--set-effect", "--json", "--dry-run"};
+    constexpr std::array<std::string_view, 17U> setOptions{"--project", "--mixer", "--bus", "--remove-bus", "--set",
+        "--add-snapshot", "--remove-snapshot", "--snapshot", "--set-snapshot", "--clear-snapshot-bus", "--effect-bus", "--add-effect", "--remove-effect", "--move-effect", "--set-effect", "--json", "--dry-run"};
+    constexpr std::array<std::string_view, 3U> showOptions{"--project", "--mixer", "--json"};
     constexpr std::array<std::string_view, 4U> assignOptions{"--project", "--scene", "--mixer", "--snapshot"};
     std::span<const std::string_view> allowed;
     if (action == "new") allowed = newOptions;
@@ -230,14 +307,14 @@ int RunAudioMixerCommand(const ArgumentList& arguments, CommandIo io) {
         mixer = std::move(*loaded);
     }
     if (action == "show") {
-        ShowMixer(file, mixer, io);
+        ShowMixer(file, mixer, io, arguments.Flag("--json"));
         return 0;
     }
     if (action == "set") {
-        constexpr std::array<std::string_view, 7U> edits{"--set", "--bus", "--remove-bus", "--add-snapshot",
-            "--remove-snapshot", "--set-snapshot", "--clear-snapshot-bus"};
+        constexpr std::array<std::string_view, 11U> edits{"--set", "--bus", "--remove-bus", "--add-snapshot",
+            "--remove-snapshot", "--set-snapshot", "--clear-snapshot-bus", "--add-effect", "--remove-effect", "--move-effect", "--set-effect"};
         if (std::none_of(edits.begin(), edits.end(), [&](auto option) { return !arguments.Options(option).empty(); })) {
-            io.err << "error: audio-mixer set requires a bus or snapshot edit\n";
+            io.err << "error: audio-mixer set requires a bus, snapshot or DSP edit\n";
             return 1;
         }
     }
@@ -245,13 +322,14 @@ int RunAudioMixerCommand(const ArgumentList& arguments, CommandIo io) {
         io.err << "error: " << error << '\n';
         return 1;
     }
+    if (arguments.Flag("--dry-run")) { ShowMixer(file, mixer, io, arguments.Flag("--json"), true); return 0; }
     std::error_code error;
     std::filesystem::create_directories(file.physical.parent_path(), error);
     if (error || !kb::audio::AudioMixerAssetIO::Save(file.physical, mixer)) {
         io.err << "error: audio mixer could not be saved: " << file.virtualPath << '\n';
         return 1;
     }
-    ShowMixer(file, mixer, io);
+    ShowMixer(file, mixer, io, arguments.Flag("--json"));
     return 0;
 }
 

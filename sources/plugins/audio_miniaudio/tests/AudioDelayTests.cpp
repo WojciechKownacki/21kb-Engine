@@ -339,6 +339,37 @@ void AllocationFailurePreservesSignal(bool delaySurvivor) {
     Require(counter.live == 0U && counter.bytes == 0U, "Delay reset retained counted allocations");
 }
 
+void OutputFaderAndReattachment() {
+    Graph graph;
+    const std::array input{0.25F, -0.125F};
+    graph.Initialize(input, 2U);
+    graph.Configure(std::array{Desc{.kind = Kind::Delay, .delayMs = 10.0, .feedback = 0.95F, .wet = 1.0F, .dry = 0.0F}}, 48000U);
+    const auto first = graph.Read(512U, 512U);
+    Require(*std::max_element(first.begin(), first.end()) > 0.2F, "Post-effect fader fixture has no actual delayed output");
+    Require(graph.chain.SetOutputVolume(0.0F, &graph.source) == MA_SUCCESS, "Post-effect mute failed");
+    static_cast<void>(graph.Read(512U, 512U)); // Drain at most one native processing quantum.
+    const auto muted = graph.Read(512U, 512U);
+    for (float sample : muted) Require(sample == 0.0F, "Post-effect mute leaked the feedback tail");
+    Require(graph.chain.SetOutputVolume(0.25F, &graph.source) == MA_SUCCESS
+        && graph.chain.DetachOutput(&graph.source) == MA_SUCCESS
+        && graph.chain.Attach(&graph.source, ma_node_graph_get_endpoint(&graph.graph)) == MA_SUCCESS,
+        "Detached effect chain did not reattach with its state intact");
+    const auto resumed = graph.Read(1024U, 512U);
+    const auto peak = *std::max_element(resumed.begin(), resumed.end());
+    Require(peak > 0.01F && peak <= 0.0625F, "Unmuting the post-effect fader lost or amplified the feedback tail");
+    const auto dryInput = Stream();
+    Graph direct;
+    direct.Initialize(dryInput, 2U); direct.Configure({}, 48000U);
+    Require(direct.chain.SetOutputVolume(0.25F, &direct.source) == MA_SUCCESS
+        && direct.chain.SetOutputVolume(-1.0F, &direct.source) == MA_INVALID_ARGS
+        && direct.chain.SetOutputVolume(std::numeric_limits<float>::quiet_NaN(), &direct.source) == MA_INVALID_ARGS
+        && direct.chain.SetOutputVolume(1.0F, nullptr) == MA_INVALID_ARGS,
+        "Direct bus fader accepted invalid settings or lost its source");
+    const auto output = direct.Read(128U, 7U);
+    for (std::size_t i = 0U; i < output.size(); ++i) Require(output[i] == dryInput[i] * 0.25F, "Direct bus gain differs from post-effect gain semantics");
+    std::cout << "Delay output fader mutedTail=0 restoredPeak=" << peak << " directGain=0.25\n";
+}
+
 } // namespace
 
 int main() {
@@ -365,6 +396,7 @@ int main() {
         InvalidParametersAndBudgetPreserveSignal();
         AllocationFailurePreservesSignal(false);
         AllocationFailurePreservesSignal(true);
+        OutputFaderAndReattachment();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

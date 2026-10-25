@@ -19,7 +19,8 @@
 
 namespace {
 
-constexpr std::string_view kUsage = R"(kb_cli — 21kb Engine headless tooling for developers and AI coding agents
+constexpr std::array<std::string_view, 3U> kUsageParts{
+R"(kb_cli — 21kb Engine headless tooling for developers and AI coding agents
 
 Usage: kb_cli <command> [options]
 
@@ -104,7 +105,7 @@ Commands:
   scene-post-process Give a scene (the startup scene unless --scene) its post-process
                profile, or none for the renderer's defaults.
                  --project <dir> [--scene <path>] --profile /Game/<path>.kbppfx|none
-)"
+)",
 R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                  new --project <dir> --name <Name> [--folder Assets/Audio]
                      [--bus <Bus> ...] [--set Bus.parent|volume|mute=value ...]
@@ -117,6 +118,11 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
                      [--snapshot <Name> --set-snapshot Bus=volume ...]
                Additional set edits: [--remove-snapshot <Name> ...]
                      [--snapshot <Name> --clear-snapshot-bus <Bus> ...]
+               DSP edits for new/set: --effect-bus <Bus>
+                     [--add-effect Id=lowpass|highpass|equalizer|delay|reverb|compressor|limiter ...]
+                     [--remove-effect <Id> ...] [--move-effect Id=index ...]
+                     [--set-effect Id.parameter=value ...]  (indexes start at 0)
+               new/set accept --dry-run; new/set/show accept --json.
   animator     Build an Animator Controller, the state machine that picks a character's
                animation; every change is validated and saved at once.
                  new --project <dir> --name <Name> --clip <clip> [--clip ...]
@@ -253,11 +259,15 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
   scene-attach Attach a behaviour asset to a scene node and save the scene.
                  --project <dir> --scene <path> --node <name> --script <path>
                  [--tick-group <group>] [--execution-order <n>] [--disabled]
-  run          Run a scene headless and report logs, events, and errors (the
+)",
+R"(  run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on any error.
                  --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>]
-                 [--quiet] [--report particles]
-               Particle reports are versioned JSON on stdout; logs go to stderr.
+                 [--quiet] [--report particles|audio] [--pcm-frames <n>]
+               Reports are versioned JSON on stdout; logs go to stderr.
+               Audio probes use explicit offline PCM rendering (up to 600 ticks
+               and 1920000 total PCM frames). --pcm-frames overrides audio frames
+               per tick; the default follows the sample rate and --dt.
   mcp          Serve the commands above as MCP tools over stdio (newline-
                delimited JSON-RPC), for use from MCP-compatible clients.
                  [--project <dir>]
@@ -328,7 +338,12 @@ R"(  audio-mixer  Create, edit and assign an audio bus graph (.kbmixer).
 
 Scene paths may be physical (relative to the project root) or virtual
 ("/Game/Scenes/Main.21kbscene", requires --project).
-)";
+)"
+};
+
+void PrintUsage(std::ostream& output) {
+    for (const auto part : kUsageParts) output << part;
+}
 
 constexpr std::array<std::string_view, 5> kFlagNames{ "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu" };
 
@@ -377,7 +392,7 @@ int main(int argc, char** argv) {
 
 int Dispatch(int argc, char** argv) {
     if (argc < 2) {
-        std::cout << kUsage;
+        PrintUsage(std::cout);
         return 0;
     }
 
@@ -388,7 +403,9 @@ int Dispatch(int argc, char** argv) {
         rest.emplace_back(argv[index]);
     }
 
-    const kb::cli::ArgumentList arguments{ rest, kFlagNames };
+    std::vector<std::string_view> flagNames{kFlagNames.begin(), kFlagNames.end()};
+    flagNames.insert(flagNames.end(), {"--json", "--dry-run"});
+    const kb::cli::ArgumentList arguments{ rest, flagNames };
     if (!arguments.Errors().empty()) {
         for (const std::string& error : arguments.Errors()) {
             std::cerr << "error: " << error << '\n';
@@ -520,10 +537,11 @@ int Dispatch(int argc, char** argv) {
         return kb::cli::RunLightingQualityCommand(arguments, io);
     }
     if (command == "help" || command == "--help" || command == "-h") {
-        std::cout << kUsage;
+        PrintUsage(std::cout);
         return 0;
     }
 
-    std::cerr << "error: unknown command '" << command << "'\n\n" << kUsage;
+    std::cerr << "error: unknown command '" << command << "'\n\n";
+    PrintUsage(std::cerr);
     return 1;
 }

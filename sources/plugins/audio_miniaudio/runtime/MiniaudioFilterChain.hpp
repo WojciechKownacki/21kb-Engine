@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/audio/AudioDspEffect.hpp"
+
 #include <miniaudio.h>
 
 #include <cstddef>
@@ -10,29 +12,8 @@
 
 namespace kb::audio_miniaudio {
 
-enum class MiniaudioFilterKind : std::uint8_t { LowPass, HighPass, PeakingEqualizer, Delay, Reverb, Compressor, Limiter };
-
-struct MiniaudioFilterDesc {
-    MiniaudioFilterKind kind = MiniaudioFilterKind::LowPass;
-    double cutoffHz = 1000.0;
-    std::uint32_t order = 2U;
-    bool bypass = false;
-    double gainDb = 0.0;
-    double quality = 1.0;
-    double delayMs = 250.0;
-    float feedback = 0.0F;
-    float wet = 0.5F;
-    float dry = 1.0F;
-    float roomSize = 0.5F;
-    float damping = 0.25F;
-    float width = 1.0F;
-    double thresholdDb = -12.0;
-    double ratio = 4.0;
-    double attackMs = 10.0;
-    double releaseMs = 100.0;
-    double makeupDb = 0.0;
-    double ceilingDb = -1.0;
-};
+using MiniaudioFilterKind = kb::audio::AudioDspKind;
+using MiniaudioFilterDesc = kb::audio::AudioDspParameters;
 
 // Private graph primitive. The graph and attached source/target must outlive this
 // chain. Rebuilds are owner-thread operations, outside concurrent PCM reads.
@@ -48,6 +29,10 @@ public:
     [[nodiscard]] ma_result Initialize(ma_node_graph& graph, std::uint32_t sampleRate,
         std::span<const MiniaudioFilterDesc> filters, const ma_allocation_callbacks* allocations = nullptr);
     [[nodiscard]] ma_result Attach(ma_node* source, ma_node* target);
+    // Commit graph routing and fader changes while the host has excluded PCM reads.
+    // Empty chains use the supplied source as their direct output.
+    [[nodiscard]] ma_result DetachOutput(ma_node* source);
+    [[nodiscard]] ma_result SetOutputVolume(float volume, ma_node* source);
     void Reset() noexcept;
     [[nodiscard]] std::size_t ActiveNodeCount() const noexcept;
 

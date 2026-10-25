@@ -317,6 +317,36 @@ int LuaAudioDeviceCall(lua_State* state, const char* function) {
 int LuaAudioDeviceStatus(lua_State* state) { return LuaAudioDeviceCall(state, "Audio.DeviceStatus"); }
 int LuaAudioReinitialize(lua_State* state) { return LuaAudioDeviceCall(state, "Audio.Reinitialize"); }
 
+int LuaAudioDspCall(lua_State* state, const char* function, const char* field = nullptr) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (field != nullptr && std::string_view{field} == "frames") {
+        const lua_Integer frames = luaL_checkinteger(state, 1);
+        luaL_argcheck(state, frames >= 1 && frames <= 384000, 1, "offline audio frames must be between 1 and 384000");
+        arguments.push_back(Arg(field, ScriptValue{static_cast<int>(frames)}));
+    } else if (field != nullptr) {
+        std::size_t length = 0U;
+        const char* value = luaL_checklstring(state, 1, &length);
+        arguments.push_back(Arg(field, ScriptValue{std::string{value, length}}));
+    }
+    const auto result = context->CallFunction(function, arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "audio DSP request failed");
+    if (field == nullptr) {
+        lua_pushboolean(state, result.Output("configured").value_or(ScriptValue{false}).AsBool() ? 1 : 0);
+        return 1;
+    }
+    return PushAudioResultTable(state, result);
+}
+
+int LuaAudioConfigureOffline(lua_State* state) { return LuaAudioDspCall(state, "Audio.ConfigureOffline"); }
+int LuaAudioRenderOffline(lua_State* state) { return LuaAudioDspCall(state, "Audio.RenderOffline", "frames"); }
+int LuaAudioDspState(lua_State* state) { return LuaAudioDspCall(state, "Audio.DspState", "bus"); }
+
 int LuaAudioSetListenerLocalUser(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -3418,6 +3448,9 @@ constexpr auto kCatalogBindingAdapters = std::to_array<lua_CFunction>({
     &LuaAudioIsSourcePlaying,
     &LuaAudioDeviceStatus,
     &LuaAudioReinitialize,
+    &LuaAudioConfigureOffline,
+    &LuaAudioRenderOffline,
+    &LuaAudioDspState,
     &LuaAudioSetListenerLocalUser,
     &LuaAudioListenerLocalUser,
     &LuaAudioSetBusVolume,
