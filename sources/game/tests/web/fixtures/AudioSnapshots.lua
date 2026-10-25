@@ -1,5 +1,7 @@
 local frames = 0
 local clicks = 0
+local retargetStage = 0
+local retargetElapsed = 0
 
 local function call(name, args)
     local result, diagnostic = CallFunction("Audio." .. name, args or {})
@@ -30,16 +32,31 @@ function OnUIClicked(self, event)
         assert(call("TransitionToSnapshot", {snapshot="Quiet", durationSeconds=0.5}))
     elseif clicks == 8 then
         assert(call("TransitionToSnapshot", {snapshot="", durationSeconds=0.5}))
+    elseif clicks == 9 then
+        assert(call("TransitionToSnapshot", {snapshot="Loud", durationSeconds=2.0}))
+        retargetStage, retargetElapsed = 1, 0
     end
 end
 
 function Tick(self, dt)
     frames = frames + 1
+    if retargetStage >= 1 and retargetStage <= 3 then
+        retargetElapsed = retargetElapsed + dt
+        if retargetStage == 1 and retargetElapsed >= 0.3 then
+            assert(call("TransitionToSnapshot", {snapshot="Quiet", durationSeconds=1.0}))
+            retargetStage, retargetElapsed = 2, 0
+        elseif retargetStage == 2 and retargetElapsed >= 0.3 then
+            assert(call("TransitionToSnapshot", {snapshot="", durationSeconds=1.0}))
+            retargetStage, retargetElapsed = 3, 0
+        elseif retargetStage == 3 and retargetElapsed >= 1.1 then
+            retargetStage = 4
+        end
+    end
     if frames % 8 == 0 then
         local device = call("DeviceStatus")
         local source = call("IsSourcePlaying")
         Log("audio-snapshots " .. string.format(
-            '{"ready":true,"clicks":%d,"playing":%s,"available":%s,"deviceStatus":%d,"snapshot":"%s"}',
-            clicks, tostring(source.playing), tostring(device.available), device.status, call("ActiveSnapshot")))
+            '{"ready":true,"clicks":%d,"playing":%s,"available":%s,"deviceStatus":%d,"snapshot":"%s","retargetStage":%d}',
+            clicks, tostring(source.playing), tostring(device.available), device.status, call("ActiveSnapshot"), retargetStage))
     end
 end

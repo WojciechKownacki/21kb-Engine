@@ -131,6 +131,12 @@ bool MiniaudioBusRegistry::Sync(ma_engine& engine, kb::scene::Scene& scene, bool
         const float authored = ValidVolumeOr(bus->volume, 1.0F);
         float volume = snapshotVolume(fromSnapshot, record.name, authored);
         if (transition.IsActive()) {
+            for (const auto& captured : transition.fromVolumes) {
+                if (captured.bus == record.name) {
+                    volume = ValidVolumeOr(captured.volume, volume);
+                    break;
+                }
+            }
             // An empty/unknown transition target resolves to the authored volumes - the
             // same honest fallback an unknown active snapshot already has.
             const float target = snapshotVolume(toSnapshot, record.name, authored);

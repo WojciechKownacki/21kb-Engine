@@ -535,6 +535,119 @@ void RunVorbisUnicodePathTest() {
     Require(frames > 0U && energy > 1.0, "Unicode Vorbis stream produced silent PCM");
 }
 
+void RunSnapshotTransitionPcmTest() {
+    const auto tonePath = TestRoot() / "SnapshotTone.wav";
+    {
+        std::ofstream output{tonePath, std::ios::binary | std::ios::trunc};
+        output.write("RIFF", 4); WriteU32(output, 36U + 96000U); output.write("WAVEfmt ", 8);
+        WriteU32(output, 16U); WriteU16(output, 1U); WriteU16(output, 1U);
+        WriteU32(output, 48000U); WriteU32(output, 96000U); WriteU16(output, 2U); WriteU16(output, 16U);
+        output.write("data", 4); WriteU32(output, 96000U);
+        for (std::uint32_t frame = 0U; frame < 48000U; ++frame) {
+            const auto sample = static_cast<std::int16_t>(3276.0 * std::sin(
+                6.283185307179586 * 440.0 * static_cast<double>(frame) / 48000.0));
+            WriteU16(output, static_cast<std::uint16_t>(sample));
+        }
+        Require(output.good(), "Snapshot PCM tone could not be written");
+    }
+    kb::scene::Scene scene;
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses = {{.name = "Output", .volume = 0.5F}, {.name = "Effects", .parentBus = "Output", .volume = 0.5F}};
+    mixer.snapshots = {
+        {.name = "Quiet", .busVolumes = {{.bus = "Effects", .volume = 0.125F}}},
+        {.name = "Loud", .busVolumes = {{.bus = "Output", .volume = 0.75F}, {.bus = "Effects", .volume = 1.0F}}},
+    };
+    const auto mixerPath = TestRoot() / "SnapshotMixer.kbmixer";
+    Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixer), "Snapshot PCM mixer could not be saved");
+    Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = kb::assets::AssetId{9301U}, .type = kb::audio::kAudioMixerAssetType, .name = "SnapshotMixer",
+        .virtualPath = "/Game/Audio/SnapshotMixer.kbmixer", .physicalPath = mixerPath, .contentHash = 1U,
+    }), "Snapshot PCM mixer could not be registered");
+    using Access = kb::scene::SceneAudioMixerAccess;
+    Access::SetActiveMixer(scene, 9301U);
+    Require(Access::SetActiveSnapshot(scene, "Quiet"), "Snapshot PCM selection failed");
+    kb::audio_miniaudio::MiniaudioEngine engine;
+    engine.Initialize(true);
+    kb::audio_miniaudio::MiniaudioBusRegistry buses;
+    Require(buses.Sync(engine.Native(), scene, true), "Snapshot PCM graph could not initialize");
+    const auto route = buses.Resolve("Effects");
+    Require(route.Succeeded() && route.group != nullptr, "Snapshot PCM route is unavailable");
+    auto encoded = std::make_shared<kb::audio::AudioClipAsset>();
+    encoded->encodedBytes = ReadFileBytesU8(tonePath);
+    encoded->sourceExtension = ".wav";
+    const kb::audio_miniaudio::ResolvedAudioClip clip{
+        .audioClip = encoded, .extension = ".wav", .identity = "SnapshotPcmTone",
+    };
+    kb::audio_miniaudio::MiniaudioSound sound;
+    Require(sound.Initialize(engine.Native(), clip, false, route.group) == MA_SUCCESS,
+        "Snapshot PCM sound could not initialize");
+    Require(sound.OwnsEncodedPayloadForTesting(), "Snapshot PCM fixture did not use its synchronous memory decoder");
+    sound.Apply(kb::audio_miniaudio::MiniaudioSoundSettings{.volume = 0.25F, .loop = true, .spatial = false});
+    Require(sound.Start() == MA_SUCCESS, "Snapshot PCM sound could not start");
+    const auto measure = [&](std::string_view label, double expectedGain) {
+        Require(!buses.Sync(engine.Native(), scene, true), "A snapshot edit unnecessarily rebuilt the routing graph");
+        const double expected = (3276.0 / 32768.0) * expectedGain / std::sqrt(2.0);
+        std::size_t consecutive = 0U;
+        double rms = 0.0;
+        for (std::size_t attempt = 0U; attempt < 8U && consecutive < 4U; ++attempt) {
+            std::array<float, 2048U * 2U> output{};
+            ma_uint64 frames = 0U;
+            Require(ma_engine_read_pcm_frames(&engine.Native(), output.data(), 2048U, &frames) == MA_SUCCESS
+                && frames == 2048U, "Snapshot PCM read is incomplete");
+            double energy = 0.0;
+            for (std::size_t frame = 0U; frame < 2048U; ++frame) {
+                const float sample = output[frame * 2U];
+                Require(std::isfinite(sample), "Snapshot transition produced non-finite PCM");
+                energy += static_cast<double>(sample) * sample;
+            }
+            rms = std::sqrt(energy / 2048.0);
+            consecutive = std::abs(rms / expected - 1.0) < 0.02 ? consecutive + 1U : 0U;
+        }
+        std::cout << "Snapshot PCM " << label << " gain=" << expectedGain << " rms=" << rms
+            << " expected=" << expected << " blocks=" << consecutive << '\n';
+        Require(consecutive == 4U, std::string{label} + " did not produce four PCM blocks at the expected gain");
+        Require(sound.IsPlaying(), "Snapshot transition lost playing sound intent");
+    };
+    measure("quiet", 0.5 * 0.125 * 0.25);
+    Require(Access::BeginSnapshotTransition(scene, "Loud", 1.0F), "Snapshot fade could not begin");
+    Require(!Access::AdvanceSnapshotTransition(scene, 0.25F), "Snapshot fade completed too soon");
+    measure("fade-quarter", 0.5625 * 0.34375 * 0.25);
+    Require(Access::BeginSnapshotTransition(scene, "Quiet", 1.0F), "Snapshot interruption could not begin");
+    measure("interruption-continuity", 0.5625 * 0.34375 * 0.25);
+    Require(!Access::AdvanceSnapshotTransition(scene, 0.5F), "Interrupted fade completed too soon");
+    measure("interruption-half", 0.53125 * 0.234375 * 0.25);
+    Require(Access::BeginSnapshotTransition(scene, "", 1.0F), "Overlapping return fade could not begin");
+    measure("overlap-continuity", 0.53125 * 0.234375 * 0.25);
+    Require(!Access::AdvanceSnapshotTransition(scene, 0.5F), "Return fade completed too soon");
+    measure("return-half", 0.515625 * 0.3671875 * 0.25);
+    Require(Access::AdvanceSnapshotTransition(scene, 0.5F) && Access::ActiveSnapshot(scene).empty(),
+        "Snapshot return did not finish at the authored mix");
+    measure("authored-base", 0.5 * 0.5 * 0.25);
+    Require(Access::SetBusVolumeOverride(scene, "Effects", 0.75F)
+        && Access::BeginSnapshotTransition(scene, "Quiet", 1.0F)
+        && !Access::AdvanceSnapshotTransition(scene, 0.5F), "Overridden fade could not begin");
+    measure("override-precedence", 0.5 * 0.75 * 0.25);
+    Require(Access::ClearBusVolumeOverride(scene, "Effects"), "Snapshot override could not be cleared");
+    measure("underlying-fade-after-clear", 0.5 * 0.3125 * 0.25);
+    Require(!Access::BeginSnapshotTransition(scene, "Loud", std::numeric_limits<float>::quiet_NaN()),
+        "Non-finite duration changed a running fade");
+    measure("invalid-duration-preserves-mix", 0.5 * 0.3125 * 0.25);
+    Require(Access::AdvanceSnapshotTransition(scene, 0.5F), "Overridden fade did not finish");
+    measure("quiet-complete", 0.5 * 0.125 * 0.25);
+    Require(Access::BeginSnapshotTransition(scene, "Loud", 0.0F)
+        && !Access::SnapshotTransition(scene).IsActive(), "Zero-duration transition did not apply immediately");
+    measure("immediate-loud", 0.75 * 1.0 * 0.25);
+    Require(Access::SetActiveSnapshot(scene, "") && Access::SetBusVolumeOverride(scene, "Effects", 0.75F)
+        && Access::BeginSnapshotTransition(scene, "Quiet", 1.0F)
+        && !Access::AdvanceSnapshotTransition(scene, 0.5F)
+        && Access::BeginSnapshotTransition(scene, "Loud", 1.0F), "Overridden retarget could not begin");
+    measure("override-through-retarget", 0.5 * 0.75 * 0.25);
+    Require(Access::ClearBusVolumeOverride(scene, "Effects"), "Retarget override could not be cleared");
+    measure("captured-mix-excludes-override", 0.5 * 0.3125 * 0.25);
+    Require(!Access::AdvanceSnapshotTransition(scene, 0.5F), "Overridden retarget completed too soon");
+    measure("captured-mix-half", 0.625 * 0.65625 * 0.25);
+}
+
 void RunVorbisTransportTest() {
     const auto path = FixtureRoot() / "seek.ogg";
     const auto bytes = ReadFileBytesU8(path);
@@ -2619,6 +2732,9 @@ int RunTests(int argc, char** argv) {
     }
     if (filter.empty() || filter == "vorbis-transport") {
         RunVorbisTransportTest();
+    }
+    if (filter.empty() || filter == "snapshot-transition") {
+        RunSnapshotTransitionPcmTest();
     }
     if (filter.empty() || filter == "import-memory") {
         RunImportedMemoryLifecycleTest();

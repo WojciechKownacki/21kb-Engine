@@ -36,11 +36,40 @@ and its result, rather than completion metadata alone. It does not establish a
 precise wall-clock duration or exact interpolation curve.
 
 This scenario passed on desktop Chromium using native miniaudio WebAudio output
-and hardware WebGL2 through bgfx: nineteen checks, one native UI pixel capture,
-and ten intermediate PCM blocks in each fade. Steady RMS must remain within 2%
+and hardware WebGL2 through bgfx, including a native UI pixel capture and
+intermediate PCM levels in both fades. Steady RMS must remain within 2%
 of the analytic signal, with frequency within 30 Hz for 2048-frame windows.
 All phases retain one audio context and playing source intent.
 
-Transition interruption, overlapping transitions, curve continuity when
-retargeting, editor output equivalence, physical output, and other device/backend
-combinations remain separate verification work.
+Retargeting a running positive-duration transition now starts at its current
+per-bus blend. The last completed snapshot remains selected until the new
+transition finishes. Runtime overrides and mute remain stronger layers and are
+not captured as underlying snapshot gains. A non-positive duration still applies
+immediately; a non-finite duration leaves the running transition unchanged.
+
+The browser scenario also interrupts a two-second fade after 0.3 seconds of
+scene time, then retargets again after another 0.3 seconds. Actual PCM must remain
+within 75% to 130% of the initial base amplitude across at least sixteen blocks,
+then settle back at the authored mix. The previous behavior jumped to the old
+target before starting the next fade and fails this signal envelope. The updated
+scenario requires twenty-two checks and one native UI GPU capture.
+
+`kb_audio_runtime_tests snapshot-transition` verifies fifteen deterministic
+scene-time checkpoints using a real mixer graph and owned WAV memory decoding.
+Both parent and child gains vary, so the expected signal is their product.
+Each checkpoint requires four consecutive 2048-frame native PCM blocks within
+2% of the analytic RMS, with at most eight attempts. The cases include partial
+fades, interruption, overlapping retargets, return to authored gains, override
+precedence, clearing an override after retargeting, invalid durations, and an
+immediate transition. This isolates gain processing from asynchronous file
+streaming, which has separate decoder and transport tests.
+
+The native checkpoints passed in Windows Release and ASan builds.
+`kb_engine_tests script-audio-mixer` separately checks shared asset IO and script
+API state. The runtime-state layout change increments the engine module ABI;
+native modules must be rebuilt. `kb_21kb_particle_stage2_tests module-abi` checks
+that the module host rejects the previous ABI before calling its creation
+function. Its default invocation retains the complete existing test suite.
+
+Exact real-time curve timing, editor output equivalence, physical output, and
+other device/backend combinations remain separate verification work.

@@ -411,8 +411,14 @@ void TestProjectPolicy() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string_view{argv[1]} == "module-abi") {
+            TestOldEngineModuleAbiRejectedBeforeCreate();
+            std::cout << "Engine module ABI tests passed\n";
+            return 0;
+        }
+        if (argc != 1) return 1;
         TestComponentAndPresenceContract();
         TestPlaybackOwnershipAndBounds();
         TestSceneAndPrefabRoundTrips();

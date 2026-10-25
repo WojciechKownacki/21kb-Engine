@@ -310,5 +310,7 @@ It creates and selects snapshots through CLI, cooks the scene, and requires
 actual PCM for snapshot gains, runtime override precedence, clearing overrides,
 and the authored base mix. Two timed transitions must produce intermediate
 monotonic PCM levels and settle at the expected endpoint, retaining one context
-and hardware-rendered native UI pixels. Interruption, overlap, and exact curve
-timing are separate coverage. See [audio snapshots](../../../../docs/audio_snapshots.md).
+and hardware-rendered native UI pixels. A further click interrupts a running
+fade and retargets it again; real PCM must remain inside the continuous blend
+envelope before returning to the authored mix. Exact real-time curve timing
+remains separate coverage. See [audio snapshots](../../../../docs/audio_snapshots.md).

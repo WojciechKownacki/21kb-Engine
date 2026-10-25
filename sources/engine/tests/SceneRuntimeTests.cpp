@@ -18,6 +18,7 @@ void RunSceneHierarchyDepthTests();
 void RunPrefabHierarchyDepthTests();
 void RunEcsBatchHierarchyDepthTests();
 void RunScriptNativeHeaderReloadTest();
+void RunScriptAudioMixerTests();
 void RunPhysicsReplayOnlyTest();
 void RunPhysicsStepSpikeBenchmark();
 void RunAgentsFrameBenchmark();
@@ -127,6 +128,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunScriptSaveTests();
     } else if (suite == "script-native-header") {
         kb::tests::RunScriptNativeHeaderReloadTest();
+    } else if (suite == "script-audio-mixer") {
+        kb::tests::RunScriptAudioMixerTests();
     } else if (suite == "script-api") {
         kb::tests::RunScriptApiCatalogTests();
     } else if (suite == "visual-graph") {

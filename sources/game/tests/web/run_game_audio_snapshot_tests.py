@@ -38,7 +38,7 @@ def run_cases(args, root, report, origin):
             ("runtime override", "Loud", 0.0625), ("snapshot under runtime override", "Quiet", 0.0625),
             ("clear runtime override", "Quiet", 0.015625), ("authored base mix", "", 0.0625),
             ("fade to quiet", "Quiet", 0.015625), ("fade to base", "", 0.0625)]
-        reference = None
+        reference = base_reference = None
         for clicks, (label, snapshot, volume) in enumerate(phases, 1):
             cursor = len(case.states())
             after = case.audio()["count"]
@@ -48,6 +48,8 @@ def run_cases(args, root, report, origin):
             measured = case.output("actual PCM " + label, after, True, volume=volume)
             if clicks == 1:
                 reference = measured
+            if clicks == 6:
+                base_reference = measured
             if clicks in (7, 8):
                 blocks = [b for b in case.audio()["blocks"] if b["index"] > after]
                 middle = [b for b in blocks if reference * 1.1 < b["rms"] < reference * 4 * 0.9]
@@ -56,14 +58,24 @@ def run_cases(args, root, report, origin):
                 require(all((b["rms"] >= a["rms"] * 0.95 if increasing else b["rms"] <= a["rms"] * 1.05)
                     for a, b in zip(middle, middle[1:])), "Native PCM fade did not move monotonically")
                 report["observations"].append(dict(check="actual PCM ramp " + label, intermediateBlocks=middle))
+        cursor = len(case.states())
+        after = case.audio()["count"]
+        case.click_save()
+        case.wait("native interrupted and overlapping fades complete", lambda v: v["clicks"] == 9 and
+            v["retargetStage"] == 4 and v["available"] and v["playing"] and v["snapshot"] == "", cursor)
+        case.output("actual PCM after overlapping fades", after, True, reference=base_reference, volume=0.0625)
+        blocks = [b for b in case.audio()["blocks"] if b["index"] > after]
+        require(len(blocks) >= 16 and all(base_reference * 0.75 < b["rms"] < base_reference * 1.3 for b in blocks),
+            "Interrupted fades jumped outside the continuous blend envelope: " + str(blocks))
+        report["observations"].append(dict(check="actual PCM continuity across interrupted and overlapping fades", blocks=blocks))
         events = case.client.evaluate("kbMouseEvents")
-        require(len([e for e in events if e["type"] == "click"]) == len(phases) and all(e["trusted"] for e in events),
+        require(len([e for e in events if e["type"] == "click"]) == len(phases) + 1 and all(e["trusted"] for e in events),
             "Snapshot changes require trusted native UI clicks")
         require(len(case.audio()["contexts"]) == 1, "Snapshot changes recreated the audio context")
         case.blue_button("audio-snapshots-native-ui")
         report["coverage"] = dict(cliSnapshotAuthoring=True, cookedSnapshotSelection=True, actualNativePcm=True,
             snapshotSwitch=True, overridePrecedence=True, returnToBase=True, transitionRamp=True,
-            transitionInterruption=False, overlappingTransitions=False, preciseCurveTiming=False,
+            transitionInterruption=True, overlappingTransitions=True, retargetContinuity=True, preciseCurveTiming=False,
             editorMixComparison=False, physicalOutput=False)
 
 

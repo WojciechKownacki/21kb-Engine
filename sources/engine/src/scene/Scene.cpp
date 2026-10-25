@@ -51,6 +51,7 @@
 #include <cmath>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 namespace kb::scene {
 namespace {
@@ -415,20 +416,45 @@ bool SceneAudioMixerAccess::BeginSnapshotTransition(Scene& scene, std::string_vi
         return false;
     }
     SceneState& state = SceneAccess::State(scene);
-    // A running transition completes instantly before retargeting - the new blend always
-    // starts from a well-defined snapshot state, never from an unrepresentable mid-blend.
-    if (state.audioMixerSnapshotTransition.IsActive()) {
-        state.audioMixerSnapshotName = state.audioMixerSnapshotTransition.toSnapshot;
-        state.audioMixerSnapshotTransition = {};
-    }
     if (durationSeconds <= 0.0F) {
         state.audioMixerSnapshotName.assign(toSnapshot);
+        state.audioMixerSnapshotTransition = {};
         return true;
+    }
+    std::vector<AudioMixerBusVolumeOverride> fromVolumes;
+    const auto& previous = state.audioMixerSnapshotTransition;
+    if (previous.IsActive() && state.audioMixerAssetId != 0U) {
+        const auto mixer = state.assets.Load<kb::audio::AudioMixerAsset>(kb::assets::AssetId{state.audioMixerAssetId});
+        if (mixer.IsLoaded()) {
+            const auto* from = mixer->FindSnapshot(state.audioMixerSnapshotName);
+            const auto* to = mixer->FindSnapshot(previous.toSnapshot);
+            const auto snapshotGain = [](const auto* snapshot, const auto& bus) {
+                if (snapshot != nullptr) {
+                    for (const auto& value : snapshot->busVolumes) {
+                        if (value.bus == bus.name) return value.volume;
+                    }
+                }
+                return bus.volume;
+            };
+            fromVolumes.reserve(mixer->buses.size());
+            for (const auto& bus : mixer->buses) {
+                float source = snapshotGain(from, bus);
+                for (const auto& captured : previous.fromVolumes) {
+                    if (captured.bus == bus.name) {
+                        source = captured.volume;
+                        break;
+                    }
+                }
+                const float target = snapshotGain(to, bus);
+                fromVolumes.push_back({.bus = bus.name, .volume = source + (target - source) * previous.Progress()});
+            }
+        }
     }
     state.audioMixerSnapshotTransition = AudioMixerSnapshotTransition{
         .toSnapshot = std::string{ toSnapshot },
         .elapsedSeconds = 0.0F,
         .durationSeconds = durationSeconds,
+        .fromVolumes = std::move(fromVolumes),
     };
     return true;
 }

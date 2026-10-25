@@ -33,7 +33,7 @@ finger from pressing a button. The captured ID survives contact reordering and i
 release uses its own position while other fingers remain down. Focus loss ends the
 UI press without activation; later moves do not revive it. Native callers can pass
 the same contact list through `SceneUIInput::touchPoints`.
-The input structure and cancellation protocol use engine module ABI 11.
+The input structure and cancellation protocol require engine module ABI 11 or later.
 Rebuild native engine modules; the module host rejects the previous ABI before
 calling a module's creation function.
 

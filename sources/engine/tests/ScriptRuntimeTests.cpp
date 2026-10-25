@@ -4836,7 +4836,7 @@ void RunAudioMixerAssetIOAndAccessTest() {
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).size() == 1U, "Clearing must remove exactly the named override");
 
     // LIB-150: snapshot transition - deterministic scene-delta advance, FROM state stays
-    // active until completion, retarget completes the previous transition first.
+    // active until completion, including when a running transition is retargeted.
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Calm"),
         "Audio snapshot fixture setup failed");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 1.0F),
@@ -4867,9 +4867,9 @@ void RunAudioMixerAssetIOAndAccessTest() {
         "A non-finite transition delta must be a non-mutating no-op");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "", 1.0F),
         "A transition back to authored volumes must start");
-    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Calm"
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
             && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).toSnapshot.empty(),
-        "Retargeting mid-transition must complete the previous transition instantly first");
+        "Retargeting must retain the last completed snapshot until the new transition completes");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 0.0F),
         "A valid immediate snapshot transition must succeed");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
@@ -16805,6 +16805,11 @@ void RunScriptComponentPropertyTests() {
     RunScriptAudioComponentPropertiesTest();
     RunScriptSceneComponentGeneratedAccessorCoverageTest();
     RunScriptSceneComponentPropertiesNeverExposeRawPointerTest();
+}
+
+void RunScriptAudioMixerTests() {
+    RunAudioMixerAssetIOAndAccessTest();
+    RunScriptAudioMixerApiTest();
 }
 
 void RunScriptRuntimeTests() {
