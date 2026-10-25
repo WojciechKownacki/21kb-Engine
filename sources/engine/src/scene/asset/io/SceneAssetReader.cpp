@@ -199,9 +199,14 @@ SceneDocumentLoadResult SceneAssetReader::Read(std::vector<std::uint8_t> bytes) 
     if (!input.ReadRaw(magic.data(), magic.size()) ||
         magic != SceneAssetFormat::Magic ||
         !input.ReadUInt32(fileVersion) ||
-        fileVersion == 0U ||
-        fileVersion > SceneDocument::CurrentFileVersion) {
+        fileVersion == 0U) {
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset header is invalid." };
+    }
+    if (fileVersion > SceneDocument::CurrentFileVersion) {
+        // A well-formed header from a newer engine: say so, instead of calling the file damaged.
+        return SceneDocumentLoadResult{ .succeeded = false, .document = {},
+            .error = "Scene asset is version " + std::to_string(fileVersion) + ", saved by a newer engine; this engine reads up to version " +
+                std::to_string(SceneDocument::CurrentFileVersion) + ". Update the engine to open it." };
     }
 
     SceneDocument scene;
