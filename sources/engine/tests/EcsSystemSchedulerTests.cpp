@@ -710,6 +710,58 @@ void RunDebugTraceCapturesSystemExecutionTest() {
     scheduler.Shutdown(world);
 }
 
+// The critical path follows, from the system that finished last, the dependency that finished last, and keeps CPU time
+// summed over workers apart from the wall time of the chain.
+void RunSchedulerCriticalPathTest() {
+    const auto event = [](const char* name, std::uint64_t start, std::uint64_t end, std::vector<std::string> blockedBy) {
+        kb::ecs::SystemSchedulerTraceEvent value;
+        value.systemName = name;
+        value.startTimeNanoseconds = start;
+        value.endTimeNanoseconds = end;
+        value.durationNanoseconds = end - start;
+        value.blockedDependencies = std::move(blockedBy);
+        return value;
+    };
+    kb::ecs::SystemSchedulerTrace trace;
+    // Two workers: Input and Physics run side by side, Animation waits for both (Physics is the later one), Render waits
+    // for Animation. Audio runs alone and ends earlier than Render.
+    trace.events = {
+        event("Input", 0U, 10U, {}),
+        event("Physics", 0U, 40U, {}),
+        event("Animation", 40U, 60U, { "Input", "Physics" }),
+        event("Render", 65U, 100U, { "Animation" }),
+        event("Audio", 0U, 90U, {}),
+    };
+    const kb::ecs::SystemSchedulerCriticalPath path = kb::ecs::ComputeSystemSchedulerCriticalPath(trace);
+    kb::tests::Require(path.systems == std::vector<std::string>{ "Physics", "Animation", "Render" }, "the critical path must follow the latest dependency of each system");
+    kb::tests::Require(path.wallNanoseconds == 100U, "the critical path wall time runs from the first start to the last end");
+    kb::tests::Require(path.busyNanoseconds == 40U + 20U + 35U, "the critical path busy time is the running time of its systems, not the waits between them");
+    kb::tests::Require(kb::ecs::SumSystemSchedulerCpuNanoseconds(trace) == 10U + 40U + 20U + 35U + 90U, "CPU time is the sum over all systems");
+    kb::tests::Require(kb::ecs::SumSystemSchedulerCpuNanoseconds(trace) > path.wallNanoseconds, "CPU time summed over workers may exceed the wall time");
+    kb::tests::Require(kb::ecs::ComputeSystemSchedulerCriticalPath(kb::ecs::SystemSchedulerTrace{}).systems.empty(), "an empty trace has no critical path");
+
+    // A dependency name that loops back must not hang the walk.
+    kb::ecs::SystemSchedulerTrace loop;
+    loop.events = { event("A", 0U, 10U, { "B" }), event("B", 10U, 20U, { "A" }) };
+    kb::tests::Require(kb::ecs::ComputeSystemSchedulerCriticalPath(loop).systems.size() == 2U, "a dependency loop must end the walk");
+
+    // The real scheduler records the same dependencies: a chain of three systems is its own critical path.
+    kb::ecs::World world;
+    std::vector<std::string> order;
+    kb::ecs::SystemAccess afterFirst;
+    afterFirst.After("PathA");
+    kb::ecs::SystemAccess afterSecond;
+    afterSecond.After("PathB");
+    kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{ .debugTraceEnabled = true } };
+    scheduler.Add(std::make_unique<RecordingSystem>("PathA", kb::ecs::SystemAccess{}, order), world);
+    scheduler.Add(std::make_unique<RecordingSystem>("PathB", std::move(afterFirst), order), world);
+    scheduler.Add(std::make_unique<RecordingSystem>("PathC", std::move(afterSecond), order), world);
+    scheduler.Update(world, 0.0F);
+    kb::tests::Require(kb::ecs::ComputeSystemSchedulerCriticalPath(scheduler.LastDebugTrace()).systems == std::vector<std::string>{ "PathA", "PathB", "PathC" },
+        "the real scheduler trace must yield the dependency chain as its critical path");
+    scheduler.Shutdown(world);
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -773,6 +825,7 @@ void RunEcsSystemSchedulerTests() {
     RunSchedulerLargeSparseGraphCacheInvalidationTest();
     RunProfilerTraceExportWritesExternalJsonFileTest();
     RunDebugTraceCapturesSystemExecutionTest();
+    RunSchedulerCriticalPathTest();
 }
 
 } // namespace kb::tests

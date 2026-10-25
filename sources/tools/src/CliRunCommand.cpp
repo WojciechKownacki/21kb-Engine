@@ -3,6 +3,7 @@
 #include "CliAudioMeterJson.hpp"
 
 #include "engine/core/JsonValue.hpp"
+#include "engine/ecs/SystemSchedulerTraceExport.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/ecs/WorldTelemetryExport.hpp"
 #include "engine/audio/AudioPlayback.hpp"
@@ -34,6 +35,50 @@
 namespace kb::cli {
 
 namespace {
+
+// The ECS scheduler of the last simulated frame. Wall time and CPU time are separate numbers: cpu_time_ns adds up the
+// durations of all systems over all workers, so it can exceed the frame's wall time.
+[[nodiscard]] kb::core::JsonValue EcsSchedulerJson(const kb::ecs::SystemSchedulerTrace& trace) {
+    using kb::core::JsonValue;
+    auto scheduler = JsonValue::MakeObject();
+    scheduler.Set("scope", JsonValue::MakeString("ECS world scheduler, last simulated frame; the physics and render stages have their own schedulers and are not in this trace"));
+    scheduler.Set("frame_index", JsonValue::MakeNumber(static_cast<double>(trace.frameIndex)));
+    scheduler.Set("frame_wall_ns", JsonValue::MakeNumber(static_cast<double>(trace.frameDurationNanoseconds)));
+    scheduler.Set("cpu_time_ns", JsonValue::MakeNumber(static_cast<double>(kb::ecs::SumSystemSchedulerCpuNanoseconds(trace))));
+    scheduler.Set("cpu_time_basis", JsonValue::MakeString("sum of the durations of all systems over all workers; not wall time and may exceed frame_wall_ns"));
+    scheduler.Set("worker_count", JsonValue::MakeNumber(static_cast<double>(trace.workers.size())));
+    auto systems = JsonValue::MakeArray();
+    for (const kb::ecs::SystemSchedulerTraceEvent& event : trace.events) {
+        auto entry = JsonValue::MakeObject();
+        entry.Set("name", JsonValue::MakeString(event.systemName));
+        entry.Set("stage", JsonValue::MakeNumber(static_cast<double>(event.stageIndex)));
+        entry.Set("worker", JsonValue::MakeNumber(static_cast<double>(event.workerIndex)));
+        entry.Set("start_ns", JsonValue::MakeNumber(static_cast<double>(event.startTimeNanoseconds)));
+        entry.Set("end_ns", JsonValue::MakeNumber(static_cast<double>(event.endTimeNanoseconds)));
+        entry.Set("duration_ns", JsonValue::MakeNumber(static_cast<double>(event.durationNanoseconds)));
+        entry.Set("wait_ns", JsonValue::MakeNumber(static_cast<double>(event.waitTimeNanoseconds)));
+        entry.Set("wait_reason", JsonValue::MakeString(event.waitReason));
+        auto blockedBy = JsonValue::MakeArray();
+        for (const std::string& dependency : event.blockedDependencies) {
+            blockedBy.Append(JsonValue::MakeString(dependency));
+        }
+        entry.Set("blocked_by", std::move(blockedBy));
+        systems.Append(std::move(entry));
+    }
+    scheduler.Set("systems", std::move(systems));
+    const kb::ecs::SystemSchedulerCriticalPath path = kb::ecs::ComputeSystemSchedulerCriticalPath(trace);
+    auto critical = JsonValue::MakeObject();
+    auto names = JsonValue::MakeArray();
+    for (const std::string& name : path.systems) {
+        names.Append(JsonValue::MakeString(name));
+    }
+    critical.Set("systems", std::move(names));
+    critical.Set("wall_ns", JsonValue::MakeNumber(static_cast<double>(path.wallNanoseconds)));
+    critical.Set("busy_ns", JsonValue::MakeNumber(static_cast<double>(path.busyNanoseconds)));
+    critical.Set("basis", JsonValue::MakeString("from the system that finished last, the dependency that finished last of each system; wall_ns includes waits, busy_ns does not"));
+    scheduler.Set("critical_path", std::move(critical));
+    return scheduler;
+}
 
 [[nodiscard]] std::optional<int> ParseInt(const std::string& text) noexcept {
     try {
@@ -390,6 +435,9 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     bool audioSucceeded = true;
     std::string audioError;
     int completedFrames = 0;
+    if (ecsReport != nullptr) {
+        scene.Runtime().SetEcsProfilerEnabled(true);
+    }
     for (int frame = 1; frame <= frames; ++frame) {
         const auto updateStarted = std::chrono::steady_clock::now();
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
@@ -498,6 +546,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
         report.Set("diagnostics", JsonValue::MakeNumber(static_cast<double>(printer.total)));
         report.Set("telemetry", std::move(telemetry));
+        report.Set("scheduler", EcsSchedulerJson(scene.Runtime().LastEcsProfilerTrace()));
         *ecsReport << report.Dump() << '\n';
         if (!ecsReport->good()) {
             io.err << "error: the ECS telemetry report could not be written" << '\n';

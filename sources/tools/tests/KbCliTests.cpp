@@ -448,6 +448,12 @@ void RunParticleReportCommandTests() {
             basis->Find("estimated") && basis->Find("estimated")->Size() > 0U && telemetry->Find("committed_bytes") != nullptr &&
             telemetry->Find("query_estimated_gigabytes_per_second") != nullptr,
             "ECS telemetry report does not separate measured, estimated and unavailable numbers");
+        const JsonValue* scheduler = report.Find("scheduler");
+        Require(scheduler != nullptr && scheduler->Find("frame_wall_ns") != nullptr && scheduler->Find("cpu_time_ns") != nullptr &&
+            scheduler->Find("cpu_time_basis") != nullptr && scheduler->Find("cpu_time_basis")->AsString().find("not wall time") != std::string::npos &&
+            scheduler->Find("systems") != nullptr && scheduler->Find("critical_path") != nullptr &&
+            scheduler->Find("critical_path")->Find("systems") != nullptr && scheduler->Find("critical_path")->Find("wall_ns") != nullptr,
+            "ECS report must carry the scheduler trace with wall and CPU time kept apart and a critical path");
         Require(Contains(err.str(), "done:"), "ECS telemetry report lost the stderr log");
     }
 
