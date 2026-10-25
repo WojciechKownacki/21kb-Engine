@@ -31,6 +31,7 @@
 #include "kb/render/scene/RenderScene.hpp"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -598,6 +599,33 @@ int main() {
         Require(Map2DAssetIO::Load(file)->tiles == map.tiles, "runtime rules and scripts leave source data unchanged");
         Require(scene.Runtime().RemoveSceneSystem(handle), "detach rich runtime");
         for (const auto& asset : manager.Registry().All()) Require(!NormalizeAssetPath(asset.virtualPath).starts_with("/Runtime/"), "runtime releases generated resources on detach");
+    }
+    // A large map: a fill, a stroke across a 16 cell chunk seam, undo and redo keep every tile,
+    // and the whole sequence stays inside a generous time budget.
+    {
+        constexpr std::uint32_t kSide = 400U;
+        const auto started = std::chrono::steady_clock::now();
+        Map2DAsset map = kb::assets::MakeEmptyMap2DAsset(kSide, kSide);
+        kb::world2d::Map2DEditor editor{ map, library, assets };
+        Require(editor.FillGround(*dirtBrush, 0U, 0U, 0U) == kSide * kSide, "a large fill must cover every cell");
+        const Map2DAsset filled = map;
+        kb::world2d::Map2DChangeSet changes;
+        editor.SetChangeSet(&changes);
+        Require(editor.PaintGround(*grassBrush, { 15U, 15U, 16U, 16U }, 0U), "a stroke across the chunk seam must paint");
+        changes.Finish(map);
+        editor.SetChangeSet(nullptr);
+        Require(Tile(map, 15U, 15U)->ground.cell == 25U && Tile(map, 16U, 16U)->ground.cell == 25U &&
+                HasBorder(map, 16U, 14U, grassBrush->Border(Map2DBorderPiece::S)) && HasBorder(map, 14U, 16U, grassBrush->Border(Map2DBorderPiece::E)),
+            "borders must cross the chunk seam on both axes");
+        Require(map.tiles.size() == filled.tiles.size(), "the stroke must not add tiles beyond the fill");
+        const Map2DAsset painted = map;
+        changes.Undo(map);
+        Require(map.tiles == filled.tiles, "undo must restore every tile of the large map");
+        changes.Redo(map);
+        Require(map.tiles == painted.tiles, "redo must repeat the stroke on the large map");
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
+        std::printf("map2d large map %ux%u edit sequence %lld ms\n", kSide, kSide, static_cast<long long>(elapsed.count()));
+        Require(elapsed < std::chrono::seconds(5), "editing a large map must stay inside its time budget");
     }
     std::filesystem::remove_all(root);
     std::puts("kb_world2d_tests passed");
