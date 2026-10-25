@@ -12,14 +12,15 @@ from run_game_touch_tests import require
 
 
 class TimeoutHandler(http.server.SimpleHTTPRequestHandler):
+    resource_name = "Game.kbpack"
     stop = threading.Event()
     release_stall = threading.Event()
     stalled = True
     transfers = []
 
     def do_GET(self):
-        stalled = self.path == "/Stalled/Game.kbpack" and TimeoutHandler.stalled
-        active = self.path == "/Progressing/Game.kbpack"
+        stalled = self.path == "/Stalled/" + self.resource_name and TimeoutHandler.stalled
+        active = self.path == "/Progressing/" + self.resource_name
         if not stalled and not active:
             return super().do_GET()
         data = Path(self.translate_path(self.path)).read_bytes()
@@ -34,7 +35,8 @@ class TimeoutHandler(http.server.SimpleHTTPRequestHandler):
 
         try:
             self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Type", "application/wasm" if self.resource_name.endswith(".wasm")
+                else "application/octet-stream")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -53,7 +55,7 @@ class TimeoutHandler(http.server.SimpleHTTPRequestHandler):
             self.close_connection = True
 
 
-def run_cases(args, root, report, origin):
+def run_cases(args, root, report, origin, *, resource_name="Game.kbpack", error_code="fetch-timeout"):
     TimeoutHandler.stop.clear()
     TimeoutHandler.release_stall.clear()
     TimeoutHandler.stalled = True
@@ -73,16 +75,21 @@ def run_cases(args, root, report, origin):
             deadline = time.monotonic() + 42
             while True:
                 failed = stalled.client.evaluate("({data:{...document.documentElement?.dataset},"
-                    "metrics:window.kbLoadMetrics,visible:document.querySelector('#status')?.hidden===false})")
+                    "metrics:window.kbLoadMetrics,visible:document.querySelector('#status')?.hidden===false,"
+                    "hasGraphics:!!window.kbTouchGraphics,packRequested:performance.getEntriesByType('resource')"
+                    ".some(value=>new URL(value.name).pathname.endsWith('/Game.kbpack'))})")
                 if failed["data"].get("kbError"):
                     break
-                require(time.monotonic() < deadline, "Idle download did not report a bounded native failure")
+                require(time.monotonic() < deadline, "Idle download did not report a bounded failure")
                 time.sleep(0.05)
-            require(failed["data"]["kbError"] == "fetch-timeout" and failed["visible"] and
+            require(failed["data"]["kbError"] == error_code and failed["visible"] and
                 not failed["data"].get("kbFirstFrame") and failed["metrics"]["firstFrameMs"] is None,
-                "Idle download did not stop at its native deadline: " + str(failed))
+                "Idle download did not stop at its deadline: " + str(failed))
+            if resource_name == "Game.wasm":
+                require(not failed["hasGraphics"] and not failed["packRequested"] and
+                    not failed["data"].get("kbBackend"), "Timed-out WASM startup reached the runtime: " + str(failed))
             stalled.paint()
-            require(stalled.client.evaluate("document.documentElement.dataset.kbError") == "fetch-timeout",
+            require(stalled.client.evaluate("document.documentElement.dataset.kbError") == error_code,
                 "Closing the expired fetch replaced its timeout diagnostic")
             report["observations"].append(dict(check="actual stalled body reaches idle timeout", state=failed))
             TimeoutHandler.release_stall.set()
@@ -90,9 +97,9 @@ def run_cases(args, root, report, origin):
             verify(active.ready(), 0)
             active.blue_button("active-transfer-over-thirty-seconds")
             measure(active, "active-transfer", report, len(pack))
-            transfer = next(value for value in TimeoutHandler.transfers if value["route"] == "/Progressing/Game.kbpack")
+            transfer = next(value for value in TimeoutHandler.transfers if value["route"] == "/Progressing/" + resource_name)
             require(len(transfer["chunks"]) == 3 and transfer["chunks"][-1]["elapsedSeconds"] >= 30 and
-                sum(value["bytes"] for value in transfer["chunks"]) == len(pack),
+                sum(value["bytes"] for value in transfer["chunks"]) == (web / resource_name).stat().st_size,
                 "The active response did not exercise progress beyond the idle interval: " + str(transfer))
             report["observations"].append(dict(check="active download longer than idle interval succeeds", transfer=transfer))
 

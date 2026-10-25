@@ -227,3 +227,13 @@ timeout diagnostic when the request is cancelled; the second must reach native
 readiness and hardware-rendered UI. Restoring the stalled response and normally
 reloading must also recover rendering, input and persistence. The standalone
 sanitized test covers the production idle policy's boundary and progress rules.
+
+`run_game_wasm_timeout_tests.py` uses the same arguments and reports
+`21kb.web-game-wasm-timeout/v1`. It applies the real stalled/progressing/reload
+scenario to the WASM module before native startup. A failed bootstrap must not
+request the package or create a shader; successful and reloaded sessions still
+require native input, persistence and hardware GPU readback.
+`run_game_wasm_loading_tests.py` reports `21kb.web-game-wasm-loading/v1` for
+missing/corrupt modules, a response interrupted mid-body, a generic MIME type
+and a script/WASM directory separate from the HTML page. The two valid variants
+require native readiness and actual hardware-rendered button captures.

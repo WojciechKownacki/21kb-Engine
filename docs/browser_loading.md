@@ -51,6 +51,26 @@ test also checks the exact idle boundary, increasing versus duplicate byte
 counts and deadline reset for a new request. These checks cover the package
 request after WASM startup, rather than a stalled download of the WASM module.
 
+The default WASM loader separately observes received bytes before native
+startup, using the public `Module.instantiateWasm` callback. It applies the
+same 30-second idle interval and reports `wasm-timeout` when progress stops.
+The deadline ends at HTTP body completion, before compilation and native
+initialization. A late network rejection cannot replace the first failure or
+start the runtime. Reload creates a new request.
+HTTP failure reports `wasm-http`, interrupted transport reports `wasm-fetch`,
+and invalid or incompatible modules report `wasm-init`. The existing reload
+message remains visible while native startup has not run.
+
+`run_game_wasm_timeout_tests.py` checks actual stalled and 32-second progressing
+WASM responses concurrently, then reload recovery, GPU pixels, input and
+persistence. The stalled case must not request the package or compile a game
+shader. `run_game_wasm_loading_tests.py` also checks missing and corrupt modules,
+a real connection closed mid-body, a generic binary MIME type and script/WASM
+files hosted in a different directory from the HTML page. The loader uses
+streaming instantiation for `application/wasm` and binary instantiation for
+other MIME types. It preserves the public `locateFile` and `wasmBinary` options;
+a supplied custom instantiator retains control of its own loading policy.
+
 The `21kb.web-game-loading/v1` result retains package/runtime hashes, native
 observations, browser events, resource and heap measurements and four GPU
 captures. WASM capacity and JavaScript heap samples do not measure process RSS,
