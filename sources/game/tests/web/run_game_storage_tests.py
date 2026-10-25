@@ -352,12 +352,16 @@ def run_cases(args, root, report, origin):
 
 def main(*, fixture=author_fixture, scenario=run_cases,
         schema="21kb.web-game-storage-tests/v1", description=__doc__, prefix="GameStorage",
-        http_handler_type=http.server.SimpleHTTPRequestHandler):
+        http_handler_type=http.server.SimpleHTTPRequestHandler, native_tools=True):
     parser = argparse.ArgumentParser(description=description)
-    for name in ["cli", "cooker", "engine-root", "shaderc", "directory", "browser", "output"]:
+    names = ["directory", "browser", "output"]
+    if native_tools:
+        names = ["cli", "cooker", "engine-root", "shaderc", *names]
+    for name in names:
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--browser-arg", action="append", default=[])
-    parser.add_argument("--cook-cache", type=Path)
+    if native_tools:
+        parser.add_argument("--cook-cache", type=Path)
     args = parser.parse_args()
     if hasattr(ctypes, "windll"):
         ctypes.windll.kernel32.SetErrorMode(32771)

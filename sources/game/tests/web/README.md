@@ -237,3 +237,11 @@ require native input, persistence and hardware GPU readback.
 missing/corrupt modules, a response interrupted mid-body, a generic MIME type
 and a script/WASM directory separate from the HTML page. The two valid variants
 require native readiness and actual hardware-rendered button captures.
+
+`run_wasm_bootstrap_failure_tests.py --browser /path/to/chromium --directory
+build/web-player/bin --output build/web-player-results` requires only a built
+production player and the pinned browser transport dependency. It checks the
+three WASM failure cases before native startup. Its report explicitly excludes
+native runtime and GPU rendering acceptance; the unused empty package sentinel
+must never be requested. The CI Web player job builds `kb_game_webgl` and runs
+this command. Complete cooked game/GPU checks remain separate.

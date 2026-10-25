@@ -35,6 +35,7 @@ and transform-pass comparisons remain bit-exact on every toolchain.
 
 | CI job | Runner | What it runs |
 | --- | --- | --- |
+| Web player bootstrap | `ubuntu-24.04` | Strict Release build of the production WebGL2 host; real browser HTTP, binary and interrupted-body failures before native startup; no GPU rendering acceptance |
 | Web input ASan UBSan | `ubuntu-24.04` | Production touch collector compiled to WebAssembly with ASan and UBSan; trusted headless Chromium touch events and native state readback |
 | Linux native read batches | `ubuntu-24.04` | Isolated background read batch tests under ASan and UBSan, covering priority, cancellation and exact ranges |
 | clang-tidy gate | `windows-2025-vs2026` | `scripts/clang_tidy_gate.py` over changed first-party sources; every source when a first-party header changes, on manual dispatch, or in the weekly scheduled run |
@@ -49,12 +50,15 @@ diagnostic with exit code 2.
 
 ## Not covered by CI
 
-There is no macOS job: macOS is not a tested platform. The renderer, the
-editor and the packaged game hosts build only on Windows in CI; the Linux row
-builds neither the renderer nor the editor, and no CI job builds the Android or
-Web player. The isolated Web input job does not validate the browser renderer,
-asset packs or a complete game. None of these players may be described as
-supported until a CI job builds and tests them.
+There is no macOS job: macOS is not a tested platform. Native renderer, editor
+and packaged desktop host execution is covered only on Windows; the Linux
+native row builds neither the renderer nor the editor. The Web player job
+cross-compiles the production WebGL2 host and verifies failures before native
+startup. Its empty package sentinel must never be requested; it does not cook
+or run a complete game and does not qualify a GPU backend. The isolated Web
+input job also does not validate browser rendering or asset packs. Android and
+WebGPU players are not built in CI. Unvalidated runtime cells remain unsupported
+until their actual platform workflows pass.
 
 `kb_engine_library_tests` verifies the catalog and parity of Native, Lua and
 Visual Graph entry points; it runs in the Windows MSVC and Linux rows.

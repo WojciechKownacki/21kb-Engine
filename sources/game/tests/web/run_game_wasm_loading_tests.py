@@ -31,7 +31,7 @@ class WasmLoadingHandler(http.server.SimpleHTTPRequestHandler):
         WasmLoadingHandler.transmissions.append(dict(route=self.path, declaredBytes=len(data), sentBytes=sent))
 
 
-def run_cases(args, root, report, origin):
+def run_cases(args, root, report, origin, *, failures_only=False):
     WasmLoadingHandler.transmissions = []
     web = root / "Web"
     engine = web / "Engine"
@@ -42,6 +42,8 @@ def run_cases(args, root, report, origin):
             ("Corrupt", "wasm-init", "WASM startup failed"),
             ("Disconnected", "wasm-fetch", "WASM startup failed"), ("WrongMime", None, None),
             ("Relocated", None, None)]:
+        if failures_only and code is None:
+            continue
         folder = web / label
         folder.mkdir()
         if label == "Relocated":
@@ -90,7 +92,7 @@ def run_cases(args, root, report, origin):
                 "WASM failure changed its cause or produced an unhandled exception")
             report["observations"].append(dict(check="WASM startup refuses " + label, state=state))
     report["httpTransfers"] = list(WasmLoadingHandler.transmissions)
-    require(len(report["httpTransfers"]) == 2, "An actual controlled WASM HTTP body is missing")
+    require(len(report["httpTransfers"]) == (1 if failures_only else 2), "An actual controlled WASM HTTP body is missing")
     partial = next(value for value in report["httpTransfers"] if value["route"].startswith("/Disconnected/"))
     require(0 < partial["sentBytes"] < partial["declaredBytes"], "The WASM connection was not interrupted mid-body")
 
