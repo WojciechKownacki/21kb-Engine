@@ -29,11 +29,13 @@ jobs:
           version: 6.0.9
           actions-cache-folder: emsdk-cache
       - name: Install the compiler cache
+        id: compiler_cache
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y ccache
       - name: Restore Web compiler objects
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: web_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: build/ccache-web
           key: ${{ runner.os }}-emsdk-6.0.9-webgl-ccache-v1-${{ github.sha }}
@@ -49,8 +51,7 @@ jobs:
             -DKB_BUILD_EDITOR=OFF -DKB_BUILD_RENDERER=ON \
             -DKB_BUILD_GRAPH_SHADERC=OFF -DKB_GENERATE_RENDERER_SHADERS=OFF \
             -DKB_BUILD_PACKAGED_GAME_HOST=ON -DKB_WEB_RENDERER=WEBGL
-          cmake --build build/web-player --target kb_game_webgl --parallel 2
-          ccache --show-stats
+          cmake --build build/web-player --target kb_game_webgl --parallel 4
       - name: Verify bootstrap failures before native startup
         run: |
           python3 -m venv build/web-player-tools
@@ -58,6 +59,15 @@ jobs:
           browser="$(command -v google-chrome || command -v chromium)"
           build/web-player-tools/bin/python sources/game/tests/web/run_wasm_bootstrap_failure_tests.py \
             --browser "$browser" --directory build/web-player/bin --output build/web-player-results
+      - name: Report Web compiler cache statistics
+        if: always() && steps.compiler_cache.outcome == 'success'
+        run: ccache --show-stats
+      - name: Keep Web compiler objects
+        if: always() && steps.web_cache.outputs.cache-primary-key != '' && steps.web_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: build/ccache-web
+          key: ${{ steps.web_cache.outputs.cache-primary-key }}
       - name: Keep bootstrap results
         if: always()
         uses: actions/upload-artifact@v4

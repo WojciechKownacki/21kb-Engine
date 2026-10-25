@@ -41,6 +41,14 @@ and transform-pass comparisons remain bit-exact on every toolchain.
 | clang-tidy gate | `windows-2025-vs2026` | `scripts/clang_tidy_gate.py` over changed first-party sources; every source when a first-party header changes, on manual dispatch, or in the weekly scheduled run |
 | Fuzz untrusted-input readers | `windows-2025-vs2026` | The `kb_fuzzers` libFuzzer harnesses with AddressSanitizer: corpus replay, then 60 seconds of fresh inputs per reader |
 
+The Web player job uses up to four compile jobs within its 20-minute budget,
+matching the [standard public Ubuntu runner's CPU capacity](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+Its pinned toolchain uses a 1 GiB compiler cache across commits. Separate restore
+and save steps attempt to preserve completed compiler objects after a failed or
+interrupted build, and cache statistics are reported independently of build
+success. A skipped bootstrap test or interrupted build does not qualify the
+browser host.
+
 The static-analysis gate rejects an empty compilation database or source filter
 selection with exit code 2. Check `compile_commands.json`, `--filter` and
 `--filter-file` when no first-party sources are selected. An unchanged
