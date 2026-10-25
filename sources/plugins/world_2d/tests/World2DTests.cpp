@@ -1125,6 +1125,23 @@ int main() {
             }
         }
     }
+    // Golden: the borders of a plus-shaped grass patch on an empty map, as every cell lists them (x,y:ground+borders). A change
+    // here changes how existing maps look: update it only on purpose.
+    {
+        Map2DAsset map = kb::assets::MakeEmptyMap2DAsset(12U, 12U);
+        kb::world2d::Map2DEditor editor{ map, library, assets };
+        Require(editor.PaintGround(*grassBrush, { 4U, 5U, 6U, 5U }, 0U) && editor.PaintGround(*grassBrush, { 5U, 4U, 5U, 6U }, 0U), "the patch must paint");
+        std::string golden;
+        for (const auto& [key, tile] : map.tiles) {
+            golden += std::to_string(kb::assets::Map2DTileKeyX(key)) + "," + std::to_string(kb::assets::Map2DTileKeyY(key)) + ":";
+            golden += tile.ground.IsValid() ? std::to_string(tile.ground.cell) : std::string("-");
+            for (const Map2DSprite border : tile.borders) golden += "+" + std::to_string(border.cell);
+            golden += ";";
+        }
+        const std::string expected =
+            "4,3:-+16;5,3:-+17;6,3:-+18;3,4:-+16;4,4:-+28;5,4:25;6,4:-+27;7,4:-+18;3,5:-+24;4,5:25;5,5:25;6,5:25;7,5:-+26;3,6:-+32;4,6:-+20;5,6:25;6,6:-+19;7,6:-+34;4,7:-+32;5,7:-+33;6,7:-+34;";
+        Require(golden == expected, ("the autoborder of a plus-shaped patch changed: " + golden).c_str());
+    }
     std::filesystem::remove_all(root);
     std::puts("kb_world2d_tests passed");
     return 0;
