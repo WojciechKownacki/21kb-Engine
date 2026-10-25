@@ -8,6 +8,7 @@
 #include "engine/localization/LocalizationCatalogIO.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneLocalization.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -2034,6 +2035,72 @@ void TestScrollMovementAndLocalizedText() {
 }
 
 // Every v39 widget setting survives a save, and an older canvas keeps filling the whole screen.
+// A modal canvas takes the input of every canvas drawn below it while it is shown: no hit, no focus, no navigation into
+// them. Focus moves into the modal canvas when it appears and returns to where it was when the canvas goes.
+void TestModalCanvasBlocksCanvasesBelow() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject hud = AddUI(scene, {}, CanvasComponents());
+    kb::scene::UIComponentSet buttonComponents = kb::scene::BuildUIComponentPreset(kb::scene::UIComponentPreset::Button);
+    buttonComponents.rectTransform = Rect(0.0F, 0.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject hudFirst = AddUI(scene, hud, buttonComponents);
+    buttonComponents.rectTransform = Rect(0.0F, 40.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject hudSecond = AddUI(scene, hud, buttonComponents);
+
+    kb::scene::UIComponentSet dialogComponents = CanvasComponents();
+    dialogComponents.canvas->sortingOrder = 10;
+    dialogComponents.canvas->modal = true;
+    dialogComponents.canvasGroup.emplace();
+    dialogComponents.canvasGroup->visible = false;
+    dialogComponents.canvasGroup->transitionSeconds = 0.0F;
+    const kb::scene::SceneObject dialog = AddUI(scene, {}, dialogComponents);
+    buttonComponents.rectTransform = Rect(200.0F, 0.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject yes = AddUI(scene, dialog, buttonComponents);
+    buttonComponents.rectTransform = Rect(200.0F, 40.0F, 100.0F, 20.0F);
+    const kb::scene::SceneObject no = AddUI(scene, dialog, buttonComponents);
+
+    kb::input::InputDeviceState& device = scene.Input().MutableDeviceState();
+    device.SetHasFocus(true);
+    device.SetPointerViewportExtent(400U, 400U);
+    device.SetPointerPosition(390.0F, 390.0F);
+    const auto frame = [&] { static_cast<void>(scene.Runtime().Update(0.016F)); };
+    const auto tap = [&](kb::input::InputKey key) {
+        device.SetKeyDown(key, true);
+        frame();
+        device.SetKeyDown(key, false);
+        frame();
+    };
+    frame();
+    kb::tests::Require(!scene.UI().ModalCanvasActive() && scene.UI().SetFocus(hudFirst.Entity()), "A hidden modal canvas must not block anything");
+    kb::tests::Require(scene.UI().HitTest({50.0F, 10.0F}) == hudFirst.Entity(), "The HUD is hit while the dialog is hidden");
+
+    // The dialog appears.
+    scene.Components().UI().TryGet<kb::scene::UICanvasGroup>(dialog.Entity())->visible = true;
+    scene.Components().UI().MarkModified<kb::scene::UICanvasGroup>(dialog.Entity());
+    frame();
+    frame();
+    kb::tests::Require(scene.UI().ModalCanvasActive(), "A shown modal canvas must report itself");
+    kb::tests::Require(scene.UI().Focused() == yes.Entity(), "Focus must move into the modal canvas when it appears");
+    kb::tests::Require(scene.UI().HitTest({50.0F, 10.0F}) != hudFirst.Entity() && scene.UI().HitTest({50.0F, 50.0F}) != hudSecond.Entity(),
+        "The canvas below a modal canvas must not be hit");
+    kb::tests::Require(scene.UI().HitTest({250.0F, 10.0F}) == yes.Entity(), "The modal canvas itself is still hit");
+    kb::tests::Require(!scene.UI().SetFocus(hudSecond.Entity()), "The canvas below a modal canvas must refuse focus");
+    tap(kb::input::InputKey::GamepadDPadDown);
+    kb::tests::Require(scene.UI().Focused() == no.Entity(), "Navigation moves inside the modal canvas");
+    tap(kb::input::InputKey::GamepadDPadDown);
+    tap(kb::input::InputKey::GamepadDPadLeft);
+    kb::tests::Require(scene.UI().Focused() == no.Entity(), "Navigation must not leave the modal canvas for the one below");
+
+    // The dialog goes: focus returns to the widget that had it.
+    scene.Components().UI().TryGet<kb::scene::UICanvasGroup>(dialog.Entity())->visible = false;
+    scene.Components().UI().MarkModified<kb::scene::UICanvasGroup>(dialog.Entity());
+    frame();
+    frame();
+    kb::tests::Require(!scene.UI().ModalCanvasActive(), "A hidden modal canvas must let go");
+    kb::tests::Require(scene.UI().Focused() == hudFirst.Entity(), "Focus must return to where it was before the modal canvas");
+    kb::tests::Require(scene.UI().HitTest({50.0F, 50.0F}) == hudSecond.Entity() && scene.UI().SetFocus(hudSecond.Entity()),
+        "The canvas below is reachable again once the modal canvas is gone");
+}
+
 void TestWidgetSettingsPersistence() {
     kb::scene::UIComponentSet authored;
     authored.rectTransform.emplace();
@@ -2042,6 +2109,7 @@ void TestWidgetSettingsPersistence() {
     authored.canvas->pixelsPerUnit = 50.0F;
     authored.canvas->respectSafeArea = false;
     authored.canvas->player = 2;
+    authored.canvas->modal = true;
     authored.canvasGroup.emplace();
     authored.canvasGroup->visible = false;
     authored.canvasGroup->transitionSeconds = 0.3F;
@@ -2091,9 +2159,9 @@ void TestWidgetSettingsPersistence() {
     kb::scene::SceneAssetUIComponentCodec::Write(bytes, authored);
     kb::scene::SceneAssetBinaryIO::ByteReader reader{bytes};
     kb::scene::UIComponentSet decoded;
-    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, 45U, decoded) && reader.Exhausted(), "A v45 widget set must load");
+    kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(reader, kb::scene::SceneDocument::CurrentFileVersion, decoded) && reader.Exhausted(), "The current widget set must load");
     kb::tests::Require(decoded.canvas->renderMode == kb::scene::UICanvasRenderMode::WorldSpace && decoded.canvas->pixelsPerUnit == 50.0F &&
-        !decoded.canvas->respectSafeArea && decoded.canvas->player == 2 && !decoded.canvasGroup->visible &&
+        !decoded.canvas->respectSafeArea && decoded.canvas->player == 2 && decoded.canvas->modal && !decoded.canvasGroup->visible &&
         decoded.canvasGroup->transitionSeconds == 0.3F && decoded.canvasGroup->hiddenOffset.y == 5.0F && decoded.canvasGroup->hiddenScale == 0.8F &&
         decoded.image->fillMethod == kb::scene::UIImageFillMethod::Radial360 && decoded.image->fillOrigin == kb::scene::UIImageFillOrigin::End &&
         decoded.image->fillAmount == 0.4F && !decoded.image->fillClockwise && decoded.image->alphaHitThreshold == 0.2F &&
@@ -2109,6 +2177,20 @@ void TestWidgetSettingsPersistence() {
         decoded.inputField->contentType == kb::scene::UIInputContentType::Pin && kb::scene::UIInputPlaceholder(*decoded.inputField) == "PIN" &&
         decoded.progressBar->direction == kb::scene::UIAxisDirection::TopToBottom && decoded.progressBar->fillRect == 71U,
         "Every v45 widget setting must round-trip");
+
+    // A canvas saved before the modal flag existed (v51) ends one byte earlier and never blocks the canvases below.
+    {
+        kb::scene::UIComponentSet onlyCanvas;
+        onlyCanvas.canvas.emplace();
+        onlyCanvas.canvas->modal = true;
+        std::vector<std::uint8_t> current;
+        kb::scene::SceneAssetUIComponentCodec::Write(current, onlyCanvas);
+        current.pop_back();
+        kb::scene::SceneAssetBinaryIO::ByteReader olderReader{current};
+        kb::scene::UIComponentSet older;
+        kb::tests::Require(kb::scene::SceneAssetUIComponentCodec::Read(olderReader, 51U, older) && olderReader.Exhausted() && !older.canvas->modal,
+            "A v51 canvas must load without a modal flag");
+    }
 
     std::vector<std::uint8_t> legacy;
     kb::scene::SceneAssetBinaryIO::WriteUInt64(legacy, 1ULL << static_cast<unsigned>(kb::scene::UIComponentType::Canvas));
@@ -2324,6 +2406,7 @@ void RunSceneUITests() {
     TestSparseGroupTransitionLifetime();
     TestScrollMovementAndLocalizedText();
     TestWidgetSettingsPersistence();
+    TestModalCanvasBlocksCanvasesBelow();
     TestFrameAmongManyRootsMatchesRecordedFrame();
     TestFrameNextToMillionRootsIsCheap();
     TestInputFieldEditsGraphemeClusters();

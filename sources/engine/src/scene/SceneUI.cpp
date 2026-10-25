@@ -404,6 +404,7 @@ class FrameBuilder {
             output.refusal = refusal_;
             return false;
         }
+        ApplyModalCanvases();
         // Traversal ordinals break every paint-order tie, allowing the full records to be sorted in place.
         std::ranges::sort(frame_.elements, [](const SceneUIFrameElement& a, const SceneUIFrameElement& b) {
             if (a.canvasSortingOrder != b.canvasSortingOrder)
@@ -575,6 +576,32 @@ class FrameBuilder {
                 size.height = minimumOnly ? element->minimumHeight : std::max(size.height, element->minimumHeight);
         }
         return size;
+    }
+
+    // A shown modal canvas takes the input of every canvas drawn below it: those elements keep drawing but can neither
+    // be hit nor take focus. "Shown" means one of its elements is visible at all, so a faded-out dialog lets go.
+    void ApplyModalCanvases() {
+        bool found = false;
+        std::int32_t order = 0;
+        for (const SceneUIFrameElement& element : frame_.elements) {
+            if (element.effectiveOpacity <= 0.0F)
+                continue;
+            const UICanvas* canvas = ui_.TryGet<UICanvas>(element.canvas);
+            if (canvas != nullptr && canvas->modal && (!found || element.canvasSortingOrder > order)) {
+                found = true;
+                order = element.canvasSortingOrder;
+            }
+        }
+        if (!found)
+            return;
+        frame_.modalActive = true;
+        frame_.modalSortingOrder = order;
+        for (SceneUIFrameElement& element : frame_.elements) {
+            if (element.canvasSortingOrder < order) {
+                element.interactionEnabled = false;
+                element.hitTestable = false;
+            }
+        }
     }
 
     void SearchForCanvas(SceneEntity entity) {
@@ -2465,6 +2492,9 @@ std::vector<std::uint64_t> SceneUIQueries::PendingImageAlpha() const {
             pending.push_back(element.image->imageAssetId);
     return pending;
 }
+bool SceneUIQueries::ModalCanvasActive() const noexcept {
+    return SceneAccess::State(scene_).uiFrame.modalActive;
+}
 SceneEntity SceneUIQueries::Dragged() const noexcept {
     const SceneState& state = SceneAccess::State(scene_);
     return state.uiDragging ? state.uiDragged : SceneEntity{};
@@ -2606,6 +2636,9 @@ SceneEntity SceneUIAccess::Pressed() const noexcept {
 SceneEntity SceneUIAccess::Focused() const noexcept {
     return SceneAccess::State(scene_).uiFocused;
 }
+bool SceneUIAccess::ModalCanvasActive() const noexcept {
+    return SceneAccess::State(scene_).uiFrame.modalActive;
+}
 bool SceneUIAccess::HasFocusedTextInput() const noexcept {
     return SceneUIQueries{scene_}.HasFocusedTextInput();
 }
@@ -2663,10 +2696,32 @@ bool SceneUIAccess::Update(float viewportWidth, float viewportHeight, const Scen
         state.uiFrame = std::move(clampedFrame);
         presentationDirty = false;
     }
+    const SceneEntity focusBeforeModal = state.uiFocused;
     if (state.uiFocused.IsValid()) {
         const SceneUIFrameElement* focused = Find(state.uiFrame, state.uiFocused);
         if (focused == nullptr || !focused->interactionEnabled)
             ClearFocus();
+    }
+    // A modal canvas appearing takes focus into itself and remembers where it was; going away gives it back.
+    if (state.uiFrame.modalActive != state.uiModalActive) {
+        if (state.uiFrame.modalActive) {
+            state.uiModalRestoreFocus = focusBeforeModal;
+            if (!state.uiFocused.IsValid()) {
+                const SceneUIFrameElement* first = nullptr;
+                for (const SceneUIFrameElement& element : state.uiFrame.elements)
+                    if (element.interactionEnabled && element.canvasSortingOrder >= state.uiFrame.modalSortingOrder &&
+                        (first == nullptr || element.traversalOrder < first->traversalOrder))
+                        first = &element;
+                if (first != nullptr)
+                    static_cast<void>(SetFocus(first->entity));
+            }
+        } else {
+            const SceneEntity restore = state.uiModalRestoreFocus;
+            state.uiModalRestoreFocus = {};
+            if (restore.IsValid() && !state.uiFocused.IsValid())
+                static_cast<void>(SetFocus(restore));
+        }
+        state.uiModalActive = state.uiFrame.modalActive;
     }
     for (SceneState::UIPlayerFocus& player : state.uiPlayers) {
         const SceneUIFrameElement* focused = Find(state.uiFrame, player.focused);

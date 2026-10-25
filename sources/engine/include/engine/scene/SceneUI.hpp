@@ -177,6 +177,10 @@ struct SceneUIFrame {
     kb::math::Vec2 viewportSize{};
     std::vector<SceneUIFrameElement> elements;
     SceneUIFrameRefusal refusal{};
+    // True while a modal canvas is shown; every element on a canvas sorted below modalSortingOrder is then neither
+    // hit-testable nor interactive.
+    bool modalActive = false;
+    std::int32_t modalSortingOrder = 0;
 
     [[nodiscard]] SceneEntity HitTest(kb::math::Vec2 point) const noexcept;
     // The topmost hit that is not `excluded` or inside it - where a dragged widget is being dropped.
@@ -192,6 +196,8 @@ class SceneUIQueries {
     [[nodiscard]] SceneEntity PlayerFocused(std::uint32_t player) const noexcept;
     // The widget being dragged, if any.
     [[nodiscard]] SceneEntity Dragged() const noexcept;
+    // Whether a modal canvas is shown, so the canvases below it take no input.
+    [[nodiscard]] bool ModalCanvasActive() const noexcept;
     [[nodiscard]] bool HasImageAlpha(std::uint64_t imageAssetId) const noexcept;
     // Image assets the current frame hit-tests by opacity whose opacity has not been published yet.
     [[nodiscard]] std::vector<std::uint64_t> PendingImageAlpha() const;
@@ -225,6 +231,7 @@ class SceneUIAccess {
     [[nodiscard]] SceneEntity Hovered() const noexcept;
     [[nodiscard]] SceneEntity Pressed() const noexcept;
     [[nodiscard]] SceneEntity Focused() const noexcept;
+    [[nodiscard]] bool ModalCanvasActive() const noexcept;
     [[nodiscard]] bool HasFocusedTextInput() const noexcept;
     [[nodiscard]] std::span<const SceneUIEvent> Events() const noexcept;
     [[nodiscard]] std::vector<SceneUIEvent> DrainEvents();

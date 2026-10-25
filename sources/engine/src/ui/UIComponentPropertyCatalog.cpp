@@ -276,7 +276,7 @@ constexpr std::array kRectTransformProperties{
 };
 constexpr std::array kCanvasProperties{
     KB_ENUM(UICanvas, renderMode),       KB_INT(UICanvas, sortingOrder),  KB_BOOL(UICanvas, pixelPerfect),
-    KB_BOOL(UICanvas, respectSafeArea), KB_FLOAT(UICanvas, pixelsPerUnit), KB_INT(UICanvas, player),
+    KB_BOOL(UICanvas, respectSafeArea), KB_FLOAT(UICanvas, pixelsPerUnit), KB_INT(UICanvas, player), KB_BOOL(UICanvas, modal),
 };
 constexpr std::array kCanvasScalerProperties{
     KB_ENUM(UICanvasScaler, scaleMode),

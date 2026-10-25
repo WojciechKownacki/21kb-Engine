@@ -830,6 +830,9 @@ public:
     SceneEntity uiHovered{};
     SceneEntity uiPressed{};
     SceneEntity uiFocused{};
+    // A modal canvas was shown in the last frame, and the widget that had focus before it appeared.
+    bool uiModalActive = false;
+    SceneEntity uiModalRestoreFocus{};
     SceneUIInput previousUIInput{};
     std::optional<std::uint32_t> uiTouchCapture;
     SceneEntity uiInertialScrollView{};

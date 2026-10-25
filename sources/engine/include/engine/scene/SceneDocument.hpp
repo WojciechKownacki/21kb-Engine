@@ -62,7 +62,8 @@ struct SceneDocument {
     //      AIBrain persists the AI preset and its rules.
     static constexpr std::uint32_t TilemapFileVersion = 50U;
     static constexpr std::uint32_t OneWayColliderFileVersion = 51U;
-    static constexpr std::uint32_t CurrentFileVersion = 51U;
+    static constexpr std::uint32_t ModalCanvasFileVersion = 52U;
+    static constexpr std::uint32_t CurrentFileVersion = 52U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;
