@@ -53,3 +53,13 @@ requires amplitude within 2% of the analytic signal, frequency within 30 Hz
 capture is also required. This verifies the cooked mixer and live runtime
 changes; an editor-output comparison, physical speaker output, other browser
 backends, and mobile devices remain unverified.
+
+The same scenario also routes the playing source to a child of a muted parent.
+Transport must remain playing while the measured output is silent, including
+after a gain override on the muted parent. Switching the source to `Output`
+must produce the parent-only gain; an empty `outputBus` must use the implicit
+master gain. Switching to an undeclared bus must explicitly return `UnknownBus`
+and silence output, followed by successful autoplay when the valid child route
+is restored. All thirteen phases retain one audio context and require the same
+PCM criteria. This covers live source routing changes; it does not establish
+gapless switching or runtime replacement of a mixer's graph topology.

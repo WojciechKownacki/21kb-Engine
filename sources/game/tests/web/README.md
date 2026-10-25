@@ -299,3 +299,8 @@ the active mixer (requiring explicit named-route refusal and silence), and
 restore the mixer with autoplay at the original amplitude. It retains one audio
 context and requires hardware-rendered native UI pixels. Editor mix comparison
 and physical output remain separate coverage.
+The scenario also switches the live source to a muted parent's child, verifies
+that gain overrides cannot cancel inherited mute, then routes to the parent
+and implicit master. An undeclared bus must explicitly refuse playback with
+silence; restoring the valid child route must restore autoplay. These source
+route changes do not qualify replacement of the mixer's graph topology.

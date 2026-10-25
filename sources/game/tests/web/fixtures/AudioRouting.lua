@@ -34,6 +34,21 @@ function OnUIClicked(self, event)
         refusedStatus = refused.status
     elseif clicks == 7 then
         assert(call("SetMixer", {mixer=originalMixer}))
+    elseif clicks == 8 then
+        assert(self:SetProperty("AudioSource", "outputBus", "MutedEffects"))
+    elseif clicks == 9 then
+        assert(call("SetBusVolume", {bus="MutedParent", volume=1.0}))
+    elseif clicks == 10 then
+        assert(self:SetProperty("AudioSource", "outputBus", "Output"))
+    elseif clicks == 11 then
+        assert(self:SetProperty("AudioSource", "outputBus", ""))
+    elseif clicks == 12 then
+        assert(self:SetProperty("AudioSource", "outputBus", "Missing"))
+        local refused = call("PlaySource")
+        assert(not refused.succeeded and not refused.playing)
+        refusedStatus = refused.status
+    elseif clicks == 13 then
+        assert(self:SetProperty("AudioSource", "outputBus", "Effects"))
     end
 end
 
