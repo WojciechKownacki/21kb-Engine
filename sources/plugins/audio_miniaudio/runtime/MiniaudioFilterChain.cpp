@@ -1,5 +1,6 @@
 #include "runtime/MiniaudioFilterChain.hpp"
 #include "runtime/MiniaudioDelayNode.hpp"
+#include "runtime/MiniaudioReverbNode.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -31,7 +32,7 @@ std::uint32_t DelayFrames(double milliseconds, std::uint32_t rate) noexcept {
 } // namespace
 
 struct MiniaudioFilterChain::Node {
-    std::variant<ma_lpf_node, ma_hpf_node, ma_peak_node, MiniaudioDelayNode> value;
+    std::variant<ma_lpf_node, ma_hpf_node, ma_peak_node, MiniaudioDelayNode, MiniaudioReverbNode> value;
     ma_allocation_callbacks allocations{};
     bool customAllocator = false;
     bool initialized = false;
@@ -43,12 +44,13 @@ struct MiniaudioFilterChain::Node {
         if (auto* low = std::get_if<ma_lpf_node>(&value)) ma_lpf_node_uninit(low, Allocator());
         else if (auto* high = std::get_if<ma_hpf_node>(&value)) ma_hpf_node_uninit(high, Allocator());
         else if (auto* peak = std::get_if<ma_peak_node>(&value)) ma_peak_node_uninit(peak, Allocator());
-        // The composite delay owns independent RAII state, including partial construction.
+        // Delay and reverb own independent RAII state, including partial construction.
     }
     ma_node* Native() noexcept {
         if (auto* low = std::get_if<ma_lpf_node>(&value)) return low;
         if (auto* high = std::get_if<ma_hpf_node>(&value)) return high;
         if (auto* peak = std::get_if<ma_peak_node>(&value)) return peak;
+        if (auto* reverb = std::get_if<MiniaudioReverbNode>(&value)) return reverb->Native();
         return std::get<MiniaudioDelayNode>(value).Input();
     }
     ma_node* Output() noexcept {
@@ -85,8 +87,10 @@ struct MiniaudioFilterChain::Node {
         } else if (desc.kind == MiniaudioFilterKind::PeakingEqualizer) {
             const auto config = ma_peak_node_config_init(channels, rate, desc.gainDb, desc.quality, desc.cutoffHz);
             result = ma_peak_node_init(&graph, &config, Allocator(), &value.emplace<ma_peak_node>());
-        } else {
+        } else if (desc.kind == MiniaudioFilterKind::Delay) {
             result = value.emplace<MiniaudioDelayNode>().Initialize(graph, rate, DelayFrames(desc.delayMs, rate), desc, Allocator());
+        } else {
+            result = value.emplace<MiniaudioReverbNode>().Initialize(graph, rate, desc, Allocator());
         }
         initialized = result == MA_SUCCESS;
         if (!initialized) {
@@ -113,10 +117,11 @@ ma_result MiniaudioFilterChain::Initialize(ma_node_graph& graph, std::uint32_t s
     const auto channels = ma_node_graph_get_channels(&graph);
     if (channels == 0U || channels > 8U || sampleRate < 8000U || sampleRate > 192000U || filters.size() > 16U)
         return MA_INVALID_ARGS;
-    std::uint64_t delayBudget = 32ULL * 1024ULL * 1024ULL;
+    std::uint64_t stateBudget = 32ULL * 1024ULL * 1024ULL;
     for (const auto& filter : filters) {
         if ((filter.kind != MiniaudioFilterKind::LowPass && filter.kind != MiniaudioFilterKind::HighPass
-                && filter.kind != MiniaudioFilterKind::PeakingEqualizer && filter.kind != MiniaudioFilterKind::Delay)
+                && filter.kind != MiniaudioFilterKind::PeakingEqualizer && filter.kind != MiniaudioFilterKind::Delay
+                && filter.kind != MiniaudioFilterKind::Reverb)
             || !std::isfinite(filter.cutoffHz) || filter.cutoffHz < 1.0
             || filter.cutoffHz > 0.49 * sampleRate || filter.order == 0U || filter.order > MA_MAX_FILTER_ORDER
             || !std::isfinite(filter.gainDb) || filter.gainDb < -24.0 || filter.gainDb > 24.0
@@ -124,6 +129,11 @@ ma_result MiniaudioFilterChain::Initialize(ma_node_graph& graph, std::uint32_t s
             || (filter.kind == MiniaudioFilterKind::PeakingEqualizer && filter.order != 2U)
             || (filter.kind != MiniaudioFilterKind::PeakingEqualizer && (filter.gainDb != 0.0 || filter.quality != 1.0)))
             return MA_INVALID_ARGS;
+        if (!std::isfinite(filter.roomSize) || filter.roomSize < 0.0F || filter.roomSize > 1.0F
+            || !std::isfinite(filter.damping) || filter.damping < 0.0F || filter.damping > 1.0F
+            || !std::isfinite(filter.width) || filter.width < 0.0F || filter.width > 1.0F
+            || (filter.kind != MiniaudioFilterKind::Reverb
+                && (filter.roomSize != 0.5F || filter.damping != 0.25F || filter.width != 1.0F))) return MA_INVALID_ARGS;
         if (!std::isfinite(filter.delayMs) || filter.delayMs <= 0.0 || filter.delayMs > 2000.0
             || !std::isfinite(filter.feedback) || filter.feedback < 0.0F || filter.feedback > 0.95F
             || !std::isfinite(filter.wet) || filter.wet < 0.0F || filter.wet > 1.0F
@@ -133,8 +143,15 @@ ma_result MiniaudioFilterChain::Initialize(ma_node_graph& graph, std::uint32_t s
             if (filter.cutoffHz != 1000.0 || filter.order != 2U) return MA_INVALID_ARGS;
             if (!filter.bypass) {
                 const auto bytes = static_cast<std::uint64_t>(DelayFrames(filter.delayMs, sampleRate)) * channels * sizeof(float);
-                if (bytes > delayBudget) return MA_INVALID_ARGS;
-                delayBudget -= bytes;
+                if (bytes > stateBudget) return MA_INVALID_ARGS;
+                stateBudget -= bytes;
+            }
+        } else if (filter.kind == MiniaudioFilterKind::Reverb) {
+            if (filter.cutoffHz != 1000.0 || filter.order != 2U || filter.delayMs != 250.0 || filter.feedback != 0.0F)
+                return MA_INVALID_ARGS;
+            if (!filter.bypass) {
+                if (channels > 2U || sampleRate < 22050U || MiniaudioReverbNode::StateBytes() > stateBudget) return MA_INVALID_ARGS;
+                stateBudget -= MiniaudioReverbNode::StateBytes();
             }
         } else if (filter.delayMs != 250.0 || filter.feedback != 0.0F || filter.wet != 0.5F || filter.dry != 1.0F) {
             return MA_INVALID_ARGS;

@@ -29,7 +29,17 @@ set(KB_AUDIO_MINIAUDIO_DSP_SOURCES
     runtime/MiniaudioFilterChain.cpp
     runtime/MiniaudioDelayNode.hpp
     runtime/MiniaudioDelayNode.cpp
+    runtime/MiniaudioReverbNode.hpp
+    runtime/MiniaudioReverbNode.cpp
 )
+# The existing reverb API supports a configurable fixed maximum sample rate.
+# Use the same state layout in the vendor implementation and every consumer.
+if(NOT TARGET miniaudio_reverb_node)
+    add_library(miniaudio_reverb_node STATIC
+        ${PROJECT_SOURCE_DIR}/third_party/miniaudio/extras/nodes/ma_reverb_node/ma_reverb_node.c)
+endif()
+target_compile_definitions(miniaudio_reverb_node PUBLIC verblib_max_sample_rate_multiplier=5)
+set_target_properties(miniaudio_reverb_node PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
     set(KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE SHARED)
 endif()
@@ -71,6 +81,7 @@ target_link_libraries(kb_audio_miniaudio_plugin
         kb_engine
         kb_audio_miniaudio_asset_runtime
         miniaudio
+        miniaudio_reverb_node
 )
 
 if(NOT KB_BUILD_PROVIDER_MODULES_AS_DLL)
@@ -85,17 +96,24 @@ kb_apply_quality_gates(kb_audio_miniaudio_plugin)
 if(BUILD_TESTING)
     add_executable(kb_audio_filter_tests tests/AudioFilterTests.cpp ${KB_AUDIO_MINIAUDIO_DSP_SOURCES})
     target_include_directories(kb_audio_filter_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(kb_audio_filter_tests PRIVATE miniaudio)
+    target_link_libraries(kb_audio_filter_tests PRIVATE miniaudio miniaudio_reverb_node)
     target_compile_features(kb_audio_filter_tests PRIVATE cxx_std_20)
     add_test(NAME kb_audio_filter_tests COMMAND $<TARGET_FILE:kb_audio_filter_tests>)
     kb_apply_quality_gates(kb_audio_filter_tests)
 
     add_executable(kb_audio_delay_tests tests/AudioDelayTests.cpp ${KB_AUDIO_MINIAUDIO_DSP_SOURCES})
     target_include_directories(kb_audio_delay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(kb_audio_delay_tests PRIVATE miniaudio)
+    target_link_libraries(kb_audio_delay_tests PRIVATE miniaudio miniaudio_reverb_node)
     target_compile_features(kb_audio_delay_tests PRIVATE cxx_std_20)
     add_test(NAME kb_audio_delay_tests COMMAND $<TARGET_FILE:kb_audio_delay_tests>)
     kb_apply_quality_gates(kb_audio_delay_tests)
+
+    add_executable(kb_audio_reverb_tests tests/AudioReverbTests.cpp ${KB_AUDIO_MINIAUDIO_DSP_SOURCES})
+    target_include_directories(kb_audio_reverb_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(kb_audio_reverb_tests PRIVATE miniaudio miniaudio_reverb_node)
+    target_compile_features(kb_audio_reverb_tests PRIVATE cxx_std_20)
+    add_test(NAME kb_audio_reverb_tests COMMAND $<TARGET_FILE:kb_audio_reverb_tests>)
+    kb_apply_quality_gates(kb_audio_reverb_tests)
 
     add_executable(kb_audio_runtime_tests
         tests/AudioRuntimeTests.cpp

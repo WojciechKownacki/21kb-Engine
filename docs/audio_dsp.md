@@ -1,7 +1,7 @@
 # Audio DSP primitives
 
 The miniaudio provider contains a private filter-chain primitive for ordered
-low-pass, high-pass, peaking equalizer and delay stages. It builds actual native graph nodes with the
+low-pass, high-pass, peaking equalizer, delay and reverb stages. It builds actual native graph nodes with the
 vendored miniaudio API; the dependency's existing license and notices remain
 in its source tree. Repeated stages keep separate parameters and state.
 Bypassed stages retain validated settings and create no processing node.
@@ -25,13 +25,28 @@ Time rounds to the nearest sample, with a minimum of one sample. Defaults are
 to time zero. Delay tails continue after the input reaches its end.
 Unused parameters must retain their defaults for each effect kind.
 
-Active delay lines share a 32 MiB budget per chain, checked before construction.
-The charge is `roundedFrames * channels * sizeof(float)`; bypassed stages do
-not allocate a line. Constructing a replacement can temporarily retain both
-old and candidate lines, so their combined bound is 64 MiB plus node/container
+Active delay lines and reverb state share a 32 MiB budget per chain, checked before construction.
+Delay's charge is `roundedFrames * channels * sizeof(float)`; reverb charges
+its complete fixed state. Bypassed stages allocate neither. Constructing a replacement can temporarily retain both
+old and candidate state, so their combined bound is 64 MiB plus node/container
 overhead. Delay is not a limiter: its worst-case gain for a bounded input is
 `dry + wet / (1 - feedback)`, multiplied across repeated stages. Callers must
 reserve input headroom, including any EQ boost.
+
+Reverb uses the existing Verblib implementation in miniaudio's extra reverb
+node. Its MIT No Attribution/public-domain licensing and authorship notices
+remain in the dependency. Room size, damping, stereo width and wet/dry gains
+are finite values from 0 through 1; defaults are 0.5, 0.25, 1, 0.5 and 1.
+The wrapper explicitly applies every parameter after vendor node initialization
+and normalizes the vendor's wet/dry scaling so dry 1 means direct gain 1.
+The wet path uses the vendor's default mono-summed input and stereo diffusion.
+Room size changes decay; it does not specify a physical room dimension.
+Freeze mode is not exposed. Reverb requires mono/stereo and 22.05–192 kHz;
+an unsupported active configuration is refused before allocating or changing
+the old graph. A bypassed reverb retains its settings on any supported chain
+format. The configured vendor maximum is five times 44.1 kHz, with one shared
+state layout for its implementation and callers; the engine still caps at
+192 kHz. The large fixed state is heap-owned only by active reverb stages.
 
 Invalid parameters and failed construction preserve the
 previous graph and signal. Partial node initialization also releases filter
@@ -76,14 +91,31 @@ allocation positions in a mixed replacement is refused with either a filter
 or a delay already playing; its PCM, live allocations and requested bytes must
 remain unchanged and reset must release all owned allocations.
 
+`kb_audio_reverb_tests` reads thirteen real graph impulse responses, including
+the tail after a one-frame source ends, dry-gain normalization, width zero,
+mono/stereo, sample-rate boundaries, repeated differing effects, sixteen active
+stages, bypass and mixed delay/reverb in both orders. PCM must match direct
+Verblib processing within an absolute 2e-6 across different read blocks. This
+control uses the same vendor kernel; separate properties require nonzero late
+tail energy, stereo diffusion, identical centered wet channels at width zero,
+a longer tail with larger room size and exact silence from silent input.
+Twenty-four invalid parameter sets, unsupported active formats and combined
+over-budget delay/reverb state must fail before allocation and preserve the
+old PCM. All eight observed allocations in a replacement are separately
+refused while reverb plays; reset must leave zero owned allocations.
+
 The tests pass in x64 MSVC Release and Debug ASan, and in a 32-bit WebAssembly
 ASan/UBSan build of the same sources. The WebAssembly check uses the real
-graph/filter/delay/waveform implementation with device I/O, decoders and threading
+graph/filter/delay/reverb/waveform implementation with device I/O, decoders and threading
 omitted. One stereo second-order low/high-pass stage requested 7760 bytes from the vendor
 allocator on x64 and 7744 bytes in WebAssembly. A stereo peaking EQ stage requested
 7696 bytes on both tested architectures. A stereo 5 ms delay at 48 kHz requested
 28800 bytes on both tested architectures, including its split/merge
-graph nodes and 1920-byte delay line. These figures exclude C++ node
+graph nodes and 1920-byte delay line. One reverb stage requests 517800 bytes on
+x64 (510120 fixed-state bytes) or 517568 bytes in WebAssembly (509888 state
+bytes), independent of its active channel count and sample rate. Native ASan
+instruments engine-owned wrappers and tests; the WebAssembly build also
+instruments the vendor implementations. These figures exclude C++ node
 objects, container storage, source/output buffers and sanitizer overhead.
 
 Mixer asset serialization, editor controls, CLI authoring, cooking, packaged
