@@ -206,6 +206,10 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  --project <dir> --name <Name> [--folder Assets/Particles] [--set key=value ...]
   vfx-show     Print a particle effect: every key=value of its file.
                  --project <dir> --effect /Game/<path>.kbvfx
+  renderer-info  Print the graphics backend a hidden bgfx host selects as JSON: capabilities, limits,
+                 formats and the reason for every quality fallback (Windows).
+                 [--backend auto|d3d11|d3d12|vulkan|opengl] [--allow-fallback]
+                 Exits 1 when an explicit backend is not the one selected, unless --allow-fallback.
   vfx-profile  Profile an isolated effect with a hidden bgfx GPU host (Windows).
                  --project <dir> --effect /Game/<path>.kbvfx
                  [--backend d3d11|d3d12|vulkan|opengl] [--warmup 60] [--frames 180]
@@ -401,8 +405,8 @@ void PrintUsage(std::ostream& output) {
     for (const auto part : kUsageParts) output << part;
 }
 
-constexpr std::array<std::string_view, 8> kFlagNames{
-    "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--as-ground", "--no-borders", "--items" };
+constexpr std::array<std::string_view, 9> kFlagNames{
+    "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items" };
 
 // Runs the named command. Empty when no command has that name.
 std::optional<int> RunNamedCommand(
@@ -492,6 +496,14 @@ std::optional<int> RunNamedCommand(
         return RunScenePostProcessCommand(arguments, io);
 #else
         io.err << "error: " << command << " needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
+        return 1;
+#endif
+    }
+    if (command == "renderer-info") {
+#if KB_CLI_RENDERER
+        return RunRendererInfoCommand(arguments, io);
+#else
+        io.err << "error: renderer-info needs the renderer; this kb_cli was built with KB_BUILD_RENDERER=OFF\n";
         return 1;
 #endif
     }

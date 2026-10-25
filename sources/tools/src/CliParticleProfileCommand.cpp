@@ -160,6 +160,114 @@ JsonValue Distribution(std::vector<double> samples) {
     return result;
 }
 
+std::string FormatName(bgfx::TextureFormat::Enum format) {
+    switch (format) {
+    case bgfx::TextureFormat::RGBA8: return "RGBA8";
+    case bgfx::TextureFormat::BGRA8: return "BGRA8";
+    case bgfx::TextureFormat::RGBA16F: return "RGBA16F";
+    case bgfx::TextureFormat::RGBA32F: return "RGBA32F";
+    case bgfx::TextureFormat::RGB10A2: return "RGB10A2";
+    case bgfx::TextureFormat::RG11B10F: return "RG11B10F";
+    case bgfx::TextureFormat::R32F: return "R32F";
+    case bgfx::TextureFormat::D16: return "D16";
+    case bgfx::TextureFormat::D24: return "D24";
+    case bgfx::TextureFormat::D24S8: return "D24S8";
+    case bgfx::TextureFormat::D32: return "D32";
+    case bgfx::TextureFormat::D16F: return "D16F";
+    case bgfx::TextureFormat::D32F: return "D32F";
+    case bgfx::TextureFormat::D0S8: return "D0S8";
+    case bgfx::TextureFormat::Count: return "none";
+    default: return "format-" + std::to_string(static_cast<int>(format));
+    }
+}
+
+int RendererInfo(const ArgumentList& arguments, CommandIo io) {
+    using namespace kb::render;
+    const auto backend = arguments.Option("--backend").value_or("auto");
+    const auto rendererType = backend == "auto" ? bgfx::RendererType::Count
+        : backend == "d3d11" ? bgfx::RendererType::Direct3D11
+        : backend == "d3d12" ? bgfx::RendererType::Direct3D12
+        : backend == "vulkan" ? bgfx::RendererType::Vulkan
+        : backend == "opengl" ? bgfx::RendererType::OpenGL : bgfx::RendererType::Noop;
+    if (rendererType == bgfx::RendererType::Noop) {
+        io.err << "error: --backend expects auto, d3d11, d3d12, vulkan or opengl (Metal and OpenGL ES hosts are not available on Windows)\n";
+        return 2;
+    }
+    ProfileSurface surface;
+    if (surface.NativeWindowHandle() == nullptr) { io.err << "error: hidden render surface unavailable\n"; return 1; }
+    Renderer renderer;
+    DisplayConfig config;
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(rendererType);
+    auto report = JsonValue::MakeObject();
+    report.Set("schema", JsonValue::MakeString("21kb.renderer-info/v1"));
+    report.Set("requested", JsonValue::MakeString(backend));
+    if (!renderer.Initialize(surface, &config)) {
+        report.Set("succeeded", JsonValue::MakeBool(false));
+        report.Set("error", JsonValue::MakeString("no bgfx backend could be initialised for the request"));
+        io.out << report.Dump() << '\n';
+        io.err << "error: backend '" << backend << "' could not be initialised\n";
+        return 1;
+    }
+    const RendererCapabilityReport& capabilities = renderer.CapabilityReport();
+    const bgfx::RendererType::Enum selected = bgfx::getRendererType();
+    const bool matches = rendererType == bgfx::RendererType::Count || selected == rendererType;
+    const bool allowFallback = arguments.Flag("--allow-fallback");
+    report.Set("selected", JsonValue::MakeString(RendererBackendName(selected)));
+    report.Set("selection_reason", JsonValue::MakeString(capabilities.backendSelectionReason));
+    report.Set("explicit_request", JsonValue::MakeBool(capabilities.backendPreference == RendererBackendPreference::Explicit));
+    report.Set("fell_back", JsonValue::MakeBool(!matches));
+    char ids[16]{};
+    std::snprintf(ids, sizeof(ids), "0x%04X", static_cast<unsigned>(capabilities.vendorId));
+    report.Set("vendor_id", JsonValue::MakeString(ids));
+    std::snprintf(ids, sizeof(ids), "0x%04X", static_cast<unsigned>(capabilities.deviceId));
+    report.Set("device_id", JsonValue::MakeString(ids));
+    auto features = JsonValue::MakeObject();
+    const auto flag = [&](const char* name, bool value) { features.Set(name, JsonValue::MakeBool(value)); };
+    flag("hdr_texture", capabilities.hdrTextureSupported);
+    flag("compute", capabilities.computeSupported);
+    flag("indirect_draw", capabilities.indirectDrawSupported);
+    flag("texture_blit", capabilities.textureBlitSupported);
+    flag("texture_readback", capabilities.textureReadbackSupported);
+    flag("hdr_exposure_metering", capabilities.hdrExposureMeteringSupported);
+    flag("gpu_driven_compute_culling", capabilities.gpuDrivenComputeCullingSupported);
+    flag("gpu_driven_indirect_submit", capabilities.gpuDrivenIndirectSubmitSupported);
+    flag("gpu_driven_meshlet_submit", capabilities.gpuDrivenMeshletSubmitSupported);
+    flag("particle_gpu_drawing", capabilities.particleGpuDrawingSupported);
+    flag("particle_instancing", capabilities.particleInstancingSupported);
+    flag("particle_soft_depth_fade", capabilities.particleSoftDepthFadeSupported);
+    flag("particle_subtractive_blend", capabilities.particleSubtractiveBlendSupported);
+    flag("multiple_windows", capabilities.multipleWindowsSupported);
+    flag("homogeneous_depth", capabilities.homogeneousDepth);
+    flag("origin_bottom_left", capabilities.originBottomLeft);
+    report.Set("features", std::move(features));
+    auto limits = JsonValue::MakeObject();
+    limits.Set("max_draw_calls", JsonValue::MakeNumber(capabilities.limits.maxDrawCalls));
+    limits.Set("max_texture_size", JsonValue::MakeNumber(capabilities.limits.maxTextureSize));
+    limits.Set("max_views", JsonValue::MakeNumber(capabilities.limits.maxViews));
+    limits.Set("max_frame_buffers", JsonValue::MakeNumber(capabilities.limits.maxFrameBuffers));
+    limits.Set("max_textures", JsonValue::MakeNumber(capabilities.limits.maxTextures));
+    limits.Set("max_programs", JsonValue::MakeNumber(capabilities.limits.maxPrograms));
+    report.Set("limits", std::move(limits));
+    report.Set("scene_color_format", JsonValue::MakeString(FormatName(capabilities.sceneColor.format)));
+    report.Set("scene_depth_format", JsonValue::MakeString(FormatName(capabilities.sceneDepth.format)));
+    auto reasons = JsonValue::MakeArray();
+    for (std::uint32_t index = 0U; index < capabilities.fallbackReasonCount && index < capabilities.fallbackReasons.size(); ++index) {
+        reasons.Append(JsonValue::MakeString(capabilities.fallbackReasons[index]));
+    }
+    report.Set("fallback_reasons", std::move(reasons));
+    report.Set("summary", JsonValue::MakeString(std::string{RendererCapabilitySummary(capabilities)}));
+    const bool succeeded = matches || allowFallback;
+    report.Set("succeeded", JsonValue::MakeBool(succeeded));
+    renderer.Shutdown();
+    io.out << report.Dump() << '\n';
+    if (!matches) {
+        io.err << (allowFallback ? "warning" : "error") << ": requested backend '" << backend << "' is not the one selected ("
+               << RendererBackendName(selected) << ")\n";
+    }
+    return succeeded && io.out.good() ? 0 : 1;
+}
+
 int Profile(const ArgumentList& arguments, ProfileOptions options, CommandIo io) {
     using namespace kb::render;
     const auto projectRoot = material::ProjectRoot(arguments, "vfx-profile", io);
@@ -422,6 +530,21 @@ int Profile(const ArgumentList& arguments, ProfileOptions options, CommandIo io)
 #endif
 
 } // namespace
+
+int RunRendererInfoCommand(const ArgumentList& arguments, CommandIo io) {
+    constexpr std::array<std::string_view, 2U> allowed{"--backend", "--allow-fallback"};
+    if (!arguments.Errors().empty() || !arguments.UnknownOptions(allowed).empty() || !arguments.Positionals().empty() ||
+        arguments.Options("--backend").size() > 1U) {
+        io.err << "error: renderer-info expects [--backend auto|d3d11|d3d12|vulkan|opengl] [--allow-fallback]\n";
+        return 2;
+    }
+#if defined(_WIN32)
+    return RendererInfo(arguments, io);
+#else
+    io.err << "error: renderer-info has no native hidden GPU host on this platform\n";
+    return 1;
+#endif
+}
 
 int RunVfxProfileCommand(const ArgumentList& arguments, CommandIo io) {
     const auto options = ParseProfileOptions(arguments, io);

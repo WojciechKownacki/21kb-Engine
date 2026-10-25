@@ -146,6 +146,10 @@ if(BUILD_TESTING)
             "-DTEST_ROOT=${CMAKE_BINARY_DIR}/particle_profile_tests"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliParticleProfileTests.cmake")
         set_tests_properties(kb_cli_particle_profile PROPERTIES LABELS "tools;gpu" TIMEOUT 180)
+        add_test(NAME kb_cli_renderer_info COMMAND ${CMAKE_COMMAND}
+            "-DCLI=$<TARGET_FILE:kb_cli>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/KbCliRendererInfoTests.cmake")
+        set_tests_properties(kb_cli_renderer_info PROPERTIES LABELS "tools;gpu" TIMEOUT 300)
     endif()
 
     kb_apply_quality_gates(kb_cli_tests)
