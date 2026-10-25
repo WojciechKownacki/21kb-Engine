@@ -304,3 +304,11 @@ that gain overrides cannot cancel inherited mute, then routes to the parent
 and implicit master. An undeclared bus must explicitly refuse playback with
 silence; restoring the valid child route must restore autoplay. These source
 route changes do not qualify replacement of the mixer's graph topology.
+
+`run_game_audio_snapshot_tests.py` reports `21kb.web-game-audio-snapshots/v1`.
+It creates and selects snapshots through CLI, cooks the scene, and requires
+actual PCM for snapshot gains, runtime override precedence, clearing overrides,
+and the authored base mix. Two timed transitions must produce intermediate
+monotonic PCM levels and settle at the expected endpoint, retaining one context
+and hardware-rendered native UI pixels. Interruption, overlap, and exact curve
+timing are separate coverage. See [audio snapshots](../../../../docs/audio_snapshots.md).

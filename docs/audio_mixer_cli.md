@@ -41,6 +41,9 @@ kb_cli audio-mixer set --project Sample --mixer /Game/Audio/Main.kbmixer --add-s
 kb_cli audio-mixer assign --project Sample --mixer /Game/Audio/Main.kbmixer --snapshot Quiet
 ```
 
+See [audio snapshot verification](audio_snapshots.md) for cooked selection,
+runtime overrides, measured native PCM fades, and remaining transition coverage.
+
 Assignment updates the default scene, or the scene selected with `--scene`.
 `--snapshot Name` selects an existing snapshot; invalid mixers or missing snapshots
 leave the scene file unchanged. `--mixer none` clears both scene selections.
