@@ -21,6 +21,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
+#include "engine/world/WorldPartitionRuntime.hpp"
 
 #include <filesystem>
 #include <algorithm>
@@ -210,8 +211,37 @@ struct DiagnosticPrinter {
     return report;
 }
 
+// What the streamed worlds of the scene hold, by kind, against what the streaming budget charged (see docs/world_memory.md).
+[[nodiscard]] kb::core::JsonValue WorldMemoryJson(const kb::world::WorldMemoryReport& memory) {
+    using kb::core::JsonValue;
+    static constexpr const char* kKindNames[kb::world::kWorldMemoryKindCount] = { "assets_cpu", "instances", "scripts", "physics", "gpu" };
+    static constexpr const char* kSourceNames[] = { "unavailable", "estimated", "measured" };
+    auto categories = JsonValue::MakeArray();
+    for (const kb::world::WorldMemoryCategory& category : memory.categories) {
+        auto row = JsonValue::MakeObject();
+        row.Set("kind", JsonValue::MakeString(kKindNames[static_cast<std::size_t>(category.kind)]));
+        row.Set("source", JsonValue::MakeString(kSourceNames[static_cast<std::size_t>(category.source)]));
+        row.Set("bytes", category.source == kb::world::WorldMemorySource::Unavailable ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(category.bytes)));
+        row.Set("baseline_bytes", category.source == kb::world::WorldMemorySource::Unavailable ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(category.baselineBytes)));
+        row.Set("note", JsonValue::MakeString(category.note));
+        categories.Append(std::move(row));
+    }
+    auto report = JsonValue::MakeObject();
+    report.Set("budget_bytes", JsonValue::MakeNumber(static_cast<double>(memory.budgetBytes)));
+    report.Set("estimated_resident_bytes", JsonValue::MakeNumber(static_cast<double>(memory.estimatedResidentBytes)));
+    report.Set("resident_units", JsonValue::MakeNumber(static_cast<double>(memory.residentUnits)));
+    report.Set("measured_bytes", JsonValue::MakeNumber(static_cast<double>(memory.measuredBytes)));
+    report.Set("has_unavailable_kinds", JsonValue::MakeBool(memory.hasUnavailableKinds));
+    report.Set("error_ratio", JsonValue::MakeNumber(memory.errorRatio));
+    report.Set("minimum_error_ratio", JsonValue::MakeNumber(memory.minimumErrorRatio));
+    report.Set("maximum_error_ratio", JsonValue::MakeNumber(memory.maximumErrorRatio));
+    report.Set("samples", JsonValue::MakeNumber(static_cast<double>(memory.samples)));
+    report.Set("categories", std::move(categories));
+    return report;
+}
+
 int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr,
-    std::ostream* ecsReport = nullptr) {
+    std::ostream* ecsReport = nullptr, std::ostream* worldMemoryReport = nullptr) {
     const bool requireMeters = arguments.Option("--report") == std::optional<std::string>{"audio-meters"};
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
@@ -406,6 +436,14 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         io.err << "error: script scene system could not be installed\n";
         return 1;
     }
+    // The script heap is the one kind of memory only this host can read; the engine reads the instances and the assets itself.
+    std::optional<kb::world::WorldPartitionRuntime> worlds;
+    if (worldMemoryReport != nullptr) {
+        worlds.emplace(scene);
+        worlds->SetMemoryProbe(kb::world::WorldMemoryKind::Scripts, [&host]() -> std::optional<std::uint64_t> {
+            return static_cast<std::uint64_t>(host.LuaRuntime().LuaMemoryUsedBytes());
+        });
+    }
 
     io.out << "running " << scenePath.filename().generic_string()
            << " for " << frames << " frames (dt " << deltaSeconds << "s, "
@@ -529,6 +567,22 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
             return 1;
         }
     }
+    if (worldMemoryReport != nullptr && worlds.has_value()) {
+        using kb::core::JsonValue;
+        auto report = JsonValue::MakeObject();
+        report.Set("schema", JsonValue::MakeString("21kb.world-memory/v1"));
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U));
+        report.Set("simulation_frames", JsonValue::MakeNumber(frames));
+        report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
+        report.Set("diagnostics", JsonValue::MakeNumber(static_cast<double>(printer.total)));
+        report.Set("worlds", JsonValue::MakeNumber(static_cast<double>(worlds->Worlds().size())));
+        report.Set("memory", WorldMemoryJson(worlds->MemoryReport()));
+        *worldMemoryReport << report.Dump() << '\n';
+        if (!worldMemoryReport->good()) {
+            io.err << "error: the world memory report could not be written" << '\n';
+            return 1;
+        }
+    }
     if (ecsReport != nullptr) {
         // Read only: the telemetry of the scene's ECS world after the frames ran. Which numbers are measured,
         // which are estimates and which are unavailable is stated in its metric_basis object.
@@ -580,15 +634,16 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
 int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     const auto report = arguments.Option("--report");
     if (arguments.Flag("--dry-run")) { io.err << "error: run does not support --dry-run\n"; return 1; }
-    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters or ecs\n"; return 1; }
+    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs or world-memory\n"; return 1; }
     if (arguments.Option("--pcm-frames").has_value() && (!report || (*report != "audio" && *report != "audio-meters"))) {
         io.err << "error: --pcm-frames requires --report audio or audio-meters\n"; return 1;
     }
-    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs") {
-        io.err << "error: --report expects particles, audio, audio-meters or ecs\n";
+    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory") {
+        io.err << "error: --report expects particles, audio, audio-meters, ecs or world-memory\n";
         return 1;
     }
     if (report && *report == "ecs") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, &io.out);
+    if (report && *report == "world-memory") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, &io.out);
     if (report && (*report == "audio" || *report == "audio-meters")) return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, &io.out);
     return report ? RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, &io.out)
                   : RunSceneRuntime(arguments, io, nullptr);

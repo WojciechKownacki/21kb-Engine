@@ -4352,6 +4352,63 @@ void RunMap2DCameraCliTests() {
                             "--camera-dead-zone", "0,0", "--camera-clamp", "no" }).exitCode == 0 && !Contains(text(), "camera "),
         "setting everything back to its defaults writes no camera line");
 }
+// `run --report world-memory`: a project with a built partitioned world streams its cells around a stream focus, and the report splits what
+// they hold by kind and states which kinds it could not read.
+void RunWorldMemoryCliTests() {
+    const std::filesystem::path parent = TestRoot() / "world_memory_cli";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Big", "--template", "Empty" }).exitCode == 0, "new failed");
+    const std::filesystem::path root = parent / "Big";
+    const std::string project = root.string();
+    for (int index = 0; index < 6; ++index) {
+        const std::string position = std::to_string(index * 60) + ",0," + std::to_string(index * 30);
+        Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Cube", "--name", "Cube" + std::to_string(index), "--position", position }).exitCode == 0, "adding a cube failed");
+    }
+    Require(RunCliProgram({ "world", "migrate", "--scene", (root / "Assets/Scenes/Main.21kbscene").string(), "--out", "Assets/Worlds/Big.21kbworld", "--cell-size", "64", "--project", project }).exitCode == 0, "world migrate failed");
+    Require(RunCliProgram({ "world", "build", "--world", "Assets/Worlds/Big.21kbworld", "--project", project }).exitCode == 0, "world build failed");
+    // The migrated objects live in the world now: the scene keeps only a place for the world and a stream focus to load around.
+    for (int index = 0; index < 6; ++index) {
+        Require(RunCliProgram({ "entity", "remove", "--project", project, "--name", "Cube" + std::to_string(index) }).exitCode == 0, "removing a cube failed");
+    }
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Holder" }).exitCode == 0, "adding the holder failed");
+    Require(RunCliProgram({ "component", "add", "--project", project, "--entity", "Holder", "--type", "ContentInstance" }).exitCode == 0, "adding the content instance failed");
+    const std::string worldId = std::to_string(kb::assets::MakeAssetId("/Game/Worlds/Big.21kbworld:World").value);
+    const CliRun placed = RunCliProgram({ "component", "set", "--project", project, "--entity", "Holder", "--type", "ContentInstance", "--set", "assetId=" + worldId, "--set", "kind=3" });
+    Require(placed.exitCode == 0, "placing the world failed: " + placed.out + placed.err);
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Streamer", "--position", "100,0,50" }).exitCode == 0, "adding the streamer failed");
+    Require(RunCliProgram({ "component", "add", "--project", project, "--entity", "Streamer", "--type", "StreamFocus" }).exitCode == 0, "adding the stream focus failed");
+    Require(RunCliProgram({ "component", "set", "--project", project, "--entity", "Streamer", "--type", "StreamFocus", "--set", "outerRadius=300.0", "--set", "innerRadius=250.0" }).exitCode == 0, "setting the stream focus failed");
+
+    const CliRun ran = RunCliProgram({ "run", "--project", project, "--frames", "240", "--report", "world-memory" });
+    Require(ran.exitCode == 0, "run --report world-memory failed: " + ran.out + ran.err);
+    kb::core::JsonValue report;
+    std::string parseError;
+    Require(kb::core::JsonValue::Parse(ran.out, report, parseError), "the world memory report is not JSON: " + parseError + ran.out);
+    Require(report.Find("schema") != nullptr && report.Find("schema")->AsString() == "21kb.world-memory/v1" && report.Find("succeeded")->AsBool(), "the report has its schema and succeeded");
+    Require(report.Find("worlds")->AsNumber() == 1.0, "one world is placed");
+    const kb::core::JsonValue* memory = report.Find("memory");
+    Require(memory != nullptr && memory->Find("resident_units")->AsNumber() >= 5.0 && memory->Find("estimated_resident_bytes")->AsNumber() > 0.0, "the world's cells streamed in: " + ran.out);
+    const kb::core::JsonValue* categories = memory->Find("categories");
+    Require(categories != nullptr && categories->Size() == 5U, "five kinds are reported");
+    const auto kind = [&](const char* name) -> const kb::core::JsonValue* {
+        for (std::size_t index = 0U; index < categories->Size(); ++index) {
+            if (categories->At(index)->Find("kind")->AsString() == name) return categories->At(index);
+        }
+        return nullptr;
+    };
+    Require(kind("instances") != nullptr && kind("instances")->Find("source")->AsString() == "measured" && kind("instances")->Find("bytes")->AsNumber() > 0.0, "the instances are measured");
+    Require(kind("assets_cpu") != nullptr && kind("assets_cpu")->Find("source")->AsString() == "estimated", "the assets are estimated from file sizes");
+    Require(kind("scripts") != nullptr && kind("scripts")->Find("source")->AsString() == "measured", "the script heap is measured");
+    Require(kind("physics")->Find("source")->AsString() == "unavailable" && kind("physics")->Find("bytes")->IsNull() &&
+            kind("gpu")->Find("source")->AsString() == "unavailable" && memory->Find("has_unavailable_kinds")->AsBool(),
+        "kinds this host cannot read are unavailable, not zero");
+    Require(memory->Find("samples")->AsNumber() >= 1.0 && memory->Find("minimum_error_ratio")->AsNumber() > 0.0 &&
+            memory->Find("minimum_error_ratio")->AsNumber() <= memory->Find("maximum_error_ratio")->AsNumber(), "the error ratio was sampled");
+    const CliRun refused = RunCliProgram({ "run", "--project", project, "--report", "bogus" });
+    Require(refused.exitCode == 1 && Contains(refused.err, "world-memory"), "the report list names world-memory: " + refused.err);
+}
+
 // A Sprite 2D from the command line: created from the Create menu, its picture chosen by path (which records the picture's
 // size), refused for something that is not a picture, and run headless without errors.
 void RunSprite2DCliTests() {
@@ -4493,6 +4550,7 @@ int main(int argc, char** argv) {
     RunMaterialGraphUtilityNodeCommandTests();
     RunMap2DCameraCliTests();
     RunSprite2DCliTests();
+    RunWorldMemoryCliTests();
     RunPlayerPresetCliTests();
 #endif
     RunSceneCommandTests();

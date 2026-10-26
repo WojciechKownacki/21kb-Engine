@@ -6,8 +6,11 @@
 #include "engine/world/WorldPartitionGrid.hpp"
 #include "engine/world/WorldPartitionRuntime.hpp"
 
+#include <array>
 #include <cstdint>
 #include <deque>
+#include <limits>
+#include <optional>
 #include <map>
 #include <memory>
 #include <span>
@@ -58,8 +61,19 @@ struct WorldRuntimeInstance {
     std::vector<WorldNavMeshRuntime> navMeshes;
 };
 
+struct WorldMemoryState {
+    std::array<WorldMemoryProbe, kWorldMemoryKindCount> probes{};
+    bool baselineTaken = false;
+    std::array<std::optional<std::uint64_t>, kWorldMemoryKindCount> baseline{};
+    std::size_t sampledLoadedUnits = std::numeric_limits<std::size_t>::max();
+    double minimumRatio = 0.0;
+    double maximumRatio = 0.0;
+    std::uint32_t samples = 0U;
+};
+
 struct WorldPartitionState {
     static constexpr std::size_t MaxEvents = 4096U;
+    WorldMemoryState memory;
 
     std::map<std::uint64_t, WorldRuntimeInstance> worlds;
     std::map<std::uint64_t, WorldStreamingSource> sources;

@@ -312,11 +312,15 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
 R"(  run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on any error.
                  --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>]
-                 [--quiet] [--report particles|audio|audio-meters|ecs] [--pcm-frames <n>]
+                 [--quiet] [--report particles|audio|audio-meters|ecs|world-memory] [--pcm-frames <n>]
                Reports are versioned JSON on stdout; logs go to stderr.
                Audio probes use explicit offline PCM rendering (up to 600 ticks
                and 1920000 total PCM frames). --pcm-frames overrides audio frames
                per tick; the default follows the sample rate and --dt.
+               --report world-memory states what the streamed worlds hold by kind (assets,
+               instances, scripts, physics, graphics; each measured, estimated or
+               unavailable) against what the streaming budget charged; see
+               docs/world_memory.md.
   mcp          Serve the commands above as MCP tools over stdio (newline-
                delimited JSON-RPC), for use from MCP-compatible clients.
                  [--project <dir>]

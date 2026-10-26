@@ -3,8 +3,11 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/world/WorldPartitionGrid.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -83,6 +86,52 @@ struct WorldStreamingStats {
     double milliseconds = 0.0;
 };
 
+// What a streamed world costs, by kind. The streaming budget charges every cell with one number (its serialized size and a fixed cost
+// per entity); this is what the cells actually hold, so the estimate can be judged.
+enum class WorldMemoryKind : std::uint8_t {
+    AssetsCpu,  // the assets the cells made resident, in CPU memory
+    Instances,  // the entities and components of the scene
+    Scripts,    // the script runtime's heap
+    Physics,    // the physics world
+    Gpu,        // graphics resources (textures, meshes, buffers)
+};
+inline constexpr std::size_t kWorldMemoryKindCount = 5U;
+
+enum class WorldMemorySource : std::uint8_t {
+    Unavailable, // nothing reads this kind in this host
+    Estimated,   // derived from something measurable (a file size, a count), not the memory itself
+    Measured,    // read from the subsystem that holds the memory
+};
+
+// A host's reading of the total memory of one kind, in bytes, now; empty when it cannot be read. The report counts growth since the
+// first world was placed, so a total that includes memory the world did not cause is fine.
+using WorldMemoryProbe = std::function<std::optional<std::uint64_t>()>;
+
+struct WorldMemoryCategory {
+    WorldMemoryKind kind = WorldMemoryKind::AssetsCpu;
+    WorldMemorySource source = WorldMemorySource::Unavailable;
+    std::uint64_t bytes = 0U;         // growth since the baseline
+    std::uint64_t baselineBytes = 0U; // the reading before any cell loaded
+    std::string note;
+};
+
+struct WorldMemoryReport {
+    std::uint64_t budgetBytes = 0U;
+    // What the streaming budget charges for the cells resident now.
+    std::uint64_t estimatedResidentBytes = 0U;
+    std::array<WorldMemoryCategory, kWorldMemoryKindCount> categories{};
+    // The sum of the kinds that have a reading; kinds without one are not guessed.
+    std::uint64_t measuredBytes = 0U;
+    bool hasUnavailableKinds = false;
+    // measuredBytes / estimatedResidentBytes for the cells resident now (0 when none), and the lowest, highest and number of such
+    // ratios taken each time the set of resident cells settled. Above 1 the estimate is too small.
+    double errorRatio = 0.0;
+    double minimumErrorRatio = 0.0;
+    double maximumErrorRatio = 0.0;
+    std::uint32_t samples = 0U;
+    std::size_t residentUnits = 0U;
+};
+
 struct WorldInstanceInfo {
     scene::SceneEntity owner{};
     std::uint64_t worldAssetId = 0U;
@@ -118,6 +167,12 @@ public:
     // Throws std::invalid_argument for a zero count or a non-positive time budget.
     void ConfigureBudget(const WorldStreamingBudget& budget);
     [[nodiscard]] WorldStreamingBudget Budget() const;
+
+    // Readings the report cannot take itself: the script heap, the physics world, graphics memory. Instances (the scene's ECS storage) and
+    // assets (the file sizes of the loaded assets) are read by the engine unless a probe replaces them.
+    void SetMemoryProbe(WorldMemoryKind kind, WorldMemoryProbe probe);
+    // Reads every kind now and compares the growth with what the budget charged.
+    [[nodiscard]] WorldMemoryReport MemoryReport();
 
     [[nodiscard]] std::vector<WorldInstanceInfo> Worlds() const;
     [[nodiscard]] WorldCellState CellState(scene::SceneEntity world, WorldCellCoord coord, std::string_view dataLayer = {}) const;

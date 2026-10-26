@@ -713,6 +713,58 @@ void RunBudgetTests() {
     std::filesystem::remove_all(fixture.root);
 }
 
+// The report splits what the cells hold by kind, takes readings from the host's probes, and compares them with what the budget charged.
+void RunMemoryReportTests() {
+    WorldFixture fixture = BuildFixtureWorld("memory", false);
+    Check(WorldCellBuilder::Build(fixture.descriptor, nullptr).succeeded, "memory world must build");
+    StreamingHarness harness = MountWorld(fixture, true);
+    WorldPartitionRuntime runtime = harness.Runtime();
+    std::uint64_t scriptBytes = 10'000U;
+    std::uint64_t gpuBytes = 3'000'000U;
+    runtime.SetMemoryProbe(WorldMemoryKind::Scripts, [&] { return std::optional<std::uint64_t>{ scriptBytes }; });
+    runtime.SetMemoryProbe(WorldMemoryKind::Gpu, [&] { return std::optional<std::uint64_t>{ gpuBytes }; });
+    runtime.ConfigureBudget({ .maxLoadRequestsPerFrame = 8U, .maxPendingLoads = 8U, .maxResidentBytes = 1ULL << 30U, .maxMillisecondsPerFrame = 50.0 });
+    const WorldMemoryReport empty = runtime.MemoryReport();
+    Check(empty.estimatedResidentBytes == 0U && empty.samples == 0U && empty.measuredBytes == 0U && empty.errorRatio == 0.0, "an empty world reports nothing resident");
+    const std::uint64_t source = runtime.AddSource({ .position = { 50.0, 0.0, 50.0 }, .loadRadius = 120.0, .unloadRadius = 180.0, .priority = 0 });
+    Settle(harness);
+    // The host's script heap and graphics memory grew as the cells loaded.
+    scriptBytes += 40'000U;
+    gpuBytes += 2'000'000U;
+    const WorldMemoryReport report = runtime.MemoryReport();
+    const auto category = [&](WorldMemoryKind kind) -> const WorldMemoryCategory& { return report.categories[static_cast<std::size_t>(kind)]; };
+    Check(report.budgetBytes == (1ULL << 30U) && report.estimatedResidentBytes == runtime.Stats().residentBytes && report.estimatedResidentBytes > 0U &&
+            report.residentUnits == runtime.Stats().loadedUnits, "the report carries the budget and what it charged for the resident cells");
+    Check(category(WorldMemoryKind::Instances).source == WorldMemorySource::Measured && category(WorldMemoryKind::Instances).bytes > 0U,
+        "the instances are read from the scene's ECS storage");
+    Check(category(WorldMemoryKind::AssetsCpu).source == WorldMemorySource::Estimated, "assets are estimated from the files of the loaded assets");
+    Check(category(WorldMemoryKind::Scripts).source == WorldMemorySource::Measured && category(WorldMemoryKind::Scripts).bytes == 40'000U &&
+            category(WorldMemoryKind::Gpu).source == WorldMemorySource::Measured && category(WorldMemoryKind::Gpu).bytes == 2'000'000U &&
+            category(WorldMemoryKind::Gpu).baselineBytes == 3'000'000U, "host probes count growth since the world was placed");
+    Check(category(WorldMemoryKind::Physics).source == WorldMemorySource::Unavailable && category(WorldMemoryKind::Physics).bytes == 0U &&
+            report.hasUnavailableKinds && category(WorldMemoryKind::Physics).note.find("no reading") != std::string::npos, "a kind nobody reads is reported unavailable, not guessed");
+    std::uint64_t sum = 0U;
+    for (const WorldMemoryCategory& entry : report.categories) sum += entry.bytes;
+    Check(report.measuredBytes == sum && report.errorRatio > 0.0, "the measured total is the sum of the kinds that have a reading");
+    Check(report.samples >= 1U && report.minimumErrorRatio > 0.0 && report.minimumErrorRatio <= report.maximumErrorRatio, "the error ratio is sampled as the resident cells settle");
+    std::printf("world_memory resident_units=%zu estimated=%llu instances=%llu assets=%llu ratio_without_host_probes=%.3f samples=%u\n", report.residentUnits,
+        static_cast<unsigned long long>(report.estimatedResidentBytes), static_cast<unsigned long long>(category(WorldMemoryKind::Instances).bytes),
+        static_cast<unsigned long long>(category(WorldMemoryKind::AssetsCpu).bytes),
+        report.estimatedResidentBytes == 0U ? 0.0 : static_cast<double>(category(WorldMemoryKind::Instances).bytes + category(WorldMemoryKind::AssetsCpu).bytes) / static_cast<double>(report.estimatedResidentBytes),
+        report.samples);
+
+    // Moving the source away unloads the cells: what the instances hold goes down with them.
+    const std::uint64_t instancesLoaded = category(WorldMemoryKind::Instances).bytes;
+    Check(runtime.UpdateSource(source, { .position = { 5000.0, 0.0, 5000.0 }, .loadRadius = 120.0, .unloadRadius = 180.0, .priority = 0 }), "move the source away");
+    Settle(harness);
+    const WorldMemoryReport after = runtime.MemoryReport();
+    Check(after.estimatedResidentBytes < report.estimatedResidentBytes &&
+            after.categories[static_cast<std::size_t>(WorldMemoryKind::Instances)].bytes < instancesLoaded, "unloading the cells lowers the estimate and the measured instances");
+    Check(after.samples > report.samples, "a settled unload is sampled too");
+    harness.scene.reset();
+    std::filesystem::remove_all(fixture.root);
+}
+
 struct WorldReplayTrace {
     std::vector<std::string> raw;
     std::vector<std::string> decisions;
@@ -965,6 +1017,7 @@ void RunWorldPartitionTests() {
     RunBuildTests();
     RunStreamingTests();
     RunBudgetTests();
+    RunMemoryReportTests();
     RunDeterminismTests();
     RunUnbuiltWorldTests();
     RunFarWorldTests();
