@@ -20,6 +20,7 @@
 #undef DrawText
 #endif
 #include "engine/scene/Sprite2DComponent.hpp"
+#include "assets/EditorAssetReimport.hpp"
 #include "kb/editor/docking/DockTypes.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "app/EditorPlayModeState.hpp"
@@ -2532,6 +2533,43 @@ ReadScriptValue(
         const bool refused = BoolMember(step, "refused", error, false).value_or(false);
         const bool imported = state.context.ImportAssetFiles(sources, std::filesystem::path{ *destination }, options);
         return { imported != refused, sourcePath->string() };
+    }
+
+    // "reimport_asset": the changed source replaces an imported model in place (Project Files > Reimport...). "on_conflict" is what to do with
+    // textures and materials edited since the import: report (default; nothing changes), keep_local or overwrite. "dry_run" plans only.
+    // "expect" is the outcome: updated (default), reused, conflict (refused over edits), failed; "conflicts" is how many edited assets the
+    // result names.
+    if (*operation == "reimport_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto source = StringMember(step, "source", error);
+        if (!asset || !source) return { false, error };
+        const auto sourcePath = ResolveProjectPath(*source, error);
+        if (!sourcePath) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        kb::assets::AssetImportOptions options = EditorAssetReimport::OptionsOf(state.context.Scene().Assets().Manager(), id);
+        const std::string policy = StringMember(step, "on_conflict", error, false).value_or("report");
+        if (policy == "report") options.conflictPolicy = kb::assets::AssetImportConflictPolicy::Report;
+        else if (policy == "keep_local") options.conflictPolicy = kb::assets::AssetImportConflictPolicy::KeepLocal;
+        else if (policy == "overwrite") options.conflictPolicy = kb::assets::AssetImportConflictPolicy::Overwrite;
+        else return { false, "on_conflict must be report, keep_local or overwrite" };
+        options.dryRun = BoolMember(step, "dry_run", error, false).value_or(false);
+        const EditorAssetReimport::Outcome outcome = EditorAssetReimport::Run(state.context, id, *sourcePath, options);
+        const kb::assets::AssetImportItemResult& item = outcome.item;
+        const char* word = item.status == kb::assets::AssetImportItemStatus::Failed || item.status == kb::assets::AssetImportItemStatus::Missing
+            ? (item.conflicts.empty() ? "failed" : "conflict")
+            : (item.status == kb::assets::AssetImportItemStatus::Updated ? "updated" : "reused");
+        const std::string expect = StringMember(step, "expect", error, false).value_or("updated");
+        bool ok = expect == word;
+        if (const auto conflicts = NumberMember(step, "conflicts", error, false)) ok = ok && static_cast<double>(item.conflicts.size()) == *conflicts;
+        return { ok, std::string{ word } + ": " + std::to_string(item.changes.size()) + " asset(s) planned, " + std::to_string(item.conflicts.size()) + " edited" +
+            (item.error.empty() ? std::string{} : " (" + item.error + ")") };
+    }
+
+    // "undo_reimport": Undo Last Reimport, the files of the newest backup put back.
+    if (*operation == "undo_reimport") {
+        const bool expectFailure = BoolMember(step, "expect_nothing", error, false).value_or(false);
+        const bool undone = EditorAssetReimport::UndoLast(state.context);
+        return { undone != expectFailure, undone ? "restored" : "nothing to undo" };
     }
 
     if (*operation == "create_entity") {

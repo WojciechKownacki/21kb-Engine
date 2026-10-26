@@ -139,6 +139,7 @@ add_executable(kb_editor WIN32
     src/assets/EditorAssetBrowserChromeHitTester.cpp
     src/assets/EditorAssetBrowserContentLayout.cpp
     src/assets/EditorAssetBrowserContextMenuState.cpp
+    src/assets/EditorAssetReimport.cpp
     src/assets/EditorAssetBrowserContextMenuLayout.cpp
     src/assets/EditorAssetBrowserContentHitTester.cpp
     src/assets/EditorAssetBrowserDeleteConfirmState.cpp
@@ -281,6 +282,7 @@ add_executable(kb_editor WIN32
     src/private/docking/FloatingWindowRegistry.hpp
     src/private/docking/FloatingWindowResizeEventResolver.hpp
     src/private/assets/EditorAssetBrowserAssetRows.hpp
+    src/private/assets/EditorAssetReimport.hpp
     src/private/assets/EditorAssetBrowserBreadcrumbHitTester.hpp
     src/private/assets/EditorAssetBrowserBottomBarLayout.hpp
     src/private/assets/EditorAssetBrowserChromeHitTester.hpp
@@ -1643,6 +1645,15 @@ if(BUILD_TESTING)
             --selftest-task "SELFTEST-Workspace")
     set_tests_properties(kb_editor_workspace_headless PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;docking" TIMEOUT 180)
+    # A changed source replaces an imported model in place; an edited material is kept or replaced as told, and the reimport can be undone.
+    add_test(NAME kb_editor_asset_reimport_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario "${CMAKE_CURRENT_SOURCE_DIR}/tests/AssetReimportScenario.json"
+            --selftest-root "${CMAKE_BINARY_DIR}/SelfTest"
+            --selftest-task "SELFTEST-AssetReimport")
+    set_tests_properties(kb_editor_asset_reimport_headless PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;headless;assets" TIMEOUT 180)
+
     # Every editor language, one after another: each panel's texts fit where they are drawn.
     add_test(NAME kb_editor_languages_headless
         COMMAND $<TARGET_FILE:kb_editor>

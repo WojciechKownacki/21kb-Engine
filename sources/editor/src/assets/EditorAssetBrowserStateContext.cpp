@@ -1,4 +1,5 @@
 #include "assets/EditorAssetBrowserState.hpp"
+#include "assets/EditorAssetReimport.hpp"
 #include "localization/EditorLocalization.hpp"
 
 #include "assets/EditorAssetBrowserPathUtils.hpp"
@@ -61,6 +62,13 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserState::ContextMenuItem
             if (EditorAssetOpenPolicy::CanOpen(*metadata)) {
                 items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = std::string{ EditorText("common.open", "Open") } });
             }
+        }
+        // An imported model can be reimported from its changed source; the last reimport can be undone while its backup is kept.
+        if (metadata != nullptr && EditorAssetReimport::CanReimport(*metadata)) {
+            if (EditorAssetReimport::CanUndo(manager)) {
+                items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::UndoReimport, .label = std::string{ EditorText("projectFiles.menu.undoReimport", "Undo Last Reimport") }, .separatorAfter = true });
+            }
+            items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Reimport, .label = std::string{ EditorText("projectFiles.menu.reimport", "Reimport...") } });
         }
         if (metadata != nullptr && (metadata->type == "RenderMesh" || metadata->importCategory == "Mesh")) {
             items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::ExtractMaterials, .label = std::string{ EditorText("projectFiles.menu.extractMaterials", "Extract Material Instances") }, .separatorAfter = true });
