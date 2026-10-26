@@ -198,6 +198,7 @@ private:
     bgfx::UniformHandle colorUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sizeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle outputUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle flipbookUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle spinUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle basisUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle fieldUniform_ = BGFX_INVALID_HANDLE;

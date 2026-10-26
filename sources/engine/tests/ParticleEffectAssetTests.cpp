@@ -212,6 +212,35 @@ void RunSpinSchemaTest() {
     Require(!ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "a reversed spin range passed validation");
 }
 
+void RunFlipbookRangeSchemaTest() {
+    using namespace kb::scene;
+    auto asset = MakeComprehensiveAsset();
+    std::vector<ParticleEffectDiagnostic> diagnostics;
+    const auto legacy = ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(legacy && legacy->find(".startFrame") == std::string::npos && legacy->find(".frameCount") == std::string::npos,
+        "default atlas ranges must preserve canonical legacy files");
+    const auto old = ParticleEffectAssetIO::Parse(*legacy);
+    Require(old.Succeeded() && std::get<ParticleBillboardOutput>(old.asset->emitters[0].output.payload).flipbook.frameCount == 0U,
+        "old atlases must retain their full frame range");
+    auto& range = std::get<ParticleBillboardOutput>(asset.emitters[0].output.payload).flipbook;
+    range.startFrame = 1U;
+    range.frameCount = 2U;
+    const auto encoded = ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(encoded.has_value(), "partial atlas must serialize");
+    const auto decoded = ParticleEffectAssetIO::Parse(*encoded);
+    Require(decoded.Succeeded(), "partial atlas must load");
+    const auto& restored = std::get<ParticleBillboardOutput>(decoded.asset->emitters[0].output.payload).flipbook;
+    Require(restored.startFrame == 1U && restored.frameCount == 2U && !restored.looping,
+        "start, active range and one-shot policy must survive save/load");
+    range.frameCount = UINT32_MAX;
+    Require(!ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "overflowing atlas range must fail validation");
+    range.frameCount = 0U;
+    range.startFrame = 3U;
+    Require(ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "last atlas cell is a valid static range");
+    range.startFrame = 4U;
+    Require(!ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(), "start past the atlas must fail validation");
+}
+
 void RunScreenDepthCollisionSchemaTest() {
     auto asset = MakeComprehensiveAsset();
     std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
@@ -1244,6 +1273,7 @@ int main() {
         RunCanonicalGoldenTest();
         RunComprehensiveSchemaTest();
         RunSpinSchemaTest();
+        RunFlipbookRangeSchemaTest();
         RunScreenDepthCollisionSchemaTest();
         RunMotionAndOutputSchemaTest();
         RunAuthoringOrderTest();

@@ -506,6 +506,16 @@ void RunParticleReportCommandTests() {
         Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx", "--set",
         "effect.emitter[0].screenDepthCollision=invalid"}).exitCode != 0,
         "CLI screen-depth disable or invalid-value rejection failed");
+    Require(Run(setEffect, {"--project", project, "--effect", "/Game/Particles/ReportEffect.kbvfx",
+        "--set", "effect.emitter[0].output.payload.flipbook.columns=4",
+        "--set", "effect.emitter[0].output.payload.flipbook.rows=2",
+        "--set", "effect.emitter[0].output.payload.flipbook.startFrame=2",
+        "--set", "effect.emitter[0].output.payload.flipbook.frameCount=5"}).exitCode == 0,
+        "CLI must author optional partial-atlas fields");
+    const auto atlas = kb::scene::ParticleEffectAssetIO::LoadDetailed(parent / "Sample/Assets/Particles/ReportEffect.kbvfx");
+    Require(atlas.Succeeded() && std::get<kb::scene::ParticleBillboardOutput>(atlas.asset->emitters[0].output.payload).flipbook.startFrame == 2U &&
+        std::get<kb::scene::ParticleBillboardOutput>(atlas.asset->emitters[0].output.payload).flipbook.frameCount == 5U,
+        "CLI-authored atlas range must survive save/reload");
     const auto active = reportFor(project);
     const auto* emitters = active.Find("emitters");
     Require(active.Find("provider_available")->AsBool() && active.Find("snapshot_available")->AsBool() &&

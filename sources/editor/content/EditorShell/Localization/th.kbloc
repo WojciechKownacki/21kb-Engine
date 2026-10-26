@@ -1932,6 +1932,8 @@ text "particle.property.depth_test" "การทดสอบความลึ�
 text "particle.property.depth_write" "การเขียนความลึก"
 text "particle.property.direction" "ทิศทาง"
 text "particle.property.distance" "ระยะทาง"
+text "particle.property.flipbook_start" "เฟรมแรกของแอตลาส"
+text "particle.property.flipbook_count" "จำนวนเฟรม (0: ที่เหลือ)"
 text "particle.property.flipbook_loop" "วนซ้ำ Flipbook"
 text "particle.property.frame_rate" "อัตราเฟรม"
 text "particle.property.frequency" "ความถี่"

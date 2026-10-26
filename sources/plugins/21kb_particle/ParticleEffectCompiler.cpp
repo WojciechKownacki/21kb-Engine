@@ -148,7 +148,9 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
         const auto compileFlipbook = [&](const kb::scene::ParticleFlipbookAsset& flipbook) noexcept {
             destination.flipbookColumns = static_cast<std::uint16_t>(flipbook.columns);
             destination.flipbookRows = static_cast<std::uint16_t>(flipbook.rows);
-            destination.flipbookFrameCount = flipbook.columns * flipbook.rows;
+            destination.flipbookStartFrame = flipbook.startFrame;
+            destination.flipbookFrameCount = flipbook.frameCount != 0U ? flipbook.frameCount :
+                flipbook.columns * flipbook.rows - flipbook.startFrame;
             destination.flipbookFramesPerSecond = flipbook.framesPerSecond;
             destination.flipbookLooping = flipbook.looping;
         };

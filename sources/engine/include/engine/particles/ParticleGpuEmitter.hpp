@@ -61,6 +61,12 @@ struct ParticleGpuEmitterParams {
     std::array<std::array<float, 4U>, kParticleGpuCurveSamples> color{};
     std::array<float, kParticleGpuCurveSamples> size{};
     std::uint64_t textureAtlasAssetId = 0U;
+    std::uint32_t flipbookColumns = 1U;
+    std::uint32_t flipbookRows = 1U;
+    std::uint32_t flipbookStartFrame = 0U;
+    std::uint32_t flipbookFrameCount = 1U;
+    float flipbookFramesPerSecond = 0.0F;
+    bool flipbookLooping = true;
     std::uint32_t capacity = 0U;
     ParticleRenderOutput output = ParticleRenderOutput::Billboard;
     ParticleRenderBlendMode blend = ParticleRenderBlendMode::Alpha;

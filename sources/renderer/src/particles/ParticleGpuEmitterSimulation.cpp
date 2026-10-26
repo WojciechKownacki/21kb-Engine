@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cmath>
 
 namespace kb::render {
 namespace {
@@ -96,6 +97,7 @@ bool ParticleGpuEmitterSimulation::Initialize(std::uint64_t maxBufferBytes) {
         static_cast<std::uint16_t>(kb::particles::kParticleGpuCurveSamples));
     sizeUniform_ = bgfx::createUniform("u_gpuParticleSize", bgfx::UniformType::Vec4, 2U);
     outputUniform_ = bgfx::createUniform("u_gpuParticleOutput", bgfx::UniformType::Vec4);
+    flipbookUniform_ = bgfx::createUniform("u_gpuParticleFlipbook", bgfx::UniformType::Vec4);
     spinUniform_ = bgfx::createUniform("u_gpuParticleSpin", bgfx::UniformType::Vec4, 4U);
     basisUniform_ = bgfx::createUniform("u_gpuParticleBasis", bgfx::UniformType::Vec4, 3U);
     forcesUniform_ = bgfx::createUniform("u_gpuParticleForces", bgfx::UniformType::Vec4, static_cast<std::uint16_t>(2U * kb::particles::kParticleGpuMaxMotionModules));
@@ -134,7 +136,8 @@ bool ParticleGpuEmitterSimulation::Initialize(std::uint64_t maxBufferBytes) {
 bool ParticleGpuEmitterSimulation::IsReady() const noexcept {
     return bgfx::isValid(program_) && bgfx::isValid(motionUniform_) && bgfx::isValid(timeUniform_) &&
         bgfx::isValid(colorUniform_) && bgfx::isValid(sizeUniform_) && bgfx::isValid(collideProgram_) &&
-        bgfx::isValid(forcesUniform_) && bgfx::isValid(fieldUniform_) && bgfx::isValid(noiseOriginUniform_);
+        bgfx::isValid(forcesUniform_) && bgfx::isValid(fieldUniform_) && bgfx::isValid(noiseOriginUniform_) &&
+        bgfx::isValid(flipbookUniform_);
 }
 
 void ParticleGpuEmitterSimulation::Shutdown() noexcept {
@@ -142,7 +145,7 @@ void ParticleGpuEmitterSimulation::Shutdown() noexcept {
     for (bgfx::UniformHandle* handle : { &motionUniform_, &timeUniform_, &colorUniform_, &sizeUniform_, &worldUniform_, &worldInverseUniform_, &localUniform_, &planeUniform_,
              &collisionUniform_, &depthBounceUniform_, &texelUniform_, &viewProjectionUniform_, &depthSampler_,
              &inverseViewProjectionUniform_, &depthParamsUniform_, &cameraPositionUniform_, &sortCameraUniform_,
-             &sortParamsUniform_, &sortDepthUniform_, &outputUniform_, &spinUniform_, &basisUniform_, &rebaseUniform_, &forcesUniform_,
+             &sortParamsUniform_, &sortDepthUniform_, &outputUniform_, &flipbookUniform_, &spinUniform_, &basisUniform_, &rebaseUniform_, &forcesUniform_,
              &noiseOriginUniform_, &fieldUniform_ }) {
         if (bgfx::isValid(*handle)) bgfx::destroy(*handle);
         *handle = BGFX_INVALID_HANDLE;
@@ -433,7 +436,12 @@ void ParticleGpuEmitterSimulation::Apply(
         }
         if (command.hasParams) {
             kb::particles::ParticleGpuEmitterParams params = command.params;
-            if (params.motionModuleCount > params.motionModules.size()) {
+            if (params.motionModuleCount > params.motionModules.size() || params.flipbookColumns == 0U ||
+                params.flipbookRows == 0U || params.flipbookColumns > 256U || params.flipbookRows > 256U ||
+                params.flipbookFrameCount == 0U || !std::isfinite(params.flipbookFramesPerSecond) ||
+                params.flipbookFramesPerSecond < 0.0F ||
+                static_cast<std::uint64_t>(params.flipbookStartFrame) + params.flipbookFrameCount >
+                    static_cast<std::uint64_t>(params.flipbookColumns) * params.flipbookRows) {
                 reject(command.key, ParticleGpuUpdateFailure::InvalidParameters);
                 continue;
             }
@@ -597,6 +605,9 @@ void ParticleGpuEmitterSimulation::Dispatch(bgfx::ViewId viewId, std::uint64_t s
         const std::array<float, 4> output{ outputMode, static_cast<float>(emitter.perSlot),
             followsVelocity ? 1.0F : params.trailSegmentSeconds, params.trailWidth };
         bgfx::setUniform(outputUniform_, output.data());
+        const std::array<float, 4> flipbook{static_cast<float>(params.flipbookStartFrame),
+            static_cast<float>(params.flipbookFrameCount), params.flipbookFramesPerSecond, params.flipbookLooping ? 1.0F : 0.0F};
+        bgfx::setUniform(flipbookUniform_, flipbook.data());
         const std::array<float, 16> spin{ params.spinMin.x, params.spinMin.y, params.spinMin.z, 0.0F,
             params.spinMax.x, params.spinMax.y, params.spinMax.z, 0.0F,
             params.spinRateMin.x, params.spinRateMin.y, params.spinRateMin.z, 0.0F,

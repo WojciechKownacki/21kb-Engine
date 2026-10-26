@@ -298,5 +298,5 @@ void main()
     vec3 recordVelocity = local ? mul(u_gpuParticleWorldInverse, vec4(velocity, 0.0)).xyz : velocity;
     stateRecords[slot * 2u] = vec4(recordPosition, now);
     stateRecords[slot * 2u + 1u] = vec4(recordVelocity, stamp);
-    WriteLiveInstance(base, position, velocity, age / lifetime, ParticleSpin(slot, start.w, age));
+    WriteLiveInstance(base, position, velocity, age / lifetime, ParticleSpin(slot, start.w, age), age);
 }

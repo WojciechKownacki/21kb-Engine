@@ -27,7 +27,7 @@ enum class ParticleGpuFallbackReason : std::uint8_t {
     case ParticleGpuFallbackReason::SimulationSpace: return "simulation-space";
     case ParticleGpuFallbackReason::Output: return "output";
     case ParticleGpuFallbackReason::LocalAlignment: return "local-alignment";
-    case ParticleGpuFallbackReason::Flipbook: return "animated-flipbook";
+    case ParticleGpuFallbackReason::Flipbook: return "flipbook-frame-precision";
     case ParticleGpuFallbackReason::ParticleCapacity: return "particle-capacity";
     case ParticleGpuFallbackReason::MeshAssets: return "missing-mesh-assets";
     case ParticleGpuFallbackReason::LocalTrail: return "local-trail";

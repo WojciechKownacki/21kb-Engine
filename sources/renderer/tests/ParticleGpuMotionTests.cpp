@@ -171,7 +171,8 @@ MotionCase MakeMotionCase(int kind) {
     return result;
 }
 
-std::array<float, 20> RunAuthoredMotion(kb::scene::ParticleEffectAsset effect, bool gpu, MotionReadback& readback) {
+std::array<float, 20> RunAuthoredMotion(kb::scene::ParticleEffectAsset effect, bool gpu, MotionReadback& readback,
+    int frameSteps = 60, bool expectDead = false) {
     const auto root = std::filesystem::temp_directory_path() / ("21kb_particle_motion_" + std::to_string(GetCurrentProcessId()));
     std::error_code error;
     std::filesystem::create_directories(root, error);
@@ -209,7 +210,7 @@ std::array<float, 20> RunAuthoredMotion(kb::scene::ParticleEffectAsset effect, b
         Require(ids.size() == 1U && kb::particles::ParticlePlayback::Emit(scene, ids[0], 1U).Succeeded(), "Motion birth failed");
         ParticleGpuEmitterSimulation simulation;
         Require(!gpu || simulation.Initialize(), "Real GPU simulation unavailable");
-        for (int step = 0; step < 60; ++step) {
+        for (int step = 0; step < frameSteps; ++step) {
             Require(scene.Runtime().Update(kStep), "Motion runtime step failed");
             if (gpu) {
                 std::vector<kb::particles::ParticleGpuEmitterCommand> commands;
@@ -232,17 +233,55 @@ std::array<float, 20> RunAuthoredMotion(kb::scene::ParticleEffectAsset effect, b
             Require(draws.size() == 1U, "GPU motion dispatch did not produce its instance buffer");
             const auto pixels = readback.Read(draws[0]);
             std::copy_n(pixels.begin(), result.size(), result.begin());
-            Require(simulation.AllocatedBytes() == 8U * 208U, "GPU motion resource bytes changed unexpectedly");
+            Require(simulation.AllocatedBytes() == 8U * (draws[0].params->NeedsState() ? 208U : 144U),
+                "GPU motion resource bytes changed unexpectedly");
             simulation.Shutdown();
         } else {
-            Require(snapshot->Particles().size() == 1U, "CPU motion reference lost its particle");
-            const auto& particle = snapshot->Particles()[0];
-            result = {particle.position.x, particle.position.y, particle.position.z, particle.size,
-                0.0F, 0.0F, 0.0F, 0.0F, particle.velocity.x, particle.velocity.y, particle.velocity.z};
+            Require(snapshot->Particles().size() == (expectDead ? 0U : 1U), "CPU motion reference has an unexpected live count");
+            if (!expectDead) {
+                const auto& particle = snapshot->Particles()[0];
+                result = {particle.position.x, particle.position.y, particle.position.z, particle.size,
+                    0.0F, 0.0F, 0.0F, 0.0F, particle.velocity.x, particle.velocity.y, particle.velocity.z};
+                result[16] = static_cast<float>(particle.frame);
+            }
         }
     }
     std::filesystem::remove_all(root, error);
     return result;
+}
+
+void VerifyAuthoredFlipbookFrames(MotionReadback& readback) {
+    for (const bool stateful : {false, true}) for (const bool looping : {false, true}) {
+        for (const float speed : {0.0F, 3.25F, 8.0F}) for (const int steps : {1, 15, 19, 30, 43, 45, 59}) {
+            auto effect = MakeMotionCase(0).effect;
+            auto& emitter = effect.emitters[0];
+            emitter.modules.clear();
+            if (stateful) emitter.modules.push_back({.moduleId = 1U, .type = Module::CollisionPlane,
+                .payload = kb::scene::ParticleCollisionPlaneModule{.normal = {0.0F, 1.0F, 0.0F}, .distance = -100.0F}});
+            emitter.spawn.lifetimeMin = emitter.spawn.lifetimeMax = 1.0F;
+            emitter.output.payload = kb::scene::ParticleBillboardOutput{
+                .flipbook = {.columns = 4U, .rows = 2U, .framesPerSecond = speed, .looping = looping,
+                    .startFrame = 2U, .frameCount = 5U}};
+            const auto cpu = RunAuthoredMotion(effect, false, readback, steps);
+            const auto gpu = RunAuthoredMotion(effect, true, readback, steps);
+            if (cpu[16] != gpu[16]) std::fprintf(stderr,
+                "flipbook mismatch stateful=%d loop=%d speed=%g steps=%d cpu=%g gpu=%g\n",
+                stateful, looping, static_cast<double>(speed), steps,
+                static_cast<double>(cpu[16]), static_cast<double>(gpu[16]));
+            Require(cpu[16] == gpu[16] && gpu[16] >= 2.0F && gpu[16] <= 6.0F,
+                "Authored partial atlas frames must agree on the CPU and actual GPU after save/load");
+            if (speed == 0.0F) Require(gpu[16] == 2.0F, "Paused flipbook must retain its authored first frame");
+            if (steps == 59 && speed == 8.0F)
+                Require(gpu[16] == (looping ? 4.0F : 6.0F), "Loop and one-shot must select the right frame near particle death");
+            if (steps == 59 && speed == 8.0F) {
+                const auto deadCpu = RunAuthoredMotion(effect, false, readback, 60, true);
+                const auto deadGpu = RunAuthoredMotion(effect, true, readback, 60, true);
+                Require(deadCpu[3] == 0.0F && std::all_of(deadGpu.begin(), deadGpu.end(), [](float value) { return value == 0.0F; }),
+                    "CPU and GPU flipbook particles must disappear at the same lifetime boundary");
+            }
+        }
+    }
+    std::fprintf(stderr, "particle_flipbook cpu_gpu=equal kernels=closed,stateful range=partial speed=zero,fractional,integer lifetime_end=checked\n");
 }
 
 std::array<float, 20> RunMotionKernel(const MotionCase& test, MotionReadback& readback) {
@@ -598,6 +637,14 @@ void VerifyRejectedStateUpdates() {
     Require(simulation.RejectedUpdates(1U).size() == 1U &&
         simulation.RejectedUpdates(1U)[0].failure == ParticleGpuUpdateFailure::InvalidParameters && draw().params->motionModuleCount == 2U,
         "Oversized GPU motion input was not rejected before accessing the operation array");
+    update.params.motionModuleCount = 2U;
+    update.params.flipbookStartFrame = 1U;
+    simulation.Apply(1U, {&update, 1U});
+    Require(simulation.RejectedUpdates(1U).size() == 1U &&
+        simulation.RejectedUpdates(1U)[0].failure == ParticleGpuUpdateFailure::InvalidParameters &&
+        draw().params->flipbookStartFrame == 0U,
+        "Out-of-grid GPU flipbook range replaced a valid emitter");
+    update.params.flipbookStartFrame = 0U;
     simulation.ReleaseScene(1U);
     Require(simulation.AllocatedBytes() == 0U && simulation.RejectedUpdates(1U).empty(), "GPU release retained buffers or rejected update metadata");
     simulation.Shutdown();
@@ -647,6 +694,7 @@ void RunParticleGpuMotionTests(bool kernelOnly, bgfx::RendererType::Enum backend
         VerifyMissingDepthResource(readback);
         VerifyStagedBirthRanges();
         VerifyRejectedStateUpdates();
+        if (!kernelOnly) VerifyAuthoredFlipbookFrames(readback);
         for (int kind = 0; kind < 5; ++kind) {
             std::array<float, 20> baseline{};
             for (int variant = 0; variant < (kind >= 3 ? 4 : 2); ++variant) {

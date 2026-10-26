@@ -501,9 +501,16 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
                           std::is_same_v<T, kb::scene::ParticleStretchedBillboardOutput> ||
                           std::is_same_v<T, kb::scene::ParticlePointSpriteOutput>) {
                 AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookColumns, std::string{ ParticleText("particle.property.atlas_columns", "Atlas columns") },
-                    ScalarText(payload.flipbook.columns)), payload.flipbook.columns, 1U, 16U);
+                    ScalarText(payload.flipbook.columns)), payload.flipbook.columns, 1U, 256U);
                 AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookRows, std::string{ ParticleText("particle.property.atlas_rows", "Atlas rows") },
-                    ScalarText(payload.flipbook.rows)), payload.flipbook.rows, 1U, 16U);
+                    ScalarText(payload.flipbook.rows)), payload.flipbook.rows, 1U, 256U);
+                const auto atlasCells = payload.flipbook.columns * payload.flipbook.rows;
+                AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookStartFrame,
+                    std::string{ParticleText("particle.property.flipbook_start", "First atlas frame")}, ScalarText(payload.flipbook.startFrame)),
+                    payload.flipbook.startFrame, 0U, atlasCells > 0U ? atlasCells - 1U : 0U);
+                AddIntegerSlider(addProperty(ParticleEditorProperty::FlipbookFrameCount,
+                    std::string{ParticleText("particle.property.flipbook_count", "Frame count (0: remaining)")}, ScalarText(payload.flipbook.frameCount)),
+                    payload.flipbook.frameCount, 0U, atlasCells > payload.flipbook.startFrame ? atlasCells - payload.flipbook.startFrame : 0U);
                 AddSlider(addProperty(ParticleEditorProperty::FlipbookFramesPerSecond, std::string{ ParticleText("particle.property.frame_rate", "Frame rate") },
                     ScalarText(payload.flipbook.framesPerSecond)), payload.flipbook.framesPerSecond, 0.0F, 60.0F);
                 AddToggle(addProperty(ParticleEditorProperty::FlipbookLooping, std::string{ ParticleText("particle.property.flipbook_loop", "Flipbook loop") },

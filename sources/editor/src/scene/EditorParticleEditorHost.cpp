@@ -857,6 +857,8 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
         if (parsed) output.alignment = static_cast<kb::scene::ParticleAlignment>(uintValue); break;
     case kb::particle_editor::ParticleEditorProperty::FlipbookColumns:
     case kb::particle_editor::ParticleEditorProperty::FlipbookRows:
+    case kb::particle_editor::ParticleEditorProperty::FlipbookStartFrame:
+    case kb::particle_editor::ParticleEditorProperty::FlipbookFrameCount:
     case kb::particle_editor::ParticleEditorProperty::FlipbookFramesPerSecond:
     case kb::particle_editor::ParticleEditorProperty::FlipbookLooping:
     case kb::particle_editor::ParticleEditorProperty::OutputVelocityScale:
@@ -869,6 +871,8 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
                           std::is_same_v<T, kb::scene::ParticlePointSpriteOutput>) {
                 if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookColumns) parsed = setUInt(payload.flipbook.columns);
                 else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookRows) parsed = setUInt(payload.flipbook.rows);
+                else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookStartFrame) parsed = setUInt(payload.flipbook.startFrame);
+                else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookFrameCount) parsed = setUInt(payload.flipbook.frameCount);
                 else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookFramesPerSecond) parsed = setFloat(payload.flipbook.framesPerSecond);
                 else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookLooping) parsed = setBool(payload.flipbook.looping);
                 else if constexpr (std::is_same_v<T, kb::scene::ParticleStretchedBillboardOutput>) {

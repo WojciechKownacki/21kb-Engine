@@ -4,6 +4,24 @@ The particle provider selects simulation per emitter. `GpuVisualPreferred`
 allows CPU simulation when an emitter needs behavior the GPU kernel cannot
 preserve. CPU particles still use the renderer's particle draw path.
 
+Billboard flipbooks use `columns` and `rows` (1–256 each), a zero-based
+`startFrame`, and `frameCount`. A count of zero uses all remaining atlas cells;
+an explicit count must fit after the first frame. This supports partially filled
+atlases without displaying unused cells. Missing range fields retain the old
+whole-atlas behavior. Frames advance with particle age at `framesPerSecond`;
+zero speed holds the first frame, looping wraps within the range, and one-shot
+playback holds the last frame until particle death. The editor exposes these
+properties with Undo/Redo, and CLI paths use
+`effect.emitter[0].output.payload.flipbook.startFrame` and `frameCount`.
+CPU particle ages accumulate in double precision before conversion to render
+records, avoiding accumulated float drift at frame and lifetime boundaries.
+
+GPU billboard simulation evaluates the same frame range in both free-flight and
+collision kernels. Cooking and the versioned compiled cache preserve the range.
+If the maximum lifetime multiplied by playback speed exceeds 16,777,215 frames,
+the provider uses CPU simulation with reason `flipbook-frame-precision` to avoid
+loss of whole-frame precision in the GPU clock.
+
 The particle editor's Diagnostics section reads the selected emitter's preview
 snapshot. It shows the active simulation path, fallback reason and CPU render
 record count and bytes. These records can include particles retained from a

@@ -291,6 +291,9 @@ struct ParticleFlipbookAsset {
     std::uint32_t rows = 1U;
     float framesPerSecond = 0.0F;
     bool looping = true;
+    std::uint32_t startFrame = 0U;
+    // Zero uses every remaining atlas cell, preserving existing effect files.
+    std::uint32_t frameCount = 0U;
 };
 struct ParticleBillboardOutput {
     ParticleFlipbookAsset flipbook;

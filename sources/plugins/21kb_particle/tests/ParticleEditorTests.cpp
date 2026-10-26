@@ -491,6 +491,14 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     Require(std::get<kb::scene::ParticleBillboardOutput>(
                 atlasDocument.Asset().emitters[0].output.payload).flipbook.columns == 4U,
         "atlas columns did not persist on the working document");
+    atlasBillboard->flipbook.startFrame = 1U;
+    atlasBillboard->flipbook.frameCount = 2U;
+    Require(ParticleEditorCommands::SetEmitterOutput(atlasDocument, atlasWorkspace, 11U, atlasOutput).Succeeded(),
+        "partial atlas authoring must succeed");
+    Require(atlasDocument.Undo() && std::get<kb::scene::ParticleBillboardOutput>(atlasDocument.Asset().emitters[0].output.payload).flipbook.startFrame == 0U,
+        "undo must restore the prior atlas range");
+    Require(atlasDocument.Redo() && std::get<kb::scene::ParticleBillboardOutput>(atlasDocument.Asset().emitters[0].output.payload).flipbook.frameCount == 2U,
+        "redo must restore the partial atlas range");
     const auto atlasValidation =
         kb::scene::ParticleEffectAssetValidator::ValidateStructure(atlasDocument.Asset());
     Require(atlasValidation.Succeeded(), "atlas columns left the particle effect structurally invalid");
@@ -514,6 +522,7 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     const auto atlasCompiled = kb::particle_plugin::ParticleEffectCompiler::Compile(
         atlasCompilable, atlasOwner, atlasRegistry);
     Require(atlasCompiled.Succeeded() && atlasCompiled.effect != nullptr &&
+            atlasCompiled.effect->emitters[0].flipbookStartFrame == 1U && atlasCompiled.effect->emitters[0].flipbookFrameCount == 2U &&
             atlasCompiled.effect->emitters[0].colorOverLife.stopCount == 2U &&
             atlasCompiled.effect->emitters[0].colorOverLife.stops[0].color.g > 0.8F &&
             atlasCompiled.effect->emitters[0].colorOverLife.stops[0].color.r < 0.2F,
@@ -646,6 +655,9 @@ void TestProductionBakeCacheAndCapabilityGates() {
         .physicalPath = sourcePath, .contentHash = 30U};
     auto effect = MakeEffect();
     effect.emitters[0].spawn.bursts.push_back({.timeSeconds = 0.25F, .count = 3U});
+    effect.emitters[0].output.payload = kb::scene::ParticleBillboardOutput{
+        .flipbook = {.columns = 4U, .rows = 2U, .framesPerSecond = 3.25F, .looping = false,
+            .startFrame = 2U, .frameCount = 5U}};
     effect.emitters[0].modules.push_back({.moduleId = 1U, .authoringOrder = 0U, .type = kb::scene::ParticleModuleType::Gravity,
         .payload = kb::scene::ParticleGravityModule{.acceleration = {0.0F, -2.0F, 0.0F}}});
     kb::math::Gradient colorGradient;
@@ -665,6 +677,8 @@ void TestProductionBakeCacheAndCapabilityGates() {
         "first production Bake failed or modified the source asset");
     const ParticleBakeResult hit = bake(effect);
     Require(hit.status == ParticleBakeStatus::UpToDate && hit.key == first.key &&
+            hit.effect->emitters[0].flipbookStartFrame == 2U && hit.effect->emitters[0].flipbookFrameCount == 5U &&
+            hit.effect->emitters[0].flipbookFramesPerSecond == 3.25F && !hit.effect->emitters[0].flipbookLooping &&
             hit.effect->emitters[0].materialAssetId == 72U && hit.effect->emitters[0].burstCount == 1U &&
             hit.effect->emitters[0].moduleCount == 2U && hit.effect->emitters[0].colorOverLife.stopCount == 2U &&
             std::get<kb::scene::ParticleGravityModule>(hit.effect->emitters[0].modules[0].payload).acceleration.y == -2.0F,

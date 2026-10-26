@@ -103,6 +103,7 @@ ParticleRuntimeDiagnosticResult CaptureParticleRuntimeDiagnostics(
             row.Set("reason", JsonValue::MakeString(std::string{kb::particles::ParticleGpuFallbackReasonName(emitter.gpuFallbackReason)}));
             row.Set("cpu_render_record_count", JsonValue::MakeNumber(emitter.particleCount));
             auto records = JsonValue::MakeArray();
+            auto atlasFrames = JsonValue::MakeArray();
             const auto particles = snapshot->Particles();
             if (emitter.firstParticle <= particles.size() && emitter.particleCount <= particles.size() - emitter.firstParticle) {
                 const auto count = std::min({samples, emitter.particleCount, remainingCpuSamples});
@@ -112,9 +113,11 @@ ParticleRuntimeDiagnosticResult CaptureParticleRuntimeDiagnostics(
                     for (const auto value : {particle.position.x, particle.position.y, particle.position.z,
                             particle.velocity.x, particle.velocity.y, particle.velocity.z}) record.Append(JsonValue::MakeNumber(value));
                     records.Append(std::move(record));
+                    atlasFrames.Append(JsonValue::MakeNumber(particle.frame));
                 }
             }
             row.Set("cpu_position_velocity_samples", std::move(records));
+            row.Set("cpu_atlas_frame_samples", std::move(atlasFrames));
             emitters.Append(std::move(row));
         }
     }
@@ -131,6 +134,11 @@ ParticleRuntimeDiagnosticResult CaptureParticleRuntimeDiagnostics(
         row.Set("emitter_id", Integer(draw.key.emitterId));
         row.Set("capacity", JsonValue::MakeNumber(draw.capacity));
         row.Set("output_enum", JsonValue::MakeNumber(static_cast<std::uint8_t>(draw.params->output)));
+        row.Set("texture_atlas_asset_id", Integer(draw.params->textureAtlasAssetId));
+        row.Set("flipbook_columns", JsonValue::MakeNumber(draw.params->flipbookColumns));
+        row.Set("flipbook_rows", JsonValue::MakeNumber(draw.params->flipbookRows));
+        row.Set("flipbook_start_frame", JsonValue::MakeNumber(draw.params->flipbookStartFrame));
+        row.Set("flipbook_frame_count", JsonValue::MakeNumber(draw.params->flipbookFrameCount));
         row.Set("plane_kill_on_contact", JsonValue::MakeBool(draw.params->hasPlane && draw.params->plane.killOnContact));
         auto motion = JsonValue::MakeArray();
         const auto moduleCount = std::min(draw.params->motionModuleCount, static_cast<std::uint32_t>(draw.params->motionModules.size()));

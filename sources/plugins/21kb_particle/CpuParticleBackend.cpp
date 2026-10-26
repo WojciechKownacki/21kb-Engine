@@ -5,6 +5,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
+#include "engine/particles/ParticleFlipbook.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/ParticleEffectAssetValidation.hpp"
@@ -848,7 +849,7 @@ std::size_t CpuParticleBackend::CopyLiveParticleStates(
             output[total] = {
                 .position = particlePositions_[index],
                 .velocity = particleVelocities_[index],
-                .age = particleAges_[index],
+                .age = static_cast<float>(particleAges_[index]),
                 .lifetime = particleLifetimes_[index],
                 .color = particleColors_[index],
                 .size = particleSizes_[index],
@@ -1894,7 +1895,7 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
         const CompiledEmitter& emitter = *integrated;
         kb::math::Vec3& velocity = particleVelocities_[index];
         const float normalizedAge = kb::math::Clamp(
-            particleAges_[index] / particleLifetimes_[index], 0.0F, 1.0F);
+            static_cast<float>(particleAges_[index] / particleLifetimes_[index]), 0.0F, 1.0F);
         // Fields anchored to the emitter (axis rotation, attraction, torus) turn about where it is now.
         const kb::math::Vec3 origin = EmitterOrigin(denseIndex, emitter);
         kb::math::Color color = EvaluateGradient(emitter.colorOverLife, normalizedAge);
@@ -2037,7 +2038,7 @@ void CpuParticleBackend::EmitWhileAlive(float fixedDeltaSeconds, std::uint32_t& 
             // Births over this step at the binding's rate, phased per particle so neighbours do not
             // spawn in lockstep.
             const float phase = static_cast<float>((particleIds_[index] * 0x9E3779B97F4A7C15ULL) >> 40U) / 16777216.0F;
-            const float age = particleAges_[index];
+            const float age = static_cast<float>(particleAges_[index]);
             const float births = std::floor(age * binding.ratePerSecond + phase) -
                 std::floor(std::max(age - fixedDeltaSeconds, 0.0F) * binding.ratePerSecond + phase);
             if (births < 1.0F) continue;
@@ -2395,21 +2396,16 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
         const std::uint32_t destinationIndex = renderGroupWriteOffsets_[groupIndex]++;
         const CompiledEmitter& emitter =
             compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect->emitters[emitterIndex];
-        std::uint16_t frame = 0U;
-        if (emitter.flipbookFrameCount > 1U && emitter.flipbookFramesPerSecond > 0.0F) {
-            const std::uint32_t unboundedFrame = static_cast<std::uint32_t>(
-                particleAges_[particleIndex] * emitter.flipbookFramesPerSecond);
-            frame = static_cast<std::uint16_t>(emitter.flipbookLooping
-                ? unboundedFrame % emitter.flipbookFrameCount
-                : std::min<std::uint32_t>(unboundedFrame, emitter.flipbookFrameCount - 1U));
-        }
+        const float age = static_cast<float>(particleAges_[particleIndex]);
+        const std::uint16_t frame = kb::particles::ParticleFlipbookFrame(age,
+            emitter.flipbookFramesPerSecond, emitter.flipbookStartFrame, emitter.flipbookFrameCount, emitter.flipbookLooping);
         const float speed = std::sqrt(kb::math::Dot(
             particleVelocities_[particleIndex], particleVelocities_[particleIndex]));
         renderParticleScratch_[destinationIndex] = {
             .position = particlePositions_[particleIndex],
             .size = particleSizes_[particleIndex],
             .previousPosition = particlePreviousPositions_[particleIndex],
-            .rotationRadians = particleSpins_[particleIndex].z + particleSpinRates_[particleIndex].z * particleAges_[particleIndex],
+            .rotationRadians = particleSpins_[particleIndex].z + particleSpinRates_[particleIndex].z * age,
             .velocity = particleVelocities_[particleIndex],
             .stretch = std::max(emitter.stretchMinimumLength, speed * emitter.stretchVelocityScale),
             .particleId = particleIds_[particleIndex],
@@ -2419,14 +2415,14 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
             .frame = frame,
             .normalizedAgeUnorm = static_cast<std::uint16_t>(std::lround(
                 kb::math::Clamp(particleLifetimes_[particleIndex] > 0.0F
-                        ? particleAges_[particleIndex] / particleLifetimes_[particleIndex]
+                        ? age / particleLifetimes_[particleIndex]
                         : 0.0F,
                     0.0F,
                     1.0F) * 65535.0F)),
             .rotationXSnorm = kb::particles::PackParticleAngle(
-                particleSpins_[particleIndex].x + particleSpinRates_[particleIndex].x * particleAges_[particleIndex]),
+                particleSpins_[particleIndex].x + particleSpinRates_[particleIndex].x * age),
             .rotationYSnorm = kb::particles::PackParticleAngle(
-                particleSpins_[particleIndex].y + particleSpinRates_[particleIndex].y * particleAges_[particleIndex]),
+                particleSpins_[particleIndex].y + particleSpinRates_[particleIndex].y * age),
         };
         kb::particles::ParticleRenderEmitterRecord& batch =
             renderEmitterScratch_[renderGroupRecordIndices_[groupIndex]];
@@ -2507,7 +2503,9 @@ kb::particles::ParticleGpuFallbackReason CpuParticleBackend::GpuFallbackReason(
         emitter.outputType != kb::scene::ParticleOutputType::Mesh &&
         emitter.outputType != kb::scene::ParticleOutputType::Trail) return Reason::Output;
     if (emitter.alignment == kb::scene::ParticleAlignment::Local) return Reason::LocalAlignment;
-    if (emitter.flipbookFrameCount > 1U) return Reason::Flipbook;
+    // Keep integer frame selection exact in the compute shader's single-precision clock.
+    if (emitter.flipbookFrameCount > 1U && static_cast<double>(emitter.lifetimeMax) *
+        emitter.flipbookFramesPerSecond > 16'777'215.0) return Reason::Flipbook;
     if (emitter.maxParticles > kb::particles::kParticleGpuMaxCapacity) return Reason::ParticleCapacity;
     if (emitter.outputType == kb::scene::ParticleOutputType::Mesh && (emitter.meshAssetId == 0U || emitter.materialAssetId == 0U)) {
         return Reason::MeshAssets;
@@ -2642,6 +2640,12 @@ kb::particles::ParticleGpuEmitterParams CpuParticleBackend::BuildGpuParams(
         params.size[sample] = emitter.sizeOverLife.keyCount > 0U ? EvaluateCurve(emitter.sizeOverLife, age) : 1.0F;
     }
     params.textureAtlasAssetId = emitter.textureAtlasAssetId;
+    params.flipbookColumns = emitter.flipbookColumns;
+    params.flipbookRows = emitter.flipbookRows;
+    params.flipbookStartFrame = emitter.flipbookStartFrame;
+    params.flipbookFrameCount = emitter.flipbookFrameCount;
+    params.flipbookFramesPerSecond = emitter.flipbookFramesPerSecond;
+    params.flipbookLooping = emitter.flipbookLooping;
     params.spinMin = emitter.spinMinRadians;
     params.spinMax = emitter.spinMaxRadians;
     params.spinRateMin = emitter.spinRateMinRadians;

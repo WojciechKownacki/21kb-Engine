@@ -4,6 +4,7 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
+#include "engine/particles/ParticleFlipbook.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/ParticleEffectAssetMigration.hpp"
@@ -514,11 +515,9 @@ void TestVisualModulesObservableGoldenAndDefaults() {
             std::abs(state.color.a - 0.45F) < 0.00001F &&
             std::abs(state.size - 2.0F) < 0.00001F,
         "curve, gradient, size, or composed alpha state is not publicly observable");
-#if defined(__APPLE__)
-    constexpr std::uint64_t kExpectedVisualHash = 4323008387544267842ULL;
-#else
-    constexpr std::uint64_t kExpectedVisualHash = 3957020943848305260ULL;
-#endif
+    Require(state.age == 0.5F, "Thirty fixed steps must publish the exact half-second age");
+    // At the exact midpoint both fused and separate float interpolation produce this state.
+    constexpr std::uint64_t kExpectedVisualHash = 18157631811310042286ULL;
     const std::uint64_t actualHash = HashVisualStateSpan(enabled);
     Require(actualHash == kExpectedVisualHash,
         ("visual curve and gradient deterministic golden changed: actual=" + std::to_string(actualHash)).c_str());
@@ -2993,6 +2992,10 @@ void TestGpuFallbackReasonTable() {
         { "animated flipbook", [](auto& e) {
               e.emitters[0].output.payload = kb::scene::ParticleBillboardOutput{
                   .flipbook = {.columns = 2U, .rows = 2U, .framesPerSecond = 30.0F, .looping = true} };
+          }, Reason::None },
+        { "flipbook beyond GPU clock precision", [](auto& e) {
+              e.emitters[0].output.payload = kb::scene::ParticleBillboardOutput{
+                  .flipbook = {.columns = 2U, .rows = 2U, .framesPerSecond = 1.0e20F, .looping = true} };
           }, Reason::Flipbook },
         { "ribbon output", [](auto& e) {
               e.emitters[0].output.type = kb::scene::ParticleOutputType::Ribbon;
@@ -3826,6 +3829,20 @@ void RunParticleSceneMemoryProbe() {
 
 int main(int argc, char** argv) {
     try {
+        using kb::particles::ParticleFlipbookFrame;
+        Require(ParticleFlipbookFrame(0.0F, 8.0F, 2U, 5U, true) == 2U &&
+            ParticleFlipbookFrame(0.5F, 8.0F, 2U, 5U, true) == 6U &&
+            ParticleFlipbookFrame(0.625F, 8.0F, 2U, 5U, true) == 2U &&
+            ParticleFlipbookFrame(0.625F, 8.0F, 2U, 5U, false) == 6U,
+            "Partial flipbook range must loop or clamp at its own boundary");
+        // Exercise the runtime overflow guard without folding an unreachable float conversion.
+        volatile float largeClockInput = 1.0e30F;
+        const float largeClock = largeClockInput;
+        Require(ParticleFlipbookFrame(100.0F, 0.0F, 65535U, 1U, true) == 65535U &&
+            ParticleFlipbookFrame(largeClock, largeClock, 2U, 5U, false) == 6U &&
+            ParticleFlipbookFrame(largeClock, largeClock, 2U, 5U, true) >= 2U &&
+            ParticleFlipbookFrame(largeClock, largeClock, 2U, 5U, true) <= 6U,
+            "Static and extreme finite flipbook clocks must stay within the authored range");
         if (argc == 2 && std::string_view{argv[1]} == "--memory-probe") {
             RunParticleSceneMemoryProbe();
             return 0;

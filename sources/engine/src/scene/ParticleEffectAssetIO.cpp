@@ -431,6 +431,8 @@ void ReadFlipbook(Reader& reader, const std::string& base, ParticleFlipbookAsset
     reader.Required(base + ".rows", flipbook.rows, ParseUInt<std::uint32_t>);
     reader.Required(base + ".framesPerSecond", flipbook.framesPerSecond, ParseFloat);
     reader.Required(base + ".looping", flipbook.looping, ParseBool);
+    static_cast<void>(reader.Optional(base + ".startFrame", flipbook.startFrame, ParseUInt<std::uint32_t>));
+    static_cast<void>(reader.Optional(base + ".frameCount", flipbook.frameCount, ParseUInt<std::uint32_t>));
 }
 
 [[nodiscard]] std::optional<std::size_t> ParsePathIndex(std::string_view path, std::string_view marker) noexcept {
@@ -1043,6 +1045,8 @@ void WriteFlipbook(std::string& out, const std::string& base, const ParticleFlip
     Line(out, base + ".rows", std::to_string(value.rows));
     Line(out, base + ".framesPerSecond", Float(value.framesPerSecond));
     BoolLine(out, base + ".looping", value.looping);
+    if (value.startFrame != 0U) Line(out, base + ".startFrame", std::to_string(value.startFrame));
+    if (value.frameCount != 0U) Line(out, base + ".frameCount", std::to_string(value.frameCount));
 }
 
 } // namespace

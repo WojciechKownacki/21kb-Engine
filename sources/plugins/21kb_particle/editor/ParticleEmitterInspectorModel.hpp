@@ -36,6 +36,7 @@ enum class ParticleEditorProperty : std::uint16_t {
     OutputAntiAliasing, OutputAlignment, FlipbookColumns, FlipbookRows,
     FlipbookFramesPerSecond, FlipbookLooping, OutputVelocityScale, OutputMinimumLength,
     OutputPointDiameter, ModulePayload,
+    FlipbookStartFrame, FlipbookFrameCount,
 };
 
 enum class ParticleEditorPropertyWidget : std::uint8_t {

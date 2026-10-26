@@ -347,7 +347,8 @@ private:
     std::vector<kb::math::Vec3> particlePositions_;
     std::vector<kb::math::Vec3> particlePreviousPositions_;
     std::vector<kb::math::Vec3> particleVelocities_;
-    std::vector<float> particleAges_;
+    // Accumulate fixed steps without float drift at flipbook and lifetime boundaries.
+    std::vector<double> particleAges_;
     std::vector<float> particleLifetimes_;
     std::vector<kb::math::Color> particleColors_;
     std::vector<float> particleSizes_;

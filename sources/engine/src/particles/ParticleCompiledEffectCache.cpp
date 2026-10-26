@@ -74,7 +74,8 @@ void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect&
         WriteUInt8(bytes, static_cast<std::uint8_t>(e.blendMode)); WriteUInt8(bytes, static_cast<std::uint8_t>(e.sortMode));
         WriteUInt8(bytes, static_cast<std::uint8_t>(e.alignment)); WriteBool(bytes, e.depthTest); WriteBool(bytes, e.depthWrite);
         WriteBool(bytes, e.softParticles); WriteBool(bytes, e.antiAliasing); WriteUInt32(bytes, e.flipbookColumns);
-        WriteUInt32(bytes, e.flipbookRows); WriteUInt32(bytes, e.flipbookFrameCount); WriteFloat(bytes, e.flipbookFramesPerSecond);
+        WriteUInt32(bytes, e.flipbookRows); WriteUInt32(bytes, e.flipbookFrameCount); WriteUInt32(bytes, e.flipbookStartFrame);
+        WriteFloat(bytes, e.flipbookFramesPerSecond);
         WriteBool(bytes, e.flipbookLooping); WriteFloat(bytes, e.stretchVelocityScale); WriteFloat(bytes, e.stretchMinimumLength);
         WriteFloat(bytes, e.pointSpriteDiameter);
         WriteFloat(bytes, e.trailSampleIntervalSeconds); WriteFloat(bytes, e.trailMinimumDistance);
@@ -234,7 +235,8 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             !reader.U8(alignment) || alignment > static_cast<std::uint8_t>(kb::scene::ParticleAlignment::Local) ||
             !reader.Bool(e.depthTest) || !reader.Bool(e.depthWrite) || !reader.Bool(e.softParticles) ||
             !reader.Bool(e.antiAliasing) || !reader.U32(columns) || columns > UINT16_MAX || !reader.U32(rows) || rows > UINT16_MAX ||
-            !reader.U32(e.flipbookFrameCount) || !reader.F(e.flipbookFramesPerSecond) || !reader.Bool(e.flipbookLooping) ||
+            !reader.U32(e.flipbookFrameCount) || !reader.U32(e.flipbookStartFrame) ||
+            !reader.F(e.flipbookFramesPerSecond) || !reader.Bool(e.flipbookLooping) ||
             !reader.F(e.stretchVelocityScale) || !reader.F(e.stretchMinimumLength) || !reader.F(e.pointSpriteDiameter) ||
             !reader.F(e.trailSampleIntervalSeconds) || !reader.F(e.trailMinimumDistance) ||
             !reader.U32(e.trailMaxSamplesPerParticle) || !reader.F(e.trailWidth) ||
@@ -307,6 +309,9 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             emitter.lifetimeMin <= 0.0F || emitter.lifetimeMax < emitter.lifetimeMin ||
             emitter.prewarmSeconds < 0.0F || emitter.prewarmSeconds > kb::scene::kParticleEffectMaxPrewarmSeconds ||
             emitter.flipbookColumns == 0U || emitter.flipbookRows == 0U || emitter.flipbookFrameCount == 0U ||
+            emitter.flipbookColumns > 256U || emitter.flipbookRows > 256U || emitter.flipbookFramesPerSecond < 0.0F ||
+            static_cast<std::uint64_t>(emitter.flipbookStartFrame) + emitter.flipbookFrameCount >
+                static_cast<std::uint64_t>(emitter.flipbookColumns) * emitter.flipbookRows ||
             emitter.pointSpriteDiameter <= 0.0F ||
             emitter.trailSampleIntervalSeconds <= 0.0F || emitter.trailMinimumDistance < 0.0F ||
             emitter.trailMaxSamplesPerParticle == 0U ||

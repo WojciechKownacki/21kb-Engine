@@ -7,8 +7,10 @@ import math
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import tempfile
+import zlib
 
 
 def require(condition, message):
@@ -48,7 +50,20 @@ def main():
         return run(args.cli, "vfx-set", "--project", project, "--effect", f"/Game/Particles/{name}.kbvfx", *sets(*values))
 
     run(args.cli, "new", "--parent", root, "--name", "Sample", "--template", "Empty")
-    for name in ["Mixed", "Contact"]:
+    # Distinct cells make a wrong atlas grid visible in the packaged pixel comparison.
+    colors = [(255, 0, 255, 255), (0, 255, 255, 255), (255, 128, 32, 255), (64, 255, 64, 255),
+              (64, 128, 255, 255), (255, 64, 64, 255), (255, 255, 64, 255), (0, 0, 0, 0)]
+    width, height, cell = 64, 32, 16
+    scanlines = b"".join(b"\0" + b"".join(bytes(colors[(y // cell) * 4 + x // cell])
+                                      for x in range(width)) for y in range(height))
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    atlas = project / "Assets" / "Textures" / "ParticleAtlas.png"
+    atlas.parent.mkdir(parents=True, exist_ok=True)
+    atlas.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)) +
+                      chunk(b"IDAT", zlib.compress(scanlines)) + chunk(b"IEND", b""))
+    names = ["Mixed", "Contact", "AtlasOnce"]
+    for name in names:
         run(args.cli, "vfx-new", "--project", project, "--name", name, *sets(
             "effect.backendPolicy=GpuVisualPreferred", "effect.determinismSeed=42", "effect.durationSeconds=10", "effect.looping=false",
             "effect.emitter[0].maxParticles=64", "effect.emitter[0].spawn.mode=Burst", "effect.emitter[0].spawn.burstCount=1",
@@ -58,6 +73,15 @@ def main():
             "effect.emitter[0].spawn.direction=1 0 0", "effect.emitter[0].spawn.spreadDegrees=0",
             "effect.emitter[0].spawn.randomization=0", "effect.emitter[0].output.depthTest=false",
             "effect.emitter[0].output.softParticles=false"))
+        edit(name, "effect.emitter[0].output.payload.flipbook.columns=4",
+             "effect.emitter[0].output.textureAtlas.path=/Game/Textures/ParticleAtlas.png",
+             "effect.emitter[0].output.payload.flipbook.rows=2",
+             "effect.emitter[0].output.payload.flipbook.startFrame=2",
+             "effect.emitter[0].output.payload.flipbook.frameCount=5",
+             "effect.emitter[0].output.payload.flipbook.framesPerSecond=8",
+             f"effect.emitter[0].output.payload.flipbook.looping={'true' if name == 'Mixed' else 'false'}")
+        if name == "AtlasOnce":
+            edit(name, "effect.emitter[0].spawn.speedMin=0", "effect.emitter[0].spawn.speedMax=0")
         run(args.cli, "entity", "add", "--project", project, "--name", name)
         run(args.cli, "component", "add", "--project", project, "--entity", name, "--type", "Particle Effect",
             *sets(f"effectAssetId=/Game/Particles/{name}.kbvfx", "deterministicSeed=1"))
@@ -105,14 +129,21 @@ def main():
         require(report["image"]["succeeded"] and report["image"]["width"] == 64 and report["image"]["height"] == 64 and
                 len(bytes.fromhex(report["image"]["rgba8_hex"])) == 64 * 64 * 4, "Packaged scene image readback is missing")
         if gpu and expected == 0:
-            require(report["gpu_execution_observed"] and len(report["gpu_captures"]) == 2, "Packaged GPU execution/readback was not observed")
+            require(report["gpu_execution_observed"] and len(report["gpu_captures"]) == len(names), "Packaged GPU execution/readback was not observed")
             require(all(row["path"] == "gpu" and row["reason"] == "none" and row["cpu_render_record_count"] == 0 for row in report["emitters"]), "Package fell back to CPU")
             require(all(row["readback_succeeded"] and len(row["raw_instance_records"]) == 8 for row in report["gpu_captures"]), "Actual GPU records are missing")
+            require(all(int(row["texture_atlas_asset_id"]) != 0 and row["flipbook_columns"] == 4 and
+                        row["flipbook_rows"] == 2 and row["flipbook_start_frame"] == 2 and row["flipbook_frame_count"] == 5
+                        for row in report["gpu_captures"]), "Cooked atlas texture or frame range did not reach the GPU renderer")
         return report
 
     gpu_player = cook("Gpu")
     birth = capture(gpu_player, 8)
     gpu = capture(gpu_player, 60)
+    gpu_late = capture(gpu_player, 289)
+    late_once = next(row for row in gpu_late["gpu_captures"] if not row["motion_modules"] and not row["plane_kill_on_contact"])
+    require(all(row[3] > 0 and row[16] == 6 for row in late_once["raw_instance_records"]),
+            "Cooked one-shot flipbook did not hold its last used cell near particle death")
     contact_before = next(row for row in birth["gpu_captures"] if row["plane_kill_on_contact"])
     contact_after = next(row for row in gpu["gpu_captures"] if row["plane_kill_on_contact"])
     require(all(row[3] > 0 for row in contact_before["raw_instance_records"]), "Contact particles were not alive before contact")
@@ -126,11 +157,18 @@ def main():
     require(ops[1]["vector"] == [0, 1, 0] and ops[4]["vector"] == [1, 0, 0] and
             ops[2]["vector"] == [1, 1, 0] and ops[2]["parameter"] == 4 and ops[5]["vector"] == [-2, 0, 3] and ops[5]["parameter"] == 0,
             "Cooked field vectors or radii changed")
-    for name in ["Mixed", "Contact"]:
+    for name in names:
         edit(name, "effect.backendPolicy=CpuDeterministic")
     cpu_player = cook("Cpu")
     cpu = capture(cpu_player, 60, gpu=False)
     cpu_birth = capture(cpu_player, 8, gpu=False)
+    cpu_late = capture(cpu_player, 289, gpu=False)
+    for actual_report, reference_report in [(birth, cpu_birth), (gpu, cpu), (gpu_late, cpu_late)]:
+        for actual in actual_report["gpu_captures"]:
+            reference = next(row for row in reference_report["emitters"] if row["instance_id"] == actual["instance_id"])
+            live_frames = [row[16] for row in actual["raw_instance_records"] if row[3] > 0]
+            require(live_frames == reference["cpu_atlas_frame_samples"] and
+                    all(2 <= frame <= 6 for frame in live_frames), "Cooked partial flipbook CPU/GPU frames disagree")
     cpu_mixed = next(row for row in cpu["emitters"] if row["instance_id"] == mixed["instance_id"])
     cpu_contact = next(row for row in cpu["emitters"] if row["instance_id"] == contact_after["instance_id"])
     require(cpu_contact["cpu_render_record_count"] == 0 and cpu_mixed["cpu_render_record_count"] == 64, "CPU contact/motion reference is invalid")
@@ -154,7 +192,7 @@ def main():
         require(mismatches <= len(actual_pixels) // 100, f"Packaged GPU/CPU images disagree in {mismatches} channels")
         image_errors.append(mismatches)
     capture(cpu_player, 8, expected=1)
-    for name in ["Mixed", "Contact"]:
+    for name in names:
         edit(name, "effect.backendPolicy=GpuVisualPreferred")
     edit("Contact", "effect.emitter[0].module[2].payload.killOnContact=false")
     control = capture(cook("BounceControl"), 60)

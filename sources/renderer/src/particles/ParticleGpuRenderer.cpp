@@ -480,7 +480,8 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitGpuEmitters(
         bgfx::setIndexBuffer(quad->indexBuffer);
         // A trail segment is a quad stretched along its own direction (the velocity slot of the instance).
         const float alignment = trail ? 1.0F : static_cast<float>(params.alignment);
-        const std::array<float, 4> emitterParams{ 1.0F, 1.0F, alignment, 1.0F };
+        const std::array<float, 4> emitterParams{ static_cast<float>(params.flipbookColumns),
+            static_cast<float>(params.flipbookRows), alignment, 1.0F };
         const std::array<float, 4> localBasis{ 0.0F, 0.0F, 0.0F, 1.0F };
         const bool soft = params.softParticles && bgfx::isValid(sceneDepthTexture);
         const std::array<float, 4> depthParams{

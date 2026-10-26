@@ -9,6 +9,8 @@ uniform vec4 u_gpuParticleSize[2]; // eight sizes over normalized age
 // x = output mode (0 billboard, 1 mesh instance, 2 trail segments), y = instances written per slot,
 // z = trail segment seconds (trail) or 1 when a mesh particle's Y axis follows its velocity, w = trail width.
 uniform vec4 u_gpuParticleOutput;
+// x = first atlas cell, y = active cell count, z = frames per second, w = looping.
+uniform vec4 u_gpuParticleFlipbook;
 // Spin ranges per axis (xyz): [0] initial angle min, [1] max, [2] angular velocity min, [3] max
 // (radians, radians per second).
 uniform vec4 u_gpuParticleSpin[4];
@@ -129,7 +131,7 @@ void WriteMeshInstance(uint base, uint slot, vec3 position, vec3 velocity, float
     instanceOut[base + 4u] = SampleColor(u);
 }
 
-void WriteLiveInstance(uint base, vec3 position, vec3 velocity, float u, vec3 angles)
+void WriteLiveInstance(uint base, vec3 position, vec3 velocity, float u, vec3 angles, float age)
 {
     if (u_gpuParticleOutput.x > 0.5)
     {
@@ -141,5 +143,12 @@ void WriteLiveInstance(uint base, vec3 position, vec3 velocity, float u, vec3 an
     instanceOut[base + 1u] = vec4(position - velocity * 0.016666668, angles.z);
     instanceOut[base + 2u] = vec4(velocity, max(u_gpuParticleTime.w, speed * u_gpuParticleTime.z));
     instanceOut[base + 3u] = SampleColor(u);
-    instanceOut[base + 4u] = vec4(0.0, u, 0.0, 0.0);
+    float count = max(u_gpuParticleFlipbook.y, 1.0);
+    float frame = u_gpuParticleFlipbook.x;
+    if (count > 1.0 && u_gpuParticleFlipbook.z > 0.0)
+    {
+        float elapsed = floor(max(age, 0.0) * u_gpuParticleFlipbook.z);
+        frame += u_gpuParticleFlipbook.w > 0.5 ? mod(elapsed, count) : min(elapsed, count - 1.0);
+    }
+    instanceOut[base + 4u] = vec4(frame, u, 0.0, 0.0);
 }
