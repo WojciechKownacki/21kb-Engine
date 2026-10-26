@@ -469,6 +469,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
 
     std::uint64_t updateWallNanoseconds = 0U;
     std::uint64_t audioFrames = 0U, audioSamples = 0U, audioAboveUnit = 0U, mixWallNanoseconds = 0U;
+    std::uint64_t audioBlocks = 0U, audioShortBlocks = 0U, worstBlockMixNanoseconds = 0U;
     double audioEnergy = 0.0, audioPeak = 0.0;
     bool audioSucceeded = true;
     std::string audioError;
@@ -485,8 +486,12 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         if (audioReport != nullptr) {
             const auto started = std::chrono::steady_clock::now();
             const auto pcm = kb::audio::AudioPlayback::RenderOffline(scene, pcmFramesPerTick);
-            mixWallNanoseconds += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            const auto blockNanoseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - started).count());
+            mixWallNanoseconds += blockNanoseconds;
+            worstBlockMixNanoseconds = std::max(worstBlockMixNanoseconds, blockNanoseconds);
+            ++audioBlocks;
+            audioShortBlocks += pcm.frames != pcmFramesPerTick ? 1U : 0U;
             audioFrames += pcm.frames;
             audioSamples += pcm.samples.size();
             for (const float sample : pcm.samples) {
@@ -623,6 +628,18 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         report.Set("rms", JsonValue::MakeNumber(audioSamples == 0U ? 0.0 : std::sqrt(audioEnergy / static_cast<double>(audioSamples))));
         report.Set("above_unit_samples", JsonValue::MakeNumber(static_cast<double>(audioAboveUnit)));
         report.Set("mix_wall_ns", JsonValue::MakeString(std::to_string(mixWallNanoseconds)));
+        // Offline rendering has no device to underrun: a block that comes back short is the offline kind of dropout. The mix cost against the
+        // duration of the audio is the headroom a real device would have; voice counts and decoder memory are not reported by the provider.
+        report.Set("blocks", JsonValue::MakeNumber(static_cast<double>(audioBlocks)));
+        report.Set("short_blocks", JsonValue::MakeNumber(static_cast<double>(audioShortBlocks)));
+        report.Set("worst_block_mix_ns", JsonValue::MakeString(std::to_string(worstBlockMixNanoseconds)));
+        const double audioSeconds = audioFrames == 0U || audioSnapshot.sampleRate == 0U ? 0.0 : static_cast<double>(audioFrames) / static_cast<double>(audioSnapshot.sampleRate);
+        report.Set("realtime_factor", audioSeconds <= 0.0 ? JsonValue::MakeNull() : JsonValue::MakeNumber(static_cast<double>(mixWallNanoseconds) * 1e-9 / audioSeconds));
+        auto unavailable = JsonValue::MakeArray();
+        unavailable.Append(JsonValue::MakeString("voice_count"));
+        unavailable.Append(JsonValue::MakeString("decoder_memory_bytes"));
+        unavailable.Append(JsonValue::MakeString("device_underruns"));
+        report.Set("unavailable_metrics", std::move(unavailable));
         *audioReport << report.Dump() << '\n';
         if (!audioReport->good()) { io.err << "error: audio execution report could not be written\n"; return 1; }
     }
