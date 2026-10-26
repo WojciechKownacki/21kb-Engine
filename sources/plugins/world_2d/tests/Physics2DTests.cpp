@@ -576,6 +576,46 @@ int main() {
         std::filesystem::remove_all(root);
     }
 
+    // A flat map is a top-down plane: its walls stop a body and a character that move across it.
+    {
+        using kb::assets::Map2DTileKey;
+        const auto root = std::filesystem::temp_directory_path() / "kb_world2d_physics_flat_map_tests";
+        std::filesystem::remove_all(root);
+        std::filesystem::create_directories(root);
+        auto map = kb::assets::MakeEmptyMap2DAsset(16U, 8U);
+        map.background = false;
+        map.orientation = kb::assets::Map2DOrientation::Flat;
+        for (unsigned x = 4U; x < 12U; ++x) map.tiles[Map2DTileKey(x, 2U, 0)].solid = true;
+        World world(true);
+        auto& manager = world.scene.Assets().Manager();
+        Require(manager.Mounts().Mount("Game", root), "mount the flat map assets");
+        Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()), "register the mesh loader");
+        const auto file = root / "Flat.kbmap2d";
+        Require(kb::assets::Map2DAssetIO::Save(file, map), "save the flat map");
+        const kb::assets::AssetId source{ 90022U };
+        Require(manager.RegisterAsset({ .id = source, .type = "RenderMesh", .virtualPath = "/Game/Flat.kbmap2d", .physicalPath = file, .contentHash = 1U }), "register the flat map");
+        const SceneEntity level = world.scene.Entities().CreateEntity({ .name = "FlatLevel" });
+        kb::world2d::SetUpMap2DComponents(world.scene, level, source.value, map);
+        const SceneEntity ball = world.Make("Ball", 0.0F, 0.0F, -2.0F);
+        world.scene.Components().Bodies2D().Set(ball, Body2DComponent{ .sideView = false, .startVelocityY = 3.0F });
+        world.scene.Components().Colliders2D().Set(ball, Collider2DComponent{ .shape = 1, .radius = 0.25F, .sideView = false });
+        const SceneEntity hero = world.Make("Hero", 2.0F, 0.0F, -2.0F);
+        world.scene.Components().CharacterControllers2D().Set(hero, CharacterController2DComponent{ .useGravity = false, .sideView = false });
+        world.Run(0.1F);
+        Require(world.scene.Runtime().DrainSceneSystemErrors().empty(), "the flat map and the physics start without errors");
+        Require(world.runtime->MapCount() == 1U && world.runtime->MapShapeCount() == 1U, "the flat map is one shape in the top-down world");
+        const auto ahead = world.runtime->Raycast(false, -1.0F, -5.0F, 0.0F, 1.0F, 20.0F, 65535U);
+        Require(ahead.hit && ahead.entity == level && Near(ahead.y, 1.0F, 0.02F), "a ray across the plane finds the wall of the flat map");
+        Require(!world.runtime->Raycast(true, -1.0F, -5.0F, 0.0F, 1.0F, 20.0F, 65535U).hit, "the side-view plane does not see the flat map");
+        kb::script::ScriptRuntimeHost host{ world.scene };
+        Require(host.Functions().Call("Physics2D.MoveCharacter", std::vector<kb::script::ScriptFunctionArgument>{ { "entity", kb::script::ScriptValue{ hero.Id(), kb::script::ScriptValueType::Entity } },
+                    { "x", kb::script::ScriptValue{ 0.0F } }, { "y", kb::script::ScriptValue{ 3.0F } } }, kb::script::ScriptFunctionCallContext{ .scene = &world.scene }).Succeeded(), "walk across the plane");
+        world.Run(3.0F);
+        Require(Near(world.At(ball).z, 0.75F, 0.1F) && Near(world.At(ball).y, 0.0F, 0.0001F), "a body stops at the wall of a flat map and keeps its height");
+        Require(Near(world.At(hero).z, 0.5F, 0.12F) && Near(world.At(hero).x, 2.0F, 0.05F), "a character is stopped by the wall of a flat map");
+        std::filesystem::remove_all(root);
+    }
+
     // The components through the authoring table and the scene file.
     {
         kb::scene::Scene scene;
