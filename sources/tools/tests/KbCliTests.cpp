@@ -4352,6 +4352,40 @@ void RunMap2DCameraCliTests() {
                             "--camera-dead-zone", "0,0", "--camera-clamp", "no" }).exitCode == 0 && !Contains(text(), "camera "),
         "setting everything back to its defaults writes no camera line");
 }
+// A Sprite 2D from the command line: created from the Create menu, its picture chosen by path (which records the picture's
+// size), refused for something that is not a picture, and run headless without errors.
+void RunSprite2DCliTests() {
+    const std::filesystem::path parent = TestRoot() / "sprite2d_cli";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Pixels", "--template", "Empty" }).exitCode == 0, "new failed");
+    const std::filesystem::path root = parent / "Pixels";
+    const std::string project = root.string();
+    WriteRedPixelPng(root / "Assets" / "Sprites" / "Hero.png");
+    const CliRun created = RunCliProgram({ "entity", "add", "--project", project, "--create", "Animated Sprite", "--name", "Hero" });
+    Require(created.exitCode == 0, "entity add --create 'Animated Sprite' failed: " + created.out + created.err);
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Sprite 2D", "--name", "Still" }).exitCode == 0, "entity add --create 'Sprite 2D' failed");
+    const CliRun chosen = RunCliProgram({ "component", "set", "--project", project, "--entity", "Hero", "--type", "Sprite2D",
+        "--set", "image=/Game/Sprites/Hero.png", "--set", "pixelsPerUnit=1", "--set", "framesPerSecond=6", "--set", "sortingOrder=3" });
+    Require(chosen.exitCode == 0, "choosing the picture failed: " + chosen.out + chosen.err);
+    const CliRun refused = RunCliProgram({ "component", "set", "--project", project, "--entity", "Hero", "--type", "Sprite2D", "--set", "image=/Game/Missing.png" });
+    Require(refused.exitCode != 0 && Contains(refused.out + refused.err, "is not a picture"), "a missing picture must be refused with a reason: " + refused.out + refused.err);
+    const auto loaded = kb::scene::SceneDocumentService::Load(root / "Assets" / "Scenes" / "Main.21kbscene");
+    Require(loaded.succeeded, "the scene must load");
+    const kb::scene::Sprite2DComponent* hero = nullptr;
+    const kb::scene::Sprite2DComponent* still = nullptr;
+    for (const auto& node : loaded.document.worldPrefab.Nodes()) {
+        if (node.components.sprite2D && node.components.sprite2D->frameCount == 4U) hero = &*node.components.sprite2D;
+        if (node.components.sprite2D && node.components.sprite2D->frameCount == 0U) still = &*node.components.sprite2D;
+    }
+    Require(hero != nullptr && still != nullptr, "both sprites are in the scene");
+    Require(hero->imageAssetId == kb::assets::MakeAssetId("/Game/Sprites/Hero.png:RenderTexture").value && hero->imageWidth == 1U && hero->imageHeight == 1U &&
+            hero->framesPerSecond == 6.0F && hero->sortingOrder == 3 && hero->pixelsPerUnit == 1.0F,
+        "the picture, its size and the settings are saved");
+    const CliRun ran = RunCliProgram({ "run", "--project", project, "--frames", "3" });
+    Require(ran.exitCode == 0 && Contains(ran.out + ran.err, "0 diagnostics"), "the scene with sprites runs headless without errors: " + ran.out + ran.err);
+}
+
 #endif
 
 #if KB_CLI_RENDERER
@@ -4447,6 +4481,7 @@ int main(int argc, char** argv) {
     RunMaterialAuthoringCommandTests();
     RunMaterialGraphUtilityNodeCommandTests();
     RunMap2DCameraCliTests();
+    RunSprite2DCliTests();
     RunPlayerPresetCliTests();
 #endif
     RunSceneCommandTests();

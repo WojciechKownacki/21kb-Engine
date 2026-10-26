@@ -41,6 +41,8 @@
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
+#include "engine/scene/SceneSprite2DComponents.hpp"
+#include "Sprite2DRuntime.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
@@ -415,6 +417,29 @@ void ListProperties(std::string_view component, std::ostream& out) {
             io.err << "error: " << component << '.' << name << ": " << set.error << '\n';
             return false;
         }
+        return true;
+    }
+
+    // A Sprite 2D's picture and material by their project paths. Choosing the picture also records its size in pixels,
+    // so the sprite can be cut into cells without opening the image at run time.
+    if (component == "Sprite2D" && (name == "image" || name == "material" || ((name == "imageAssetId" || name == "materialAssetId") && value.starts_with('/')))) {
+        const bool picture = name == "image" || name == "imageAssetId";
+        kb::scene::Sprite2DComponent* sprite = scene.Components().Sprites2D().TryGet(entity);
+        if (sprite == nullptr) {
+            io.err << "error: the entity has no Sprite 2D (use component add --type Sprite2D)\n";
+            return false;
+        }
+        const kb::assets::AssetMetadata* metadata = nullptr;
+        if (value != "none") {
+            metadata = FindAssetByFlexiblePath(scene.Assets().Manager().Registry(), Utf8Path(value));
+            if (metadata == nullptr || metadata->type.find(picture ? "Texture" : "RenderMaterial") == std::string::npos) {
+                io.err << "error: " << name << " '" << value << "' is not a " << (picture ? "picture (an image of the project)" : "material (.kbmat) of the project") << '\n';
+                return false;
+            }
+        }
+        if (picture) return kb::world2d::AssignSprite2DImage(scene, entity, metadata);
+        sprite->materialAssetId = metadata == nullptr ? 0U : metadata->id.value;
+        scene.Components().Sprites2D().MarkModified(entity);
         return true;
     }
 

@@ -18,6 +18,7 @@ namespace {
         InspectorComponentTile{ .id = "Particle Effect", .category = "Rendering", .label = "Particle Effect", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "TerrainEditor", .category = "World", .label = "Terrain Editor", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "World2DMap", .category = "World", .label = "World 2D Map", .icon = HeroIconKind::RectangleGroup },
+        InspectorComponentTile{ .id = "Sprite2D", .category = "World", .label = "Sprite 2D", .icon = HeroIconKind::RectangleGroup },
         InspectorComponentTile{ .id = "WorldBackdrop", .category = "Rendering", .label = "World Backdrop", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "Ambient Radiance", .category = "Rendering", .label = "Ambient Radiance", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "Detail Switch", .category = "Rendering", .label = "Detail Switch", .icon = HeroIconKind::Cube },
@@ -101,6 +102,7 @@ constexpr ComponentNames kComponentNames[] = {
     {"Particle Effect", "vfx, fx, smoke, fire, sparks, explosion, effect", "Plays a particle effect such as smoke, sparks or fire at this object."},
     {"TerrainEditor", "terrain, landscape, ground, heightmap, hills", "Sculpts and paints a landscape in the editor."},
     {"World2DMap", "tilemap, tile map, 2d map, tiles, level", "Holds a 2D tile map you paint with the Map Editor."},
+    {"Sprite2D", "sprite, 2d sprite, animated sprite, picture, image, character art, flipbook, sprite sheet, atlas", "Draws a picture, or one cell of a sprite sheet, and plays a frame animation."},
     {"WorldBackdrop", "sky, skybox, background, horizon", "Draws the sky and distant background behind the scene."},
     {"Ambient Radiance", "ambient light, global illumination, gi, light probe, bounce light", "Adds soft indirect light that fills shadows around it."},
     {"Detail Switch", "lod, level of detail, distance, simplify", "Swaps to simpler models as the object gets far from the camera, to save speed."},
@@ -233,6 +235,7 @@ std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile
     if (tile.id == "Particle Effect") return std::string{ EditorText("component.particleEffect", "Particle Effect") };
     if (tile.id == "TerrainEditor") return std::string{ EditorText("component.terrainEditor", "Terrain Editor") };
     if (tile.id == "World2DMap") return std::string{ EditorText("component.world2dMap", "World 2D Map") };
+    if (tile.id == "Sprite2D") return std::string{ EditorText("component.sprite2D", "Sprite 2D") };
     if (tile.id == "WorldBackdrop") return std::string{ EditorText("component.worldBackdrop", "World Backdrop") };
     if (tile.id == "Ambient Radiance") return std::string{ EditorText("component.ambientRadiance", "Ambient Radiance") };
     if (tile.id == "Detail Switch") return std::string{ EditorText("component.detailSwitch", "Detail Switch") };

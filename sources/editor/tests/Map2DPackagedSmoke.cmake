@@ -1,12 +1,18 @@
-# Exercise the editor's authored map in a separate packaged player, with no loose project assets.
+# Exercise the editor's authored map (or another scenario's scene) in a separate packaged player, with no loose project assets.
+if(NOT DEFINED SCENARIO)
+    set(SCENARIO "Map2DAutomationScenario.json")
+endif()
+if(NOT DEFINED TASK)
+    set(TASK "SELFTEST-Map2D-Package")
+endif()
 execute_process(COMMAND "${EDITOR}"
-    --selftest-scenario "${ENGINE_ROOT}/sources/editor/tests/Map2DAutomationScenario.json"
-    --selftest-root "${TEST_ROOT}" --selftest-task SELFTEST-Map2D-Package
+    --selftest-scenario "${ENGINE_ROOT}/sources/editor/tests/${SCENARIO}"
+    --selftest-root "${TEST_ROOT}" --selftest-task ${TASK}
     WORKING_DIRECTORY "${ENGINE_ROOT}" RESULT_VARIABLE result TIMEOUT 120)
 if(NOT result EQUAL 0)
     message(FATAL_ERROR "Map editor scenario failed: ${result}")
 endif()
-set(artifacts "${TEST_ROOT}/SELFTEST-Map2D-Package")
+set(artifacts "${TEST_ROOT}/${TASK}")
 string(RANDOM LENGTH 8 ALPHABET 0123456789abcdef run)
 set(package "${artifacts}/package-${run}")
 file(MAKE_DIRECTORY "${package}")

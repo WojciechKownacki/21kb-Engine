@@ -70,6 +70,8 @@ void AppendSeparator(HMENU menu) {
 [[nodiscard]] std::string_view CreateItemLabel(const kb::scene::SceneCreateItem& item) {
     if (item.id == "Map Top Down") return EditorText("map2d.createTopDown", "Map - Top Down");
     if (item.id == "Map Platformer") return EditorText("map2d.createPlatformer", "Map - Platformer");
+    if (item.id == "Sprite 2D") return EditorText("hierarchy.create.sprite2D", "Sprite 2D");
+    if (item.id == "Animated Sprite") return EditorText("hierarchy.create.animatedSprite", "Animated Sprite");
     if (item.id == "Empty") return EditorText("hierarchy.create.empty", "Create Empty");
     if (item.id == "Cube") return EditorText("hierarchy.create.cube", "Cube");
     if (item.id == "Sphere") return EditorText("hierarchy.create.sphere", "Sphere");

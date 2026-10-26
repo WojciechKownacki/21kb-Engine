@@ -13,6 +13,13 @@
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "docking/EditorDockModel.hpp"
+#include "Sprite2DRuntime.hpp"
+#include "Map2DView.hpp"
+#include "app/scene_viewport/EditorSceneViewportSelectionController.hpp"
+#ifdef DrawText
+#undef DrawText
+#endif
+#include "engine/scene/Sprite2DComponent.hpp"
 #include "kb/editor/docking/DockTypes.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "app/EditorPlayModeState.hpp"
@@ -1369,6 +1376,45 @@ ReadScriptValue(
         return *postProcess;
     }
 
+    if (*operation == "sprite2d_image") {
+        // Chooses the picture of a Sprite 2D from a project asset, as one undoable change that also records the picture's size.
+        const auto alias = StringMember(step, "entity", error);
+        const auto asset = StringMember(step, "asset", error);
+        if (!alias || !asset) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::assets::AssetMetadata* metadata = state.context.Scene().Assets().Manager().Registry().Find(ResolveAsset(state, *asset));
+        if (!state.context.Scene().Entities().IsAlive(entity) || metadata == nullptr) return { false, "the sprite entity or the picture asset was not found" };
+        const bool changed = state.context.ExecuteSceneCommand("Set Sprite Image", [&] {
+            return kb::world2d::AssignSprite2DImage(state.context.Scene(), entity, metadata);
+        });
+        const kb::scene::Sprite2DComponent* sprite = state.context.Scene().Components().Sprites2D().TryGet(entity);
+        return { changed && sprite != nullptr && sprite->imageAssetId == metadata->id.value,
+            sprite == nullptr ? "no sprite" : std::to_string(sprite->imageWidth) + "x" + std::to_string(sprite->imageHeight) + " px" };
+    }
+    if (*operation == "pick_generated_visual") {
+        // A click in the Scene View lands on the generated picture of a sprite; it must select the sprite's object, as it does for
+        // a tile map layer. The picture is the entity's child that carries a transient mesh.
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity owner = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(owner)) return { false, "entity alias is not alive" };
+        kb::scene::SceneEntity visual{};
+        for (const kb::scene::SceneEntity child : state.context.Scene().Hierarchy().ChildEntities(owner)) {
+            const auto* renderer = std::as_const(state.context.Scene()).Components().MeshRenderers().TryGet(child);
+            if (renderer != nullptr && renderer->transient) visual = child;
+        }
+        if (!visual.IsValid()) return { false, "the entity has no generated picture (play, or look at the scene once, first)" };
+        state.context.ClearHierarchySelection();
+        EditorSceneViewportSelectionController::ApplyClick(state.context, visual, EditorSceneViewportSelectionMode::Replace);
+        return { state.context.SelectedEntity() == owner, state.context.SelectedEntity() == owner ? "the sprite is selected" : "the click selected another object" };
+    }
+    if (*operation == "exact_colors") {
+        // The image settings pixel art wants: no tonemapping or automatic exposure, as the 2D map view sets up.
+        const bool assigned = state.context.ExecuteSceneCommand("Use Exact Colors", [&] {
+            return kb::world2d::UseExactColors(state.context.Scene(), EditorProjectPaths::AssetsRoot());
+        });
+        return { assigned, assigned ? "pixel-exact image settings assigned" : "the scene already has image settings or they could not be written" };
+    }
     if (*operation == "verify_prefab_round_trip") {
         return {state.automation.VerifyPrefabRoundTrip(), "Prefab create, place, override, apply, save, reopen, play, stop and undo keep the asset link"};
     }
