@@ -458,7 +458,8 @@ void RunPrefabFileMoveKeepsGuidAndNestedLinksTest() {
         const kb::scene::ScenePrefabHandle inner = scene.Prefabs().CreateAsset(innerRoot, "Wheel", directory / "Wheel.kbprefab");
         kb::tests::Require(inner.IsValid(), "The inner prefab could not be created");
         innerGuid = scene.Prefabs().Guid(inner);
-        for (const kb::scene::ScenePrefabNodeDesc& node : scene.Prefabs().Get(inner).Nodes()) innerStableIds.push_back(node.stableId);
+        const kb::scene::ScenePrefab innerPrefab = scene.Prefabs().Get(inner);
+        for (const kb::scene::ScenePrefabNodeDesc& node : innerPrefab.Nodes()) innerStableIds.push_back(node.stableId);
         // The cart nests the wheel by its guid.
         kb::scene::ScenePrefab cart;
         const std::uint32_t cartRoot = cart.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Cart" });
@@ -473,7 +474,8 @@ void RunPrefabFileMoveKeepsGuidAndNestedLinksTest() {
     const kb::scene::ScenePrefabHandle moved = scene.Prefabs().Load(directory / "Moved" / "Renamed.kbprefab");
     kb::tests::Require(moved.IsValid() && scene.Prefabs().Guid(moved) == innerGuid, "A moved prefab file must keep the guid stored in it");
     std::vector<std::uint64_t> movedStableIds;
-    for (const kb::scene::ScenePrefabNodeDesc& node : scene.Prefabs().Get(moved).Nodes()) movedStableIds.push_back(node.stableId);
+    const kb::scene::ScenePrefab movedPrefab = scene.Prefabs().Get(moved);
+    for (const kb::scene::ScenePrefabNodeDesc& node : movedPrefab.Nodes()) movedStableIds.push_back(node.stableId);
     kb::tests::Require(movedStableIds == innerStableIds, "A moved prefab file must keep the stable ids of its nodes");
     // The project finds the moved file by its guid: the cart's asset depends on the prefab at its new path.
     kb::scene::Scene project;
