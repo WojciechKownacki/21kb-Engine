@@ -7,25 +7,25 @@ same. It is one representative scene, not a promise for every scene or every gra
 
 1. The editor runs `sources/editor/tests/Scene3DParityScenario.json` headless: it builds a scene (a sun with shadows, a point light, a
    sky and ambient light, a floor, a cube, a metal sphere, an emissive capsule, a particle effect, a terrain and a post-process profile
-   with FXAA, vignette, fog, ambient occlusion and the default auto exposure), saves it, reopens it, plays 2400 fixed steps and
+   with FXAA, vignette, fog, ambient occlusion and the default auto exposure), saves it, reopens it, plays 240 fixed steps and
    captures the Play view at 960 by 540.
 2. `kb_cooker` cooks the project into a pack, with the runtime modules, and the packaged player (`kb_game`) is copied next to it with
    nothing else: no source assets and no editor.
-3. The player runs the pack headless at 960 by 540 and writes a screenshot of frame 2400.
+3. The player runs the pack headless at 960 by 540 and writes a screenshot of frame 240.
 4. `scripts/compare_images.py` compares the two pictures: the mean channel difference must stay under 2.0 (of 255) and fewer than 0.2%
    of the pixels may differ by more than 12 in any channel.
 
-The measured difference of the committed scene is a mean of 0.06 with 0.01% of pixels over the tolerance (the particle glow).
+The measured difference at frame 240 is a mean of 0.007 with 0.01% of pixels over the tolerance.
 
 ## What the check found
 
 - With **fixed exposure** the two pictures agree at once (mean 0.006 at frame 200). Shadows, lighting, materials, sky, fog, ambient
   occlusion, vignette, FXAA, the particle effect and the terrain are drawn the same by both.
-- With **auto exposure** (the default) the pictures differ until the exposure has settled: the player reads the scene's brightness
-  back from the GPU every 60 frames, so the exposure approaches its value in steps. Measured against the editor at the same frame
-  count (with earlier variants of this scene): mean difference 45 at frame 60, 34 at frame 200, 16 at frame 700, 0.8 at frame 2400 and 0.06 with the committed scene. A
-  comparison that takes both pictures early would call a correct package wrong; the test settles first, and a scene that must look
-  the same at once should use manual exposure.
+- With **auto exposure** (the default), headless editor rendering previously used elapsed wall time while scene simulation and the
+  packaged player used a fixed timestep. Waiting 2400 frames masked that clock mismatch and could exceed the CI timeout. At frame
+  240, the mean difference was 7.102 before synchronizing the clocks and 0.007 afterward, with unchanged comparison thresholds.
+  Runtime steps now advance renderer effects by the simulation timestep; capture redraws do not advance their clock. Interactive
+  editor paints still use elapsed wall time. The test keeps auto exposure enabled and compares both images after 240 fixed steps.
 - The scene uses FXAA. Temporal anti-aliasing (jitter and history) was not compared.
 
 ## Limits

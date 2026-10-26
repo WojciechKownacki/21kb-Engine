@@ -70,7 +70,7 @@
     { "op": "assert_component", "entity": "ball", "component": "MeshRenderer" },
     { "op": "set_startup_scene", "path": "/Game/Scenes/Parity3D.21kbscene" },
     { "op": "play" },
-    { "op": "step", "frames": 2400, "dt": 0.0166666667 },
+    { "op": "step", "frames": 240, "dt": 0.0166666667 },
     { "op": "capture_runtime", "checkpoint": "scene3d-editor", "require_non_uniform": true },
     { "op": "assert_no_errors" },
     { "op": "stop" },

@@ -619,7 +619,8 @@ struct EditorHeadlessAutomation::Impl {
     [[nodiscard]] bool RenderScene(
         EditorSceneContext& context,
         std::uint64_t viewportKey,
-        bool editorOverlaysEnabled) {
+        bool editorOverlaysEnabled,
+        std::optional<float> deltaSeconds = std::nullopt) {
         if (window == nullptr) return false;
         if (!editorOverlaysEnabled && runtimeWidth != 0U) {
             if (!context.PlayCameraEntity().IsValid()) return false;
@@ -634,7 +635,7 @@ struct EditorHeadlessAutomation::Impl {
             renderFailed = false;
             viewport.BeginPaintLayout(window);
             viewport.Present(window, bounds, context.Scene(), settings);
-            viewport.EndPaintLayout();
+            viewport.EndPaintLayout(deltaSeconds);
             const auto stats = viewport.LastSceneSubmitStats();
             if (stats.HasMissingResources() || stats.droppedInstanceCount != 0U) {
                 context.Console().Error("Renderer", "Runtime frame has missing resources or dropped instances.");
@@ -654,7 +655,7 @@ struct EditorHeadlessAutomation::Impl {
             settings.presentToHost = false;
             settings.postProcessEnabled = false;
             viewport.Present(window, RECT{0,0,640,360},context.Scene(),settings);
-            viewport.EndPaintLayout();
+            viewport.EndPaintLayout(deltaSeconds);
             return std::string_view{viewport.ActiveBackendLabel()} != "Not initialized";
         }
         constexpr RECT bounds{ 0, 0, 640, 360 };
@@ -689,13 +690,13 @@ struct EditorHeadlessAutomation::Impl {
         viewport.BeginPaintLayout(window);
         viewport.Present(
             window, bounds, context.Scene(), settings);
-        viewport.EndPaintLayout();
+        viewport.EndPaintLayout(deltaSeconds);
         return std::string_view{ viewport.ActiveBackendLabel() } !=
             "Not initialized";
     }
 
-    [[nodiscard]] bool Render(EditorSceneContext& context) {
-        return RenderScene(context, 1U, false);
+    [[nodiscard]] bool Render(EditorSceneContext& context, float deltaSeconds = 0.0F) {
+        return RenderScene(context, 1U, false, deltaSeconds);
     }
 
     // The Scene panel's own present settings (ScenePanelContentRenderer::BuildSettings), so a
@@ -2475,7 +2476,7 @@ bool EditorHeadlessAutomation::StepRuntime(
             return false;
         }
         const auto simulated = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-        if (!impl_->Render(context_)) {
+        if (!impl_->Render(context_, deltaSeconds)) {
             Trace("step_runtime", false, "render-backend-failed");
             return false;
         }

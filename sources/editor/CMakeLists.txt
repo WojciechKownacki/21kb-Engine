@@ -1734,7 +1734,7 @@ if(BUILD_TESTING)
                 "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
                 "-DSCENARIO=Scene3DParityScenario.json"
                 "-DTASK=SELFTEST-Scene3D-Package"
-                "-DWIDTH=960" "-DHEIGHT=540" "-DSCREENSHOT_FRAME=2400"
+                "-DWIDTH=960" "-DHEIGHT=540" "-DSCREENSHOT_FRAME=240"
                 "-DPYTHON=${Python3_EXECUTABLE}"
                 "-DPARITY_CHECKPOINT=scene3d-editor"
                 "-DPARITY_PIXEL_TOLERANCE=12" "-DPARITY_MAX_MEAN=2.0" "-DPARITY_MAX_DIFFERING=0.002"

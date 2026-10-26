@@ -13,6 +13,7 @@
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <ranges>
@@ -459,8 +460,8 @@ bool EditorSceneBgfxViewport::AdvanceAsyncReadbacks() {
     return true;
 }
 
-void EditorSceneBgfxViewport::EndPaintLayout() {
-    if (!renderFailed_ && !SubmitPendingPaint()) {
+void EditorSceneBgfxViewport::EndPaintLayout(std::optional<float> deltaSeconds) {
+    if (!renderFailed_ && !SubmitPendingPaint(deltaSeconds)) {
         FailRender("Scene render/present failed during queued viewport submit. The editor will stay open, but the scene viewport was disabled.");
     }
 
@@ -869,7 +870,7 @@ void EditorSceneBgfxViewport::ShutdownSessionFramebuffers() noexcept {
     hostSurfaceStore_.ShutdownPresentTargets();
 }
 
-bool EditorSceneBgfxViewport::SubmitPendingPaint() {
+bool EditorSceneBgfxViewport::SubmitPendingPaint(std::optional<float> suppliedDeltaSeconds) {
     pendingSubmissions_.clear();
     if (pendingPresents_.empty()) {
         return true;
@@ -886,6 +887,10 @@ bool EditorSceneBgfxViewport::SubmitPendingPaint() {
         }
         lastFrameClock_ = now;
         hasLastFrameClock_ = true;
+        if (suppliedDeltaSeconds.has_value()) {
+            if (!std::isfinite(*suppliedDeltaSeconds) || *suppliedDeltaSeconds < 0.0F) return false;
+            deltaSeconds = *suppliedDeltaSeconds;
+        }
         renderer_.SetFrameDeltaSeconds(deltaSeconds);
     }
 
