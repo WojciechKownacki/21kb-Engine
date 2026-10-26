@@ -20,8 +20,13 @@ public final class ControllerInstrumentation extends Instrumentation {
     private static native boolean touchMatches(int[] ids, int[] phases, float[] coordinates, int width, int height);
     private static native boolean surfaceState(int phase);
     private ControllerActivity activity;
+    private boolean touchOnly;
 
-    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); start(); }
+    @Override public void onCreate(Bundle arguments) {
+        super.onCreate(arguments);
+        touchOnly = arguments != null && "true".equals(arguments.getString("touchOnly"));
+        start();
+    }
 
     private static int find(String name) {
         for (int id : InputDevice.getDeviceIds()) {
@@ -185,6 +190,18 @@ public final class ControllerInstrumentation extends Instrumentation {
         Bundle report = new Bundle();
         int resultCode = Activity.RESULT_CANCELED;
         try {
+            if (touchOnly) {
+                Intent intent = new Intent(getTargetContext(), ControllerActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                activity = (ControllerActivity) startActivitySync(intent);
+                await(9, 0, 0);
+                verifyTouches();
+                report.putString("scope", "touch-only");
+                report.putString("touch", "PASS");
+                report.putString("result", "PASS");
+                resultCode = Activity.RESULT_OK;
+                return;
+            }
             int first, second;
             long registrationDeadline = SystemClock.uptimeMillis() + 10000;
             do {

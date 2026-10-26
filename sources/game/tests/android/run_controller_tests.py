@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument("--serial", required=True)
     parser.add_argument("--apk", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--touch-only", action="store_true", help="Exercise touch and surface lifecycle without requiring shell uinput")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     adb = [args.adb, "-s", args.serial]
@@ -75,14 +76,18 @@ def main() -> None:
     started = time.monotonic()
     report = dict(schema="21kb.android-controller-tests/v1", result="FAIL",
                   host="Android with OS virtual controllers", gameActivity="4.4.2", controller="2.0.2")
+    if args.touch_only:
+        report.update(host="Android touch host", scope="touch-only", controllers="not tested")
     try:
         installed = command("install", "-r", "-t", str(args.apk.resolve()))
         if "Success" not in installed:
             raise RuntimeError("Test APK installation did not succeed")
-        for label in ["A", "B"]:
+        for label in ([] if args.touch_only else ["A", "B"]):
             devices[label] = register(label)
         until = time.monotonic() + 15
         while True:
+            if args.touch_only:
+                break
             if any(device[0].poll() is not None for device in devices.values()):
                 raise RuntimeError("OS uinput fixture process exited; inspect uinput logs")
             inventory = command("shell", "dumpsys", "input")
@@ -91,7 +96,8 @@ def main() -> None:
             if time.monotonic() >= until:
                 raise RuntimeError("OS controller registration failed; inspect uinput logs")
             time.sleep(0.1)
-        instrumentation = subprocess.Popen(adb + ["shell", "am", "instrument", "-w", "-r",
+        instrumentation = subprocess.Popen(adb + ["shell", "am", "instrument", "-w", "-r"] +
+            (["-e", "touchOnly", "true"] if args.touch_only else []) + [
             PACKAGE + "/.ControllerInstrumentation"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", creationflags=HIDDEN)
         lines: queue.Queue[str | None] = queue.Queue()
@@ -127,6 +133,8 @@ def main() -> None:
                 "INSTRUMENTATION_RESULT: touch=PASS" not in text or
                 "INSTRUMENTATION_CODE: -1" not in text):
             raise RuntimeError("Native GameActivity controller assertions failed")
+        if args.touch_only and "INSTRUMENTATION_RESULT: scope=touch-only" not in text:
+            raise RuntimeError("The APK did not acknowledge touch-only scope")
         report.update(result="PASS", evidence="instrumentation.log", checks=[
             "real GameActivity key/motion queue and Paddleboat consumption",
             "two OS device IDs with independent six-axis values and buttons",
@@ -134,6 +142,8 @@ def main() -> None:
             "focus suppression, disconnect clears one slot, reconnect uses a new device ID",
             "two touchscreen IDs and queued begin/end phases through real GameActivity motion handlers",
             "synthetic ACTION_CANCEL, focus cancellation, actual orientation resize and surface destruction/recreation"])
+        if args.touch_only:
+            report["checks"] = report["checks"][-2:]
     except Exception as error:
         report["error"] = str(error)
         raise

@@ -20,6 +20,12 @@ installation. A headless Android emulator can be started with `-no-window` and
 `-no-audio`. Missing tools, failed registration, rejected events, timeouts and
 failed assertions are failures, never skipped passes.
 
+For a device without shell `uinput`, add `--touch-only` to the Python command. This
+runs the production touch adapter, cancellation, orientation and surface lifecycle
+checks without registering controllers. Its report explicitly marks controllers
+as untested; it does not count as a controller-suite pass. All adb commands use the
+explicit `--serial` device, including installation and cleanup.
+
 The test checks independent sticks, triggers, buttons and hats, hardware flat
 regions, finite/range conversion, focus suppression, disconnection with held
 inputs, slot isolation, reconnection with a new device ID, and native shutdown.

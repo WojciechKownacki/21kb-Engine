@@ -111,6 +111,7 @@ Java_com_kbengine_controllertests_ControllerInstrumentation_check(JNIEnv*, jclas
     const std::lock_guard lock{observationMutex};
     if (phase == 7) return observation.stopped && observation.error.empty();
     if (!observation.ready || !observation.error.empty()) return false;
+    if (phase == 9) return true; // Touch-only hosts do not need OS virtual controllers.
     const int a = Slot(first), b = Slot(second);
     if (phase == 0) {
         if (a < 0 || b < 0 || a == b) return false;
