@@ -1707,6 +1707,19 @@ if(BUILD_TESTING)
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DPackagedSmoke.cmake")
         set_tests_properties(kb_editor_map2d_packaged PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;packaging;map2d" TIMEOUT 240)
+        add_test(NAME kb_editor_map2d_component_packaged
+            COMMAND ${CMAKE_COMMAND}
+                "-DEDITOR=$<TARGET_FILE:kb_editor>"
+                "-DCOOKER=$<TARGET_FILE:kb_cooker>"
+                "-DPLAYER=$<TARGET_FILE:kb_game>"
+                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
+                "-DENGINE_ROOT=${CMAKE_SOURCE_DIR}"
+                "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
+                "-DSCENARIO=Map2DComponentScenario.json"
+                "-DTASK=SELFTEST-Map2D-Component-Package"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DPackagedSmoke.cmake")
+        set_tests_properties(kb_editor_map2d_component_packaged PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;packaging;map2d" TIMEOUT 240)
         # A Sprite 2D and an Animated Sprite made in the editor, cooked, and drawn by the packaged player.
         add_test(NAME kb_editor_sprite2d_packaged
             COMMAND ${CMAKE_COMMAND}

@@ -27,6 +27,7 @@
     {"op": "map2d_editor", "entity": "plane", "checkpoint": "plane-map-painted", "width": 1100, "height": 700, "inputs": ["click 25 185", "drag 560 280 720 280", "key s ctrl"]},
     {"op": "assert_mesh_renderer_unchanged", "entity": "plane"},
     {"op": "save_scene"},
+    {"op": "set_startup_scene", "path": "/Game/Scenes/MapComponents.21kbscene"},
     {"op": "open_scene", "path": "Assets/Scenes/MapComponents.21kbscene"},
     {"op": "assert_component", "entity": "plane", "component": "World2DMap"},
     {"op": "assert_mesh_renderer_unchanged", "entity": "plane"},
