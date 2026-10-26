@@ -2,6 +2,7 @@
 # unreliable channels, and the connection handshake. It depends on kb_engine for cryptography and
 # the network budget types and is not linked into any engine target.
 add_library(kb_net STATIC
+    include/kb/net/Auth.hpp
     include/kb/net/ByteIO.hpp
     include/kb/net/Host.hpp
     include/kb/net/Prediction.hpp
@@ -11,6 +12,7 @@ add_library(kb_net STATIC
     include/kb/net/ScriptBridge.hpp
     include/kb/net/Session.hpp
     include/kb/net/Transport.hpp
+    src/Auth.cpp
     src/Host.cpp
     src/Loopback.cpp
     src/Replication.cpp
@@ -55,6 +57,12 @@ if(BUILD_TESTING)
     add_test(NAME kb_net_script_tests COMMAND $<TARGET_FILE:kb_net_script_tests>)
     set_tests_properties(kb_net_script_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120 LABELS "network;correctness;script")
     kb_apply_quality_gates(kb_net_script_tests)
+
+    add_executable(kb_net_auth_tests tests/AuthTests.cpp)
+    target_link_libraries(kb_net_auth_tests PRIVATE kb_net)
+    add_test(NAME kb_net_auth_tests COMMAND $<TARGET_FILE:kb_net_auth_tests>)
+    set_tests_properties(kb_net_auth_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120 LABELS "network;correctness;security")
+    kb_apply_quality_gates(kb_net_auth_tests)
 endif()
 
 # The dedicated server: a project's scene without a window or a renderer, replicated to clients over UDP.
