@@ -4605,6 +4605,36 @@ void RunPlayerPresetCliTests() {
 }
 #endif
 
+#if !KB_CLI_RENDERER
+void RunSprite2DAssetRefusalTests() {
+    const std::filesystem::path parent = TestRoot() / "sprite2d_without_renderer";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Sprites", "--template", "Empty" }).exitCode == 0,
+        "creating the sprite project failed");
+    const std::filesystem::path root = parent / "Sprites";
+    const std::string project = root.string();
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Hero" }).exitCode == 0, "creating the sprite entity failed");
+    Require(RunCliProgram({ "component", "add", "--project", project, "--entity", "Hero", "--type", "Sprite2D" }).exitCode == 0,
+        "adding sprite data must not require the renderer");
+    Require(RunCliProgram({ "component", "set", "--project", project, "--entity", "Hero", "--type", "Sprite2D", "--set", "sortingOrder=7" }).exitCode == 0,
+        "editing ordinary sprite properties must not require the renderer");
+    const auto savedScene = [&]() {
+        std::ifstream input{ root / "Assets" / "Scenes" / "Main.21kbscene", std::ios::binary };
+        Require(input.is_open(), "the sprite scene must exist");
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    const std::string before = savedScene();
+    for (const std::string selection : { "image=none", "material=none", "imageAssetId=/Game/Picture.png", "materialAssetId=/Game/Surface.kbmat" }) {
+        const CliRun refused = RunCliProgram({ "component", "set", "--project", project, "--entity", "Hero", "--type", "Sprite2D",
+            "--set", "sortingOrder=9", "--set", selection });
+        Require(refused.exitCode != 0 && Contains(refused.err, "requires a CLI built with renderer support"),
+            "sprite asset selection must explain the missing capability: " + refused.out + refused.err);
+        Require(savedScene() == before, "a refused sprite asset selection must not save partial property changes");
+    }
+}
+#endif
+
 int main(int argc, char** argv) {
 #if KB_CLI_RENDERER
     kb::render::tests::InstallRendererAssertionPolicy();
@@ -4627,6 +4657,14 @@ int main(int argc, char** argv) {
         RunBatchCommandTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "sprite2d") {
+#if KB_CLI_RENDERER
+        RunSprite2DCliTests();
+#else
+        RunSprite2DAssetRefusalTests();
+#endif
+        return EXIT_SUCCESS;
+    }
     if (argc != 1) return EXIT_FAILURE;
     RunAudioMixerCommandTests();
     RunCliJsonTests();
@@ -4646,6 +4684,8 @@ int main(int argc, char** argv) {
     RunWorldMemoryCliTests();
     RunMeshReimportCliTests();
     RunPlayerPresetCliTests();
+#else
+    RunSprite2DAssetRefusalTests();
 #endif
     RunSceneCommandTests();
     RunRunCommandTests();

@@ -20,6 +20,7 @@
 #if KB_CLI_RENDERER
 #include "Map2DEditing.hpp"
 #include "Map2DView.hpp"
+#include "Sprite2DRuntime.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/Map2DAsset.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
@@ -42,7 +43,6 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneUIComponentSet.hpp"
 #include "engine/scene/SceneSprite2DComponents.hpp"
-#include "Sprite2DRuntime.hpp"
 #include "engine/scene/SceneUIComponents.hpp"
 #include "engine/ui/UIComponentCatalog.hpp"
 #include "engine/ui/UIComponentPropertyCatalog.hpp"
@@ -423,6 +423,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
     // A Sprite 2D's picture and material by their project paths. Choosing the picture also records its size in pixels,
     // so the sprite can be cut into cells without opening the image at run time.
     if (component == "Sprite2D" && (name == "image" || name == "material" || ((name == "imageAssetId" || name == "materialAssetId") && value.starts_with('/')))) {
+#if KB_CLI_RENDERER
         const bool picture = name == "image" || name == "imageAssetId";
         kb::scene::Sprite2DComponent* sprite = scene.Components().Sprites2D().TryGet(entity);
         if (sprite == nullptr) {
@@ -441,6 +442,10 @@ void ListProperties(std::string_view component, std::ostream& out) {
         sprite->materialAssetId = metadata == nullptr ? 0U : metadata->id.value;
         scene.Components().Sprites2D().MarkModified(entity);
         return true;
+#else
+        io.err << "error: Sprite2D asset selection requires a CLI built with renderer support\n";
+        return false;
+#endif
     }
 
     // The other body of a joint, by its name (empty = the world), as the editor's Connected Body.
