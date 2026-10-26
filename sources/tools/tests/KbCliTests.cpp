@@ -46,6 +46,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -4352,6 +4353,98 @@ void RunMap2DCameraCliTests() {
                             "--camera-dead-zone", "0,0", "--camera-clamp", "no" }).exitCode == 0 && !Contains(text(), "camera "),
         "setting everything back to its defaults writes no camera line");
 }
+// `import --reimport`: a changed source replaces the model in place; a material edited since the import is not overwritten without being
+// told; --diff plans without writing; what a reimport overwrote can be listed and undone.
+void RunMeshReimportCliTests() {
+    const std::filesystem::path parent = TestRoot() / "mesh_reimport_cli";
+    std::error_code error;
+    std::filesystem::remove_all(parent, error);
+    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Reimport", "--template", "Empty" }).exitCode == 0, "new failed");
+    const std::filesystem::path root = parent / "Reimport";
+    const std::string project = root.string();
+    const std::filesystem::path sources = parent / "Source";
+    std::filesystem::create_directories(sources, error);
+    const auto writeBytes = [](const std::filesystem::path& path, const std::string& bytes) {
+        std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    };
+    const auto read = [](const std::filesystem::path& path) {
+        std::ifstream input{ path, std::ios::binary };
+        return std::string{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    const auto triangle = [](float scale) {
+        std::string bytes;
+        for (const float value : { 0.0F, 0.0F, 0.0F, scale, 0.0F, 0.0F, 0.0F, scale, 0.0F }) {
+            const auto bits = std::bit_cast<std::uint32_t>(value);
+            for (unsigned shift = 0U; shift < 32U; shift += 8U) bytes.push_back(static_cast<char>((bits >> shift) & 0xFFU));
+        }
+        return bytes;
+    };
+    const auto document = [](const std::string& roughness) {
+        return std::string{ R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)" } +
+            R"("meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],)" +
+            R"("materials":[{"name":"Skin","pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicFactor":0.25,"roughnessFactor":)" + roughness + "}}]," +
+            R"("textures":[{"source":0}],"images":[{"uri":"Skin.png"}],)" +
+            R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}],)" +
+            R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36}],"buffers":[{"byteLength":36,"uri":"Triangle.bin"}]})";
+    };
+    const std::array<unsigned char, 69U> pngBytes{ 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06,
+        0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xFF, 0xFF, 0x3F, 0x00, 0x05, 0xFE, 0x02,
+        0xFE, 0xA7, 0x35, 0x81, 0x84, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82 };
+    const std::string png{ reinterpret_cast<const char*>(pngBytes.data()), pngBytes.size() };
+    writeBytes(sources / "Skin.png", png);
+    writeBytes(sources / "Triangle.bin", triangle(1.0F));
+    writeBytes(sources / "Triangle.gltf", document("0.75"));
+
+    const CliRun imported = RunCliProgram({ "import", "--project", project, "--destination", "/Game/Meshes", "--import-materials", "yes", (sources / "Triangle.gltf").string() });
+    Require(imported.exitCode == 0 && Contains(imported.out, "created /Game/Meshes/Triangle.21kb"), "the first import failed: " + imported.out + imported.err);
+    const std::filesystem::path meshFile = root / "Assets/Meshes/Triangle.21kb";
+    const std::filesystem::path materialFile = [&] {
+        for (const auto& entry : std::filesystem::directory_iterator(root / "Assets/Meshes/Materials")) return entry.path();
+        return std::filesystem::path{};
+    }();
+    Require(Contains(read(root / "Assets/Meshes/Triangle.importrecord"), "asset ") && !materialFile.empty(), "the import left a record");
+    const std::string asset = "/Game/Meshes/Triangle.21kb";
+    const std::string gltf = (sources / "Triangle.gltf").string();
+
+    // Nothing changed: reused, nothing backed up.
+    const CliRun same = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf });
+    Require(same.exitCode == 0 && Contains(same.out, "reused " + asset) && !Contains(same.out, "backup"), "an unchanged reimport is reused: " + same.out + same.err);
+
+    // A changed model: planned, then replaced in place, with a backup that can be listed and undone.
+    const std::string before = read(meshFile);
+    writeBytes(sources / "Triangle.bin", triangle(2.0F));
+    const CliRun plan = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf, "--diff" });
+    Require(plan.exitCode == 0 && Contains(plan.out, "would be updated " + asset) && Contains(plan.out, "~ " + asset) && read(meshFile) == before, "--diff plans and writes nothing: " + plan.out + plan.err);
+    const CliRun updated = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf });
+    Require(updated.exitCode == 0 && Contains(updated.out, "updated " + asset) && Contains(updated.out, "backup ") && read(meshFile) != before, "a changed model is replaced in place: " + updated.out + updated.err);
+    const std::string backup = updated.out.substr(updated.out.find("backup ") + 7U, updated.out.find(' ', updated.out.find("backup ") + 7U) - updated.out.find("backup ") - 7U);
+    Require(Contains(RunCliProgram({ "import", "--project", project, "--list-backups" }).out, backup), "the backup is listed");
+    Require(RunCliProgram({ "import", "--project", project, "--undo", backup }).exitCode == 0 && read(meshFile) == before, "undo puts the old model back");
+    Require(RunCliProgram({ "import", "--project", project, "--undo", backup }).exitCode == 1, "a backup is restored once");
+    Require(RunCliProgram({ "import", "--project", project, "--undo", "../x" }).exitCode == 1, "a backup id is not a path");
+
+    // An edited material is not overwritten without being told.
+    std::string material = read(materialFile);
+    const std::size_t at = material.find("roughnessFactor 0.75");
+    Require(at != std::string::npos, "the imported material has its roughness");
+    material.replace(at, 20U, "roughnessFactor 0.5");
+    writeBytes(materialFile, material);
+    writeBytes(sources / "Triangle.gltf", document("0.2"));
+    const CliRun refused = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf });
+    Require(refused.exitCode == 1 && Contains(refused.err, "edited since the last import") && Contains(refused.out + refused.err, "! "), "the default refuses over an edited material: " + refused.out + refused.err);
+    Require(read(materialFile) == material, "a refusal changes nothing");
+    const CliRun kept = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf, "--on-conflict", "keep-local" });
+    Require(kept.exitCode == 0 && Contains(kept.out, "kept ") && read(materialFile) == material, "keep-local leaves the edit: " + kept.out + kept.err);
+    const CliRun overwritten = RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf, "--on-conflict", "overwrite" });
+    Require(overwritten.exitCode == 0 && Contains(overwritten.out, "replaced ") && Contains(overwritten.out, "backup ") && Contains(read(materialFile), "roughnessFactor 0.2") && Contains(overwritten.out, "updated "),
+        "overwrite replaces the edit: " + overwritten.out + overwritten.err);
+    const std::string overwriteBackup = overwritten.out.substr(overwritten.out.find("backup ") + 7U, overwritten.out.find(' ', overwritten.out.find("backup ") + 7U) - overwritten.out.find("backup ") - 7U);
+    Require(RunCliProgram({ "import", "--project", project, "--undo", overwriteBackup }).exitCode == 0 && read(materialFile) == material, "undo brings back the edited material");
+    Require(RunCliProgram({ "import", "--project", project, "--reimport", asset, gltf, "--on-conflict", "sometimes" }).exitCode == 1, "an unknown policy is refused");
+    Require(RunCliProgram({ "import", "--project", project, "--reimport", "/Game/Meshes/Nothing.21kb", gltf }).exitCode == 1, "a missing asset is refused");
+}
+
 // `run --report world-memory`: a project with a built partitioned world streams its cells around a stream focus, and the report splits what
 // they hold by kind and states which kinds it could not read.
 void RunWorldMemoryCliTests() {
@@ -4551,6 +4644,7 @@ int main(int argc, char** argv) {
     RunMap2DCameraCliTests();
     RunSprite2DCliTests();
     RunWorldMemoryCliTests();
+    RunMeshReimportCliTests();
     RunPlayerPresetCliTests();
 #endif
     RunSceneCommandTests();

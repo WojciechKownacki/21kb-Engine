@@ -295,6 +295,16 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                as a character: Skeleton, Skeletal Mesh and one Animation Clip per
                source animation, named after it, all listed with '+'; FBX, glTF and
                GLB as Blender exports them)
+               Reimport a changed source into the asset it was imported to, in place (the
+               asset keeps its id and path, so scenes keep working):
+                 --project <dir> --reimport /Game/<path>.21kb <changed source file>
+                 [--on-conflict report|keep-local|overwrite] [--diff]
+               The textures and materials of the last import are kept in a record beside
+               the asset. One edited since then is a local override: report (the default)
+               refuses and changes nothing, keep-local leaves it, overwrite replaces it.
+               --diff lists what would change and writes nothing (also for a character
+               import). What a reimport overwrote is backed up first:
+                 --project <dir> --list-backups | --undo <backup id>
   import-preset-new Create an import preset (.kbimportpreset), as the editor's
                Create > Import Preset; the import dialog and import --preset use it.
                  --project <dir> --name <Name> [--folder Assets/ImportPresets]
@@ -411,8 +421,9 @@ void PrintUsage(std::ostream& output) {
     for (const auto part : kUsageParts) output << part;
 }
 
-constexpr std::array<std::string_view, 9> kFlagNames{
-    "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items" };
+constexpr std::array<std::string_view, 11> kFlagNames{
+    "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
+    "--diff", "--list-backups" };
 
 // Runs the named command. Empty when no command has that name.
 std::optional<int> RunNamedCommand(

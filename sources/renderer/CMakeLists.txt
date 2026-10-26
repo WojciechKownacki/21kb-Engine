@@ -816,6 +816,7 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         tests/RendererTests.cpp
         tests/AssetImportCatalogCoverageTests.cpp
         tests/GltfExternalResourceTests.cpp
+        tests/MeshReimportTests.cpp
         tests/SceneLightGridTests.cpp
         tests/SceneLightGridGpuTests.cpp
         tests/RendererTestSupport.hpp

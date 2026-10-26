@@ -38,6 +38,7 @@ add_library(kb_engine STATIC
     include/engine/assets/TerrainAssetIO.hpp
     include/engine/assets/AssetImportPreset.hpp
     include/engine/assets/AssetImportService.hpp
+    include/engine/assets/AssetImportRecord.hpp
     include/engine/assets/AssetImportTypes.hpp
     include/engine/assets/AssetManager.hpp
     include/engine/assets/AssetManifest.hpp
@@ -607,6 +608,7 @@ add_library(kb_engine STATIC
     src/assets/AssetImportPreset.cpp
     src/assets/AssetImportService.cpp
     src/assets/AssetLoadRequest.cpp
+    src/assets/AssetImportRecord.cpp
     src/assets/AssetImportTypes.cpp
     src/assets/AssetLoaderRegistry.cpp
     src/assets/AssetManager.cpp

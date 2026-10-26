@@ -52,6 +52,7 @@ void RunRenderFramePipelineTests();
 void RunRenderResourceRegistryTests();
 void RunAssetImportCatalogCoverageTests();
 void RunGltfExternalResourceTests();
+void RunMeshReimportTests();
 void RunRuntimeAssetShaderProviderTests();
 void RunRuntimeAssetPackValidationTests();
 void RunPackagedMaterialRuntimeTests();
@@ -206,6 +207,10 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view{ argv[1] } == "gltf-external") {
         kb::render::tests::RunGltfExternalResourceTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "mesh-reimport") {
+        kb::render::tests::RunMeshReimportTests();
         return EXIT_SUCCESS;
     }
     if (argc == 2 && std::string_view{ argv[1] } == "import-catalog") {
@@ -450,6 +455,7 @@ int main(int argc, char** argv) {
     RunSuite("RunRenderResourceRegistryTests", &kb::render::tests::RunRenderResourceRegistryTests);
     RunSuite("RunAssetImportCatalogCoverageTests", &kb::render::tests::RunAssetImportCatalogCoverageTests);
     RunSuite("RunGltfExternalResourceTests", &kb::render::tests::RunGltfExternalResourceTests);
+    RunSuite("RunMeshReimportTests", &kb::render::tests::RunMeshReimportTests);
     RunSuite("RunRuntimeAssetShaderProviderTests", &kb::render::tests::RunRuntimeAssetShaderProviderTests);
     RunSuite("RunRuntimeAssetPackValidationTests", &kb::render::tests::RunRuntimeAssetPackValidationTests);
     RunSuite("RunRenderMaterialTypeSchemaTests", &kb::render::tests::RunRenderMaterialTypeSchemaTests);

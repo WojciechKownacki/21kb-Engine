@@ -1,5 +1,6 @@
 #include "kb/render/resources/RenderMeshImportArtifacts.hpp"
 
+#include "engine/assets/AssetImportRecord.hpp"
 #include "engine/assets/AssetImportService.hpp"
 
 #include "engine/assets/AssetManager.hpp"
@@ -165,6 +166,138 @@ void Rollback(std::vector<PublishedEntry>& entries) noexcept {
         Remove(iterator->stage);
         Remove(iterator->backup);
     }
+}
+
+// What an import is about to write, compared with what is there: refuse, keep or overwrite the files edited since the last import, and keep
+// the files a reimport replaces so that it can be undone.
+struct GuardTarget {
+    std::string virtualPath;
+    std::string assetType;
+    std::uint64_t newHash = 0U; // 0 when the content is not known before it is written
+};
+
+[[nodiscard]] std::uint64_t StagedHash(const kb::scene::SkeletalMeshImportArtifact& artifact) {
+    const std::filesystem::path stage = std::filesystem::temp_directory_path() / ("kb_import_stage_" + Hex8(Hash(kb::assets::NormalizeAssetPath(artifact.virtualPath))) +
+        "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".tmp");
+    std::uint64_t hash = 0U;
+    if (artifact.write && artifact.write(stage)) hash = kb::assets::HashAssetFile(stage);
+    Remove(stage);
+    return hash;
+}
+
+[[nodiscard]] std::string ConflictSummary(const std::vector<kb::assets::AssetImportChange>& conflicts) {
+    std::string text;
+    for (std::size_t index = 0U; index < conflicts.size() && index < 4U; ++index) {
+        text += (index == 0U ? "" : ", ") + conflicts[index].virtualPath.generic_string();
+    }
+    if (conflicts.size() > 4U) text += " and " + std::to_string(conflicts.size() - 4U) + " more";
+    return text;
+}
+
+enum class GuardOutcome : std::uint8_t { Proceed, Stop };
+
+// `required` are targets that cannot be left out (the model itself); `alwaysBackup` are files the import replaces whatever their state.
+// On Stop the item says why (a dry run, a refusal, or everything kept).
+[[nodiscard]] GuardOutcome Guard(
+    kb::assets::AssetManager& manager,
+    const kb::assets::AssetImportOptions& options,
+    const kb::assets::AssetImportRecord* recorded,
+    std::vector<kb::scene::SkeletalMeshImportArtifact>& artifacts,
+    const std::vector<GuardTarget>& required,
+    const std::vector<std::filesystem::path>& alwaysBackup,
+    kb::assets::AssetImportItemResult& item) {
+    std::vector<kb::assets::AssetImportPlanEntry> targets;
+    for (const GuardTarget& target : required) targets.push_back({ target.virtualPath, target.assetType, target.newHash });
+    for (const kb::scene::SkeletalMeshImportArtifact& artifact : artifacts) {
+        targets.push_back({ kb::assets::NormalizeAssetPath(artifact.virtualPath), artifact.expectedAssetType, StagedHash(artifact) });
+    }
+    item.changes = kb::assets::PlanImportChanges(manager, recorded, targets);
+    std::vector<kb::assets::AssetImportChange> overridden;
+    for (const kb::assets::AssetImportChange& change : item.changes) {
+        if (change.kind == kb::assets::AssetImportChangeKind::LocalOverride) overridden.push_back(change);
+    }
+    if (options.dryRun) {
+        item.conflicts = overridden;
+        return GuardOutcome::Stop;
+    }
+    if (!overridden.empty()) {
+        item.conflicts = overridden;
+        if (options.conflictPolicy == kb::assets::AssetImportConflictPolicy::Report) {
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = std::to_string(overridden.size()) + " asset(s) were edited since the last import and would be overwritten: " + ConflictSummary(overridden) +
+                ". Nothing was changed; reimport with keep-local to leave them or overwrite to replace them (the old files are backed up).";
+            return GuardOutcome::Stop;
+        }
+        if (options.conflictPolicy == kb::assets::AssetImportConflictPolicy::KeepLocal) {
+            const bool requiredEdited = std::ranges::any_of(overridden, [&](const kb::assets::AssetImportChange& change) {
+                return std::ranges::any_of(required, [&](const GuardTarget& target) { return target.virtualPath == change.virtualPath.generic_string(); });
+            });
+            if (requiredEdited) {
+                // The model and its skeleton are published together: kept as they are means nothing is updated.
+                item.status = kb::assets::AssetImportItemStatus::Reused;
+                return GuardOutcome::Stop;
+            }
+            std::erase_if(artifacts, [&](const kb::scene::SkeletalMeshImportArtifact& artifact) {
+                const std::string path = kb::assets::NormalizeAssetPath(artifact.virtualPath);
+                return std::ranges::any_of(overridden, [&](const kb::assets::AssetImportChange& change) { return change.virtualPath.generic_string() == path; });
+            });
+        }
+    }
+    // The files that will be replaced are kept first.
+    std::vector<kb::assets::AssetImportBackupFile> files;
+    std::set<std::string> listed;
+    const auto add = [&](const std::filesystem::path& physical, const std::string& virtualPath) {
+        if (listed.insert(physical.generic_string()).second) files.push_back({ virtualPath, physical });
+    };
+    for (const kb::assets::AssetImportChange& change : item.changes) {
+        const bool replaced = change.kind == kb::assets::AssetImportChangeKind::Changed ||
+            (change.kind == kb::assets::AssetImportChangeKind::LocalOverride && options.conflictPolicy == kb::assets::AssetImportConflictPolicy::Overwrite);
+        const bool published = std::ranges::any_of(artifacts, [&](const kb::scene::SkeletalMeshImportArtifact& artifact) {
+            return kb::assets::NormalizeAssetPath(artifact.virtualPath) == change.virtualPath.generic_string();
+        }) || std::ranges::any_of(required, [&](const GuardTarget& target) { return target.virtualPath == change.virtualPath.generic_string(); });
+        if (!replaced || !published) continue;
+        if (const auto physical = manager.Mounts().Resolve(change.virtualPath)) add(*physical, change.virtualPath.generic_string());
+    }
+    // The model and its record are replaced whenever anything changes; when nothing does, nothing is kept.
+    const bool anyChange = std::ranges::any_of(item.changes, [](const kb::assets::AssetImportChange& change) {
+        return change.kind == kb::assets::AssetImportChangeKind::Added || change.kind == kb::assets::AssetImportChangeKind::Changed ||
+            change.kind == kb::assets::AssetImportChangeKind::LocalOverride;
+    });
+    if (anyChange) {
+        for (const std::filesystem::path& path : alwaysBackup) add(path, {});
+    }
+    if (!files.empty()) {
+        std::string error;
+        const std::optional<std::string> id = kb::assets::AssetImportBackups::Create(manager, files, &error);
+        if (!id.has_value()) {
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = "The files the reimport replaces could not be backed up (" + error + "); nothing was changed.";
+            return GuardOutcome::Stop;
+        }
+        item.backupId = *id;
+    }
+    return GuardOutcome::Proceed;
+}
+
+// Writes the record of what this import left: the entries of the last record for what it did not touch, the hash now for what it wrote.
+void WriteRecord(
+    kb::assets::AssetManager& manager,
+    const std::filesystem::path& mainPhysicalPath,
+    const std::filesystem::path& sourcePath,
+    const kb::assets::AssetImportOptions& options,
+    const std::optional<kb::assets::AssetImportRecord>& previous,
+    std::span<const std::pair<std::filesystem::path, std::string>> written) {
+    kb::assets::AssetImportRecord record = previous.value_or(kb::assets::AssetImportRecord{});
+    record.sourceName = sourcePath.filename().string();
+    record.sourceHash = kb::assets::HashAssetFile(sourcePath);
+    record.optionFlags = kb::assets::AssetImportOptionFlags(options);
+    record.transform = options.mesh.transform;
+    for (const auto& [virtualPath, type] : written) {
+        const auto physical = manager.Mounts().Resolve(virtualPath);
+        record.Set(kb::assets::NormalizeAssetPath(virtualPath), type, physical.has_value() ? kb::assets::HashAssetFile(*physical) : 0U);
+    }
+    std::string ignored;
+    static_cast<void>(kb::assets::AssetImportRecordIO::Write(kb::assets::AssetImportRecordIO::PathFor(mainPhysicalPath), record, &ignored));
 }
 
 } // namespace
@@ -341,6 +474,15 @@ kb::assets::AssetImportResult RenderMeshImportArtifacts::ImportStaticFiles(
     kb::assets::AssetImportResult result{};
     result.items.reserve(sourceFiles.size());
     for (const std::filesystem::path& sourcePath : sourceFiles) {
+        if (options.dryRun) {
+            result.items.push_back({
+                .sourcePath = sourcePath,
+                .category = kb::assets::AssetImportCategory::Model,
+                .status = kb::assets::AssetImportItemStatus::Failed,
+                .error = "A dry run plans a reimport of an existing asset (import --reimport) or a character import; a new static import has nothing to compare.",
+            });
+            continue;
+        }
         const bool meshSource = CarriesSourceMaterials(sourcePath);
         std::string error;
         std::optional<RenderPreparedMeshImportArtifacts> prepared;
@@ -361,6 +503,14 @@ kb::assets::AssetImportResult RenderMeshImportArtifacts::ImportStaticFiles(
             manager, oneSource, destinationVirtualFolder, options);
         if (imported.items.empty()) continue;
         kb::assets::AssetImportItemResult item = std::move(imported.items.front());
+        std::optional<kb::assets::AssetImportRecord> previousRecord;
+        if (item.Succeeded() && prepared.has_value()) {
+            previousRecord = kb::assets::AssetImportRecordIO::Read(kb::assets::AssetImportRecordIO::PathFor(item.assetPhysicalPath));
+            if (Guard(manager, options, previousRecord ? &*previousRecord : nullptr, prepared->artifacts, {}, {}, item) == GuardOutcome::Stop) {
+                result.items.push_back(std::move(item));
+                continue;
+            }
+        }
         if (item.Succeeded() && prepared.has_value() && !PublishStandalone(manager, prepared->artifacts, &error)) {
             if (item.status == kb::assets::AssetImportItemStatus::Created) {
                 std::error_code removeError;
@@ -374,10 +524,99 @@ kb::assets::AssetImportResult RenderMeshImportArtifacts::ImportStaticFiles(
         }
         if (item.Succeeded() && prepared.has_value()) {
             item.producedAssets = PublishedArtifactIds(manager, prepared->artifacts);
+            std::vector<std::pair<std::filesystem::path, std::string>> written;
+            for (const kb::scene::SkeletalMeshImportArtifact& artifact : prepared->artifacts) written.emplace_back(artifact.virtualPath, artifact.expectedAssetType);
+            WriteRecord(manager, item.assetPhysicalPath, sourcePath, options, previousRecord, written);
         }
         result.items.push_back(std::move(item));
     }
     return result;
+}
+
+kb::assets::AssetImportItemResult RenderMeshImportArtifacts::ReimportStatic(
+    kb::assets::AssetManager& manager,
+    kb::assets::AssetId id,
+    const std::filesystem::path& sourcePath,
+    const kb::assets::AssetImportOptions& options) {
+    kb::assets::AssetImportItemResult item{};
+    item.sourcePath = sourcePath;
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+    if (metadata == nullptr || metadata->physicalPath.empty()) {
+        item.status = kb::assets::AssetImportItemStatus::Missing;
+        item.error = "The asset to reimport is not in the project.";
+        return item;
+    }
+    // What the container itself would become, without writing it.
+    kb::assets::AssetImportOptions plan = options;
+    plan.dryRun = true;
+    kb::assets::AssetImportItemResult container = kb::assets::AssetImportService::ReimportFile(manager, id, sourcePath, plan);
+    if (container.status != kb::assets::AssetImportItemStatus::Updated && container.status != kb::assets::AssetImportItemStatus::Reused) return container;
+    item = container;
+    const std::filesystem::path physical = metadata->physicalPath;
+    const std::filesystem::path virtualPath = metadata->virtualPath;
+    const std::optional<kb::assets::AssetImportRecord> previous = kb::assets::AssetImportRecordIO::Read(kb::assets::AssetImportRecordIO::PathFor(physical));
+
+    std::string error;
+    std::optional<RenderPreparedMeshImportArtifacts> prepared;
+    if (CarriesSourceMaterials(sourcePath) && (options.mesh.importTextures || options.mesh.importMaterials)) {
+        prepared = Prepare(manager, sourcePath, virtualPath.parent_path(), options, &error);
+        if (!prepared) {
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = error.empty() ? "Static mesh auxiliary asset planning failed." : std::move(error);
+            return item;
+        }
+    }
+    std::vector<kb::scene::SkeletalMeshImportArtifact> artifacts = prepared.has_value() ? prepared->artifacts : std::vector<kb::scene::SkeletalMeshImportArtifact>{};
+    const std::string mainPath = kb::assets::NormalizeAssetPath(virtualPath);
+    const std::vector<GuardTarget> required{ { mainPath, "RenderMesh", container.assetHash } };
+    const GuardOutcome outcome = Guard(manager, options, previous ? &*previous : nullptr, artifacts, required, { physical, kb::assets::AssetImportRecordIO::PathFor(physical) }, item);
+    if (outcome == GuardOutcome::Stop) return item;
+    // The model's own entry reflects whether anyone edited the container: it never is, so it is Changed or Unchanged.
+    const kb::assets::AssetImportItemResult written = kb::assets::AssetImportService::ReimportFile(manager, id, sourcePath, options);
+    if (written.status != kb::assets::AssetImportItemStatus::Updated && written.status != kb::assets::AssetImportItemStatus::Reused) {
+        item.status = written.status;
+        item.error = written.error;
+        if (!item.backupId.empty()) {
+            std::string restoreError;
+            static_cast<void>(kb::assets::AssetImportBackups::Restore(manager, item.backupId, &restoreError));
+            static_cast<void>(manager.DiscoverMountedAssets());
+            item.backupId.clear();
+        }
+        return item;
+    }
+    item.status = written.status;
+    item.assetHash = written.assetHash;
+    item.sourceHash = written.sourceHash;
+    if (!artifacts.empty() && !PublishStandalone(manager, artifacts, &error)) {
+        // The container is already in place: put everything back so the project is as it was.
+        if (!item.backupId.empty()) {
+            std::string restoreError;
+            static_cast<void>(kb::assets::AssetImportBackups::Restore(manager, item.backupId, &restoreError));
+            static_cast<void>(manager.DiscoverMountedAssets());
+            item.backupId.clear();
+        }
+        item.status = kb::assets::AssetImportItemStatus::Failed;
+        item.error = error.empty() ? "Static mesh auxiliary asset publication failed." : std::move(error);
+        return item;
+    }
+    item.producedAssets = PublishedArtifactIds(manager, artifacts);
+    // The model itself may be the same while a texture or material was replaced.
+    if (item.status == kb::assets::AssetImportItemStatus::Reused) {
+        const bool replaced = std::ranges::any_of(item.changes, [&](const kb::assets::AssetImportChange& change) {
+            const bool published = std::ranges::any_of(artifacts, [&](const kb::scene::SkeletalMeshImportArtifact& artifact) {
+                return kb::assets::NormalizeAssetPath(artifact.virtualPath) == change.virtualPath.generic_string();
+            });
+            return published && (change.kind == kb::assets::AssetImportChangeKind::Added || change.kind == kb::assets::AssetImportChangeKind::Changed ||
+                change.kind == kb::assets::AssetImportChangeKind::LocalOverride);
+        });
+        if (replaced) item.status = kb::assets::AssetImportItemStatus::Updated;
+    }
+    std::vector<std::pair<std::filesystem::path, std::string>> writtenEntries;
+    writtenEntries.emplace_back(virtualPath, "RenderMesh");
+    for (const kb::scene::SkeletalMeshImportArtifact& artifact : artifacts) writtenEntries.emplace_back(artifact.virtualPath, artifact.expectedAssetType);
+    WriteRecord(manager, physical, sourcePath, options, previous, writtenEntries);
+    static_cast<void>(manager.DiscoverMountedAssets());
+    return item;
 }
 
 namespace {
@@ -415,9 +654,51 @@ template <typename Planner, typename Publisher, typename Options>
     }
     const auto plan = Planner::Plan(manager, sourcePath, destinationVirtualFolder, importOptions, &error);
     if (!plan) return fail(std::move(error), "import planning failed.");
-    const bool meshAlreadyExisted = manager.Registry().FindByPath(plan->meshVirtualPath) != nullptr;
+    const kb::assets::AssetMetadata* existingMesh = manager.Registry().FindByPath(plan->meshVirtualPath);
+    const bool meshAlreadyExisted = existingMesh != nullptr;
+    // Publishing over assets that exist is a reimport: what was edited since the last import is a local override.
+    std::optional<kb::assets::AssetImportRecord> previousRecord;
+    std::vector<GuardTarget> required;
+    std::vector<std::filesystem::path> alwaysBackup;
+    if (meshAlreadyExisted) {
+        previousRecord = kb::assets::AssetImportRecordIO::Read(kb::assets::AssetImportRecordIO::PathFor(existingMesh->physicalPath));
+        // The same source with the same options republishes what it published before: the recorded hash is then what the file should still be.
+        const bool sameSource = previousRecord.has_value() && previousRecord->sourceHash == kb::assets::HashAssetFile(sourcePath) &&
+            previousRecord->optionFlags == kb::assets::AssetImportOptionFlags(options) && previousRecord->transform == options.mesh.transform;
+        const auto expectedHash = [&](const std::string& path) -> std::uint64_t {
+            const kb::assets::AssetImportRecordEntry* entry = sameSource ? previousRecord->Find(path) : nullptr;
+            return entry != nullptr ? entry->hash : 0U;
+        };
+        const std::string meshPath = kb::assets::NormalizeAssetPath(plan->meshVirtualPath);
+        required.push_back({ meshPath, "SkeletalMesh", expectedHash(meshPath) });
+        alwaysBackup.push_back(existingMesh->physicalPath);
+        alwaysBackup.push_back(kb::assets::AssetImportRecordIO::PathFor(existingMesh->physicalPath));
+        if (const kb::assets::AssetMetadata* skeleton = manager.Registry().FindByPath(plan->skeletonVirtualPath)) {
+            const std::string skeletonPath = kb::assets::NormalizeAssetPath(plan->skeletonVirtualPath);
+            required.push_back({ skeletonPath, "Skeleton", expectedHash(skeletonPath) });
+            alwaysBackup.push_back(skeleton->physicalPath);
+        }
+        if (previousRecord.has_value()) {
+            for (const kb::assets::AssetImportRecordEntry& entry : previousRecord->entries) {
+                if (entry.assetType != "AnimationClip") continue;
+                if (const auto clip = manager.Mounts().Resolve(entry.virtualPath)) alwaysBackup.push_back(*clip);
+            }
+        }
+    }
+    if (Guard(manager, options, previousRecord ? &*previousRecord : nullptr, prepared->artifacts, required, alwaysBackup, item) == GuardOutcome::Stop) {
+        item.id = existingMesh != nullptr ? existingMesh->id : kb::assets::AssetId{};
+        item.virtualPath = plan->meshVirtualPath;
+        return item;
+    }
     const auto published = Publisher::PublishWithArtifacts(manager, *plan, prepared->artifacts, &error);
-    if (!published) return fail(std::move(error), "asset publication failed.");
+    if (!published) {
+        if (!item.backupId.empty()) {
+            std::string ignored;
+            static_cast<void>(kb::assets::AssetImportBackups::Restore(manager, item.backupId, &ignored));
+            item.backupId.clear();
+        }
+        return fail(std::move(error), "asset publication failed.");
+    }
     // A source of animations only names its skeleton as the item; the clips follow it.
     const bool animationsOnly = !published->meshAssetId.IsValid();
     const kb::assets::AssetMetadata* metadata =
@@ -434,6 +715,16 @@ template <typename Planner, typename Publisher, typename Options>
         published->animationClipAssetIds.begin(), published->animationClipAssetIds.end());
     for (const kb::assets::AssetId artifact : PublishedArtifactIds(manager, prepared->artifacts)) {
         item.producedAssets.push_back(artifact);
+    }
+    if (!animationsOnly) {
+        std::vector<std::pair<std::filesystem::path, std::string>> writtenEntries;
+        writtenEntries.emplace_back(metadata->virtualPath, "SkeletalMesh");
+        if (const kb::assets::AssetMetadata* skeleton = manager.Registry().Find(published->skeletonAssetId)) writtenEntries.emplace_back(skeleton->virtualPath, "Skeleton");
+        for (const kb::assets::AssetId clip : published->animationClipAssetIds) {
+            if (const kb::assets::AssetMetadata* clipMetadata = manager.Registry().Find(clip)) writtenEntries.emplace_back(clipMetadata->virtualPath, "AnimationClip");
+        }
+        for (const kb::scene::SkeletalMeshImportArtifact& artifact : prepared->artifacts) writtenEntries.emplace_back(artifact.virtualPath, artifact.expectedAssetType);
+        WriteRecord(manager, metadata->physicalPath, sourcePath, options, previousRecord, writtenEntries);
     }
     return item;
 }

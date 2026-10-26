@@ -35,6 +35,32 @@ enum class AssetImportItemStatus : std::uint8_t {
     Missing,
     Unsupported,
     Failed,
+    // A reimport replaced an existing asset in place (same id, same path).
+    Updated,
+};
+
+// What a reimport does when an asset it would overwrite was edited since the import wrote it (see AssetImportRecord).
+enum class AssetImportConflictPolicy : std::uint8_t {
+    Report,    // refuse, change nothing and list the edited assets
+    KeepLocal, // leave the edited assets as they are and update the rest
+    Overwrite, // replace everything; the old files are kept in a backup that can be restored
+};
+
+enum class AssetImportChangeKind : std::uint8_t {
+    Added,         // the import writes an asset that is not there
+    Changed,       // the file differs from what the import would write, and nobody edited it since the last import
+    Unchanged,     // the file is what the import would write
+    LocalOverride, // the file was edited since the last import, and differs from what the import would write
+    Removed,       // the last import wrote it, this one does not
+};
+
+struct AssetImportChange {
+    std::filesystem::path virtualPath;
+    std::string assetType;
+    AssetImportChangeKind kind = AssetImportChangeKind::Unchanged;
+    std::uint64_t recordedHash = 0U; // what the last import wrote (0 when unknown)
+    std::uint64_t currentHash = 0U;  // the file now (0 when it is not there)
+    std::uint64_t newHash = 0U;      // what this import would write (0 for Removed)
 };
 
 // The size and orientation a model is brought in with, as Unity's ModelImporter Scale Factor
@@ -69,6 +95,10 @@ struct AssetMeshImportOptions {
 
 struct AssetImportOptions {
     AssetMeshImportOptions mesh{};
+    // Only a reimport or an import that finds its assets already there reads these two.
+    AssetImportConflictPolicy conflictPolicy = AssetImportConflictPolicy::Report;
+    // Plan only: fill AssetImportItemResult::changes and write nothing.
+    bool dryRun = false;
 };
 
 inline constexpr std::uint16_t kAssetImportOptionMeshDisableMaterialSlots = 1U << 0U;
@@ -97,10 +127,16 @@ struct AssetImportItemResult {
     // Further assets the same source produced beside `id`: a skeletal model's skeleton and
     // animation clips, its textures and materials.
     std::vector<AssetId> producedAssets;
+    // What a reimport changed, would change (dry run) or refused to change, one entry per asset it concerns.
+    std::vector<AssetImportChange> changes;
+    // The assets edited since the import that the reimport kept or refused to overwrite.
+    std::vector<AssetImportChange> conflicts;
+    // The backup of the files a reimport overwrote; AssetImportBackups::Restore undoes it. Empty when nothing was overwritten.
+    std::string backupId;
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return error.empty() &&
-            (status == AssetImportItemStatus::Created || status == AssetImportItemStatus::Reused) &&
+            (status == AssetImportItemStatus::Created || status == AssetImportItemStatus::Reused || status == AssetImportItemStatus::Updated) &&
             id.IsValid() &&
             !assetPhysicalPath.empty();
     }
