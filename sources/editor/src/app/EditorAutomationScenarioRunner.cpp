@@ -132,6 +132,7 @@
 #endif
 
 #include <algorithm>
+#include <cstdio>
 #include <array>
 #include <atomic>
 #include <ranges>
@@ -6040,6 +6041,14 @@ int EditorAutomationScenarioRunner::Run(
     report << "========================================\n"
            << "RESULT: " << (passed ? "PASS" : "FAIL") << '\n';
     if (!report.good()) return 1;
+    // The report is a file on the machine that ran the scenario; a failing step is also said on standard error, so a
+    // test log (a CI job's, for one) names what failed without the file.
+    if (!passed) {
+        for (const std::string& line : reportLines) {
+            if (line.starts_with("[FAIL]")) std::fprintf(stderr, "%s\n", line.c_str());
+        }
+        std::fflush(stderr);
+    }
 
     std::ofstream manifest(
         absoluteArtifacts / "manifest.txt",
