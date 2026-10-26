@@ -4473,7 +4473,11 @@ void RunWorldMemoryCliTests() {
     Require(RunCliProgram({ "component", "add", "--project", project, "--entity", "Streamer", "--type", "StreamFocus" }).exitCode == 0, "adding the stream focus failed");
     Require(RunCliProgram({ "component", "set", "--project", project, "--entity", "Streamer", "--type", "StreamFocus", "--set", "outerRadius=300.0", "--set", "innerRadius=250.0" }).exitCode == 0, "setting the stream focus failed");
 
-    const CliRun ran = RunCliProgram({ "run", "--project", project, "--frames", "240", "--report", "world-memory" });
+    // Streaming performs real asynchronous I/O. Run a four-second playback instead of racing
+    // through simulation ticks before the worker threads have had time to finish reading.
+    const auto playbackStarted = std::chrono::steady_clock::now();
+    const CliRun ran = RunCliProgram({ "run", "--project", project, "--frames", "240", "--realtime", "--report", "world-memory" });
+    Require(std::chrono::steady_clock::now() - playbackStarted >= std::chrono::milliseconds(3900), "realtime playback did not pace simulation ticks");
     Require(ran.exitCode == 0, "run --report world-memory failed: " + ran.out + ran.err);
     kb::core::JsonValue report;
     std::string parseError;
@@ -4500,6 +4504,8 @@ void RunWorldMemoryCliTests() {
             memory->Find("minimum_error_ratio")->AsNumber() <= memory->Find("maximum_error_ratio")->AsNumber(), "the error ratio was sampled");
     const CliRun refused = RunCliProgram({ "run", "--project", project, "--report", "bogus" });
     Require(refused.exitCode == 1 && Contains(refused.err, "world-memory"), "the report list names world-memory: " + refused.err);
+    const CliRun excessive = RunCliProgram({ "run", "--project", project, "--frames", "240", "--dt", "1000", "--realtime" });
+    Require(excessive.exitCode == 1 && Contains(excessive.err, "24 hours"), "unbounded realtime playback was accepted");
 }
 
 // A Sprite 2D from the command line: created from the Create menu, its picture chosen by path (which records the picture's

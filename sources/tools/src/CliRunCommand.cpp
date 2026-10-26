@@ -30,6 +30,7 @@
 #include <optional>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -269,6 +270,11 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         deltaSeconds = *parsed;
     }
 
+    const bool realtime = arguments.Flag("--realtime");
+    if (realtime && static_cast<double>(frames) * deltaSeconds > 86400.0) {
+        io.err << "error: --realtime playback must not exceed 24 hours\n";
+        return 1;
+    }
     const bool quiet = arguments.Flag("--quiet");
     if (audioReport != nullptr && frames > 600) {
         io.err << "error: an audio execution probe accepts at most 600 simulation frames\n"; return 1;
@@ -477,7 +483,12 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     if (ecsReport != nullptr) {
         scene.Runtime().SetEcsProfilerEnabled(true);
     }
+    const auto playbackStarted = std::chrono::steady_clock::now();
     for (int frame = 1; frame <= frames; ++frame) {
+        if (realtime) {
+            std::this_thread::sleep_until(playbackStarted + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>{ static_cast<double>(frame) * deltaSeconds }));
+        }
         const auto updateStarted = std::chrono::steady_clock::now();
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
         updateWallNanoseconds += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(

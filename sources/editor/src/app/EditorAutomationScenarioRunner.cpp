@@ -5339,6 +5339,25 @@ ReadScriptValue(
         return { driven, driven ? "map2d:" + *checkpoint : failure };
     }
 
+    if (*operation == "assert_map2d_sharing") {
+        const auto first = StringMember(step, "entity", error);
+        const auto second = StringMember(step, "other", error);
+        const auto shared = BoolMember(step, "shared", error);
+        const auto sameContent = BoolMember(step, "same_content", error);
+        if (!first || !second || !shared || !sameContent) return { false, error };
+        const auto& scene = state.context.Scene();
+        const auto* firstMetadata = EditorMap2DService::MapMetadata(scene, ResolveEntity(state, *first));
+        const auto* secondMetadata = EditorMap2DService::MapMetadata(scene, ResolveEntity(state, *second));
+        if (!firstMetadata || !secondMetadata) return { false, "both map assets must be registered" };
+        if ((firstMetadata->id == secondMetadata->id) != *shared)
+            return { false, "map asset sharing differs from the expected ownership" };
+        const auto firstMap = EditorMap2DService::Load(scene, firstMetadata->id, &error);
+        const auto secondMap = EditorMap2DService::Load(scene, secondMetadata->id, &error);
+        if (!firstMap || !secondMap) return { false, error };
+        const bool equal = kb::assets::Map2DAssetIO::Write(*firstMap) == kb::assets::Map2DAssetIO::Write(*secondMap);
+        return { equal == *sameContent, "persisted map content and asset ownership checked" };
+    }
+
     if (*operation == "assert_map2d_runtime") {
         const auto alias = StringMember(step,"entity",error);
         if (!alias) return {false,error};

@@ -321,7 +321,7 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
 )",
 R"(  run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on any error.
-                 --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>]
+                 --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>] [--realtime]
                  [--quiet] [--report particles|audio|audio-meters|ecs|world-memory] [--pcm-frames <n>]
                Reports are versioned JSON on stdout; logs go to stderr.
                Audio probes use explicit offline PCM rendering (up to 600 ticks
@@ -436,9 +436,9 @@ void PrintUsage(std::ostream& output) {
     for (const auto part : kUsageParts) output << part;
 }
 
-constexpr std::array<std::string_view, 14> kFlagNames{
+constexpr std::array<std::string_view, 15> kFlagNames{
     "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
-    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace" };
+    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace", "--realtime" };
 
 // Runs the named command. Empty when no command has that name.
 std::optional<int> RunNamedCommand(

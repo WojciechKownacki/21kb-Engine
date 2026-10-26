@@ -62,6 +62,7 @@ usage: kb_dedicated_server --project <dir> --keys <file> [options]
   --stop-file <path>       stop cleanly when this file exists
   --port-file <path>       write the bound UDP port here once the socket is open
   --status-file <path>     rewrite the status JSON here about once a second
+  --state-file <path>      resume a .21kbscene checkpoint if present and save it on clean shutdown
   --json                   print the final status as one JSON object on stdout; log lines go to stderr
   --quiet                  no log lines
   --help                   this text
@@ -105,7 +106,7 @@ ParsedArguments Parse(const std::vector<std::string>& arguments) {
         }
     }
     static const std::set<std::string> known{ "--project", "--keys", "--scene", "--port", "--bind", "--max-clients", "--tick-rate", "--idle-timeout",
-        "--empty-timeout", "--max-seconds", "--replicate", "--world-extent", "--stop-file", "--port-file", "--status-file", "--json", "--quiet", "--help" };
+        "--empty-timeout", "--max-seconds", "--replicate", "--world-extent", "--stop-file", "--port-file", "--status-file", "--state-file", "--json", "--quiet", "--help" };
     for (const auto& [name, value] : values) {
         if (!known.contains(name)) {
             parsed.error = "unknown option: " + name;
@@ -143,6 +144,7 @@ ParsedArguments Parse(const std::vector<std::string>& arguments) {
     if (values.contains("--stop-file")) options.stopFile = values["--stop-file"];
     if (values.contains("--port-file")) options.portFile = values["--port-file"];
     if (values.contains("--status-file")) options.statusFile = values["--status-file"];
+    if (values.contains("--state-file")) options.stateFile = values["--state-file"];
     if (!number("--port", 65535U, options.port) || !number("--max-clients", 4096U, options.maxClients) || !number("--tick-rate", 240U, options.tickRate) ||
         !number("--idle-timeout", 3600U, options.idleTimeoutSeconds) || !number("--empty-timeout", 86400U, options.emptyTimeoutSeconds) ||
         !number("--max-seconds", 31536000U, options.maxSeconds)) {

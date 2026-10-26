@@ -575,6 +575,57 @@ void TestLifetimeOptions() {
     }
 }
 
+void TestSceneCheckpoint() {
+    const TestProject project = MakeProject("checkpoint");
+    const fs::path checkpoint = project.root / "State.21kbscene";
+    {
+        Server server(project, { "--state-file", checkpoint.string() }, "first");
+        Require(server.WaitForPort() != 0U, "checkpoint server did not start");
+        server.RequestStop();
+        Require(server.process.Wait(20'000) == 0, "checkpoint server did not stop cleanly");
+        Require(server.Status().Find("state_saved") != nullptr && server.Status().Find("state_saved")->AsBool(), "checkpoint save was not reported");
+    }
+    auto saved = kb::scene::SceneDocumentService::Load(checkpoint);
+    Require(saved.succeeded && saved.document.worldPrefab.NodeCount() >= 4U, "checkpoint did not preserve the scene");
+    bool edited = false;
+    for (std::uint32_t index = 0U; index < saved.document.worldPrefab.NodeCount(); ++index) {
+        auto* node = saved.document.worldPrefab.TryGetMutableNode(index);
+        if (node->name == "Net_A") {
+            node->transform.localPosition.x = 123.0F;
+            edited = true;
+        }
+    }
+    Require(edited && kb::scene::SceneDocumentService::Save(saved.document, checkpoint), "could not prepare changed checkpoint state");
+    {
+        Server server(project, { "--state-file", checkpoint.string() }, "resume");
+        Require(server.WaitForPort() != 0U, "checkpoint server did not resume");
+        server.RequestStop();
+        Require(server.process.Wait(20'000) == 0, "resumed server did not stop cleanly");
+        Require(server.Status().Find("state_loaded") != nullptr && server.Status().Find("state_loaded")->AsBool(), "checkpoint resume was not reported");
+    }
+    const auto resumed = kb::scene::SceneDocumentService::Load(checkpoint);
+    Require(resumed.succeeded, "resumed checkpoint is unreadable");
+    bool preserved = false;
+    for (const auto& node : resumed.document.worldPrefab.Nodes())
+        if (node.name == "Net_A") preserved = node.transform.localPosition.x == 123.0F;
+    Require(preserved, "server replaced checkpoint state with the original project scene");
+    WriteFile(checkpoint, "corrupt checkpoint");
+    {
+        Server server(project, { "--state-file", checkpoint.string() }, "corrupt");
+        Require(server.process.Wait(20'000) == 1, "corrupt checkpoint was silently discarded");
+        Require(ReadFile(checkpoint) == "corrupt checkpoint", "failed startup overwrote the checkpoint");
+    }
+    const fs::path failedSave = project.root / "Failed.21kbscene";
+    {
+        Server server(project, { "--state-file", failedSave.string() }, "save-failure");
+        Require(server.WaitForPort() != 0U, "save failure server did not start");
+        fs::create_directory(failedSave);
+        server.RequestStop();
+        Require(server.process.Wait(20'000) == 1, "checkpoint write failure was reported as a clean stop");
+        Require(ReadFile(server.out).find("state-save-error") != std::string::npos, "checkpoint failure has no final diagnostic");
+    }
+}
+
 void TestCommandLine() {
     const TestProject project = MakeProject("cli");
     const fs::path out = project.root / "out.txt";
@@ -624,6 +675,7 @@ void TestKeysFile() {
 int main() {
     const std::vector<std::pair<const char*, void (*)()>> tests{
         { "keys-file", &TestKeysFile },
+        { "scene-checkpoint", &TestSceneCheckpoint },
         { "command-line", &TestCommandLine },
         { "main-run", &TestMainRun },
         { "lifetime-options", &TestLifetimeOptions },

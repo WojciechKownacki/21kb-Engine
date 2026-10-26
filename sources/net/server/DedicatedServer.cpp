@@ -128,6 +128,8 @@ std::string SummaryJson(const ServerOptions& options, const ServerSummary& summa
     root.Set("exit_reason", JsonValue::MakeString(summary.exitReason));
     root.Set("project", JsonValue::MakeString(options.project.generic_string()));
     root.Set("port", number(summary.port));
+    root.Set("state_loaded", JsonValue::MakeBool(summary.stateLoaded));
+    root.Set("state_saved", JsonValue::MakeBool(summary.stateSaved));
     root.Set("tick_rate", number(options.tickRate));
     root.Set("ticks", number(summary.ticks));
     root.Set("uptime_ms", number(summary.uptimeMilliseconds));
@@ -284,6 +286,11 @@ bool DedicatedServer::Start(std::string& error) {
     Impl& s = *impl_;
     const ServerOptions& options = s.options;
 
+    if (!options.stateFile.empty() && options.stateFile.extension() != ".21kbscene") {
+        error = "--state-file must name a .21kbscene checkpoint";
+        return false;
+    }
+
     std::uint32_t address = 0U;
     if (!ParseAddress(options.bindAddress, address)) {
         error = "the bind address is not an IPv4 address: " + options.bindAddress;
@@ -379,6 +386,18 @@ bool DedicatedServer::Start(std::string& error) {
         scenePath = std::filesystem::path{ sceneOption };
         if (scenePath.is_relative()) {
             scenePath = projectRoot / scenePath;
+        }
+    }
+    if (!options.stateFile.empty()) {
+        std::error_code stateError;
+        const bool exists = std::filesystem::exists(options.stateFile, stateError);
+        if (stateError) {
+            error = "the server checkpoint could not be inspected: " + stateError.message();
+            return false;
+        }
+        if (exists) {
+            scenePath = options.stateFile;
+            s.summary.stateLoaded = true;
         }
     }
     if (!kb::scene::SceneDocumentService::LoadFileIntoScene(*s.scene, scenePath)) {
@@ -523,6 +542,14 @@ int DedicatedServer::Run(const std::atomic<bool>& stop) {
     while (s.NowMilliseconds() - shutdownStarted < 300U && s.host->ClientCount() != 0U) {
         s.PumpHost(s.NowMilliseconds());
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if (exitCode == 0 && !options.stateFile.empty()) {
+        s.summary.stateSaved = kb::scene::SceneDocumentService::Save(*s.scene, options.stateFile, "ServerState");
+        if (!s.summary.stateSaved) {
+            s.Log("error: the server checkpoint could not be saved");
+            reason = "state-save-error";
+            exitCode = 1;
+        }
     }
     s.scripts.reset();
     s.summary.exitReason = reason;

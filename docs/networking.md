@@ -179,7 +179,7 @@ renderer, steps it at a fixed rate, and replicates it over UDP.
     kb_dedicated_server --project <dir> --keys <file> [--scene <path>] [--port 27015] [--bind 0.0.0.0]
         [--max-clients 16] [--tick-rate 30] [--idle-timeout 30] [--empty-timeout <s>] [--max-seconds <s>]
         [--replicate all|none|prefix:<name>] [--world-extent 1000] [--stop-file <path>] [--port-file <path>]
-        [--status-file <path>] [--json] [--quiet]
+        [--status-file <path>] [--state-file <path.21kbscene>] [--json] [--quiet]
 
 * **Keys.** The keys file lists one `<client id> <64 hex digits>` per line (`#` starts a comment). Only
   those clients can connect; the handshake is the one above, so a wrong key or an unknown id gets no session.
@@ -199,6 +199,11 @@ renderer, steps it at a fixed rate, and replicates it over UDP.
   or failed; 2: bad command line. Log lines go to stdout, or to stderr with `--json`, which prints one JSON
   object (`21kb.dedicated-server/v1`: exit reason, ticks, clients, host and replication counters) on stdout at
   the end; `--status-file` holds the same object, refreshed about once a second.
+* **Scene persistence.** `--state-file` loads an existing scene checkpoint instead of the startup scene and saves the current scene
+  on clean shutdown. A missing checkpoint starts from the project scene; an unreadable checkpoint refuses startup without replacing it.
+  The scene file contains entities, serialized components and asset references. It does not preserve Lua coroutine stacks, network
+  connections or physics solver state. Scripts initialize again after a restart. A save failure exits 1 with `state-save-error`;
+  status JSON reports `state_loaded` and `state_saved`. The scene writer uses atomic replacement for the scene payload.
 * **Tested.** `kb_dedicated_server_tests` starts the real process and talks to it over real UDP on 127.0.0.1:
   handshake, replication of the scene's entities, RPC both ways and a broadcast, a wrong key and an unknown id,
   600 hostile datagrams, a client dropped by the idle timeout, the client limit, `--max-seconds` and

@@ -39,6 +39,7 @@ struct ServerOptions {
     std::filesystem::path stopFile;   // the server stops cleanly when this file exists
     std::filesystem::path portFile;   // the bound port, written once the socket is open
     std::filesystem::path statusFile; // the status JSON, rewritten about once a second
+    std::filesystem::path stateFile;  // optional scene checkpoint, loaded on startup and saved on clean shutdown
     bool quiet = false;
 };
 
@@ -50,6 +51,8 @@ struct ServerSummary {
     std::size_t clientsPeak = 0U;
     std::size_t replicatedEntities = 0U;
     std::uint16_t port = 0U;
+    bool stateLoaded = false;
+    bool stateSaved = false;
     HostStats host;
     ReplicationServerStats replication;
 };
