@@ -47,6 +47,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -3621,6 +3622,32 @@ void RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest() {
         "Render texture DDS fixture was not found");
 }
 
+void RunTextureLoaderChecksJpegSizeAfterMarkerPaddingTest() {
+    const auto read = [](const std::filesystem::path& relativePath) {
+        std::ifstream input{ ResolveFixturePath(relativePath), std::ios::binary };
+        Require(input.is_open(), "JPEG regression fixture was not found");
+        return std::vector<std::uint8_t>{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    };
+    // The fuzz corpus starts with the harness's path selector, followed by the actual JPEG.
+    std::vector<std::uint8_t> hostile = read("fuzz/corpus/image/regression-jpeg-marker-padding.bin");
+    Require(hostile.size() > 1U && hostile.front() == 0U, "JPEG regression fixture has an unexpected path selector");
+    hostile.erase(hostile.begin());
+    const std::size_t peakBefore = PeakCommittedBytes();
+    Require(!DecodeTextureSource("PaddedOversized.jpg", hostile).has_value(), "A JPEG size check was bypassed by padding between markers");
+    Require(PeakCommittedBytes() - peakBefore < 256U * 1024U * 1024U, "A padded JPEG allocated its implausible declared image size");
+
+    std::vector<std::uint8_t> valid = read("third_party/bgfx.cmake/bgfx/examples/runtime/images/image1.jpg");
+    const auto expected = DecodeTextureSource("Original.jpg", valid);
+    Require(expected.has_value(), "The valid JPEG control must decode");
+    Require(valid.size() >= 6U && valid[2] == 0xFFU && valid[3] == 0xE0U, "The JPEG control must begin with an APP0 marker");
+    const std::size_t nextMarker = 4U + (static_cast<std::size_t>(valid[4]) << 8U) + valid[5];
+    Require(nextMarker < valid.size(), "The JPEG control's APP0 marker must fit in the file");
+    valid.insert(valid.begin() + static_cast<std::ptrdiff_t>(nextMarker), { 0x13U, 0x00U, 0x7FU, 0xFFU, 0xFFU });
+    const auto padded = DecodeTextureSource("PaddedValid.jpg", valid);
+    Require(padded.has_value() && padded->width == expected->width && padded->height == expected->height && padded->rgba8 == expected->rgba8,
+        "JPEG marker padding accepted by the decoder must preserve the decoded picture");
+}
+
 // The decoded-texture cache: a file must be decoded to RGBA8 at most once while unchanged on disk, so the many
 // scenes that reference the same texture (main scene + material preview + thumbnails) stop each paying the full
 // bimg decode - the multi-second stall on opening a Material Editor. Proven via the decode counter, with a
@@ -3791,6 +3818,7 @@ void RunPackagedMaterialRuntimeTests() {
 }
 
 void RunRenderResourceRegistryTests() {
+    RunTextureLoaderChecksJpegSizeAfterMarkerPaddingTest();
     RunMaterialHandlesAreGenerationalTest();
     RunGraphBlendModeDrivesResourceRenderStateTest();
     RunMaterialReloadInvalidatesStaleSceneBindingTest();

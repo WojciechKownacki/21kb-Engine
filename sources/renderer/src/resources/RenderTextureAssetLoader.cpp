@@ -312,7 +312,9 @@ constexpr std::uint64_t kMaximumJpegPixelsPerByte = 2048U;
     if (size < 4U || bytes[0] != 0xFFU || bytes[1] != 0xD8U) return false;
     std::size_t at = 2U;
     while (at + 4U <= size) {
-        if (bytes[at] != 0xFFU) return false;
+        // The JPEG decoder skips padding between segments while seeking the frame header.
+        // Keep scanning too, or padding lets an oversized frame bypass this preflight check.
+        if (bytes[at] != 0xFFU) { ++at; continue; }
         const std::uint8_t marker = bytes[at + 1U];
         if (marker == 0xFFU) { ++at; continue; }
         if (marker == 0x01U || (marker >= 0xD0U && marker <= 0xD8U)) { at += 2U; continue; }
