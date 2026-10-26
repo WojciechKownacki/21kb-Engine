@@ -74,18 +74,20 @@ void RunSceneStreamingTests() {
     }
     // A budget no step can keep: streaming still moves forward by a step every frame (it never starves) and says how
     // many frames went over the limit and how long the longest was.
-    scene.LoadedContent().ConfigureStreaming({.maxPendingLoads = 2U, .maxOperationsPerFrame = 7U, .maxMillisecondsPerFrame = 0.0001F});
+    scene.LoadedContent().ConfigureStreaming({.maxPendingLoads = 2U, .maxOperationsPerFrame = 1U, .maxMillisecondsPerFrame = 0.000000001F});
     {
         const auto tight = scene.LoadedContent().LoadAsync(path, parent);
         const auto tightDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{15};
         while (scene.LoadedContent().Status(tight) != SceneLoadStatus::Ready && std::chrono::steady_clock::now() < tightDeadline) {
             static_cast<void>(scene.Runtime().Update(0.0F));
+            Require(scene.LoadedContent().StreamingStats().operations <= 1U,
+                "Minimum streaming progress must preserve the operation budget");
             std::this_thread::yield();
         }
         Require(scene.LoadedContent().Status(tight) == SceneLoadStatus::Ready && scene.Entities().Count() == 515U,
             "A load under an impossible time budget must still finish");
         const SceneStreamingStats tightStats = scene.LoadedContent().StreamingStats();
-        Require(tightStats.overBudgetFrames > 0U && tightStats.longestFrameMilliseconds > 0.0001,
+        Require(tightStats.overBudgetFrames > 0U && tightStats.longestFrameMilliseconds > 0.000000001,
             "Frames over the time budget must be counted");
         Require(scene.LoadedContent().UnloadAsync(tight), "The tight-budget scene must unload");
         const auto unloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{15};

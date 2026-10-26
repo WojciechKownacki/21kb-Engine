@@ -4621,10 +4621,24 @@ void RunSprite2DAssetRefusalTests() {
     const std::filesystem::path root = parent / "Sprites";
     const std::string project = root.string();
     Require(RunCliProgram({ "entity", "add", "--project", project, "--name", "Hero" }).exitCode == 0, "creating the sprite entity failed");
-    Require(RunCliProgram({ "component", "add", "--project", project, "--entity", "Hero", "--type", "Sprite2D" }).exitCode == 0,
-        "adding sprite data must not require the renderer");
-    Require(RunCliProgram({ "component", "set", "--project", project, "--entity", "Hero", "--type", "Sprite2D", "--set", "sortingOrder=7" }).exitCode == 0,
-        "editing ordinary sprite properties must not require the renderer");
+    const CliRun added = RunCliProgram({ "component", "add", "--project", project, "--entity", "Hero", "--type", "Sprite2D" });
+    Require(added.exitCode != 0 && Contains(added.err, "World.Map2D"),
+        "adding a sprite must explain its disabled plugin: " + added.out + added.err);
+    // A renderer-free tool can still edit data authored by a renderer-enabled tool.
+    const auto scenePath = root / "Assets" / "Scenes" / "Main.21kbscene";
+    auto document = kb::scene::SceneDocumentService::Load(scenePath);
+    Require(document.succeeded, "the sprite scene must load");
+    bool foundHero = false;
+    for (std::uint32_t index = 0U; index < document.document.worldPrefab.NodeCount(); ++index) {
+        auto* node = document.document.worldPrefab.TryGetMutableNode(index);
+        if (node->name == "Hero") {
+            node->components.sprite2D = kb::scene::Sprite2DComponent{};
+            foundHero = true;
+        }
+    }
+    Require(foundHero && kb::scene::SceneDocumentService::Save(document.document, scenePath), "the authored sprite fixture must save");
+    const CliRun edited = RunCliProgram({ "component", "set", "--project", project, "--entity", "Hero", "--type", "Sprite2D", "--set", "sortingOrder=7" });
+    Require(edited.exitCode == 0, "editing ordinary sprite properties must not require the renderer: " + edited.out + edited.err);
     const auto savedScene = [&]() {
         std::ifstream input{ root / "Assets" / "Scenes" / "Main.21kbscene", std::ios::binary };
         Require(input.is_open(), "the sprite scene must exist");
