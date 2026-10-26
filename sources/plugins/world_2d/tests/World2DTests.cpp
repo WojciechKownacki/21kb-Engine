@@ -1303,6 +1303,24 @@ int main() {
         const auto blocked = call("Map2D.NextStep", 2, 3, { { "targetX", ScriptValue{ 4 } }, { "targetY", ScriptValue{ 3 } } });
         Require(blocked.Succeeded() && !blocked.Output("found")->AsBool() && blocked.Output("x")->AsInt() == 2 && blocked.Output("y")->AsInt() == 3,
             "NextStep stays where it is when the target cannot be reached");
+        Require(step.outputs.size() == 4U, "existing NextStep callers retain their four positional results");
+        const auto limited = call("Map2D.NextStepDetailed", 2, 3, {{"targetX", ScriptValue{6}}, {"targetY", ScriptValue{3}},
+            {"maximumVisited", ScriptValue{1}}});
+        Require(limited.Succeeded() && !limited.Output("found")->AsBool() && limited.Output("budgetExceeded")->AsBool(),
+            "scripts must distinguish exhausted path budgets from blocked targets");
+        const auto wide = call("Map2D.NextStep", 2, 3, {{"targetX", ScriptValue{6}}, {"targetY", ScriptValue{3}},
+            {"clearance", ScriptValue{1}}});
+        Require(wide.Succeeded() && !wide.Output("found")->AsBool(), "a wide scripted body cannot pass a one-cell gap");
+        const auto diagonal = call("Map2D.NextStepDetailed", 0, 0, {{"targetX", ScriptValue{2}}, {"targetY", ScriptValue{2}},
+            {"diagonal", ScriptValue{1}}});
+        Require(diagonal.Succeeded() && diagonal.Output("found")->AsBool() && diagonal.Output("cost")->AsInt64() == 28,
+            "scripted diagonal policy must reach the native path query");
+        Require(!call("Map2D.NextStep", 0, 0, {{"targetX", ScriptValue{2}}, {"targetY", ScriptValue{2}},
+            {"clearance", ScriptValue{-1}}}).Succeeded(), "invalid scripted path options must produce a diagnostic");
+        Require(call("Map2D.Erase", 4, 3).Succeeded(), "dynamic obstacle removal must succeed");
+        const auto reopened = call("Map2D.NextStep", 2, 3, {{"targetX", ScriptValue{6}}, {"targetY", ScriptValue{3}}});
+        Require(reopened.Succeeded() && reopened.Output("found")->AsBool() && reopened.Output("cells")->AsInt() == 5,
+            "the next query must see a removed live obstacle without reloading the map");
         Require(kb::assets::Map2DAssetIO::Load(file)->tiles == map.tiles, "script cell edits never change the source asset");
     }
     // Pixel perfect view: for every viewport and density the view is a whole number of screen pixels per
@@ -1657,6 +1675,46 @@ int main() {
         Require(kb::assets::FindMap2DPathResult(large, { 5, 5 }, { 127, 127 }).status == Map2DPathStatus::EndBlocked &&
                 kb::assets::FindMap2DPathResult(large, { 127, 127 }, { 5, 5 }).status == Map2DPathStatus::StartBlocked,
             "a blocked end and a blocked start are told apart");
+    }
+    // Time limits are distinct from exhausted visited-cell limits and do not mutate the map.
+    {
+        const auto map = kb::assets::MakeEmptyMap2DAsset(4096U, 4096U);
+        const auto timed = kb::assets::FindMap2DPathResult(map, {0, 0}, {4095, 4095},
+            {.maximumVisited = 1048576U, .maximumMilliseconds = 0.000000001});
+        Require(timed.status == kb::assets::Map2DPathStatus::BudgetExceeded && timed.timeBudgetExceeded &&
+            timed.path.empty() && timed.visited <= 1U && timed.elapsedMilliseconds >= 0.0,
+            "a tiny time limit must stop before expanding a large map");
+        for (const double invalid : {-1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
+            Require(kb::assets::FindMap2DPathResult(map, {0, 0}, {1, 1}, {.maximumMilliseconds = invalid}).status ==
+                kb::assets::Map2DPathStatus::InvalidOptions, "invalid time limits must not silently disable budgeting");
+    }
+    // A narrow serpentine corridor has one route whose authored cost exceeds INT32_MAX.
+    {
+        const auto memoryBefore = WorkingSetBytes();
+        auto map = kb::assets::MakeEmptyMap2DAsset(4096U, 109U);
+        map.sheets.resize(1U);
+        map.sheets[0].definitions[0].properties["navCost"] = 1000.0;
+        std::size_t walkable = 0U;
+        for (std::uint32_t y = 0U; y < map.height; ++y) {
+            const auto door = (y / 2U) % 2U == 0U ? map.width - 1U : 0U;
+            for (std::uint32_t x = 0U; x < map.width; ++x) {
+                auto& tile = map.tiles[Map2DTileKey(x, y, 0)];
+                tile.ground = {.sheet = 0, .cell = 0};
+                tile.solid = y % 2U != 0U && x != door;
+                if (!tile.solid) ++walkable;
+            }
+        }
+        const auto route = kb::assets::FindMap2DPathResult(map, {0, 0}, {4095, 108},
+            {.maximumVisited = 300000U, .costProperty = "navCost", .maximumMilliseconds = 30000.0});
+        const auto expectedCost = static_cast<std::int64_t>(walkable - 1U) * 10000;
+        Require(expectedCost > std::numeric_limits<std::int32_t>::max() && route.cost == expectedCost &&
+            route.status == kb::assets::Map2DPathStatus::Found && route.path.size() == walkable &&
+            route.visited <= 300000U, "large weighted paths must not wrap costs or corrupt their predecessor chain");
+        const auto memoryAfter = WorkingSetBytes();
+        const auto growth = memoryAfter > memoryBefore ? memoryAfter - memoryBefore : 0U;
+        std::printf("map2d weighted path cells=%zu cost=%lld time_ms=%.3f working_set_growth=%zu\n",
+            route.path.size(), static_cast<long long>(route.cost), route.elapsedMilliseconds, growth);
+        Require(growth < 1024ULL * 1024ULL * 1024ULL, "bounded path search exceeded its one-GiB fixture memory budget");
     }
     // Platformer paths: falling down a ledge, a ceiling that stops a jump, a one-way platform entered from below.
     {

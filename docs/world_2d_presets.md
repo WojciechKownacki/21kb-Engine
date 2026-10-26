@@ -69,6 +69,34 @@ The map asset stores authored cells sparsely. Runtime geometry is grouped into 1
 cell chunks per floor; an edit rebuilds affected chunks, including neighbouring borders.
 These geometry chunks do not imply that the map asset itself is loaded on demand.
 
+## Bounded top-down path queries
+
+`kb_cli map2d path --project <dir> --map /Game/Maps/World.kbmap2d --from 1,1 --to 20,12`
+returns JSON with cell-center waypoints, status, visited cells, elapsed milliseconds and
+accumulated cost. Orthogonal steps cost 10; diagonal steps cost 14. Use `--diagonal safe`
+to forbid corner cutting or `--diagonal free` to allow it. The default uses orthogonal
+steps. `--clearance 0..8` requires a square footprint around each waypoint; the starting
+cell is exempt so an agent can leave a tight space. `--floor` selects one floor.
+
+`--cost-property <name>` reads a cell property or its graphic default as a multiplier,
+clamped to 1..1000; missing or non-finite values use 1. Accumulated costs use 64 bits.
+The command does not edit the map. It exits with 0 for a path, 2 for an unreachable or
+blocked endpoint, 3 for an exhausted search budget and 1 for invalid input or I/O errors.
+
+The default limits are 65,536 visited cells and 25 milliseconds. Override them with
+`--max-visited 1..1048576` and `--timeout-ms` (positive, at most 60,000). JSON distinguishes
+`time` and `visited` budget exhaustion from `no-path`: exhaustion does not prove that
+a route is impossible. Time is checked between search expansions, so this is a cooperative
+search budget, excluding asset loading and JSON output, rather than a process deadline.
+The C++ API exposes the same timing and cost diagnostics; its default time limit is disabled.
+
+`Map2D.NextStep` also accepts optional `clearance`, `diagonal` (0 orthogonal, 1 safe,
+2 free), `costProperty`, `maximumVisited` and `maximumMilliseconds` arguments. Its
+existing defaults and four outputs remain unchanged, with zero disabling the time limit.
+`Map2D.NextStepDetailed` takes the same arguments and adds outputs `budgetExceeded`,
+`cost` and `elapsedMilliseconds` so scripts can detect incomplete
+queries. Queries use the live map, including cells changed by script since loading.
+
 ## Not covered
 
 - The editor's Create menu does not list these items yet (it would need the project folder to write the script, and an

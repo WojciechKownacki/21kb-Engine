@@ -20,6 +20,8 @@ struct Map2DPathOptions {
     // Top-down only. Name of a number property of a cell (its own or its graphic default) that multiplies the cost of
     // stepping onto it; values below 1 count as 1. Empty: every cell costs the same.
     std::string costProperty;
+    // Wall-time budget checked between expansions; zero disables the time limit.
+    double maximumMilliseconds = 0.0;
 };
 
 enum class Map2DPathStatus : std::uint8_t {
@@ -27,13 +29,17 @@ enum class Map2DPathStatus : std::uint8_t {
     NoPath,          // the search ended: no way exists
     StartBlocked,
     EndBlocked,
-    BudgetExceeded,  // the search stopped at maximumVisited before it knew
+    BudgetExceeded,  // the search stopped at its visited-cell or wall-time limit
+    InvalidOptions,
 };
 
 struct Map2DPathResult {
     std::vector<std::array<int, 2>> path;
     Map2DPathStatus status = Map2DPathStatus::NoPath;
     std::size_t visited = 0U;
+    std::int64_t cost = 0; // tenths of a cell, including authored cost multipliers
+    double elapsedMilliseconds = 0.0;
+    bool timeBudgetExceeded = false;
 };
 [[nodiscard]] Map2DPathResult FindMap2DPathResult(const Map2DAsset& map,
     std::array<int, 2> start, std::array<int, 2> end, const Map2DPathOptions& options = {});

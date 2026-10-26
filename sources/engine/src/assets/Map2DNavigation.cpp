@@ -1,8 +1,10 @@
 #include "engine/assets/Map2DNavigation.hpp"
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <map>
 #include <queue>
+#include <utility>
 
 namespace kb::assets {
 bool Map2DCellBlocked(const Map2DAsset& map, int x, int y, int floor) {
@@ -27,6 +29,17 @@ Map2DPathResult FindMap2DPathResult(const Map2DAsset& map, std::array<int, 2> st
     std::array<int, 2> end, const Map2DPathOptions& options) {
     using Cell = std::array<int, 2>;
     Map2DPathResult result;
+    const auto started = std::chrono::steady_clock::now();
+    const auto elapsed = [&] {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    };
+    const auto finish = [&](Map2DPathStatus status) {
+        result.status = status;
+        result.elapsedMilliseconds = elapsed();
+        return std::move(result);
+    };
+    if (!std::isfinite(options.maximumMilliseconds) || options.maximumMilliseconds < 0.0)
+        return finish(Map2DPathStatus::InvalidOptions);
     const auto blocked = [&](Cell cell) { return Map2DCellBlocked(map, cell[0], cell[1], options.floor); };
     const int clearance = static_cast<int>(std::min(options.clearanceCells, 8U));
     // A body wider than one cell needs its whole footprint free (top-down only).
@@ -38,9 +51,9 @@ Map2DPathResult FindMap2DPathResult(const Map2DAsset& map, std::array<int, 2> st
         }
         return false;
     };
-    if (blocked(start)) { result.status = Map2DPathStatus::StartBlocked; return result; }
-    if (blockedForBody(end)) { result.status = Map2DPathStatus::EndBlocked; return result; }
-    if (options.maximumVisited == 0) { result.status = Map2DPathStatus::BudgetExceeded; return result; }
+    if (blocked(start)) return finish(Map2DPathStatus::StartBlocked);
+    if (blockedForBody(end)) return finish(Map2DPathStatus::EndBlocked);
+    if (options.maximumVisited == 0) return finish(Map2DPathStatus::BudgetExceeded);
     const bool diagonals = !options.platformer && options.diagonal != Map2DDiagonalPolicy::None;
     // Costs are in tenths of a step so that a diagonal step costs 14 against 10.
     const auto distance = [diagonals](Cell a, Cell b) {
@@ -59,14 +72,20 @@ Map2DPathResult FindMap2DPathResult(const Map2DAsset& map, std::array<int, 2> st
         return std::isfinite(number) ? std::clamp(number, 1.0, 1000.0) : 1.0;
     };
     bool budgetHit = false;
-    struct Entry { int score; int cost; Cell cell; bool operator>(const Entry& other) const { return std::tie(score, cost, cell) > std::tie(other.score, other.cost, other.cell); } };
+    // A long route through expensive cells can exceed a signed 32-bit cost.
+    struct Entry { std::int64_t score; std::int64_t cost; Cell cell; bool operator>(const Entry& other) const { return std::tie(score, cost, cell) > std::tie(other.score, other.cost, other.cell); } };
     std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> open;
-    std::map<Cell, std::pair<int, Cell>> visited;
+    std::map<Cell, std::pair<std::int64_t, Cell>> visited;
     visited[start] = {0, start};
     open.push({distance(start, end), 0, start});
     const int jumpHeight = static_cast<int>(std::min(options.jumpHeight, 16U));
     const int jumpDistance = static_cast<int>(std::min(options.jumpDistance, 16U));
     while (!open.empty()) {
+        if (options.maximumMilliseconds > 0.0 && elapsed() >= options.maximumMilliseconds) {
+            result.visited = visited.size();
+            result.timeBudgetExceeded = true;
+            return finish(Map2DPathStatus::BudgetExceeded);
+        }
         const auto current = open.top(); open.pop();
         if (visited[current.cell].first != current.cost) continue;
         if (current.cell == end) {
@@ -74,9 +93,9 @@ Map2DPathResult FindMap2DPathResult(const Map2DAsset& map, std::array<int, 2> st
             while (path.back() != start) path.push_back(visited[path.back()].second);
             std::ranges::reverse(path);
             result.path = std::move(path);
-            result.status = Map2DPathStatus::Found;
             result.visited = visited.size();
-            return result;
+            result.cost = current.cost;
+            return finish(Map2DPathStatus::Found);
         }
         const auto add = [&](Cell next) {
             if (blockedForBody(next)) return;
@@ -123,8 +142,7 @@ Map2DPathResult FindMap2DPathResult(const Map2DAsset& map, std::array<int, 2> st
             if (clear) add(target);
         }
     }
-    result.status = budgetHit ? Map2DPathStatus::BudgetExceeded : Map2DPathStatus::NoPath;
     result.visited = visited.size();
-    return result;
+    return finish(budgetHit ? Map2DPathStatus::BudgetExceeded : Map2DPathStatus::NoPath);
 }
 } // namespace kb::assets

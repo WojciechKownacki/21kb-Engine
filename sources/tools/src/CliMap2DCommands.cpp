@@ -5,11 +5,14 @@
 
 #include "engine/assets/AssetFileName.hpp"
 #include "engine/assets/Map2DAsset.hpp"
+#include "engine/assets/Map2DNavigation.hpp"
+#include "engine/core/JsonValue.hpp"
 #include "engine/project/ProjectManager.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <map>
 #include <optional>
 #include <set>
@@ -26,6 +29,9 @@ constexpr std::string_view kUsage =
     "  new        --name <Entity> [--scene <path>] [--size 64x64] [--orientation flat|wall] [--view 15x11]\n"
     "  view       --entity <Name> [--scene <path>]      (the Map Camera again, after set)\n"
     "  info       --map <path>\n"
+    "  path       --map <path> --from x,y --to x,y [--floor n] [--clearance 0..8]\n"
+    "             [--diagonal none|safe|free] [--cost-property <name>] [--max-visited 1..1048576]\n"
+    "             [--timeout-ms <milliseconds>] (JSON; default 25 ms; exits 0 found, 2 no path, 3 budget)\n"
     "  set        --map <path> [--size WxH] [--orientation flat|wall] [--view WxH]\n"
     "             [--camera-pixels-per-unit n] [--camera-follow <Name>|none] [--camera-smoothing seconds]\n"
     "             [--camera-dead-zone w,h] [--camera-clamp yes|no]   (the play camera: pixel perfect, follow, bounds)\n"
@@ -110,6 +116,8 @@ struct Spot {
 [[nodiscard]] std::optional<Spot> ParseSpot(std::string_view text) {
     const std::optional<std::vector<std::int64_t>> values = Numbers<std::int64_t>(text);
     if (!values.has_value() || values->size() < 2U || values->size() > 3U) return std::nullopt;
+    if (values->size() == 3U && ((*values)[2] < kb::assets::Map2DAsset::MinimumFloor ||
+        (*values)[2] > kb::assets::Map2DAsset::MaximumFloor)) return std::nullopt;
     Spot spot{ (*values)[0], (*values)[1], values->size() == 3U ? static_cast<std::int32_t>((*values)[2]) : 0 };
     if (spot.z < kb::assets::Map2DAsset::MinimumFloor || spot.z > kb::assets::Map2DAsset::MaximumFloor) return std::nullopt;
     return spot;
@@ -153,6 +161,80 @@ struct MapSession {
     }
     io.out << what << " (" << kb::world2d::Map2DVirtualPath(session.assetsRoot, session.file) << ", " << session.map.tiles.size() << " tiles)\n";
     return 0;
+}
+
+[[nodiscard]] int FindPath(const ArgumentList& arguments, CommandIo io) {
+    const auto from = Numbers<int>(arguments.Option("--from").value_or(""));
+    const auto to = Numbers<int>(arguments.Option("--to").value_or(""));
+    if (!from || !to || from->size() != 2U || to->size() != 2U) {
+        io.err << "error: path requires --from x,y and --to x,y\n";
+        return 1;
+    }
+    kb::assets::Map2DPathOptions options;
+    options.maximumMilliseconds = 25.0;
+    const auto integer = [&](std::string_view name, int low, int high, int fallback) -> std::optional<int> {
+        const auto value = arguments.Option(name);
+        if (!value) return fallback;
+        const auto parsed = Numbers<int>(*value);
+        if (parsed && parsed->size() == 1U && parsed->front() >= low && parsed->front() <= high) return parsed->front();
+        io.err << "error: " << name << " expects " << low << ".." << high << '\n';
+        return std::nullopt;
+    };
+    const auto floor = integer("--floor", -50, 50, 0);
+    const auto clearance = integer("--clearance", 0, 8, 0);
+    const auto visited = integer("--max-visited", 1, 1048576, 65536);
+    if (!floor || !clearance || !visited) return 1;
+    options.floor = *floor;
+    options.clearanceCells = static_cast<std::uint32_t>(*clearance);
+    options.maximumVisited = static_cast<std::size_t>(*visited);
+    options.costProperty = arguments.Option("--cost-property").value_or("");
+    const auto diagonal = arguments.Option("--diagonal").value_or("none");
+    if (diagonal == "safe") options.diagonal = kb::assets::Map2DDiagonalPolicy::NoCornerCutting;
+    else if (diagonal == "free") options.diagonal = kb::assets::Map2DDiagonalPolicy::Allowed;
+    else if (diagonal != "none") { io.err << "error: --diagonal expects none, safe or free\n"; return 1; }
+    if (const auto timeout = arguments.Option("--timeout-ms")) {
+        const auto parsed = Numbers<double>(*timeout);
+        if (!parsed || parsed->size() != 1U || !std::isfinite(parsed->front()) || parsed->front() <= 0.0 || parsed->front() > 60000.0) {
+            io.err << "error: --timeout-ms expects a finite value in (0,60000]\n";
+            return 1;
+        }
+        options.maximumMilliseconds = parsed->front();
+    }
+    const auto session = OpenMap(arguments, io);
+    if (!session) return 1;
+    const auto result = kb::assets::FindMap2DPathResult(session->map,
+        {(*from)[0], (*from)[1]}, {(*to)[0], (*to)[1]}, options);
+    using Status = kb::assets::Map2DPathStatus;
+    const char* status = "invalid-options";
+    switch (result.status) {
+    case Status::Found: status = "found"; break;
+    case Status::NoPath: status = "no-path"; break;
+    case Status::StartBlocked: status = "start-blocked"; break;
+    case Status::EndBlocked: status = "end-blocked"; break;
+    case Status::BudgetExceeded: status = "budget-exceeded"; break;
+    case Status::InvalidOptions: break;
+    }
+    using kb::core::JsonValue;
+    auto report = JsonValue::MakeObject();
+    report.Set("schema", JsonValue::MakeString("21kb.map-path/v1"));
+    report.Set("succeeded", JsonValue::MakeBool(result.status == Status::Found));
+    report.Set("status", JsonValue::MakeString(status));
+    report.Set("visited", JsonValue::MakeNumber(static_cast<double>(result.visited)));
+    report.Set("cost", JsonValue::MakeNumber(static_cast<double>(result.cost)));
+    report.Set("elapsed_ms", JsonValue::MakeNumber(result.elapsedMilliseconds));
+    report.Set("budget_exceeded", JsonValue::MakeString(result.status != Status::BudgetExceeded ? "none" :
+        (result.timeBudgetExceeded ? "time" : "visited")));
+    auto path = JsonValue::MakeArray();
+    for (const auto& cell : result.path) {
+        auto point = JsonValue::MakeArray();
+        point.Append(JsonValue::MakeNumber(cell[0]));
+        point.Append(JsonValue::MakeNumber(cell[1]));
+        path.Append(std::move(point));
+    }
+    report.Set("path", std::move(path));
+    io.out << report.Dump() << '\n';
+    if (!io.out.good() || result.status == Status::InvalidOptions) return 1;
+    return result.status == Status::Found ? 0 : (result.status == Status::BudgetExceeded ? 3 : 2);
 }
 
 [[nodiscard]] std::set<std::int32_t> Floors(const kb::assets::Map2DAsset& map) {
@@ -704,6 +786,7 @@ int RunMap2DCommand(const ArgumentList& arguments, CommandIo io) {
     if (action == "new" || action == "view") return RunMap2DSceneCommand(action, arguments, io);
     if (action == "info") return Info(arguments, io);
     if (action == "set") return Set(arguments, io);
+    if (action == "path") return FindPath(arguments, io);
     if (action == "paint") return Paint(arguments, io);
     if (action == "fill") return Fill(arguments, io);
     if (action == "erase") return Erase(arguments, io);

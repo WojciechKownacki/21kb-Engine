@@ -201,6 +201,9 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                      [--camera-dead-zone w,h] [--camera-clamp yes|no]   (the play camera, see docs/world_2d_camera.md)
                  view --project <dir> --entity <Name>   (update the Map Camera and painted collision)
                  info --project <dir> --map <path>
+                 path --project <dir> --map <path> --from x,y --to x,y [--floor n] [--clearance 0..8]
+                     [--diagonal none|safe|free] [--cost-property <name>] [--max-visited 1..1048576]
+                     [--timeout-ms <milliseconds>] (default 25 ms; JSON; exits 0 found, 2 no path, 3 budget)
                Sprite sheets go into Assets/2D Map Sprites/<Category>; cells count row by row from 0.
   vfx-new      Create a particle effect (.kbvfx) as the editor's New Particle Effect.
                  --project <dir> --name <Name> [--folder Assets/Particles] [--set key=value ...]

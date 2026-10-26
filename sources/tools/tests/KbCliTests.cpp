@@ -4407,6 +4407,40 @@ void RunMap2DCameraCliTests() {
     Require(RunCliProgram({ "map2d", "set", "--project", project, "--map", map, "--camera-follow", "none", "--camera-pixels-per-unit", "0", "--camera-smoothing", "0",
                             "--camera-dead-zone", "0,0", "--camera-clamp", "no" }).exitCode == 0 && !Contains(text(), "camera "),
         "setting everything back to its defaults writes no camera line");
+    const std::string unchanged = text();
+    const auto pathReport = [&](std::string_view option, std::string_view value, int expected) {
+        const auto run = RunCliProgram({"map2d", "path", "--project", project, "--map", map,
+            "--from", "1,1", "--to", "4,4", option, value});
+        kb::core::JsonValue report;
+        std::string parseError;
+        Require(run.exitCode == expected && kb::core::JsonValue::Parse(run.out, report, parseError),
+            "path command must return its status and JSON: " + run.out + run.err);
+        Require(text() == unchanged, "path queries must not change the authored map");
+        return report;
+    };
+    const auto straight = pathReport("--timeout-ms", "1000", 0);
+    Require(straight.Find("cost")->AsNumber() == 60.0 && straight.Find("status")->AsString() == "found",
+        "orthogonal path must have the expected accumulated cost");
+    const auto diagonal = pathReport("--diagonal", "safe", 0);
+    Require(diagonal.Find("cost")->AsNumber() == 42.0, "safe diagonal path must use diagonal costs");
+    Require(pathReport("--max-visited", "1", 3).Find("budget_exceeded")->AsString() == "visited",
+        "visited limit must be distinguishable from an unreachable destination");
+    Require(pathReport("--timeout-ms", "0.000000001", 3).Find("budget_exceeded")->AsString() == "time",
+        "time limit must report an incomplete search");
+    for (const auto value : {"nan", "inf", "-1", "0", "60001"}) {
+        Require(RunCliProgram({"map2d", "path", "--project", project, "--map", map,
+            "--from", "1,1", "--to", "4,4", "--timeout-ms", value}).exitCode == 1,
+            "invalid time budgets must be refused");
+    }
+    Require(RunCliProgram({"map2d", "block", "--project", project, "--map", map,
+        "--at", "1,1,4294967296"}).exitCode == 1 && text() == unchanged,
+        "an overflowing floor must not wrap around and edit another floor");
+    Require(RunCliProgram({"map2d", "block", "--project", project, "--map", map, "--at", "4,4"}).exitCode == 0,
+        "path fixture must block the destination");
+    const auto blocked = RunCliProgram({"map2d", "path", "--project", project, "--map", map,
+        "--from", "1,1", "--to", "4,4"});
+    Require(blocked.exitCode == 2 && Contains(blocked.out, "end-blocked"),
+        "a blocked destination must return no-path exit status");
 }
 // `import --reimport`: a changed source replaces the model in place; a material edited since the import is not overwritten without being
 // told; --diff plans without writing; what a reimport overwrote can be listed and undone.

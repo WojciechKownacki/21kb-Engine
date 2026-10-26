@@ -6,6 +6,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include <algorithm>
+#include <cmath>
 
 namespace kb::script {
 namespace {
@@ -87,16 +88,37 @@ template <typename Value> ScriptFunctionCallResult SetProperty(const ScriptFunct
     cell.tile.properties[Arg(args, "name").AsString()] = converted;
     return cell.Save();
 }
-ScriptFunctionCallResult NextStep(const ScriptFunctionCallContext& context, Args args) {
+ScriptFunctionCallResult NextStepDetailed(const ScriptFunctionCallContext& context, Args args) {
     const Cell cell(context, args); if (!cell.map) return Error("Tilemap entity or coordinates are invalid");
     Map2DPathOptions options;
     options.floor = cell.floor; options.platformer = cell.map->orientation == Map2DOrientation::Wall;
     options.jumpHeight = static_cast<unsigned>(std::clamp(Arg(args, "jumpHeight").AsInt(3), 0, 16));
     options.jumpDistance = static_cast<unsigned>(std::clamp(Arg(args, "jumpDistance").AsInt(4), 0, 16));
-    const auto path = FindMap2DPath(*cell.map, {static_cast<int>(cell.x), static_cast<int>(cell.y)},
+    const int clearance = Arg(args, "clearance").AsInt(0);
+    const int maximumVisited = Arg(args, "maximumVisited").AsInt(65536);
+    const int diagonal = Arg(args, "diagonal").AsInt(0);
+    options.maximumMilliseconds = Arg(args, "maximumMilliseconds").AsDouble(0.0);
+    if (clearance < 0 || clearance > 8 || maximumVisited < 1 || maximumVisited > 1048576 ||
+        diagonal < 0 || diagonal > 2 || !std::isfinite(options.maximumMilliseconds) ||
+        options.maximumMilliseconds < 0.0 || options.maximumMilliseconds > 60000.0)
+        return Error("Path options require clearance 0..8, diagonal 0..2, maximumVisited 1..1048576 and maximumMilliseconds 0..60000");
+    options.clearanceCells = static_cast<unsigned>(clearance);
+    options.maximumVisited = static_cast<std::size_t>(maximumVisited);
+    options.diagonal = static_cast<Map2DDiagonalPolicy>(diagonal);
+    options.costProperty = Arg(args, "costProperty").AsString();
+    const auto result = FindMap2DPathResult(*cell.map, {static_cast<int>(cell.x), static_cast<int>(cell.y)},
         {Arg(args, "targetX").AsInt(), Arg(args, "targetY").AsInt()}, options);
+    const auto& path = result.path;
     const auto next = path.empty() ? std::array<int, 2>{static_cast<int>(cell.x), static_cast<int>(cell.y)} : path[std::min<std::size_t>(1, path.size() - 1)];
-    return {.executed = true, .outputs = {{"found", ScriptValue{!path.empty()}}, {"x", ScriptValue{next[0]}}, {"y", ScriptValue{next[1]}}, {"cells", ScriptValue{static_cast<int>(path.size())}}}};
+    return {.executed = true, .outputs = {{"found", ScriptValue{!path.empty()}}, {"x", ScriptValue{next[0]}}, {"y", ScriptValue{next[1]}},
+        {"cells", ScriptValue{static_cast<int>(path.size())}}, {"budgetExceeded", ScriptValue{result.status == Map2DPathStatus::BudgetExceeded}},
+        {"cost", ScriptValue{result.cost}}, {"elapsedMilliseconds", ScriptValue{result.elapsedMilliseconds}}}};
+}
+ScriptFunctionCallResult NextStep(const ScriptFunctionCallContext& context, Args args) {
+    auto result = NextStepDetailed(context, args);
+    // Preserve the positional result contract of existing scripts and graphs.
+    if (result.executed) result.outputs.resize(4U);
+    return result;
 }
 }
 
@@ -109,7 +131,7 @@ bool ScriptMap2DApi::Register(ScriptRuntimeHost& host) {
         else if (name == "Set") desc.signature.description = "Replace a live cell's ground sprite using sheet:cell, preserving items and metadata. Rebuilds surrounding automatic edges and the affected render and physics chunks before simulation.";
         else if (name == "Erase") desc.signature.description = "Clear a live cell including items and metadata, then rebuild neighboring automatic edges. Does not modify the source asset.";
         else if (name == "PaintGround") desc.signature.description = "Paint a named embedded ground brush with its weighted variation and automatic edges. Does not modify the source asset.";
-        else if (name == "NextStep") desc.signature.description = "Find the next cell on a complete grid path to targetX,targetY. Side-view maps include clear jumps and falls using jumpHeight and jumpDistance in cells. Returns found=false when unreachable or the query budget is exhausted.";
+        else if (name == "NextStep" || name == "NextStepDetailed") desc.signature.description = "Find the next cell on a complete grid path to targetX,targetY. Side-view maps include clear jumps and falls using jumpHeight and jumpDistance in cells. Optional clearance, diagonal (0 orthogonal, 1 safe, 2 free), costProperty, maximumVisited and maximumMilliseconds control top-down queries. Zero milliseconds disables the time limit. NextStepDetailed also reports budget exhaustion, accumulated cost and elapsed milliseconds.";
         else if (name.starts_with("Get")) desc.signature.description = "Read typed tile data by name, using the cell override then the top graphic's defaults. Returns found=false when absent or of a different type.";
         else desc.signature.description = "Set a typed live cell data value by name. This overrides the graphic default and does not modify the source asset.";
         desc.signature.inputs.insert(desc.signature.inputs.end(), extra.begin(), extra.end());
@@ -120,8 +142,14 @@ bool ScriptMap2DApi::Register(ScriptRuntimeHost& host) {
     ok = add("Set", {{"sprite", T::String, true}}, {{"applied", T::Bool, true}}, &Set) && ok;
     ok = add("Erase", {}, {{"applied", T::Bool, true}}, &Erase) && ok;
     ok = add("PaintGround", {{"brush", T::String, true}}, {{"applied", T::Bool, true}}, &Paint) && ok;
-    ok = add("NextStep", {{"targetX", T::Int, true}, {"targetY", T::Int, true}, {"jumpHeight", T::Int, false}, {"jumpDistance", T::Int, false}},
+    const std::vector<ScriptFunctionPin> pathInputs{{"targetX", T::Int, true}, {"targetY", T::Int, true}, {"jumpHeight", T::Int, false}, {"jumpDistance", T::Int, false},
+        {"clearance", T::Int, false}, {"diagonal", T::Int, false}, {"costProperty", T::String, false},
+        {"maximumVisited", T::Int, false}, {"maximumMilliseconds", T::Double, false}};
+    ok = add("NextStep", pathInputs,
         {{"found", T::Bool, true}, {"x", T::Int, true}, {"y", T::Int, true}, {"cells", T::Int, true}}, &NextStep) && ok;
+    ok = add("NextStepDetailed", pathInputs,
+        {{"found", T::Bool, true}, {"x", T::Int, true}, {"y", T::Int, true}, {"cells", T::Int, true},
+         {"budgetExceeded", T::Bool, true}, {"cost", T::Int64, true}, {"elapsedMilliseconds", T::Double, true}}, &NextStepDetailed) && ok;
     const auto property = [&]<typename Value>(std::string suffix, T type) {
         ok = add("Get" + suffix, {{"name", T::String, true}}, {{"found", T::Bool, true}, {"value", type, true}}, &Property<Value>) && ok;
         ok = add("Set" + suffix, {{"name", T::String, true}, {"value", type, true}}, {{"applied", T::Bool, true}}, &SetProperty<Value>) && ok;
