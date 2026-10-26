@@ -1212,6 +1212,18 @@ void RunTextureLoaderRefusesOversizedImageHeaderTest() {
         "A buffer shorter than an image signature was decoded");
 }
 
+// A JPEG's frame header states its size and the decoder fills every pixel it states, so a few hundred bytes that state
+// 16384 x 8192 pixels (found by fuzzing, fuzz/corpus/image) kept the decoder busy for over ten seconds. A file with
+// far more stated pixels than bytes is refused before decoding; a real small JPEG still decodes.
+void RunTextureLoaderRefusesJpegThatStatesMorePixelsThanItHasBytesTest() {
+    const std::vector<std::uint8_t> jpeg{ 0xFFU, 0xD8U, 0xFFU, 0xE0U, 0x00U, 0x10U, 'J', 'F', 'I', 'F', 0x00U, 0x01U, 0x01U, 0x00U, 0x00U, 0x01U, 0x00U,
+        0x01U, 0x00U, 0x00U, 0xFFU, 0xC0U, 0x00U, 0x11U, 0x08U, 0x40U, 0x00U, 0x20U, 0x00U, 0x03U, 0x01U, 0x22U, 0x00U, 0x02U, 0x11U, 0x01U, 0x03U,
+        0x11U, 0x01U, 0xFFU, 0xDAU, 0x00U, 0x0CU, 0x03U, 0x01U, 0x00U, 0x02U, 0x11U, 0x03U, 0x11U, 0x00U, 0x3FU, 0x00U, 0xFFU, 0xD9U };
+    const auto started = std::chrono::steady_clock::now();
+    Require(!DecodeTextureSource("Hostile.jpg", jpeg).has_value(), "A JPEG that states 134 million pixels in 60 bytes was decoded");
+    Require(std::chrono::steady_clock::now() - started < std::chrono::seconds(2), "A JPEG with an implausible size was not refused up front");
+}
+
 // TGA has no signature and its pixel data has no length: the decoder read past the end
 // of the file as zeros for every pixel the header declared. A 46-byte file (found by
 // fuzzing, fuzz/corpus/image) spent seconds filling a 3855 x 3855 image that way.
@@ -3800,6 +3812,7 @@ void RunRenderResourceRegistryTests() {
     RunFbxImporterRefusesUnboundedMaterialSlotsTest();
     RunTextureLoaderRefusesOversizedImageHeaderTest();
     RunTextureLoaderRefusesTruncatedTgaTest();
+    RunTextureLoaderRefusesJpegThatStatesMorePixelsThanItHasBytesTest();
     RunGltfImporterRefusesBufferLongerThanItsDataTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();

@@ -301,12 +301,42 @@ constexpr std::uint32_t kMaximumDecodedTextureExtent = 16384U;
     return bigEndian(16U) > kMaximumDecodedTextureExtent || bigEndian(20U) > kMaximumDecodedTextureExtent;
 }
 
+// A JPEG states its size in the frame header, and the stb decoder fills every pixel the header states, with zeros
+// for data that is not there: a 429 byte file that stated 16384 x 8192 pixels (found by fuzzing, fuzz/corpus/image)
+// took over ten seconds. The smallest JPEG spends more than a byte on every few hundred pixels, so a file that states
+// far more pixels than it has bytes for is refused before decoding.
+constexpr std::uint64_t kMaximumJpegPixelsPerByte = 2048U;
+
+[[nodiscard]] bool StatesImplausibleJpegSize(const void* data, std::uint32_t size) {
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    if (size < 4U || bytes[0] != 0xFFU || bytes[1] != 0xD8U) return false;
+    std::size_t at = 2U;
+    while (at + 4U <= size) {
+        if (bytes[at] != 0xFFU) return false;
+        const std::uint8_t marker = bytes[at + 1U];
+        if (marker == 0xFFU) { ++at; continue; }
+        if (marker == 0x01U || (marker >= 0xD0U && marker <= 0xD8U)) { at += 2U; continue; }
+        const std::size_t length = (static_cast<std::size_t>(bytes[at + 2U]) << 8U) | bytes[at + 3U];
+        const bool frame = marker >= 0xC0U && marker <= 0xCFU && marker != 0xC4U && marker != 0xC8U && marker != 0xCCU;
+        if (frame) {
+            if (length < 8U || at + 9U > size) return false;
+            const std::uint64_t height = (static_cast<std::uint64_t>(bytes[at + 5U]) << 8U) | bytes[at + 6U];
+            const std::uint64_t width = (static_cast<std::uint64_t>(bytes[at + 7U]) << 8U) | bytes[at + 8U];
+            return width * height > static_cast<std::uint64_t>(size) * kMaximumJpegPixelsPerByte;
+        }
+        if (marker == 0xDAU || length < 2U) return false;
+        at += 2U + length;
+    }
+    return false;
+}
+
 [[nodiscard]] std::optional<RenderTextureAssetData> LoadImageBytes(const void* data, std::size_t size) {
     if (data == nullptr || size == 0U || size > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return std::nullopt;
     }
     if (HasInvalidBitmapPayload(data, static_cast<std::uint32_t>(size)) ||
-        StatesOversizedImage(data, static_cast<std::uint32_t>(size))) {
+        StatesOversizedImage(data, static_cast<std::uint32_t>(size)) ||
+        StatesImplausibleJpegSize(data, static_cast<std::uint32_t>(size))) {
         return std::nullopt;
     }
 
