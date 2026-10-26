@@ -16,7 +16,7 @@ jobs:
   web-player:
     name: Web player bootstrap
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       CCACHE_DIR: ${{ github.workspace }}/build/ccache-web
       CCACHE_BASEDIR: ${{ github.workspace }}
