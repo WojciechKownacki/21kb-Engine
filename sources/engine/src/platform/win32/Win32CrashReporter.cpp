@@ -62,7 +62,6 @@ struct NoteSlot {
 
 struct ReporterState {
     std::atomic<bool> installed{ false };
-    std::atomic<bool> ready{ false };
     std::atomic<LONG> handling{ 0 };
     std::atomic<DWORD> handlingThread{ 0U };
 
@@ -839,7 +838,6 @@ DWORD WINAPI ReporterThread(void*) {
     LoadSystemLibraries();
     ReadVersionResource();
     ReadProfilePrefix();
-    g_state.ready.store(true, std::memory_order_release);
     if (g_state.uploadPendingReports) {
         static_cast<void>(StartPendingUploadInBackground());
     }
@@ -878,7 +876,9 @@ void ReportCrash(EXCEPTION_POINTERS* pointers, const char* reason) noexcept {
     g_state.pointers = pointers;
     g_state.crashedThreadId = self;
     CopyText(g_state.reason, sizeof(g_state.reason), reason, std::strlen(reason));
-    if (g_state.requestEvent != nullptr && g_state.ready.load(std::memory_order_acquire)) {
+    if (g_state.requestEvent != nullptr && g_state.reporterThreadId != 0U) {
+        // An auto-reset event retains this request while the reporter loads its libraries.
+        // Falling back to WriteReport here would run it on an exhausted or damaged stack.
         SetEvent(g_state.requestEvent);
         WaitForSingleObject(g_state.doneEvent, kReporterWaitMilliseconds);
     } else {
@@ -987,6 +987,13 @@ std::filesystem::path DefaultCrashReportDirectory(std::wstring_view executableSt
 bool CrashReporter::Install(const CrashReporterOptions& options) {
     bool expected = false;
     if (!g_state.installed.compare_exchange_strong(expected, true)) {
+        return false;
+    }
+    // Windows still needs stack space to dispatch an overflow to the unhandled exception
+    // filter before that filter can hand the report to our dedicated thread.
+    ULONG stackGuarantee = 64U * 1024U;
+    if (SetThreadStackGuarantee(&stackGuarantee) == FALSE) {
+        g_state.installed.store(false);
         return false;
     }
     const DWORD length = GetModuleFileNameW(nullptr, g_state.executablePath, static_cast<DWORD>(kPathCapacity));
