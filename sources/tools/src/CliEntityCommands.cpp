@@ -590,6 +590,11 @@ void ListProperties(std::string_view component, std::ostream& out) {
     const std::optional<std::string> create = arguments.Option("--create");
     const kb::scene::SceneCreateItem* createItem = create.has_value() ? kb::scene::SceneCreateMenu::Find(*create) : nullptr;
     const bool playerPreset = create.has_value() && IsPlayerPreset(*create);
+    const std::optional<std::string> physics = arguments.Option("--physics");
+    if (physics.has_value() && (!playerPreset || (*physics != "2d" && *physics != "3d"))) {
+        io.err << "error: --physics 2d|3d chooses the physics of --create 'Platformer Player' or 'Top Down Player'\n";
+        return 1;
+    }
     const std::optional<std::string> name = arguments.Option("--name").has_value() ? arguments.Option("--name")
         : createItem != nullptr ? std::optional<std::string>{ std::string{ createItem->name } }
         : playerPreset ? std::optional<std::string>{ "Player" } : create;
@@ -615,7 +620,7 @@ void ListProperties(std::string_view component, std::ostream& out) {
     }
     kb::scene::SceneEntity entity{};
     if (playerPreset) {
-        entity = AddPlayerPreset(scene, Utf8Path(arguments.Option("--project").value_or("")), *create, *name, io);
+        entity = AddPlayerPreset(scene, Utf8Path(arguments.Option("--project").value_or("")), *create, *name, io, physics.has_value() && *physics == "2d");
         if (!entity.IsValid()) return 1;
         if (parent.has_value() && !scene.Hierarchy().SetParent(entity, *parent)) {
             io.err << "error: '" << *name << "' could not be parented\n";

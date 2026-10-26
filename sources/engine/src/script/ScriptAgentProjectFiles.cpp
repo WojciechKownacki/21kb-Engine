@@ -408,6 +408,57 @@ function Tick(self, dt)
 end
 )lua";
 
+// The same two players on the 2D physics (Box2D): a Character Controller 2D driven through the Physics2D functions.
+constexpr std::string_view kPlatformer2DBox2DPlayerLuaTemplate = R"lua(-- Platformer2DBox2DPlayer.lua
+-- For a Map Platformer (a wall map: x across, y up) on the 2D physics. Requires: Character Controller 2D (side view).
+-- Input: Move (Axis2D, x = left and right), Jump (Bool).
+-- @expose speed Float = 6.0
+-- @expose jumpSpeed Float = 9.0
+-- @expose jumpBuffer Float = 0.12
+-- jumpBuffer: seconds before landing in which a Jump press is remembered.
+
+local states = {}
+
+function Tick(self, dt)
+    local entity = self.entity
+    local vars = self.variables
+    local move = Input.Vector2("Move")
+    CallFunction("Physics2D.MoveCharacter", { entity = entity, x = (move.x or 0.0) * vars.speed, y = 0.0 })
+
+    local sincePress = states[entity]
+    if sincePress == nil then sincePress = 1000.0 end
+    if Input.Pressed("Jump") then sincePress = 0.0 else sincePress = sincePress + dt end
+    if sincePress <= vars.jumpBuffer and CallFunction("Physics2D.IsGrounded", { entity = entity }) then
+        if CallFunction("Physics2D.JumpCharacter", { entity = entity, speed = vars.jumpSpeed }) then sincePress = 1000.0 end
+    end
+    states[entity] = sincePress
+end
+)lua";
+
+constexpr std::string_view kTopDown2DBox2DPlayerLuaTemplate = R"lua(-- TopDown2DBox2DPlayer.lua
+-- For a Map Top Down (a flat map: x across, z up the screen) on the 2D physics. Requires: Character Controller 2D
+-- with Side View off. Input: Move (Axis2D).
+-- @expose speed Float = 5.0
+-- @expose eightWay Bool = true
+-- eightWay: false allows the four directions only (the stronger axis wins).
+
+function Tick(self, dt)
+    local vars = self.variables
+    local move = Input.Vector2("Move")
+    local x = move.x or 0.0
+    local y = move.y or 0.0
+    if not vars.eightWay then
+        if math.abs(x) >= math.abs(y) then y = 0.0 else x = 0.0 end
+    end
+    local length = math.sqrt(x * x + y * y)
+    if length > 1.0 then
+        x = x / length
+        y = y / length
+    end
+    CallFunction("Physics2D.MoveCharacter", { entity = self.entity, x = x * vars.speed, y = y * vars.speed })
+end
+)lua";
+
 constexpr std::string_view kSimpleShooterControllerLuaTemplate = R"lua(-- SimpleShooterController.lua
 -- Requires: CharacterController and the shipped Projectile.kbprefab.
 -- Input: Move (Axis2D), Fire (Bool).
@@ -505,6 +556,8 @@ constexpr std::string_view kLuarcTemplate = R"json({
 std::string_view ScriptAgentProjectFiles::PresetScript(std::string_view fileName) noexcept {
     if (fileName == "Platformer2DPlayer.lua") return kPlatformer2DPlayerLuaTemplate;
     if (fileName == "TopDown2DPlayer.lua") return kTopDown2DPlayerLuaTemplate;
+    if (fileName == "Platformer2DBox2DPlayer.lua") return kPlatformer2DBox2DPlayerLuaTemplate;
+    if (fileName == "TopDown2DBox2DPlayer.lua") return kTopDown2DBox2DPlayerLuaTemplate;
     return {};
 }
 

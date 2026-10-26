@@ -18,7 +18,9 @@ namespace kb::cli {
 // runs the project's copy of Platformer2DPlayer.lua or TopDown2DPlayer.lua (Assets/Scripts, written when missing and
 // never overwritten), default Move and Jump input actions when the project has no input context yet, and, in every map
 // of the scene, a camera that follows the player. What was done is printed to io.out. Invalid entity on failure.
+// With `box2d` the player is a Character Controller 2D on the 2D physics, driven by Platformer2DBox2DPlayer.lua or
+// TopDown2DBox2DPlayer.lua through the Physics2D functions, instead of a CharacterController on the 3D physics.
 [[nodiscard]] kb::scene::SceneEntity AddPlayerPreset(kb::scene::Scene& scene, const std::filesystem::path& projectRoot,
-    std::string_view item, std::string_view name, CommandIo io);
+    std::string_view item, std::string_view name, CommandIo io, bool box2d = false);
 
 } // namespace kb::cli

@@ -7,6 +7,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/CharacterController2DComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -154,9 +155,10 @@ bool IsPlayerPreset(std::string_view item) noexcept {
 }
 
 kb::scene::SceneEntity AddPlayerPreset(kb::scene::Scene& scene, const std::filesystem::path& projectRoot,
-    std::string_view item, std::string_view name, CommandIo io) {
+    std::string_view item, std::string_view name, CommandIo io, bool box2d) {
     const bool platformer = item == "Platformer Player";
-    const std::string_view fileName = platformer ? "Platformer2DPlayer.lua" : "TopDown2DPlayer.lua";
+    const std::string_view fileName = box2d ? (platformer ? "Platformer2DBox2DPlayer.lua" : "TopDown2DBox2DPlayer.lua")
+                                            : (platformer ? "Platformer2DPlayer.lua" : "TopDown2DPlayer.lua");
     const std::filesystem::path scriptFile = projectRoot / "Assets" / "Scripts" / std::string{ fileName };
     std::error_code fileError;
     if (!std::filesystem::exists(scriptFile, fileError)) {
@@ -188,11 +190,20 @@ kb::scene::SceneEntity AddPlayerPreset(kb::scene::Scene& scene, const std::files
         io.err << "error: the player could not be created\n";
         return {};
     }
-    kb::scene::CharacterControllerComponent controller{};
-    controller.radius = platformer ? 0.35F : 0.3F;
-    controller.height = platformer ? 1.6F : 0.8F;
-    controller.useGravity = platformer;
-    scene.Components().CharacterControllers().Set(entity, controller);
+    if (box2d) {
+        kb::scene::CharacterController2DComponent controller{};
+        controller.radius = platformer ? 0.35F : 0.3F;
+        controller.height = platformer ? 1.6F : 0.8F;
+        controller.useGravity = platformer;
+        controller.sideView = platformer;
+        scene.Components().CharacterControllers2D().Set(entity, controller);
+    } else {
+        kb::scene::CharacterControllerComponent controller{};
+        controller.radius = platformer ? 0.35F : 0.3F;
+        controller.height = platformer ? 1.6F : 0.8F;
+        controller.useGravity = platformer;
+        scene.Components().CharacterControllers().Set(entity, controller);
+    }
     scene.Components().Behaviours().Set(entity, *behaviour);
     io.out << "script: " << virtualPath << " (a plain Lua file of the project; its @expose lines are the tunables)\n";
 #if KB_CLI_RENDERER

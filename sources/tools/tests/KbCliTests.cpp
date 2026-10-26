@@ -4438,6 +4438,17 @@ void RunPlayerPresetCliTests() {
         "the top-down preset works and notes that the map is a platformer map: " + topDown.out + topDown.err);
     Require(Contains(read(root / "Assets" / "Scripts" / "TopDown2DPlayer.lua"), "@expose eightWay"), "the preset must write the top-down script");
 
+    // The same players on the 2D physics.
+    const CliRun box2d = RunCliProgram({ "entity", "add", "--project", project, "--create", "Platformer Player", "--physics", "2d", "--name", "Hero2D" });
+    Require(box2d.exitCode == 0 && Contains(box2d.out, "Platformer2DBox2DPlayer.lua"), "the 2D physics preset failed: " + box2d.out + box2d.err);
+    Require(Contains(read(root / "Assets" / "Scripts" / "Platformer2DBox2DPlayer.lua"), "Physics2D.MoveCharacter"), "the preset must write the 2D physics script");
+    Require(Contains(RunCliProgram({ "scene-list", "--project", project }).out, "CharacterController2D"), "the scene must hold a Character Controller 2D");
+    const CliRun box2dTopDown = RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player", "--physics", "2d", "--name", "Walker2D" });
+    Require(box2dTopDown.exitCode == 0 && Contains(read(root / "Assets" / "Scripts" / "TopDown2DBox2DPlayer.lua"), "eightWay"), "the top-down 2D physics preset failed: " + box2dTopDown.out + box2dTopDown.err);
+    Require(RunCliProgram({ "validate", "--project", project, "Assets/Scripts/Platformer2DBox2DPlayer.lua" }).exitCode == 0, "the 2D physics script must validate");
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Cube", "--physics", "2d", "--name", "Cube2D" }).exitCode == 1, "--physics is only for the players");
+    Require(RunCliProgram({ "entity", "add", "--project", project, "--create", "Top Down Player", "--physics", "4d", "--name", "Odd" }).exitCode == 1, "an unknown physics is refused");
+
     // The project runs with the new players.
     const CliRun run = RunCliProgram({ "run", "--project", project, "--frames", "30" });
     Require(run.exitCode == 0 && Contains(run.out, "0 diagnostics"), "the scene with the players must run cleanly: " + run.out + run.err);

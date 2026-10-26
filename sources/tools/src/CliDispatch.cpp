@@ -254,7 +254,9 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  Platformer2DPlayer.lua or TopDown2DPlayer.lua in Assets/Scripts (never overwritten;
                  speed, jumpSpeed, coyoteTime, jumpBuffer are its @expose lines), default Move and
                  Jump input when the project has no input context, and every map of the scene
-                 following the player; see docs/world_2d_presets.md)
+                 following the player; --physics 2d makes it a Character Controller 2D on the
+                 2D physics with Platformer2DBox2DPlayer.lua or TopDown2DBox2DPlayer.lua;
+                 see docs/world_2d_presets.md)
                  remove --project <dir> [--scene <path>] --name <Name>
                  rename --project <dir> [--scene <path>] --name <Name> --to <NewName>
                         [--occurrence <n>]

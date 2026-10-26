@@ -3026,10 +3026,10 @@ void RunAddComponentBrowserModelTest() {
     kb::editor::tests::Require(hasPhysics, "The category list contains Physics");
 
     const std::vector<kb::editor::AddComponentRow> physics = InspectorAddComponentBrowserModel::Rows("Physics", "");
-    kb::editor::tests::Require(physics.size() == 4U && physics.front().kind == AddComponentRowKind::Component, "A category lists its 4 components as Component rows");
+    kb::editor::tests::Require(physics.size() == 7U && physics.front().kind == AddComponentRowKind::Component, "A category lists its 7 components as Component rows");
 
     const std::vector<kb::editor::AddComponentRow> search = InspectorAddComponentBrowserModel::Rows("Physics", "collid");
-    kb::editor::tests::Require(search.size() == 1U && search.front().id == "Collider", "A search query overrides the category and finds Collider");
+    kb::editor::tests::Require(search.size() == 2U && search.front().id == "Collider" && search.back().id == "Collider2D", "A search query overrides the category and finds Collider and Collider 2D");
 
     const auto noPlugins = [](std::string_view) { return false; };
     const std::vector<kb::editor::AddComponentRow> filteredCategories =
@@ -3037,7 +3037,11 @@ void RunAddComponentBrowserModelTest() {
     const bool exposesPhysics = std::ranges::any_of(
         filteredCategories,
         [](const kb::editor::AddComponentRow& row) { return row.id == "Physics"; });
-    kb::editor::tests::Require(!exposesPhysics, "A disabled plugin removes an empty component category");
+    // World 2D is on by default, so Physics keeps the three 2D components; the ones of the disabled Jolt plugin are gone.
+    kb::editor::tests::Require(exposesPhysics, "A category keeps the components of plugins that are on by default");
+    const std::vector<kb::editor::AddComponentRow> physicsWithoutPlugins = InspectorAddComponentBrowserModel::Rows("Physics", "", noPlugins);
+    kb::editor::tests::Require(physicsWithoutPlugins.size() == 3U, "A disabled plugin removes its components from a category");
+    kb::editor::tests::Require(InspectorAddComponentBrowserModel::Rows("", "joint", noPlugins).empty(), "Search never exposes the physics components of a disabled plugin");
     kb::editor::tests::Require(
         InspectorAddComponentBrowserModel::Rows("", "terrain", noPlugins).empty(),
         "Search never exposes components owned by disabled plugins");

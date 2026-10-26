@@ -48,6 +48,15 @@ Flat maps (`Map Top Down`): x runs across, z up the screen. `TopDown2DPlayer.lua
 `Physics.CharacterMove`, so solid tiles stop it: `speed` (5.0) and `eightWay` (true). A diagonal is normalized to the speed
 of one axis; with `eightWay` false only the stronger axis counts (four directions).
 
+## On the 2D physics (Box2D)
+
+`--physics 2d` makes the same player on the 2D physics ([docs/world_2d_physics.md](world_2d_physics.md)) instead of the 3D one:
+a **Character Controller 2D** (side view for the platformer, top down without gravity for the other) and the scripts
+`Assets/Scripts/Platformer2DBox2DPlayer.lua` (`speed`, `jumpSpeed`, `jumpBuffer`) or `Assets/Scripts/TopDown2DBox2DPlayer.lua`
+(`speed`, `eightWay`), which drive it with `CallFunction("Physics2D.MoveCharacter", ...)`, `Physics2D.IsGrounded` and
+`Physics2D.JumpCharacter`. The input and the map cameras are the same. The tiles of the map stop it, because the 2D physics
+makes the collision of a map into 2D shapes. The 2D platformer script has no coyote time and no variable jump height.
+
 ## Not covered
 
 - The editor's Create menu does not list these items yet (it would need the project folder to write the script, and an

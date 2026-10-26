@@ -48,6 +48,9 @@ namespace {
         InspectorComponentTile{ .id = "Collider", .category = "Physics", .label = "Collider", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "CharacterController", .category = "Physics", .label = "Character Controller", .icon = HeroIconKind::Gamepad2 },
         InspectorComponentTile{ .id = "Joint", .category = "Physics", .label = "Joint", .icon = HeroIconKind::RotationSnap },
+        InspectorComponentTile{ .id = "Body2D", .category = "Physics", .label = "Body 2D", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "Collider2D", .category = "Physics", .label = "Collider 2D", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "CharacterController2D", .category = "Physics", .label = "Character Controller 2D", .icon = HeroIconKind::Gamepad2 },
         InspectorComponentTile{ .id = "NavAgent", .category = "Navigation", .label = "Nav Agent", .icon = HeroIconKind::Gamepad2 },
         InspectorComponentTile{ .id = "NavObstacle", .category = "Navigation", .label = "Nav Obstacle", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "NavLink", .category = "Navigation", .label = "Nav Link", .icon = HeroIconKind::RotationSnap },
@@ -131,6 +134,9 @@ constexpr ComponentNames kComponentNames[] = {
     {"Rigidbody", "physics body, gravity, falls, pushable, simulation", "Makes the object move by physics: fall, bounce and be pushed."},
     {"Collider", "hitbox, collision, trigger, solid, blocks", "Gives the object a solid shape that things collide with, or a trigger area."},
     {"CharacterController", "player controller, walking, movement, character movement, capsule", "Moves a character through the world without falling through floors or walls."},
+    {"Body2D", "2d physics, 2d rigidbody, box2d, gravity, platformer, falls, pushable", "Makes the object move by 2D physics: fall, bounce and be pushed in the side view or the top-down plane."},
+    {"Collider2D", "2d collision, 2d shape, hitbox, trigger zone, box, circle, capsule", "Gives the object a 2D shape that collides, or a trigger zone that reports who enters it."},
+    {"CharacterController2D", "2d player controller, platformer player, top down player, 2d character, walking", "Walks a 2D character through the world: slopes, small steps, jumping, without falling through floors or walls."},
     {"Joint", "hinge, door, constraint, connect, spring, rope joint", "Connects two physics bodies, like a hinge or a spring."},
     {"NavAgent", "pathfinding, path, walk to, ai movement, navigation", "Lets the object walk to a point along a route that avoids obstacles."},
     {"NavObstacle", "blocker, avoid, obstacle, block path", "Makes walkers go around this object."},
@@ -264,6 +270,9 @@ std::string InspectorComponentCatalog::DisplayLabel(const InspectorComponentTile
     if (tile.id == "Rigidbody") return std::string{ EditorText("component.rigidbody", "Rigidbody") };
     if (tile.id == "Collider") return std::string{ EditorText("component.collider", "Collider") };
     if (tile.id == "CharacterController") return std::string{ EditorText("component.characterController", "Character Controller") };
+    if (tile.id == "Body2D") return std::string{ EditorText("component.body2D", "Body 2D") };
+    if (tile.id == "Collider2D") return std::string{ EditorText("component.collider2D", "Collider 2D") };
+    if (tile.id == "CharacterController2D") return std::string{ EditorText("component.characterController2D", "Character Controller 2D") };
     if (tile.id == "Joint") return std::string{ EditorText("component.joint", "Joint") };
     if (tile.id == "NavAgent") return std::string{ EditorText("component.navAgent", "Nav Agent") };
     if (tile.id == "NavObstacle") return std::string{ EditorText("component.navObstacle", "Nav Obstacle") };
