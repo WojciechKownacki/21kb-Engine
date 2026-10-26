@@ -18,6 +18,9 @@
 #include "engine/scene/TilemapComponent.hpp"
 #include "engine/scene/TilemapRendererComponent.hpp"
 #include "engine/scene/TilemapColliderComponent.hpp"
+#include "engine/scene/CharacterController2DComponent.hpp"
+#include "engine/scene/Collider2DComponent.hpp"
+#include "engine/scene/Body2DComponent.hpp"
 #include "engine/scene/Sprite2DComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
@@ -416,6 +419,42 @@ struct ScriptComponentAccess<kb::scene::TilemapColliderComponent> {
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
         if (!scene.Components().TilemapColliders().Has(entity)) return false;
         scene.Components().TilemapColliders().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::CharacterController2DComponent> {
+    [[nodiscard]] static const kb::scene::CharacterController2DComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().CharacterControllers2D().TryGet(entity); }
+    [[nodiscard]] static kb::scene::CharacterController2DComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().CharacterControllers2D().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::CharacterController2DComponent& value) { scene.Components().CharacterControllers2D().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().CharacterControllers2D().Has(entity)) return false;
+        scene.Components().CharacterControllers2D().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::Collider2DComponent> {
+    [[nodiscard]] static const kb::scene::Collider2DComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Colliders2D().TryGet(entity); }
+    [[nodiscard]] static kb::scene::Collider2DComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Colliders2D().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::Collider2DComponent& value) { scene.Components().Colliders2D().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Colliders2D().Has(entity)) return false;
+        scene.Components().Colliders2D().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::Body2DComponent> {
+    [[nodiscard]] static const kb::scene::Body2DComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Bodies2D().TryGet(entity); }
+    [[nodiscard]] static kb::scene::Body2DComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Bodies2D().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::Body2DComponent& value) { scene.Components().Bodies2D().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Bodies2D().Has(entity)) return false;
+        scene.Components().Bodies2D().Remove(entity);
         return true;
     }
 };

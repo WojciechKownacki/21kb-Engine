@@ -280,7 +280,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Gameplay", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation", "Map2D", "Net" };
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Gameplay", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation", "Map2D", "Physics2D", "Net" };
     kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must list every domain module");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
@@ -2809,6 +2809,9 @@ void RunEngineLibraryComponentRegistryTest() {
     source.Components().TilemapRenderers().Set(object.Entity(), kb::scene::TilemapRendererComponent{ .sortingOrder = 5, .enabled = false });
     source.Components().TilemapColliders().Set(object.Entity(), kb::scene::TilemapColliderComponent{ .enabled = false });
     source.Components().Sprites2D().Set(object.Entity(), kb::scene::Sprite2DComponent{ .imageAssetId = 303U, .cellWidth = 16U, .cell = 2U, .frameCount = 3U, .pivotX = 0.25F, .flipX = true, .tintA = 0.5F, .sortingOrder = -4, .wall = false });
+    source.Components().Bodies2D().Set(object.Entity(), kb::scene::Body2DComponent{ .type = 1, .gravityScale = 0.5F, .fixedRotation = true, .sideView = false, .startVelocityX = 2.0F });
+    source.Components().Colliders2D().Set(object.Entity(), kb::scene::Collider2DComponent{ .shape = 2, .width = 2.0F, .radius = 0.25F, .offsetX = 0.5F, .isTrigger = true, .friction = 0.2F, .layer = 3, .collidesWith = 9U, .sideView = false });
+    source.Components().CharacterControllers2D().Set(object.Entity(), kb::scene::CharacterController2DComponent{ .radius = 0.4F, .height = 1.6F, .slopeLimitDegrees = 40.0F, .stepHeight = 0.3F, .layer = 2, .collidesWith = 5U });
     kb::scene::AudioSourceComponent audioSource{ .clipAssetId = 4242U, .volume = 0.4F, .pitch = 1.5F, .loop = true, .spatial = false, .mute = true };
     kb::tests::Require(kb::scene::SetAudioSourceOutputBus(audioSource, "Effects"), "Engine21kbLibrary component registry audio fixture needs a valid output bus");
     source.Components().AudioSources().Set(object.Entity(), audioSource);
@@ -2968,6 +2971,10 @@ void RunEngineLibraryComponentRegistryTest() {
         *target.Components().TilemapColliders().TryGet(restored) == *source.Components().TilemapColliders().TryGet(object.Entity()), "Tilemap collider fields survive the library serialization contract");
     kb::tests::Require(target.Components().Sprites2D().Has(restored) &&
         *target.Components().Sprites2D().TryGet(restored) == *source.Components().Sprites2D().TryGet(object.Entity()), "Sprite 2D fields survive the library serialization contract");
+    kb::tests::Require(target.Components().Bodies2D().Has(restored) && *target.Components().Bodies2D().TryGet(restored) == *source.Components().Bodies2D().TryGet(object.Entity()) &&
+        target.Components().Colliders2D().Has(restored) && *target.Components().Colliders2D().TryGet(restored) == *source.Components().Colliders2D().TryGet(object.Entity()) &&
+        target.Components().CharacterControllers2D().Has(restored) && *target.Components().CharacterControllers2D().TryGet(restored) == *source.Components().CharacterControllers2D().TryGet(object.Entity()),
+        "2D physics fields survive the library serialization contract");
 
     const kb::scene::AudioSourceComponent* restoredAudioSource = target.Components().AudioSources().TryGet(restored);
     kb::tests::Require(restoredAudioSource != nullptr && restoredAudioSource->clipAssetId == 4242U &&
@@ -3476,7 +3483,7 @@ void RunComponentInspectorDescCatalogTest() {
     // NavLink adds eleven (start, end, radius, kind, area, bidirectional, enabled).
     // Rigidbody damping adds two; Joint motor, spring and break force add five.
     // Audio Source contributes sixteen fields and Audio Listener four.
-    kb::tests::Require(fieldsChecked == 821U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (821, including the collision mesh and the compatibility aliases) across all components");
+    kb::tests::Require(fieldsChecked == 857U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (857, including the collision mesh and the compatibility aliases) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

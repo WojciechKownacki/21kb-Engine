@@ -333,6 +333,7 @@ public:
     kb::ecs::SystemScheduler systemScheduler;
     SceneSystemScheduler sceneSystemScheduler;
     class SceneTilemapRuntime* tilemapRuntime = nullptr;
+    class ScenePhysics2DRuntime* physics2DRuntime = nullptr;
     SceneRuntimeFixedStepSettings fixedStepSettings;
     // The delta exposed by Time.FixedDelta. In an installed production
     // ScriptRuntimeSceneSystem this mirrors fixedStepSettings exactly: script

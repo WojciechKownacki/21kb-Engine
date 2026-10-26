@@ -21,6 +21,7 @@
 #include "engine/script/ScriptPostProcessApi.hpp"
 #include "engine/script/ScriptNavigationApi.hpp"
 #include "engine/script/ScriptMap2DApi.hpp"
+#include "engine/script/ScriptPhysics2DApi.hpp"
 #include "engine/script/ScriptNetApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRendererApi.hpp"
@@ -317,6 +318,12 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Map2D",
             .ownerRuntime = "kb::scene::SceneTilemapRuntime",
             .Register = &kb::script::ScriptMap2DApi::Register,
+        },
+        // Physics2D.*: velocity, forces, ray and overlap queries, character movement and joints of the 2D physics of a scene.
+        LibraryModuleDesc{
+            .name = "Physics2D",
+            .ownerRuntime = "kb::scene::ScenePhysics2DRuntime",
+            .Register = &kb::script::ScriptPhysics2DApi::Register,
         },
         // Net.*: the script face of a network session attached to the scene (kb_net's dedicated server
         // or a game client). Offline scenes answer it too.

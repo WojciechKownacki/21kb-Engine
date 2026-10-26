@@ -33,6 +33,9 @@ public:
     [[nodiscard]] std::uint64_t TilemapComponentId() const noexcept;
     [[nodiscard]] std::uint64_t TilemapRendererComponentId() const noexcept;
     [[nodiscard]] std::uint64_t TilemapColliderComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t CharacterController2DComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t Collider2DComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t Body2DComponentId() const noexcept;
     [[nodiscard]] std::uint64_t Sprite2DComponentId() const noexcept;
     [[nodiscard]] std::uint64_t StreamFocusComponentId() const noexcept;
     [[nodiscard]] std::uint64_t WorldBackdropComponentId() const noexcept;
@@ -82,6 +85,9 @@ private:
     std::uint64_t tilemapComponentId_ = 0;
     std::uint64_t tilemapRendererComponentId_ = 0;
     std::uint64_t tilemapColliderComponentId_ = 0;
+    std::uint64_t characterController2DComponentId_ = 0;
+    std::uint64_t collider2DComponentId_ = 0;
+    std::uint64_t body2DComponentId_ = 0;
     std::uint64_t sprite2DComponentId_ = 0;
     std::uint64_t streamFocusComponentId_ = 0;
     std::uint64_t worldBackdropComponentId_ = 0;

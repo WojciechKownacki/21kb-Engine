@@ -795,6 +795,72 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseBody2D(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "body2D", present)) return false;
+    if (!present) return true;
+    Body2DComponent value{};
+    if (!ParseOptionalField(fields, "body2D.type", value.type)) return false;
+    if (!ParseOptionalField(fields, "body2D.gravityScale", value.gravityScale)) return false;
+    if (!ParseOptionalField(fields, "body2D.linearDamping", value.linearDamping)) return false;
+    if (!ParseOptionalField(fields, "body2D.angularDamping", value.angularDamping)) return false;
+    if (!ParseOptionalBool(fields, "body2D.fixedRotation", value.fixedRotation)) return false;
+    if (!ParseOptionalBool(fields, "body2D.bullet", value.bullet)) return false;
+    if (!ParseOptionalBool(fields, "body2D.allowSleep", value.allowSleep)) return false;
+    if (!ParseOptionalBool(fields, "body2D.sideView", value.sideView)) return false;
+    if (!ParseOptionalField(fields, "body2D.startVelocityX", value.startVelocityX)) return false;
+    if (!ParseOptionalField(fields, "body2D.startVelocityY", value.startVelocityY)) return false;
+    if (!ParseOptionalBool(fields, "body2D.enabled", value.enabled)) return false;
+    if (!IsBody2DComponentValid(value)) return false;
+    components.body2D = value;
+    return true;
+}
+
+[[nodiscard]] bool ParseCollider2D(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "collider2D", present)) return false;
+    if (!present) return true;
+    Collider2DComponent value{};
+    if (!ParseOptionalField(fields, "collider2D.shape", value.shape)) return false;
+    if (!ParseOptionalField(fields, "collider2D.width", value.width)) return false;
+    if (!ParseOptionalField(fields, "collider2D.height", value.height)) return false;
+    if (!ParseOptionalField(fields, "collider2D.radius", value.radius)) return false;
+    if (!ParseOptionalField(fields, "collider2D.offsetX", value.offsetX)) return false;
+    if (!ParseOptionalField(fields, "collider2D.offsetY", value.offsetY)) return false;
+    if (!ParseOptionalField(fields, "collider2D.angleDegrees", value.angleDegrees)) return false;
+    if (!ParseOptionalBool(fields, "collider2D.isTrigger", value.isTrigger)) return false;
+    if (!ParseOptionalField(fields, "collider2D.density", value.density)) return false;
+    if (!ParseOptionalField(fields, "collider2D.friction", value.friction)) return false;
+    if (!ParseOptionalField(fields, "collider2D.restitution", value.restitution)) return false;
+    if (!ParseOptionalField(fields, "collider2D.layer", value.layer)) return false;
+    if (!ParseOptionalField(fields, "collider2D.collidesWith", value.collidesWith)) return false;
+    if (!ParseOptionalBool(fields, "collider2D.sideView", value.sideView)) return false;
+    if (!ParseOptionalBool(fields, "collider2D.enabled", value.enabled)) return false;
+    if (!IsCollider2DComponentValid(value)) return false;
+    components.collider2D = value;
+    return true;
+}
+
+[[nodiscard]] bool ParseCharacterController2D(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "characterController2D", present)) return false;
+    if (!present) return true;
+    CharacterController2DComponent value{};
+    if (!ParseOptionalField(fields, "characterController2D.radius", value.radius)) return false;
+    if (!ParseOptionalField(fields, "characterController2D.height", value.height)) return false;
+    if (!ParseOptionalField(fields, "characterController2D.gravityScale", value.gravityScale)) return false;
+    if (!ParseOptionalBool(fields, "characterController2D.useGravity", value.useGravity)) return false;
+    if (!ParseOptionalField(fields, "characterController2D.slopeLimitDegrees", value.slopeLimitDegrees)) return false;
+    if (!ParseOptionalField(fields, "characterController2D.stepHeight", value.stepHeight)) return false;
+    if (!ParseOptionalField(fields, "characterController2D.layer", value.layer)) return false;
+    if (!ParseOptionalField(fields, "characterController2D.collidesWith", value.collidesWith)) return false;
+    if (!ParseOptionalBool(fields, "characterController2D.sideView", value.sideView)) return false;
+    if (!ParseOptionalBool(fields, "characterController2D.enabled", value.enabled)) return false;
+    if (!IsCharacterController2DComponentValid(value)) return false;
+    components.characterController2D = value;
+    return true;
+}
+
 [[nodiscard]] bool ParseTilemapCollider(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool present = false;
     if (!ParseOptionalComponentFlag(fields, "tilemapCollider", present)) return false;
@@ -822,6 +888,9 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseTilemap(fields, components)
         && ParseTilemapRenderer(fields, components)
         && ParseTilemapCollider(fields, components)
+        && ParseCharacterController2D(fields, components)
+        && ParseCollider2D(fields, components)
+        && ParseBody2D(fields, components)
         && ParseSprite2D(fields, components)
 
         && ParseStreamFocus(fields, components)

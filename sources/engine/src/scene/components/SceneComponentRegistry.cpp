@@ -29,6 +29,9 @@
 #include "engine/scene/TilemapComponent.hpp"
 #include "engine/scene/TilemapRendererComponent.hpp"
 #include "engine/scene/TilemapColliderComponent.hpp"
+#include "engine/scene/CharacterController2DComponent.hpp"
+#include "engine/scene/Collider2DComponent.hpp"
+#include "engine/scene/Body2DComponent.hpp"
 #include "engine/scene/Sprite2DComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -529,6 +532,57 @@ void RegisterSprite2DReflection(kb::ecs::World& world) {
     }));
 }
 
+void RegisterBody2DReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<Body2DComponent>("kb.scene.Body2DComponent", {
+        KB_ECS_FIELD(Body2DComponent, type, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(Body2DComponent, gravityScale, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Body2DComponent, linearDamping, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Body2DComponent, angularDamping, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Body2DComponent, fixedRotation, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Body2DComponent, bullet, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Body2DComponent, allowSleep, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Body2DComponent, sideView, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Body2DComponent, startVelocityX, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Body2DComponent, startVelocityY, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Body2DComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterCollider2DReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<Collider2DComponent>("kb.scene.Collider2DComponent", {
+        KB_ECS_FIELD(Collider2DComponent, shape, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(Collider2DComponent, width, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, height, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, radius, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, offsetX, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, offsetY, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, angleDegrees, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, isTrigger, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Collider2DComponent, density, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, friction, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, restitution, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Collider2DComponent, layer, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(Collider2DComponent, collidesWith, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Collider2DComponent, sideView, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Collider2DComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterCharacterController2DReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<CharacterController2DComponent>("kb.scene.CharacterController2DComponent", {
+        KB_ECS_FIELD(CharacterController2DComponent, radius, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CharacterController2DComponent, height, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CharacterController2DComponent, gravityScale, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CharacterController2DComponent, useGravity, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(CharacterController2DComponent, slopeLimitDegrees, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CharacterController2DComponent, stepHeight, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(CharacterController2DComponent, layer, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(CharacterController2DComponent, collidesWith, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(CharacterController2DComponent, sideView, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(CharacterController2DComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
 void RegisterStreamFocusReflection(kb::ecs::World& world) {
     static_cast<void>(world.RegisterComponentReflection<StreamFocusComponent>("kb.scene.StreamFocusComponent", {
         KB_ECS_FIELD(StreamFocusComponent, innerRadius, kb::ecs::ComponentFieldType::Float32),
@@ -631,6 +685,9 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , tilemapComponentId_(RegisterSceneComponent<TilemapComponent>(world, TilemapComponent::StableId))
     , tilemapRendererComponentId_(RegisterSceneComponent<TilemapRendererComponent>(world, TilemapRendererComponent::StableId))
     , tilemapColliderComponentId_(RegisterSceneComponent<TilemapColliderComponent>(world, TilemapColliderComponent::StableId))
+    , characterController2DComponentId_(RegisterSceneComponent<CharacterController2DComponent>(world, CharacterController2DComponent::StableId))
+    , collider2DComponentId_(RegisterSceneComponent<Collider2DComponent>(world, Collider2DComponent::StableId))
+    , body2DComponentId_(RegisterSceneComponent<Body2DComponent>(world, Body2DComponent::StableId))
     , sprite2DComponentId_(RegisterSceneComponent<Sprite2DComponent>(world, Sprite2DComponent::StableId))
     , streamFocusComponentId_(RegisterSceneComponent<StreamFocusComponent>(world, StreamFocusComponent::StableId))
     , worldBackdropComponentId_(RegisterSceneComponent<WorldBackdropComponent>(world, WorldBackdropComponent::StableId))
@@ -669,6 +726,9 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterTilemapReflection(world);
     RegisterTilemapRendererReflection(world);
     RegisterTilemapColliderReflection(world);
+    RegisterCharacterController2DReflection(world);
+    RegisterCollider2DReflection(world);
+    RegisterBody2DReflection(world);
     RegisterSprite2DReflection(world);
     RegisterStreamFocusReflection(world);
     RegisterWorldBackdropReflection(world);
@@ -745,6 +805,9 @@ std::uint64_t SceneComponentRegistry::GridComponentId() const noexcept { return 
 std::uint64_t SceneComponentRegistry::TilemapComponentId() const noexcept { return tilemapComponentId_; }
 std::uint64_t SceneComponentRegistry::TilemapRendererComponentId() const noexcept { return tilemapRendererComponentId_; }
 std::uint64_t SceneComponentRegistry::TilemapColliderComponentId() const noexcept { return tilemapColliderComponentId_; }
+std::uint64_t SceneComponentRegistry::CharacterController2DComponentId() const noexcept { return characterController2DComponentId_; }
+std::uint64_t SceneComponentRegistry::Collider2DComponentId() const noexcept { return collider2DComponentId_; }
+std::uint64_t SceneComponentRegistry::Body2DComponentId() const noexcept { return body2DComponentId_; }
 std::uint64_t SceneComponentRegistry::Sprite2DComponentId() const noexcept { return sprite2DComponentId_; }
 std::uint64_t SceneComponentRegistry::StreamFocusComponentId() const noexcept { return streamFocusComponentId_; }
 std::uint64_t SceneComponentRegistry::WorldBackdropComponentId() const noexcept { return worldBackdropComponentId_; }

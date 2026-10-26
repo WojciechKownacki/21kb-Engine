@@ -15,6 +15,8 @@ namespace kb::scene {
 
 SceneTilemapRuntime* SceneRuntime::Tilemaps() const noexcept { return SceneAccess::State(scene_).tilemapRuntime; }
 void SceneRuntime::SetTilemapRuntime(SceneTilemapRuntime* runtime) noexcept { SceneAccess::State(scene_).tilemapRuntime = runtime; }
+ScenePhysics2DRuntime* SceneRuntime::Physics2D() const noexcept { return SceneAccess::State(scene_).physics2DRuntime; }
+void SceneRuntime::SetPhysics2DRuntime(ScenePhysics2DRuntime* runtime) noexcept { SceneAccess::State(scene_).physics2DRuntime = runtime; }
 
 SceneRuntimeQueries::SceneRuntimeQueries(const Scene& scene) noexcept
     : scene_(scene) {}

@@ -24,6 +24,9 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , tilemaps_(world, components.TilemapComponentId())
     , tilemapRenderers_(world, components.TilemapRendererComponentId())
     , tilemapColliders_(world, components.TilemapColliderComponentId())
+    , characterControllers2D_(world, components.CharacterController2DComponentId())
+    , colliders2D_(world, components.Collider2DComponentId())
+    , bodies2D_(world, components.Body2DComponentId())
     , sprites2D_(world, components.Sprite2DComponentId())
     , streamFocuses_(world, components.StreamFocusComponentId())
     , worldBackdrops_(world, components.WorldBackdropComponentId())
@@ -166,12 +169,18 @@ const SceneGridComponentStore& SceneComponentStorage::Grids() const noexcept { r
 const SceneTilemapComponentStore& SceneComponentStorage::Tilemaps() const noexcept { return tilemaps_; }
 const SceneTilemapRendererComponentStore& SceneComponentStorage::TilemapRenderers() const noexcept { return tilemapRenderers_; }
 const SceneTilemapColliderComponentStore& SceneComponentStorage::TilemapColliders() const noexcept { return tilemapColliders_; }
+const SceneCharacterController2DComponentStore& SceneComponentStorage::CharacterControllers2D() const noexcept { return characterControllers2D_; }
+const SceneCollider2DComponentStore& SceneComponentStorage::Colliders2D() const noexcept { return colliders2D_; }
+const SceneBody2DComponentStore& SceneComponentStorage::Bodies2D() const noexcept { return bodies2D_; }
 const SceneSprite2DComponentStore& SceneComponentStorage::Sprites2D() const noexcept { return sprites2D_; }
 SceneContentInstanceComponentStore& SceneComponentStorage::ContentInstances() noexcept { return contentInstances_; }
 SceneGridComponentStore& SceneComponentStorage::Grids() noexcept { return grids_; }
 SceneTilemapComponentStore& SceneComponentStorage::Tilemaps() noexcept { return tilemaps_; }
 SceneTilemapRendererComponentStore& SceneComponentStorage::TilemapRenderers() noexcept { return tilemapRenderers_; }
 SceneTilemapColliderComponentStore& SceneComponentStorage::TilemapColliders() noexcept { return tilemapColliders_; }
+SceneCharacterController2DComponentStore& SceneComponentStorage::CharacterControllers2D() noexcept { return characterControllers2D_; }
+SceneCollider2DComponentStore& SceneComponentStorage::Colliders2D() noexcept { return colliders2D_; }
+SceneBody2DComponentStore& SceneComponentStorage::Bodies2D() noexcept { return bodies2D_; }
 SceneSprite2DComponentStore& SceneComponentStorage::Sprites2D() noexcept { return sprites2D_; }
 const SceneStreamFocusComponentStore& SceneComponentStorage::StreamFocuses() const noexcept { return streamFocuses_; }
 SceneStreamFocusComponentStore& SceneComponentStorage::StreamFocuses() noexcept { return streamFocuses_; }

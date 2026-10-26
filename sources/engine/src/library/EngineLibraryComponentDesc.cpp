@@ -198,6 +198,21 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
+            .name = "Body2D",
+            .id = ComputeLibraryComponentId("Body2D"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Collider2D",
+            .id = ComputeLibraryComponentId("Collider2D"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "CharacterController2D",
+            .id = ComputeLibraryComponentId("CharacterController2D"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "ContentInstance",
             .id = ComputeLibraryComponentId("ContentInstance"),
             .serializable = true,

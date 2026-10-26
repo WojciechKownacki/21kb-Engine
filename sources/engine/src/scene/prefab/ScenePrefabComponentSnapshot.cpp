@@ -83,6 +83,15 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const TilemapColliderComponent* content = sceneComponents.TilemapColliders().TryGet(entity)) {
         components.tilemapCollider = *content;
     }
+    if (const CharacterController2DComponent* content = sceneComponents.CharacterControllers2D().TryGet(entity)) {
+        components.characterController2D = *content;
+    }
+    if (const Collider2DComponent* content = sceneComponents.Colliders2D().TryGet(entity)) {
+        components.collider2D = *content;
+    }
+    if (const Body2DComponent* content = sceneComponents.Bodies2D().TryGet(entity)) {
+        components.body2D = *content;
+    }
     if (const Sprite2DComponent* content = sceneComponents.Sprites2D().TryGet(entity)) {
         components.sprite2D = *content;
     }

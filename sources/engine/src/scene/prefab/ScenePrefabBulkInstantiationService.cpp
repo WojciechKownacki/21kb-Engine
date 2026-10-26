@@ -155,6 +155,9 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<TilemapComponent> tilemaps;
     std::vector<TilemapRendererComponent> tilemapRenderers;
     std::vector<TilemapColliderComponent> tilemapColliders;
+    std::vector<CharacterController2DComponent> characterControllers2D;
+    std::vector<Collider2DComponent> colliders2D;
+    std::vector<Body2DComponent> bodies2D;
     std::vector<Sprite2DComponent> sprites2D;
 
     std::vector<StreamFocusComponent> streamFocuses;
@@ -263,6 +266,18 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::TilemapCollider)) {
             RepeatComponents(tilemapColliders, std::span<const TilemapColliderComponent>{ archetype.tilemapColliders }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const TilemapColliderComponent>{ tilemapColliders });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::CharacterController2D)) {
+            RepeatComponents(characterControllers2D, std::span<const CharacterController2DComponent>{ archetype.characterControllers2D }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const CharacterController2DComponent>{ characterControllers2D });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Collider2D)) {
+            RepeatComponents(colliders2D, std::span<const Collider2DComponent>{ archetype.colliders2D }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const Collider2DComponent>{ colliders2D });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Body2D)) {
+            RepeatComponents(bodies2D, std::span<const Body2DComponent>{ archetype.bodies2D }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const Body2DComponent>{ bodies2D });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Sprite2D)) {
             RepeatComponents(sprites2D, std::span<const Sprite2DComponent>{ archetype.sprites2D }, instanceCount);
@@ -452,6 +467,18 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::TilemapCollider)) {
             AddCommandComponentPatternView(views, std::span<const TilemapColliderComponent>{ archetype.tilemapColliders }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const TilemapColliderComponent>{ archetype.tilemapColliders }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::CharacterController2D)) {
+            AddCommandComponentPatternView(views, std::span<const CharacterController2DComponent>{ archetype.characterControllers2D }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const CharacterController2DComponent>{ archetype.characterControllers2D }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Collider2D)) {
+            AddCommandComponentPatternView(views, std::span<const Collider2DComponent>{ archetype.colliders2D }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const Collider2DComponent>{ archetype.colliders2D }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Body2D)) {
+            AddCommandComponentPatternView(views, std::span<const Body2DComponent>{ archetype.bodies2D }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const Body2DComponent>{ archetype.bodies2D }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Sprite2D)) {
             AddCommandComponentPatternView(views, std::span<const Sprite2DComponent>{ archetype.sprites2D }, instanceCount);

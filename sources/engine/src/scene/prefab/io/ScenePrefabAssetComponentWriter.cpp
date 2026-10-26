@@ -214,6 +214,54 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "sprite2D.wall=" << value.wall << '\n';
         output << "sprite2D.visible=" << value.visible << '\n';
     }
+    output << "body2D=" << (components.body2D.has_value() ? 1 : 0) << '\n';
+    if (components.body2D.has_value()) {
+        const auto& value = *components.body2D;
+        output << "body2D.type=" << value.type << '\n';
+        output << "body2D.gravityScale=" << value.gravityScale << '\n';
+        output << "body2D.linearDamping=" << value.linearDamping << '\n';
+        output << "body2D.angularDamping=" << value.angularDamping << '\n';
+        output << "body2D.fixedRotation=" << value.fixedRotation << '\n';
+        output << "body2D.bullet=" << value.bullet << '\n';
+        output << "body2D.allowSleep=" << value.allowSleep << '\n';
+        output << "body2D.sideView=" << value.sideView << '\n';
+        output << "body2D.startVelocityX=" << value.startVelocityX << '\n';
+        output << "body2D.startVelocityY=" << value.startVelocityY << '\n';
+        output << "body2D.enabled=" << value.enabled << '\n';
+    }
+    output << "collider2D=" << (components.collider2D.has_value() ? 1 : 0) << '\n';
+    if (components.collider2D.has_value()) {
+        const auto& value = *components.collider2D;
+        output << "collider2D.shape=" << value.shape << '\n';
+        output << "collider2D.width=" << value.width << '\n';
+        output << "collider2D.height=" << value.height << '\n';
+        output << "collider2D.radius=" << value.radius << '\n';
+        output << "collider2D.offsetX=" << value.offsetX << '\n';
+        output << "collider2D.offsetY=" << value.offsetY << '\n';
+        output << "collider2D.angleDegrees=" << value.angleDegrees << '\n';
+        output << "collider2D.isTrigger=" << value.isTrigger << '\n';
+        output << "collider2D.density=" << value.density << '\n';
+        output << "collider2D.friction=" << value.friction << '\n';
+        output << "collider2D.restitution=" << value.restitution << '\n';
+        output << "collider2D.layer=" << value.layer << '\n';
+        output << "collider2D.collidesWith=" << value.collidesWith << '\n';
+        output << "collider2D.sideView=" << value.sideView << '\n';
+        output << "collider2D.enabled=" << value.enabled << '\n';
+    }
+    output << "characterController2D=" << (components.characterController2D.has_value() ? 1 : 0) << '\n';
+    if (components.characterController2D.has_value()) {
+        const auto& value = *components.characterController2D;
+        output << "characterController2D.radius=" << value.radius << '\n';
+        output << "characterController2D.height=" << value.height << '\n';
+        output << "characterController2D.gravityScale=" << value.gravityScale << '\n';
+        output << "characterController2D.useGravity=" << value.useGravity << '\n';
+        output << "characterController2D.slopeLimitDegrees=" << value.slopeLimitDegrees << '\n';
+        output << "characterController2D.stepHeight=" << value.stepHeight << '\n';
+        output << "characterController2D.layer=" << value.layer << '\n';
+        output << "characterController2D.collidesWith=" << value.collidesWith << '\n';
+        output << "characterController2D.sideView=" << value.sideView << '\n';
+        output << "characterController2D.enabled=" << value.enabled << '\n';
+    }
     output << "tilemapCollider=" << (components.tilemapCollider.has_value() ? 1 : 0) << '\n';
     if (components.tilemapCollider.has_value()) {
         const auto& value = *components.tilemapCollider;

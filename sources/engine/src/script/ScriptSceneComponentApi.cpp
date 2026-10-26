@@ -28,6 +28,12 @@
 #include "engine/scene/SceneTilemapRendererComponents.hpp"
 #include "engine/scene/TilemapColliderComponent.hpp"
 #include "engine/scene/SceneTilemapColliderComponents.hpp"
+#include "engine/scene/CharacterController2DComponent.hpp"
+#include "engine/scene/SceneCharacterController2DComponents.hpp"
+#include "engine/scene/Collider2DComponent.hpp"
+#include "engine/scene/SceneCollider2DComponents.hpp"
+#include "engine/scene/Body2DComponent.hpp"
+#include "engine/scene/SceneBody2DComponents.hpp"
 #include "engine/scene/Sprite2DComponent.hpp"
 #include "engine/scene/SceneSprite2DComponents.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
@@ -311,7 +317,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 48> kComponentNames{
+constexpr std::array<std::string_view, 51> kComponentNames{
     "AudioSource",
     "AudioListener",
     "Transform",
@@ -335,6 +341,9 @@ constexpr std::array<std::string_view, 48> kComponentNames{
     "Tilemap",
     "TilemapRenderer",
     "TilemapCollider",
+    "CharacterController2D",
+    "Collider2D",
+    "Body2D",
     "Sprite2D",
     "ContentInstance",
     "StreamFocus",
@@ -441,6 +450,51 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kSprite2DPropertyDesc
     ScriptSceneComponentPropertyDesc{ "sortingOrder", ScriptValueType::Int, true },
     ScriptSceneComponentPropertyDesc{ "wall", ScriptValueType::Bool, true },
     ScriptSceneComponentPropertyDesc{ "visible", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kBody2DPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "type", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "linearDamping", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "angularDamping", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "fixedRotation", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "bullet", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "allowSleep", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "sideView", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "startVelocityX", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "startVelocityY", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 15> kCollider2DPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "shape", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "width", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "offsetX", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "offsetY", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "angleDegrees", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "isTrigger", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "density", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "friction", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "restitution", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "collidesWith", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "sideView", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kCharacterController2DPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "gravityScale", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "useGravity", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "slopeLimitDegrees", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "stepHeight", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "collidesWith", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "sideView", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTilemapColliderPropertyDescs{
@@ -1511,6 +1565,51 @@ constexpr std::array<FieldBinding, 26> kSprite2DFields{
     KB_BOOL(kb::scene::Sprite2DComponent, visible),
 };
 
+constexpr std::array<FieldBinding, 11> kBody2DFields{
+    KB_INT(kb::scene::Body2DComponent, type),
+    KB_FLOAT(kb::scene::Body2DComponent, gravityScale),
+    KB_FLOAT(kb::scene::Body2DComponent, linearDamping),
+    KB_FLOAT(kb::scene::Body2DComponent, angularDamping),
+    KB_BOOL(kb::scene::Body2DComponent, fixedRotation),
+    KB_BOOL(kb::scene::Body2DComponent, bullet),
+    KB_BOOL(kb::scene::Body2DComponent, allowSleep),
+    KB_BOOL(kb::scene::Body2DComponent, sideView),
+    KB_FLOAT(kb::scene::Body2DComponent, startVelocityX),
+    KB_FLOAT(kb::scene::Body2DComponent, startVelocityY),
+    KB_BOOL(kb::scene::Body2DComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 15> kCollider2DFields{
+    KB_INT(kb::scene::Collider2DComponent, shape),
+    KB_FLOAT(kb::scene::Collider2DComponent, width),
+    KB_FLOAT(kb::scene::Collider2DComponent, height),
+    KB_FLOAT(kb::scene::Collider2DComponent, radius),
+    KB_FLOAT(kb::scene::Collider2DComponent, offsetX),
+    KB_FLOAT(kb::scene::Collider2DComponent, offsetY),
+    KB_FLOAT(kb::scene::Collider2DComponent, angleDegrees),
+    KB_BOOL(kb::scene::Collider2DComponent, isTrigger),
+    KB_FLOAT(kb::scene::Collider2DComponent, density),
+    KB_FLOAT(kb::scene::Collider2DComponent, friction),
+    KB_FLOAT(kb::scene::Collider2DComponent, restitution),
+    KB_INT(kb::scene::Collider2DComponent, layer),
+    KB_UINT32(kb::scene::Collider2DComponent, collidesWith),
+    KB_BOOL(kb::scene::Collider2DComponent, sideView),
+    KB_BOOL(kb::scene::Collider2DComponent, enabled),
+};
+
+constexpr std::array<FieldBinding, 10> kCharacterController2DFields{
+    KB_FLOAT(kb::scene::CharacterController2DComponent, radius),
+    KB_FLOAT(kb::scene::CharacterController2DComponent, height),
+    KB_FLOAT(kb::scene::CharacterController2DComponent, gravityScale),
+    KB_BOOL(kb::scene::CharacterController2DComponent, useGravity),
+    KB_FLOAT(kb::scene::CharacterController2DComponent, slopeLimitDegrees),
+    KB_FLOAT(kb::scene::CharacterController2DComponent, stepHeight),
+    KB_INT(kb::scene::CharacterController2DComponent, layer),
+    KB_UINT32(kb::scene::CharacterController2DComponent, collidesWith),
+    KB_BOOL(kb::scene::CharacterController2DComponent, sideView),
+    KB_BOOL(kb::scene::CharacterController2DComponent, enabled),
+};
+
 constexpr std::array<FieldBinding, 1> kTilemapColliderFields{
     KB_BOOL(kb::scene::TilemapColliderComponent, enabled),
 };
@@ -1807,6 +1906,9 @@ void MarkGridModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) no
 void MarkTilemapModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tilemaps().MarkModified(entity); }
 void MarkTilemapRendererModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().TilemapRenderers().MarkModified(entity); }
 void MarkSprite2DModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Sprites2D().MarkModified(entity); }
+void MarkBody2DModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Bodies2D().MarkModified(entity); }
+void MarkCollider2DModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Colliders2D().MarkModified(entity); }
+void MarkCharacterController2DModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().CharacterControllers2D().MarkModified(entity); }
 void MarkTilemapColliderModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().TilemapColliders().MarkModified(entity); }
 void MarkContentInstanceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ContentInstances().MarkModified(entity); }
 void MarkStreamFocusModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().StreamFocuses().MarkModified(entity); }
@@ -1939,6 +2041,18 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
         auto* component = scene.Components().Sprites2D().TryGet(entity);
         return ComponentAccess{ component, component, kSprite2DFields, &MarkSprite2DModified };
     }
+    if (componentName == "Body2D") {
+        auto* component = scene.Components().Bodies2D().TryGet(entity);
+        return ComponentAccess{ component, component, kBody2DFields, &MarkBody2DModified };
+    }
+    if (componentName == "Collider2D") {
+        auto* component = scene.Components().Colliders2D().TryGet(entity);
+        return ComponentAccess{ component, component, kCollider2DFields, &MarkCollider2DModified };
+    }
+    if (componentName == "CharacterController2D") {
+        auto* component = scene.Components().CharacterControllers2D().TryGet(entity);
+        return ComponentAccess{ component, component, kCharacterController2DFields, &MarkCharacterController2DModified };
+    }
     if (componentName == "TilemapCollider") {
         auto* component = scene.Components().TilemapColliders().TryGet(entity);
         return ComponentAccess{ component, component, kTilemapColliderFields, &MarkTilemapColliderModified };
@@ -2043,6 +2157,9 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Tilemap") return kTilemapPropertyDescs;
     if (componentName == "TilemapRenderer") return kTilemapRendererPropertyDescs;
     if (componentName == "TilemapCollider") return kTilemapColliderPropertyDescs;
+    if (componentName == "CharacterController2D") return kCharacterController2DPropertyDescs;
+    if (componentName == "Collider2D") return kCollider2DPropertyDescs;
+    if (componentName == "Body2D") return kBody2DPropertyDescs;
     if (componentName == "Sprite2D") return kSprite2DPropertyDescs;
     if (componentName == "ContentInstance") return kContentInstancePropertyDescs;
     if (componentName == "StreamFocus") return kStreamFocusPropertyDescs;

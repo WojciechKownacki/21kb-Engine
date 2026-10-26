@@ -27,6 +27,7 @@ namespace kb::scene {
 class Scene;
 class SceneSystem;
 class SceneTilemapRuntime;
+class ScenePhysics2DRuntime;
 
 inline constexpr float kSceneRuntimeDefaultFixedDeltaSeconds = 1.0F / 60.0F;
 inline constexpr std::size_t kSceneRuntimeDefaultMaxFixedStepsPerFrame = 8U;
@@ -170,6 +171,8 @@ public:
 
     [[nodiscard]] SceneTilemapRuntime* Tilemaps() const noexcept;
     void SetTilemapRuntime(SceneTilemapRuntime* runtime) noexcept;
+    [[nodiscard]] ScenePhysics2DRuntime* Physics2D() const noexcept;
+    void SetPhysics2DRuntime(ScenePhysics2DRuntime* runtime) noexcept;
 
     void AddSystem(std::unique_ptr<kb::ecs::System> system);
     SceneSystemHandle AddSceneSystem(std::unique_ptr<SceneSystem> system);

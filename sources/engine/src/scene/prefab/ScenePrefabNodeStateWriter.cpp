@@ -105,6 +105,9 @@ namespace {
 [[nodiscard]] bool Equals(const TilemapRendererComponent& lhs, const TilemapRendererComponent& rhs) noexcept { return lhs == rhs; }
 
 [[nodiscard]] bool Equals(const TilemapColliderComponent& lhs, const TilemapColliderComponent& rhs) noexcept { return lhs == rhs; }
+[[nodiscard]] bool Equals(const CharacterController2DComponent& lhs, const CharacterController2DComponent& rhs) noexcept { return lhs == rhs; }
+[[nodiscard]] bool Equals(const Collider2DComponent& lhs, const Collider2DComponent& rhs) noexcept { return lhs == rhs; }
+[[nodiscard]] bool Equals(const Body2DComponent& lhs, const Body2DComponent& rhs) noexcept { return lhs == rhs; }
 [[nodiscard]] bool Equals(const Sprite2DComponent& lhs, const Sprite2DComponent& rhs) noexcept { return lhs == rhs; }
 
 [[nodiscard]] bool Equals(const ContentInstanceComponent& lhs, const ContentInstanceComponent& rhs) noexcept {
@@ -329,6 +332,9 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , tilemaps(scene.Components().Tilemaps())
     , tilemapRenderers(scene.Components().TilemapRenderers())
     , tilemapColliders(scene.Components().TilemapColliders())
+    , characterControllers2D(scene.Components().CharacterControllers2D())
+    , colliders2D(scene.Components().Colliders2D())
+    , bodies2D(scene.Components().Bodies2D())
     , sprites2D(scene.Components().Sprites2D())
 
     , streamFocuses(scene.Components().StreamFocuses())
@@ -425,6 +431,9 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.tilemaps, entity, node.components.tilemap);
     WriteOptionalComponent(context.tilemapRenderers, entity, node.components.tilemapRenderer);
     WriteOptionalComponent(context.tilemapColliders, entity, node.components.tilemapCollider);
+    WriteOptionalComponent(context.characterControllers2D, entity, node.components.characterController2D);
+    WriteOptionalComponent(context.colliders2D, entity, node.components.collider2D);
+    WriteOptionalComponent(context.bodies2D, entity, node.components.body2D);
     WriteOptionalComponent(context.sprites2D, entity, node.components.sprite2D);
 
     WriteOptionalComponent(context.streamFocuses, entity, node.components.streamFocus);

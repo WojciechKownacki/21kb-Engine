@@ -57,6 +57,15 @@ namespace {
     if (components.tilemapCollider.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::TilemapCollider);
     }
+    if (components.characterController2D.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::CharacterController2D);
+    }
+    if (components.collider2D.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Collider2D);
+    }
+    if (components.body2D.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Body2D);
+    }
     if (components.sprite2D.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Sprite2D);
     }
@@ -202,6 +211,15 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.tilemapCollider.has_value()) {
             archetype.tilemapColliders.push_back(*node.components.tilemapCollider);
+        }
+        if (node.components.characterController2D.has_value()) {
+            archetype.characterControllers2D.push_back(*node.components.characterController2D);
+        }
+        if (node.components.collider2D.has_value()) {
+            archetype.colliders2D.push_back(*node.components.collider2D);
+        }
+        if (node.components.body2D.has_value()) {
+            archetype.bodies2D.push_back(*node.components.body2D);
         }
         if (node.components.sprite2D.has_value()) {
             archetype.sprites2D.push_back(*node.components.sprite2D);

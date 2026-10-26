@@ -28,6 +28,9 @@
 #include "engine/scene/TilemapComponent.hpp"
 #include "engine/scene/TilemapRendererComponent.hpp"
 #include "engine/scene/TilemapColliderComponent.hpp"
+#include "engine/scene/CharacterController2DComponent.hpp"
+#include "engine/scene/Collider2DComponent.hpp"
+#include "engine/scene/Body2DComponent.hpp"
 #include "engine/scene/Sprite2DComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -96,12 +99,18 @@ public:
     [[nodiscard]] static bool HasTilemap(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasTilemapRenderer(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasTilemapCollider(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasCharacterController2D(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasCollider2D(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasBody2D(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasSprite2D(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const ContentInstanceComponent* TryGetContentInstance(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const GridComponent* TryGetGrid(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const TilemapComponent* TryGetTilemap(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const TilemapRendererComponent* TryGetTilemapRenderer(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const TilemapColliderComponent* TryGetTilemapCollider(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const CharacterController2DComponent* TryGetCharacterController2D(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const Collider2DComponent* TryGetCollider2D(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const Body2DComponent* TryGetBody2D(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const Sprite2DComponent* TryGetSprite2D(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasStreamFocus(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const StreamFocusComponent* TryGetStreamFocus(const Scene& scene, SceneEntity entity) noexcept;

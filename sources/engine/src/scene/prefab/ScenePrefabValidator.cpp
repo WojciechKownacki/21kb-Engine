@@ -36,6 +36,9 @@ bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab, std::size_t rootDe
     }
     for (const ScenePrefabNodeDesc& node : nodes) {
         if (node.components.grid && !IsGridComponentValid(*node.components.grid)) return false;
+        if (node.components.characterController2D && !IsCharacterController2DComponentValid(*node.components.characterController2D)) return false;
+        if (node.components.collider2D && !IsCollider2DComponentValid(*node.components.collider2D)) return false;
+        if (node.components.body2D && !IsBody2DComponentValid(*node.components.body2D)) return false;
         if (node.components.sprite2D && !IsSprite2DComponentValid(*node.components.sprite2D)) return false;
         if (node.components.audioSource.has_value()
             && !IsAudioSourceComponentPersistable(*node.components.audioSource)) return false;

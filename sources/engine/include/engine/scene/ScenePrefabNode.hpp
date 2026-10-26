@@ -21,6 +21,9 @@
 #include "engine/scene/TilemapComponent.hpp"
 #include "engine/scene/TilemapRendererComponent.hpp"
 #include "engine/scene/TilemapColliderComponent.hpp"
+#include "engine/scene/CharacterController2DComponent.hpp"
+#include "engine/scene/Collider2DComponent.hpp"
+#include "engine/scene/Body2DComponent.hpp"
 #include "engine/scene/Sprite2DComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -121,6 +124,9 @@ struct ScenePrefabNodeComponents {
     std::optional<TilemapComponent> tilemap;
     std::optional<TilemapRendererComponent> tilemapRenderer;
     std::optional<TilemapColliderComponent> tilemapCollider;
+    std::optional<CharacterController2DComponent> characterController2D;
+    std::optional<Collider2DComponent> collider2D;
+    std::optional<Body2DComponent> body2D;
     std::optional<Sprite2DComponent> sprite2D;
     std::optional<StreamFocusComponent> streamFocus;
     std::optional<WorldBackdropComponent> worldBackdrop;

@@ -56,6 +56,15 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.tilemapCollider.has_value()) {
         sceneComponents.TilemapColliders().Set(entity, *components.tilemapCollider);
     }
+    if (components.characterController2D.has_value()) {
+        sceneComponents.CharacterControllers2D().Set(entity, *components.characterController2D);
+    }
+    if (components.collider2D.has_value()) {
+        sceneComponents.Colliders2D().Set(entity, *components.collider2D);
+    }
+    if (components.body2D.has_value()) {
+        sceneComponents.Bodies2D().Set(entity, *components.body2D);
+    }
     if (components.sprite2D.has_value()) {
         sceneComponents.Sprites2D().Set(entity, *components.sprite2D);
     }

@@ -68,6 +68,9 @@ enum SceneNodeComponentBits : std::uint64_t {
       TilemapBit = 1ULL << 43U,
       TilemapRendererBit = 1ULL << 44U,
       TilemapColliderBit = 1ULL << 45U,
+      CharacterController2DBit = 1ULL << 49U,
+      Collider2DBit = 1ULL << 48U,
+      Body2DBit = 1ULL << 47U,
       Sprite2DBit = 1ULL << 46U,
 
 };
@@ -89,7 +92,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit | Sprite2DBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit | UIBit | NavLinkBit | SocketAttachmentBit | CombatantBit | AIBrainBit | GridBit | TilemapBit | TilemapRendererBit | TilemapColliderBit | Sprite2DBit | Body2DBit | Collider2DBit | CharacterController2DBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -141,6 +144,9 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.tilemap.has_value(), TilemapBit);
     include(components.tilemapRenderer.has_value(), TilemapRendererBit);
     include(components.tilemapCollider.has_value(), TilemapColliderBit);
+    include(components.characterController2D.has_value(), CharacterController2DBit);
+    include(components.collider2D.has_value(), Collider2DBit);
+    include(components.body2D.has_value(), Body2DBit);
     include(components.sprite2D.has_value(), Sprite2DBit);
     return componentBits;
 }
@@ -644,6 +650,60 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!input.ReadBool(value.enabled)) return false;
         output.tilemapCollider = value;
     }
+    if ((componentBits & CharacterController2DBit) != 0U) {
+        CharacterController2DComponent value{};
+        if (fileVersion < SceneDocument::CharacterController2DFileVersion) return false;
+        if (!input.ReadFloat(value.radius)) return false;
+        if (!input.ReadFloat(value.height)) return false;
+        if (!input.ReadFloat(value.gravityScale)) return false;
+        if (!input.ReadBool(value.useGravity)) return false;
+        if (!input.ReadFloat(value.slopeLimitDegrees)) return false;
+        if (!input.ReadFloat(value.stepHeight)) return false;
+        if (!input.ReadInt32(value.layer)) return false;
+        if (!input.ReadUInt32(value.collidesWith)) return false;
+        if (!input.ReadBool(value.sideView)) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        if (!IsCharacterController2DComponentValid(value)) return false;
+        output.characterController2D = value;
+    }
+    if ((componentBits & Collider2DBit) != 0U) {
+        Collider2DComponent value{};
+        if (fileVersion < SceneDocument::Collider2DFileVersion) return false;
+        if (!input.ReadInt32(value.shape)) return false;
+        if (!input.ReadFloat(value.width)) return false;
+        if (!input.ReadFloat(value.height)) return false;
+        if (!input.ReadFloat(value.radius)) return false;
+        if (!input.ReadFloat(value.offsetX)) return false;
+        if (!input.ReadFloat(value.offsetY)) return false;
+        if (!input.ReadFloat(value.angleDegrees)) return false;
+        if (!input.ReadBool(value.isTrigger)) return false;
+        if (!input.ReadFloat(value.density)) return false;
+        if (!input.ReadFloat(value.friction)) return false;
+        if (!input.ReadFloat(value.restitution)) return false;
+        if (!input.ReadInt32(value.layer)) return false;
+        if (!input.ReadUInt32(value.collidesWith)) return false;
+        if (!input.ReadBool(value.sideView)) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        if (!IsCollider2DComponentValid(value)) return false;
+        output.collider2D = value;
+    }
+    if ((componentBits & Body2DBit) != 0U) {
+        Body2DComponent value{};
+        if (fileVersion < SceneDocument::Body2DFileVersion) return false;
+        if (!input.ReadInt32(value.type)) return false;
+        if (!input.ReadFloat(value.gravityScale)) return false;
+        if (!input.ReadFloat(value.linearDamping)) return false;
+        if (!input.ReadFloat(value.angularDamping)) return false;
+        if (!input.ReadBool(value.fixedRotation)) return false;
+        if (!input.ReadBool(value.bullet)) return false;
+        if (!input.ReadBool(value.allowSleep)) return false;
+        if (!input.ReadBool(value.sideView)) return false;
+        if (!input.ReadFloat(value.startVelocityX)) return false;
+        if (!input.ReadFloat(value.startVelocityY)) return false;
+        if (!input.ReadBool(value.enabled)) return false;
+        if (!IsBody2DComponentValid(value)) return false;
+        output.body2D = value;
+    }
     if ((componentBits & Sprite2DBit) != 0U) {
         Sprite2DComponent value{};
         if (fileVersion < SceneDocument::Sprite2DFileVersion) return false;
@@ -1039,6 +1099,51 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
     }
     if (components.tilemapCollider.has_value()) {
         const auto& value = *components.tilemapCollider;
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+    }
+    if (components.characterController2D.has_value()) {
+        const auto& value = *components.characterController2D;
+        SceneAssetBinaryIO::WriteFloat(output, value.radius);
+        SceneAssetBinaryIO::WriteFloat(output, value.height);
+        SceneAssetBinaryIO::WriteFloat(output, value.gravityScale);
+        SceneAssetBinaryIO::WriteBool(output, value.useGravity);
+        SceneAssetBinaryIO::WriteFloat(output, value.slopeLimitDegrees);
+        SceneAssetBinaryIO::WriteFloat(output, value.stepHeight);
+        SceneAssetBinaryIO::WriteInt32(output, value.layer);
+        SceneAssetBinaryIO::WriteUInt32(output, value.collidesWith);
+        SceneAssetBinaryIO::WriteBool(output, value.sideView);
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+    }
+    if (components.collider2D.has_value()) {
+        const auto& value = *components.collider2D;
+        SceneAssetBinaryIO::WriteInt32(output, value.shape);
+        SceneAssetBinaryIO::WriteFloat(output, value.width);
+        SceneAssetBinaryIO::WriteFloat(output, value.height);
+        SceneAssetBinaryIO::WriteFloat(output, value.radius);
+        SceneAssetBinaryIO::WriteFloat(output, value.offsetX);
+        SceneAssetBinaryIO::WriteFloat(output, value.offsetY);
+        SceneAssetBinaryIO::WriteFloat(output, value.angleDegrees);
+        SceneAssetBinaryIO::WriteBool(output, value.isTrigger);
+        SceneAssetBinaryIO::WriteFloat(output, value.density);
+        SceneAssetBinaryIO::WriteFloat(output, value.friction);
+        SceneAssetBinaryIO::WriteFloat(output, value.restitution);
+        SceneAssetBinaryIO::WriteInt32(output, value.layer);
+        SceneAssetBinaryIO::WriteUInt32(output, value.collidesWith);
+        SceneAssetBinaryIO::WriteBool(output, value.sideView);
+        SceneAssetBinaryIO::WriteBool(output, value.enabled);
+    }
+    if (components.body2D.has_value()) {
+        const auto& value = *components.body2D;
+        SceneAssetBinaryIO::WriteInt32(output, value.type);
+        SceneAssetBinaryIO::WriteFloat(output, value.gravityScale);
+        SceneAssetBinaryIO::WriteFloat(output, value.linearDamping);
+        SceneAssetBinaryIO::WriteFloat(output, value.angularDamping);
+        SceneAssetBinaryIO::WriteBool(output, value.fixedRotation);
+        SceneAssetBinaryIO::WriteBool(output, value.bullet);
+        SceneAssetBinaryIO::WriteBool(output, value.allowSleep);
+        SceneAssetBinaryIO::WriteBool(output, value.sideView);
+        SceneAssetBinaryIO::WriteFloat(output, value.startVelocityX);
+        SceneAssetBinaryIO::WriteFloat(output, value.startVelocityY);
         SceneAssetBinaryIO::WriteBool(output, value.enabled);
     }
     if (components.sprite2D.has_value()) {
