@@ -185,19 +185,21 @@ bool SetUpMap2DView(
     scene.Components().Cameras().Set(camera.Entity(), lens);
     outcome.camera = camera.Entity();
 
-    if (kb::scene::ScenePostProcessAccess::ActiveProfile(scene) == 0U) {
-        const std::filesystem::path file = Map2DAssetFile(assetsRoot, kMap2DProfilePath);
-        std::error_code fileError;
-        if (std::filesystem::exists(file, fileError) || WritePixelProfile(file)) {
-            static_cast<void>(scene.Assets().Discover());
-            const kb::assets::AssetId profile = kb::assets::MakeAssetId(
-                kb::assets::NormalizeAssetPath(std::filesystem::path{ std::string{ kMap2DProfilePath } }) + ":" +
-                std::string{ kb::render::kPostProcessProfileAssetType });
-            kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, profile.value);
-            outcome.profileAssigned = true;
-        }
-    }
+    outcome.profileAssigned = UseExactColors(scene, assetsRoot);
     if (result != nullptr) *result = outcome;
+    return true;
+}
+
+bool UseExactColors(kb::scene::Scene& scene, const std::filesystem::path& assetsRoot) {
+    if (kb::scene::ScenePostProcessAccess::ActiveProfile(scene) != 0U) return false;
+    const std::filesystem::path file = Map2DAssetFile(assetsRoot, kMap2DProfilePath);
+    std::error_code fileError;
+    if (!std::filesystem::exists(file, fileError) && !WritePixelProfile(file)) return false;
+    static_cast<void>(scene.Assets().Discover());
+    const kb::assets::AssetId profile = kb::assets::MakeAssetId(
+        kb::assets::NormalizeAssetPath(std::filesystem::path{ std::string{ kMap2DProfilePath } }) + ":" +
+        std::string{ kb::render::kPostProcessProfileAssetType });
+    kb::scene::ScenePostProcessAccess::SetActiveProfile(scene, profile.value);
     return true;
 }
 

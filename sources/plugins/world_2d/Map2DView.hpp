@@ -46,4 +46,9 @@ void SetUpMap2DComponents(kb::scene::Scene& scene, kb::scene::SceneEntity entity
     Map2DViewResult* result = nullptr,
     std::string* error = nullptr);
 
+// A scene with no post-process profile gets /Game/Maps/PP_Map2D.kbppfx (no tonemapping, exposure or screen effects), so unlit
+// sprites show their own colours instead of being brightened by automatic exposure. True when the profile was assigned; false
+// when the scene already has a profile or the profile could not be written. Sprite 2D scenes use it too.
+bool UseExactColors(kb::scene::Scene& scene, const std::filesystem::path& assetsRoot);
+
 } // namespace kb::world2d

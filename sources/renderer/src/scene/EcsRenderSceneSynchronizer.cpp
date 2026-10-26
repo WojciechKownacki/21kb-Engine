@@ -466,11 +466,17 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     const auto* ownedMap = sync->scene->Components().Tilemaps().TryGet(entity);
     bool mapMesh = ownedMap && ownedMap->mapAssetId == renderer.meshAssetId;
     bool generated = renderer.transient;
+    // A transient mesh made for a Sprite 2D is the sprite's own picture, drawn as long as the sprite is.
+    bool spriteVisual = false;
     if (!ownedMap) {
         auto ancestor = sync->scene->Hierarchy().Parent(entity);
         while (ancestor.IsValid()) {
             const auto* parentRenderer = sync->scene->Components().MeshRenderers().TryGet(ancestor);
             generated = generated || (parentRenderer && parentRenderer->transient);
+            if (generated && sync->scene->Components().Sprites2D().Has(ancestor)) {
+                spriteVisual = true;
+                break;
+            }
             if (sync->scene->Components().Tilemaps().Has(ancestor)) {
                 if (generated) { tilemapOwner = ancestor; mapMesh = true; }
                 break;
@@ -478,7 +484,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
             ancestor = sync->scene->Hierarchy().Parent(ancestor);
         }
     }
-    if (generated && !sync->scene->Components().TilemapRenderers().Has(tilemapOwner)) visible = false;
+    if (generated && !spriteVisual && !sync->scene->Components().TilemapRenderers().Has(tilemapOwner)) visible = false;
     if (const auto* tilemap = sync->scene->Components().TilemapRenderers().TryGet(tilemapOwner); mapMesh && tilemap) {
         visible = visible && tilemap->enabled;
         const auto* grid = sync->scene->Components().Grids().TryGet(tilemapOwner);

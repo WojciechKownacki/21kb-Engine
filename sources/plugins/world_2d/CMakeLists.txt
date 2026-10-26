@@ -16,6 +16,8 @@ add_library(kb_world2d_core STATIC
     Map2DCollision.cpp
     Map2DRuntime.hpp
     Map2DRuntime.cpp
+    Sprite2DRuntime.hpp
+    Sprite2DRuntime.cpp
 )
 target_include_directories(kb_world2d_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kb_world2d_core PUBLIC kb_engine kb_renderer)
@@ -42,4 +44,9 @@ if(BUILD_TESTING)
     target_link_libraries(kb_world2d_tests PRIVATE kb_world2d_core)
     add_test(NAME kb_world2d_tests COMMAND $<TARGET_FILE:kb_world2d_tests>)
     kb_apply_quality_gates(kb_world2d_tests)
+
+    add_executable(kb_world2d_sprite_tests tests/Sprite2DTests.cpp)
+    target_link_libraries(kb_world2d_sprite_tests PRIVATE kb_world2d_core)
+    add_test(NAME kb_world2d_sprite_tests COMMAND $<TARGET_FILE:kb_world2d_sprite_tests>)
+    kb_apply_quality_gates(kb_world2d_sprite_tests)
 endif()
