@@ -248,8 +248,6 @@ Compiled only into the editor, the cooker and the shader compiler:
 - Fluent UI toolbar icons (MIT), `third_party/luizengine-fluentui-toolbar`
 - Devicon (MIT), `third_party/devicon`
 
-Box2D is vendored but not built into any product.
-
 ## Notes
 
 The root `LICENSE` file applies to 21kb-Engine itself. Third-party dependencies

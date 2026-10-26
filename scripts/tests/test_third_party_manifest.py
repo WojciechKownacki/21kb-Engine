@@ -21,8 +21,6 @@ LICENSES_DOC = ROOT / "third_party" / "THIRD_PARTY_LICENSES.md"
 # Folders of third_party/ that hold a component's license inventory entry only by another path, or hold no
 # component at all. Each one must be named in THIRD_PARTY_LICENSES.md or be build infrastructure.
 NOT_IN_MANIFEST_BY_PATH = {
-    # Vendored, not built into any product (THIRD_PARTY_LICENSES.md says so).
-    "box2d": "box2d",
     # A standalone copy of bgfx; the build uses the one inside third_party/bgfx.cmake.
     "bgfx": "bgfx",
     # Our patches to third_party/bgfx.cmake and the license texts of fetched components.

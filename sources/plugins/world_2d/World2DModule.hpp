@@ -18,7 +18,7 @@ public:
     void OnSceneDetach(kb::scene::Scene& scene) override;
     [[nodiscard]] Map2DRuntime* RuntimeFor(kb::scene::Scene& scene) const noexcept;
 private:
-    struct Attached { kb::scene::SceneSystemHandle handle; Map2DRuntime* runtime = nullptr; kb::scene::SceneSystemHandle spriteHandle; };
+    struct Attached { kb::scene::SceneSystemHandle handle; Map2DRuntime* runtime = nullptr; kb::scene::SceneSystemHandle spriteHandle; kb::scene::SceneSystemHandle physicsHandle; };
     std::unordered_map<kb::scene::Scene*, Attached> scenes_;
 };
 

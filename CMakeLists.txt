@@ -397,6 +397,17 @@ set(MINIAUDIO_INSTALL OFF CACHE BOOL "Do not install vendored miniaudio" FORCE)
 add_subdirectory(third_party/miniaudio third_party/miniaudio EXCLUDE_FROM_ALL)
 include(CMake/EnableMiniaudioVorbis.cmake)
 
+# Box2D is the 2D physics of the World.Map2D plugin (Physics 2D bodies, shapes and the character mover). Only its library is built: no
+# samples, tests, benchmarks, documentation or heavy validation, and no AVX2 (the plugin runs on every x64 machine).
+set(BOX2D_SAMPLES OFF CACHE BOOL "Do not build the Box2D samples" FORCE)
+set(BOX2D_UNIT_TESTS OFF CACHE BOOL "Do not build the Box2D unit tests" FORCE)
+set(BOX2D_BENCHMARKS OFF CACHE BOOL "Do not build the Box2D benchmarks" FORCE)
+set(BOX2D_DOCS OFF CACHE BOOL "Do not build the Box2D documentation" FORCE)
+set(BOX2D_VALIDATE OFF CACHE BOOL "No heavy Box2D validation" FORCE)
+set(BOX2D_PROFILE OFF CACHE BOOL "No Box2D profiling" FORCE)
+set(BOX2D_AVX2 OFF CACHE BOOL "No Box2D AVX2" FORCE)
+add_subdirectory(third_party/box2d third_party/box2d EXCLUDE_FROM_ALL)
+
 # ufbx is intentionally built as a small isolated C library. The engine owns
 # conversion into its canonical skeletal asset types; no ufbx types escape the
 # importer implementation.

@@ -12,7 +12,13 @@ namespace kb::world2d {
 namespace {
 using namespace kb::assets;
 using namespace kb::scene;
-std::optional<CollisionMeshAsset> Extrude(const Map2DCollision& shape, const Map2DAsset& map) {
+// The outline of a cell's shape in cell units (positive down), counter-clockwise on screen once flipped, and its triangles.
+struct Triangulated {
+    std::vector<std::array<float, 2>> polygon;
+    std::vector<std::array<unsigned, 3>> faces;
+};
+
+std::optional<Triangulated> Triangulate(const Map2DCollision& shape) {
     auto polygon = shape.polygon;
     if (shape.kind == Map2DCollisionKind::SlopeUp) polygon = {{0,1}, {1,0}, {1,1}};
     if (shape.kind == Map2DCollisionKind::SlopeDown) polygon = {{0,0}, {1,1}, {0,1}};
@@ -39,6 +45,14 @@ std::optional<CollisionMeshAsset> Extrude(const Map2DCollision& shape, const Map
         }
         if (!clipped) return {};
     }
+    return Triangulated{ std::move(polygon), std::move(faces) };
+}
+
+std::optional<CollisionMeshAsset> Extrude(const Map2DCollision& shape, const Map2DAsset& map) {
+    const auto triangulated = Triangulate(shape);
+    if (!triangulated) return {};
+    const auto& polygon = triangulated->polygon;
+    const auto& faces = triangulated->faces;
     CollisionMeshAsset mesh;
     const auto count = static_cast<unsigned>(polygon.size());
     for (int side = 0; side < 2; ++side) for (const auto point : polygon) {
@@ -56,14 +70,18 @@ std::optional<CollisionMeshAsset> Extrude(const Map2DCollision& shape, const Map
     std::string error;
     return ValidateCollisionMesh(mesh, error) ? std::optional{std::move(mesh)} : std::nullopt;
 }
-}
+struct Area {
+    unsigned x = 0U, y = 0U, endX = 0U, endY = 0U;
+    std::int32_t floor = 0;
+    Map2DCollision shape;
+};
 
-bool BuildMap2DCollision(kb::scene::Scene& scene, kb::scene::SceneEntity owner, const kb::assets::Map2DAsset& map,
-    std::vector<kb::scene::ColliderComponent>& output, std::vector<kb::assets::AssetId>* runtimeAssets, std::string* error) {
-    using namespace kb::assets; using namespace kb::scene;
-    const auto fail = [&](std::string message) { if (error) *error = std::move(message); return false; };
+// Neighbouring cells with the same shape become one area: solids and ledges along a row, solids also down a column.
+std::vector<Area> MergeAreas(const Map2DAsset& map, bool groundFloorOnly) {
+    std::vector<Area> areas;
     std::map<std::uint64_t, Map2DCollision> pending;
     for (const auto& [key, tile] : map.tiles) {
+        if (groundFloorOnly && Map2DTileKeyZ(key) != 0) continue;
         const auto shape = Map2DCellCollision(map, tile);
         if (shape.kind != Map2DCollisionKind::None) pending.emplace(key, shape);
     }
@@ -81,6 +99,19 @@ bool BuildMap2DCollision(kb::scene::Scene& scene, kb::scene::SceneEntity owner, 
             }
         }
         for (auto row = y; row < endY; ++row) for (auto col = x; col < endX; ++col) pending.erase(Map2DTileKey(col,row,floor));
+        areas.push_back({ x, y, endX, endY, floor, shape });
+    }
+    return areas;
+}
+}
+
+
+bool BuildMap2DCollision(kb::scene::Scene& scene, kb::scene::SceneEntity owner, const kb::assets::Map2DAsset& map,
+    std::vector<kb::scene::ColliderComponent>& output, std::vector<kb::assets::AssetId>* runtimeAssets, std::string* error) {
+    using namespace kb::assets; using namespace kb::scene;
+    const auto fail = [&](std::string message) { if (error) *error = std::move(message); return false; };
+    for (const auto& area : MergeAreas(map, false)) {
+        const auto x = area.x, y = area.y, endX = area.endX, endY = area.endY; const auto floor = area.floor; const auto& shape = area.shape;
         const float size = map.tileSize, cx = (static_cast<float>(x + endX) - static_cast<float>(map.width)) * size * 0.5F;
         const float cy = static_cast<float>(y + endY) * size * 0.5F, lift = static_cast<float>(floor) * map.floorHeight;
         ColliderComponent collider; collider.trigger = shape.trigger; collider.friction = shape.friction; collider.restitution = shape.restitution;
@@ -124,4 +155,50 @@ bool BuildMap2DCollision(kb::scene::Scene& scene, kb::scene::SceneEntity owner, 
     }
     return true;
 }
+bool BuildMap2DShapes2D(const kb::assets::Map2DAsset& map, std::vector<Map2DShape2D>& output, std::string* error) {
+    using namespace kb::assets;
+    const float size = map.tileSize;
+    const bool wall = map.orientation == Map2DOrientation::Wall;
+    // The map's origin is the middle of its bottom edge (a wall) or of its centre line (flat): the same as the 3D colliders.
+    const float baseline = static_cast<float>(map.height) * size * (wall ? 1.0F : 0.5F);
+    const auto cellX = [&](float column) { return (column - static_cast<float>(map.width) * 0.5F) * size; };
+    const auto cellY = [&](float row) { return baseline - row * size; };
+    for (const auto& area : MergeAreas(map, true)) {
+        const auto& shape = area.shape;
+        Map2DShape2D out;
+        out.trigger = shape.trigger;
+        out.friction = shape.friction;
+        out.restitution = shape.restitution;
+        if (shape.kind == Map2DCollisionKind::Solid || shape.kind == Map2DCollisionKind::OneWay) {
+            const float left = cellX(static_cast<float>(area.x)), right = cellX(static_cast<float>(area.endX));
+            float top = cellY(static_cast<float>(area.y)), bottom = cellY(static_cast<float>(area.endY));
+            if (shape.kind == Map2DCollisionKind::OneWay) {
+                out.oneWay = true;
+                bottom = top - std::max(0.02F, size * 0.05F);
+            }
+            out.points = { { left, bottom }, { right, bottom }, { right, top }, { left, top } };
+            output.push_back(std::move(out));
+        } else {
+            const auto triangulated = Triangulate(shape);
+            if (!triangulated) {
+                if (error) *error = "Collision outline could not be triangulated";
+                return false;
+            }
+            for (const auto& face : triangulated->faces) {
+                Map2DShape2D piece = out;
+                for (const unsigned index : face) {
+                    const auto& point = triangulated->polygon[index];
+                    piece.points.push_back({ cellX(static_cast<float>(area.x) + point[0]), cellY(static_cast<float>(area.y) + point[1]) });
+                }
+                output.push_back(std::move(piece));
+            }
+        }
+        if (output.size() > 65536U) {
+            if (error) *error = "Too many separate collision areas";
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace kb::world2d

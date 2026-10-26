@@ -71,6 +71,7 @@ struct Map2DRuntime::State {
         std::map<std::uint64_t, std::map<std::uint64_t, Map2DTile>> cells;
         std::map<std::uint64_t, Chunk> chunks;
         std::set<std::uint64_t> dirty;
+        std::uint64_t revision = 1U;
         kb::scene::TilemapRendererComponent renderer{};
         kb::scene::TilemapColliderComponent collider{};
         std::optional<kb::scene::MeshRendererComponent> originalRenderer;
@@ -194,6 +195,11 @@ void Map2DRuntime::OnCreate(kb::scene::SceneSystemContext& context) {
     context.GetScene().Runtime().SetTilemapRuntime(this);
 }
 
+std::uint64_t Map2DRuntime::Revision(SceneEntity entity) const {
+    const auto found = state_->instances.find(entity);
+    return found == state_->instances.end() ? 0U : found->second.revision;
+}
+
 const Map2DAsset* Map2DRuntime::Map(SceneEntity entity) const {
     const auto found = state_->instances.find(entity);
     return found == state_->instances.end() ? nullptr : &found->second.map;
@@ -236,6 +242,7 @@ bool Map2DRuntime::SetTile(SceneEntity entity, std::uint32_t x, std::uint32_t y,
         instance.cells[chunk][key] = tile;
     }
     instance.dirty.insert(chunk);
+    ++instance.revision;
     if (!instance.map.groundRules.empty()) {
         const auto rules = Map2DBrushLibrary::FromMap(instance.map);
         Map2DEditor editor(instance.map, rules, {});
@@ -360,6 +367,7 @@ void Map2DRuntime::Refresh(kb::scene::SceneSystemContext& context, bool advanceT
             instance.cameraStarted = false;
             instance.seconds = 0.0;
             instance.map = std::move(*loaded);
+            ++instance.revision;
             instance.source = source;
             instance.hash = copy.contentHash;
             for (const auto& [key, tile] : instance.map.tiles) instance.cells[ChunkKey(key)].emplace(key, tile);
@@ -387,6 +395,7 @@ void Map2DRuntime::Refresh(kb::scene::SceneSystemContext& context, bool advanceT
                 instance.map.tileSize = grid->cellSize;
                 instance.map.floorHeight = grid->floorHeight;
                 instance.map.orientation = orientation;
+                ++instance.revision;
                 for (const auto& [key, chunk] : instance.chunks) { static_cast<void>(chunk); instance.dirty.insert(key); }
             }
         }

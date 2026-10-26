@@ -25,6 +25,7 @@ public:
     kb::scene::SceneFixedUpdatePhase FixedUpdatePhase() const noexcept override { return kb::scene::SceneFixedUpdatePhase::PrepareSimulation; }
     void OnDestroy(kb::scene::SceneSystemContext& context) override;
     [[nodiscard]] const kb::assets::Map2DAsset* Map(kb::scene::SceneEntity entity) const override;
+    [[nodiscard]] std::uint64_t Revision(kb::scene::SceneEntity entity) const override;
     [[nodiscard]] std::optional<kb::assets::Map2DTile> Tile(kb::scene::SceneEntity entity,
         std::uint32_t x, std::uint32_t y, std::int32_t floor = 0) const;
     [[nodiscard]] bool SetTile(kb::scene::SceneEntity entity, std::uint32_t x, std::uint32_t y,

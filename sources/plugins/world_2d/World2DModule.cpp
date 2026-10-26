@@ -1,6 +1,7 @@
 #include "World2DModule.hpp"
 #include "Map2DRuntime.hpp"
 #include "Sprite2DRuntime.hpp"
+#include "Physics2DRuntime.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 
@@ -40,12 +41,14 @@ void World2DModule::OnSceneAttach(kb::scene::Scene& scene) {
     const auto handle = scene.Runtime().AddSceneSystem(std::move(runtime));
     if (!handle.IsValid()) return;
     const auto sprites = scene.Runtime().AddSceneSystem(std::make_unique<Sprite2DRuntime>());
-    scenes_.emplace(&scene, Attached{ handle, pointer, sprites });
+    const auto physics = scene.Runtime().AddSceneSystem(std::make_unique<Physics2DRuntime>());
+    scenes_.emplace(&scene, Attached{ handle, pointer, sprites, physics });
 }
 
 void World2DModule::OnSceneDetach(kb::scene::Scene& scene) {
     const auto found = scenes_.find(&scene);
     if (found == scenes_.end()) return;
+    if (found->second.physicsHandle.IsValid()) static_cast<void>(scene.Runtime().RemoveSceneSystem(found->second.physicsHandle));
     if (found->second.spriteHandle.IsValid()) static_cast<void>(scene.Runtime().RemoveSceneSystem(found->second.spriteHandle));
     if (!scene.Runtime().RemoveSceneSystem(found->second.handle) && scene.Runtime().HasSceneSystem(found->second.handle))
         throw std::logic_error("Tilemap scene system could not detach during active dispatch");
