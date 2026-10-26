@@ -28,6 +28,8 @@
 #include "engine/scene/SceneTilemapRendererComponents.hpp"
 #include "engine/scene/TilemapColliderComponent.hpp"
 #include "engine/scene/SceneTilemapColliderComponents.hpp"
+#include "engine/scene/Sprite2DComponent.hpp"
+#include "engine/scene/SceneSprite2DComponents.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -309,7 +311,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 47> kComponentNames{
+constexpr std::array<std::string_view, 48> kComponentNames{
     "AudioSource",
     "AudioListener",
     "Transform",
@@ -333,6 +335,7 @@ constexpr std::array<std::string_view, 47> kComponentNames{
     "Tilemap",
     "TilemapRenderer",
     "TilemapCollider",
+    "Sprite2D",
     "ContentInstance",
     "StreamFocus",
     "WorldBackdrop",
@@ -409,6 +412,35 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 2> kTilemapPropertyDescs{
 constexpr std::array<ScriptSceneComponentPropertyDesc, 2> kTilemapRendererPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "sortingOrder", ScriptValueType::Int, true },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool, true },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 26> kSprite2DPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "imageAssetId", ScriptValueType::Hash, true },
+    ScriptSceneComponentPropertyDesc{ "materialAssetId", ScriptValueType::Hash, true },
+    ScriptSceneComponentPropertyDesc{ "cellWidth", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "cellHeight", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "margin", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "spacing", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "imageWidth", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "imageHeight", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "cell", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "frameCount", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "framesPerSecond", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "loop", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "playing", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "time", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "pixelsPerUnit", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "pivotX", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "pivotY", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "flipX", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "flipY", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "tintR", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "tintG", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "tintB", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "tintA", ScriptValueType::Float, true },
+    ScriptSceneComponentPropertyDesc{ "sortingOrder", ScriptValueType::Int, true },
+    ScriptSceneComponentPropertyDesc{ "wall", ScriptValueType::Bool, true },
+    ScriptSceneComponentPropertyDesc{ "visible", ScriptValueType::Bool, true },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTilemapColliderPropertyDescs{
@@ -1448,6 +1480,37 @@ constexpr std::array<FieldBinding, 2> kTilemapRendererFields{
     KB_BOOL(kb::scene::TilemapRendererComponent, enabled),
 };
 
+constexpr std::array<FieldBinding, 26> kSprite2DFields{
+    FieldBinding{ "imageAssetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::Sprite2DComponent*>(component)->imageAssetId, ScriptValueType::Hash }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::Sprite2DComponent*>(component)->imageAssetId = value.AsUInt64(); return true; } },
+    FieldBinding{ "materialAssetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::Sprite2DComponent*>(component)->materialAssetId, ScriptValueType::Hash }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::Sprite2DComponent*>(component)->materialAssetId = value.AsUInt64(); return true; } },
+    KB_UINT32(kb::scene::Sprite2DComponent, cellWidth),
+    KB_UINT32(kb::scene::Sprite2DComponent, cellHeight),
+    KB_UINT32(kb::scene::Sprite2DComponent, margin),
+    KB_UINT32(kb::scene::Sprite2DComponent, spacing),
+    KB_UINT32(kb::scene::Sprite2DComponent, imageWidth),
+    KB_UINT32(kb::scene::Sprite2DComponent, imageHeight),
+    KB_UINT32(kb::scene::Sprite2DComponent, cell),
+    KB_UINT32(kb::scene::Sprite2DComponent, frameCount),
+    KB_FLOAT(kb::scene::Sprite2DComponent, framesPerSecond),
+    KB_BOOL(kb::scene::Sprite2DComponent, loop),
+    KB_BOOL(kb::scene::Sprite2DComponent, playing),
+    KB_FLOAT(kb::scene::Sprite2DComponent, time),
+    KB_FLOAT(kb::scene::Sprite2DComponent, pixelsPerUnit),
+    KB_FLOAT(kb::scene::Sprite2DComponent, pivotX),
+    KB_FLOAT(kb::scene::Sprite2DComponent, pivotY),
+    KB_BOOL(kb::scene::Sprite2DComponent, flipX),
+    KB_BOOL(kb::scene::Sprite2DComponent, flipY),
+    KB_FLOAT(kb::scene::Sprite2DComponent, tintR),
+    KB_FLOAT(kb::scene::Sprite2DComponent, tintG),
+    KB_FLOAT(kb::scene::Sprite2DComponent, tintB),
+    KB_FLOAT(kb::scene::Sprite2DComponent, tintA),
+    KB_INT(kb::scene::Sprite2DComponent, sortingOrder),
+    KB_BOOL(kb::scene::Sprite2DComponent, wall),
+    KB_BOOL(kb::scene::Sprite2DComponent, visible),
+};
+
 constexpr std::array<FieldBinding, 1> kTilemapColliderFields{
     KB_BOOL(kb::scene::TilemapColliderComponent, enabled),
 };
@@ -1743,6 +1806,7 @@ void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity enti
 void MarkGridModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Grids().MarkModified(entity); }
 void MarkTilemapModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tilemaps().MarkModified(entity); }
 void MarkTilemapRendererModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().TilemapRenderers().MarkModified(entity); }
+void MarkSprite2DModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Sprites2D().MarkModified(entity); }
 void MarkTilemapColliderModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().TilemapColliders().MarkModified(entity); }
 void MarkContentInstanceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ContentInstances().MarkModified(entity); }
 void MarkStreamFocusModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().StreamFocuses().MarkModified(entity); }
@@ -1871,6 +1935,10 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
         auto* component = scene.Components().TilemapRenderers().TryGet(entity);
         return ComponentAccess{ component, component, kTilemapRendererFields, &MarkTilemapRendererModified };
     }
+    if (componentName == "Sprite2D") {
+        auto* component = scene.Components().Sprites2D().TryGet(entity);
+        return ComponentAccess{ component, component, kSprite2DFields, &MarkSprite2DModified };
+    }
     if (componentName == "TilemapCollider") {
         auto* component = scene.Components().TilemapColliders().TryGet(entity);
         return ComponentAccess{ component, component, kTilemapColliderFields, &MarkTilemapColliderModified };
@@ -1975,6 +2043,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Tilemap") return kTilemapPropertyDescs;
     if (componentName == "TilemapRenderer") return kTilemapRendererPropertyDescs;
     if (componentName == "TilemapCollider") return kTilemapColliderPropertyDescs;
+    if (componentName == "Sprite2D") return kSprite2DPropertyDescs;
     if (componentName == "ContentInstance") return kContentInstancePropertyDescs;
     if (componentName == "StreamFocus") return kStreamFocusPropertyDescs;
     if (componentName == "WorldBackdrop") return kWorldBackdropPropertyDescs;

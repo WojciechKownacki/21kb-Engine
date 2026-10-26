@@ -10,6 +10,7 @@
 #include "scene/components/SceneTilemapComponentStore.hpp"
 #include "scene/components/SceneTilemapRendererComponentStore.hpp"
 #include "scene/components/SceneTilemapColliderComponentStore.hpp"
+#include "scene/components/SceneSprite2DComponentStore.hpp"
 #include "scene/components/SceneStreamFocusComponentStore.hpp"
 #include "scene/components/SceneWorldBackdropComponentStore.hpp"
 #include "scene/components/SceneAmbientRadianceComponentStore.hpp"
@@ -97,11 +98,13 @@ public:
     [[nodiscard]] const SceneTilemapComponentStore& Tilemaps() const noexcept;
     [[nodiscard]] const SceneTilemapRendererComponentStore& TilemapRenderers() const noexcept;
     [[nodiscard]] const SceneTilemapColliderComponentStore& TilemapColliders() const noexcept;
+    [[nodiscard]] const SceneSprite2DComponentStore& Sprites2D() const noexcept;
     [[nodiscard]] SceneContentInstanceComponentStore& ContentInstances() noexcept;
     [[nodiscard]] SceneGridComponentStore& Grids() noexcept;
     [[nodiscard]] SceneTilemapComponentStore& Tilemaps() noexcept;
     [[nodiscard]] SceneTilemapRendererComponentStore& TilemapRenderers() noexcept;
     [[nodiscard]] SceneTilemapColliderComponentStore& TilemapColliders() noexcept;
+    [[nodiscard]] SceneSprite2DComponentStore& Sprites2D() noexcept;
     [[nodiscard]] const SceneStreamFocusComponentStore& StreamFocuses() const noexcept;
     [[nodiscard]] SceneStreamFocusComponentStore& StreamFocuses() noexcept;
     [[nodiscard]] const SceneWorldBackdropComponentStore& WorldBackdrops() const noexcept;
@@ -173,6 +176,7 @@ private:
     SceneTilemapComponentStore tilemaps_;
     SceneTilemapRendererComponentStore tilemapRenderers_;
     SceneTilemapColliderComponentStore tilemapColliders_;
+    SceneSprite2DComponentStore sprites2D_;
     SceneStreamFocusComponentStore streamFocuses_;
     SceneWorldBackdropComponentStore worldBackdrops_;
     SceneAmbientRadianceComponentStore ambientRadiances_;

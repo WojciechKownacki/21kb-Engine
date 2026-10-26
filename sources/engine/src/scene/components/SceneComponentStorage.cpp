@@ -24,6 +24,7 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , tilemaps_(world, components.TilemapComponentId())
     , tilemapRenderers_(world, components.TilemapRendererComponentId())
     , tilemapColliders_(world, components.TilemapColliderComponentId())
+    , sprites2D_(world, components.Sprite2DComponentId())
     , streamFocuses_(world, components.StreamFocusComponentId())
     , worldBackdrops_(world, components.WorldBackdropComponentId())
     , ambientRadiances_(world, components.AmbientRadianceComponentId())
@@ -165,11 +166,13 @@ const SceneGridComponentStore& SceneComponentStorage::Grids() const noexcept { r
 const SceneTilemapComponentStore& SceneComponentStorage::Tilemaps() const noexcept { return tilemaps_; }
 const SceneTilemapRendererComponentStore& SceneComponentStorage::TilemapRenderers() const noexcept { return tilemapRenderers_; }
 const SceneTilemapColliderComponentStore& SceneComponentStorage::TilemapColliders() const noexcept { return tilemapColliders_; }
+const SceneSprite2DComponentStore& SceneComponentStorage::Sprites2D() const noexcept { return sprites2D_; }
 SceneContentInstanceComponentStore& SceneComponentStorage::ContentInstances() noexcept { return contentInstances_; }
 SceneGridComponentStore& SceneComponentStorage::Grids() noexcept { return grids_; }
 SceneTilemapComponentStore& SceneComponentStorage::Tilemaps() noexcept { return tilemaps_; }
 SceneTilemapRendererComponentStore& SceneComponentStorage::TilemapRenderers() noexcept { return tilemapRenderers_; }
 SceneTilemapColliderComponentStore& SceneComponentStorage::TilemapColliders() noexcept { return tilemapColliders_; }
+SceneSprite2DComponentStore& SceneComponentStorage::Sprites2D() noexcept { return sprites2D_; }
 const SceneStreamFocusComponentStore& SceneComponentStorage::StreamFocuses() const noexcept { return streamFocuses_; }
 SceneStreamFocusComponentStore& SceneComponentStorage::StreamFocuses() noexcept { return streamFocuses_; }
 const SceneWorldBackdropComponentStore& SceneComponentStorage::WorldBackdrops() const noexcept { return worldBackdrops_; }

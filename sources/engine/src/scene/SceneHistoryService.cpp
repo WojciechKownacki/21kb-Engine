@@ -122,6 +122,7 @@ template <typename T>
         && SameValue(lhs.tilemap, rhs.tilemap)
         && SameValue(lhs.tilemapRenderer, rhs.tilemapRenderer)
         && SameValue(lhs.tilemapCollider, rhs.tilemapCollider)
+        && SameValue(lhs.sprite2D, rhs.sprite2D)
         && SameValue(lhs.streamFocus, rhs.streamFocus)
         && SameValue(lhs.worldBackdrop, rhs.worldBackdrop)
         && SameValue(lhs.ambientRadiance, rhs.ambientRadiance)

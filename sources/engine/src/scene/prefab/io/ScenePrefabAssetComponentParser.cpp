@@ -759,6 +759,42 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseSprite2D(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "sprite2D", present)) return false;
+    if (!present) return true;
+    Sprite2DComponent value{};
+    if (!ParseOptionalField(fields, "sprite2D.imageAssetId", value.imageAssetId)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.materialAssetId", value.materialAssetId)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.cellWidth", value.cellWidth)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.cellHeight", value.cellHeight)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.margin", value.margin)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.spacing", value.spacing)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.imageWidth", value.imageWidth)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.imageHeight", value.imageHeight)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.cell", value.cell)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.frameCount", value.frameCount)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.framesPerSecond", value.framesPerSecond)) return false;
+    if (!ParseOptionalBool(fields, "sprite2D.loop", value.loop)) return false;
+    if (!ParseOptionalBool(fields, "sprite2D.playing", value.playing)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.time", value.time)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.pixelsPerUnit", value.pixelsPerUnit)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.pivotX", value.pivotX)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.pivotY", value.pivotY)) return false;
+    if (!ParseOptionalBool(fields, "sprite2D.flipX", value.flipX)) return false;
+    if (!ParseOptionalBool(fields, "sprite2D.flipY", value.flipY)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.tintR", value.tintR)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.tintG", value.tintG)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.tintB", value.tintB)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.tintA", value.tintA)) return false;
+    if (!ParseOptionalField(fields, "sprite2D.sortingOrder", value.sortingOrder)) return false;
+    if (!ParseOptionalBool(fields, "sprite2D.wall", value.wall)) return false;
+    if (!ParseOptionalBool(fields, "sprite2D.visible", value.visible)) return false;
+    if (!IsSprite2DComponentValid(value)) return false;
+    components.sprite2D = value;
+    return true;
+}
+
 [[nodiscard]] bool ParseTilemapCollider(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool present = false;
     if (!ParseOptionalComponentFlag(fields, "tilemapCollider", present)) return false;
@@ -786,6 +822,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseTilemap(fields, components)
         && ParseTilemapRenderer(fields, components)
         && ParseTilemapCollider(fields, components)
+        && ParseSprite2D(fields, components)
 
         && ParseStreamFocus(fields, components)
         && ParseWorldBackdrop(fields, components)

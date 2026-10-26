@@ -18,6 +18,7 @@
 #include "engine/scene/TilemapComponent.hpp"
 #include "engine/scene/TilemapRendererComponent.hpp"
 #include "engine/scene/TilemapColliderComponent.hpp"
+#include "engine/scene/Sprite2DComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -415,6 +416,18 @@ struct ScriptComponentAccess<kb::scene::TilemapColliderComponent> {
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
         if (!scene.Components().TilemapColliders().Has(entity)) return false;
         scene.Components().TilemapColliders().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::Sprite2DComponent> {
+    [[nodiscard]] static const kb::scene::Sprite2DComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Sprites2D().TryGet(entity); }
+    [[nodiscard]] static kb::scene::Sprite2DComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Sprites2D().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::Sprite2DComponent& value) { scene.Components().Sprites2D().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Sprites2D().Has(entity)) return false;
+        scene.Components().Sprites2D().Remove(entity);
         return true;
     }
 };

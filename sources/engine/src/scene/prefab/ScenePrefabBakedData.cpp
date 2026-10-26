@@ -57,6 +57,9 @@ namespace {
     if (components.tilemapCollider.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::TilemapCollider);
     }
+    if (components.sprite2D.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Sprite2D);
+    }
     if (components.streamFocus.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::StreamFocus);
     }
@@ -199,6 +202,9 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.tilemapCollider.has_value()) {
             archetype.tilemapColliders.push_back(*node.components.tilemapCollider);
+        }
+        if (node.components.sprite2D.has_value()) {
+            archetype.sprites2D.push_back(*node.components.sprite2D);
         }
         if (node.components.streamFocus.has_value()) {
             archetype.streamFocuses.push_back(*node.components.streamFocus);

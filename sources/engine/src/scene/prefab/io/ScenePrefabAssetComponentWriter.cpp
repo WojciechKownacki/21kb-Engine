@@ -184,6 +184,36 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "tilemapRenderer.sortingOrder=" << value.sortingOrder << '\n';
         output << "tilemapRenderer.enabled=" << value.enabled << '\n';
     }
+    output << "sprite2D=" << (components.sprite2D.has_value() ? 1 : 0) << '\n';
+    if (components.sprite2D.has_value()) {
+        const auto& value = *components.sprite2D;
+        output << "sprite2D.imageAssetId=" << value.imageAssetId << '\n';
+        output << "sprite2D.materialAssetId=" << value.materialAssetId << '\n';
+        output << "sprite2D.cellWidth=" << value.cellWidth << '\n';
+        output << "sprite2D.cellHeight=" << value.cellHeight << '\n';
+        output << "sprite2D.margin=" << value.margin << '\n';
+        output << "sprite2D.spacing=" << value.spacing << '\n';
+        output << "sprite2D.imageWidth=" << value.imageWidth << '\n';
+        output << "sprite2D.imageHeight=" << value.imageHeight << '\n';
+        output << "sprite2D.cell=" << value.cell << '\n';
+        output << "sprite2D.frameCount=" << value.frameCount << '\n';
+        output << "sprite2D.framesPerSecond=" << value.framesPerSecond << '\n';
+        output << "sprite2D.loop=" << value.loop << '\n';
+        output << "sprite2D.playing=" << value.playing << '\n';
+        output << "sprite2D.time=" << value.time << '\n';
+        output << "sprite2D.pixelsPerUnit=" << value.pixelsPerUnit << '\n';
+        output << "sprite2D.pivotX=" << value.pivotX << '\n';
+        output << "sprite2D.pivotY=" << value.pivotY << '\n';
+        output << "sprite2D.flipX=" << value.flipX << '\n';
+        output << "sprite2D.flipY=" << value.flipY << '\n';
+        output << "sprite2D.tintR=" << value.tintR << '\n';
+        output << "sprite2D.tintG=" << value.tintG << '\n';
+        output << "sprite2D.tintB=" << value.tintB << '\n';
+        output << "sprite2D.tintA=" << value.tintA << '\n';
+        output << "sprite2D.sortingOrder=" << value.sortingOrder << '\n';
+        output << "sprite2D.wall=" << value.wall << '\n';
+        output << "sprite2D.visible=" << value.visible << '\n';
+    }
     output << "tilemapCollider=" << (components.tilemapCollider.has_value() ? 1 : 0) << '\n';
     if (components.tilemapCollider.has_value()) {
         const auto& value = *components.tilemapCollider;

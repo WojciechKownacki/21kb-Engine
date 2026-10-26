@@ -46,6 +46,7 @@ struct ScenePrefabOptionalComponentExpectation {
         { registry.TilemapComponentId(), components.tilemap.has_value() },
         { registry.TilemapRendererComponentId(), components.tilemapRenderer.has_value() },
         { registry.TilemapColliderComponentId(), components.tilemapCollider.has_value() },
+        { registry.Sprite2DComponentId(), components.sprite2D.has_value() },
         { registry.StreamFocusComponentId(), components.streamFocus.has_value() },
         { registry.WorldBackdropComponentId(), components.worldBackdrop.has_value() },
         { registry.AmbientRadianceComponentId(), components.ambientRadiance.has_value() },

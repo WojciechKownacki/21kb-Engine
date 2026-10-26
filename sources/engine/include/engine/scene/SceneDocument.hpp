@@ -63,7 +63,8 @@ struct SceneDocument {
     static constexpr std::uint32_t TilemapFileVersion = 50U;
     static constexpr std::uint32_t OneWayColliderFileVersion = 51U;
     static constexpr std::uint32_t ModalCanvasFileVersion = 52U;
-    static constexpr std::uint32_t CurrentFileVersion = 52U;
+    static constexpr std::uint32_t Sprite2DFileVersion = 53U;
+    static constexpr std::uint32_t CurrentFileVersion = 53U;
     static constexpr std::uint32_t SocketAttachmentFileVersion = 49U;
     static constexpr std::uint32_t CombatantFileVersion = 49U;
     static constexpr std::uint32_t AIBrainFileVersion = 49U;

@@ -29,6 +29,7 @@
 #include "engine/scene/TilemapComponent.hpp"
 #include "engine/scene/TilemapRendererComponent.hpp"
 #include "engine/scene/TilemapColliderComponent.hpp"
+#include "engine/scene/Sprite2DComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
@@ -497,6 +498,37 @@ void RegisterTilemapColliderReflection(kb::ecs::World& world) {
     }));
 }
 
+void RegisterSprite2DReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<Sprite2DComponent>("kb.scene.Sprite2DComponent", {
+        KB_ECS_FIELD(Sprite2DComponent, imageAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(Sprite2DComponent, materialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(Sprite2DComponent, cellWidth, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, cellHeight, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, margin, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, spacing, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, imageWidth, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, imageHeight, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, cell, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, frameCount, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(Sprite2DComponent, framesPerSecond, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, loop, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Sprite2DComponent, playing, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Sprite2DComponent, time, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, pixelsPerUnit, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, pivotX, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, pivotY, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, flipX, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Sprite2DComponent, flipY, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Sprite2DComponent, tintR, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, tintG, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, tintB, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, tintA, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(Sprite2DComponent, sortingOrder, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(Sprite2DComponent, wall, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(Sprite2DComponent, visible, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
 void RegisterStreamFocusReflection(kb::ecs::World& world) {
     static_cast<void>(world.RegisterComponentReflection<StreamFocusComponent>("kb.scene.StreamFocusComponent", {
         KB_ECS_FIELD(StreamFocusComponent, innerRadius, kb::ecs::ComponentFieldType::Float32),
@@ -599,6 +631,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , tilemapComponentId_(RegisterSceneComponent<TilemapComponent>(world, TilemapComponent::StableId))
     , tilemapRendererComponentId_(RegisterSceneComponent<TilemapRendererComponent>(world, TilemapRendererComponent::StableId))
     , tilemapColliderComponentId_(RegisterSceneComponent<TilemapColliderComponent>(world, TilemapColliderComponent::StableId))
+    , sprite2DComponentId_(RegisterSceneComponent<Sprite2DComponent>(world, Sprite2DComponent::StableId))
     , streamFocusComponentId_(RegisterSceneComponent<StreamFocusComponent>(world, StreamFocusComponent::StableId))
     , worldBackdropComponentId_(RegisterSceneComponent<WorldBackdropComponent>(world, WorldBackdropComponent::StableId))
     , ambientRadianceComponentId_(RegisterSceneComponent<AmbientRadianceComponent>(world, AmbientRadianceComponent::StableId))
@@ -636,6 +669,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterTilemapReflection(world);
     RegisterTilemapRendererReflection(world);
     RegisterTilemapColliderReflection(world);
+    RegisterSprite2DReflection(world);
     RegisterStreamFocusReflection(world);
     RegisterWorldBackdropReflection(world);
     RegisterAmbientRadianceReflection(world);
@@ -711,6 +745,7 @@ std::uint64_t SceneComponentRegistry::GridComponentId() const noexcept { return 
 std::uint64_t SceneComponentRegistry::TilemapComponentId() const noexcept { return tilemapComponentId_; }
 std::uint64_t SceneComponentRegistry::TilemapRendererComponentId() const noexcept { return tilemapRendererComponentId_; }
 std::uint64_t SceneComponentRegistry::TilemapColliderComponentId() const noexcept { return tilemapColliderComponentId_; }
+std::uint64_t SceneComponentRegistry::Sprite2DComponentId() const noexcept { return sprite2DComponentId_; }
 std::uint64_t SceneComponentRegistry::StreamFocusComponentId() const noexcept { return streamFocusComponentId_; }
 std::uint64_t SceneComponentRegistry::WorldBackdropComponentId() const noexcept { return worldBackdropComponentId_; }
 std::uint64_t SceneComponentRegistry::AmbientRadianceComponentId() const noexcept { return ambientRadianceComponentId_; }

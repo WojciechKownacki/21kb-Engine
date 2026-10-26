@@ -381,11 +381,13 @@ add_library(kb_engine STATIC
         include/engine/scene/TilemapComponent.hpp
         include/engine/scene/TilemapRendererComponent.hpp
         include/engine/scene/TilemapColliderComponent.hpp
+        include/engine/scene/Sprite2DComponent.hpp
         include/engine/scene/SceneContentInstanceComponents.hpp
         include/engine/scene/SceneGridComponents.hpp
         include/engine/scene/SceneTilemapComponents.hpp
         include/engine/scene/SceneTilemapRendererComponents.hpp
         include/engine/scene/SceneTilemapColliderComponents.hpp
+        include/engine/scene/SceneSprite2DComponents.hpp
         include/engine/scene/StreamFocusComponent.hpp
         include/engine/scene/SceneStreamFocusComponents.hpp
         include/engine/scene/WorldBackdropComponent.hpp
@@ -911,11 +913,13 @@ add_library(kb_engine STATIC
         src/scene/components/SceneTilemapApi.cpp
         src/scene/components/SceneTilemapRendererApi.cpp
         src/scene/components/SceneTilemapColliderApi.cpp
+        src/scene/components/SceneSprite2DApi.cpp
         src/scene/components/SceneContentInstanceStorage.cpp
         src/scene/components/SceneGridStorage.cpp
         src/scene/components/SceneTilemapStorage.cpp
         src/scene/components/SceneTilemapRendererStorage.cpp
         src/scene/components/SceneTilemapColliderStorage.cpp
+        src/scene/components/SceneSprite2DStorage.cpp
         src/scene/components/SceneStreamFocusApi.cpp
         src/scene/components/SceneStreamFocusStorage.cpp
         src/scene/components/SceneWorldBackdropApi.cpp
@@ -1023,6 +1027,7 @@ add_library(kb_engine STATIC
         src/scene/modules/components/SceneTilemapModule.cpp
         src/scene/modules/components/SceneTilemapRendererModule.cpp
         src/scene/modules/components/SceneTilemapColliderModule.cpp
+        src/scene/modules/components/SceneSprite2DModule.cpp
         src/scene/modules/components/SceneStreamFocusModule.cpp
       src/scene/systems/ContentInstanceSceneSystem.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
@@ -1330,6 +1335,7 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneTilemapComponentStore.hpp
         src/private/scene/components/SceneTilemapRendererComponentStore.hpp
         src/private/scene/components/SceneTilemapColliderComponentStore.hpp
+        src/private/scene/components/SceneSprite2DComponentStore.hpp
         src/private/scene/components/SceneStreamFocusComponentStore.hpp
         src/private/scene/components/SceneWorldBackdropComponentStore.hpp
         src/private/scene/components/SceneAmbientRadianceComponentStore.hpp

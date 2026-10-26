@@ -155,6 +155,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<TilemapComponent> tilemaps;
     std::vector<TilemapRendererComponent> tilemapRenderers;
     std::vector<TilemapColliderComponent> tilemapColliders;
+    std::vector<Sprite2DComponent> sprites2D;
 
     std::vector<StreamFocusComponent> streamFocuses;
     std::vector<WorldBackdropComponent> worldBackdrops;
@@ -262,6 +263,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::TilemapCollider)) {
             RepeatComponents(tilemapColliders, std::span<const TilemapColliderComponent>{ archetype.tilemapColliders }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const TilemapColliderComponent>{ tilemapColliders });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Sprite2D)) {
+            RepeatComponents(sprites2D, std::span<const Sprite2DComponent>{ archetype.sprites2D }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const Sprite2DComponent>{ sprites2D });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::StreamFocus)) {
             RepeatComponents(streamFocuses, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);
@@ -447,6 +452,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::TilemapCollider)) {
             AddCommandComponentPatternView(views, std::span<const TilemapColliderComponent>{ archetype.tilemapColliders }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const TilemapColliderComponent>{ archetype.tilemapColliders }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Sprite2D)) {
+            AddCommandComponentPatternView(views, std::span<const Sprite2DComponent>{ archetype.sprites2D }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const Sprite2DComponent>{ archetype.sprites2D }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::StreamFocus)) {
             AddCommandComponentPatternView(views, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);

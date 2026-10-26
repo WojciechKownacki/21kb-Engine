@@ -69,6 +69,10 @@ void ForEachReference(const ScenePrefabNodeComponents& components, Sink&& sink) 
         sink(components.collider->meshAssetId, std::string_view{"collisionMesh"}, nullptr);
     }
     if (components.tilemap.has_value()) sink(components.tilemap->mapAssetId, "tilemap", nullptr);
+    if (components.sprite2D.has_value()) {
+        sink(components.sprite2D->imageAssetId, std::string_view{ "sprite2dImage" }, nullptr);
+        sink(components.sprite2D->materialAssetId, std::string_view{ "sprite2dMaterial" }, nullptr);
+    }
     if (components.meshRenderer.has_value()) {
         sink(components.meshRenderer->meshAssetId, std::string_view{ "mesh" }, nullptr);
         sink(components.meshRenderer->materialAssetId, std::string_view{ "material" }, nullptr);

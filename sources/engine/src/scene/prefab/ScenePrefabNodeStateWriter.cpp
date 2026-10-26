@@ -105,6 +105,7 @@ namespace {
 [[nodiscard]] bool Equals(const TilemapRendererComponent& lhs, const TilemapRendererComponent& rhs) noexcept { return lhs == rhs; }
 
 [[nodiscard]] bool Equals(const TilemapColliderComponent& lhs, const TilemapColliderComponent& rhs) noexcept { return lhs == rhs; }
+[[nodiscard]] bool Equals(const Sprite2DComponent& lhs, const Sprite2DComponent& rhs) noexcept { return lhs == rhs; }
 
 [[nodiscard]] bool Equals(const ContentInstanceComponent& lhs, const ContentInstanceComponent& rhs) noexcept {
     return lhs.assetId == rhs.assetId && lhs.kind == rhs.kind && lhs.lifetime == rhs.lifetime && lhs.active == rhs.active;
@@ -328,6 +329,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , tilemaps(scene.Components().Tilemaps())
     , tilemapRenderers(scene.Components().TilemapRenderers())
     , tilemapColliders(scene.Components().TilemapColliders())
+    , sprites2D(scene.Components().Sprites2D())
 
     , streamFocuses(scene.Components().StreamFocuses())
     , worldBackdrops(scene.Components().WorldBackdrops())
@@ -423,6 +425,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.tilemaps, entity, node.components.tilemap);
     WriteOptionalComponent(context.tilemapRenderers, entity, node.components.tilemapRenderer);
     WriteOptionalComponent(context.tilemapColliders, entity, node.components.tilemapCollider);
+    WriteOptionalComponent(context.sprites2D, entity, node.components.sprite2D);
 
     WriteOptionalComponent(context.streamFocuses, entity, node.components.streamFocus);
     WriteOptionalComponent(context.worldBackdrops, entity, node.components.worldBackdrop);

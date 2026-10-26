@@ -193,6 +193,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
+            .name = "Sprite2D",
+            .id = ComputeLibraryComponentId("Sprite2D"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
             .name = "ContentInstance",
             .id = ComputeLibraryComponentId("ContentInstance"),
             .serializable = true,

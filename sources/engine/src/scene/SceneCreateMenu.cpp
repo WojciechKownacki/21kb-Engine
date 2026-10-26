@@ -26,10 +26,12 @@ namespace {
 constexpr std::string_view k3DObject = "3D Object";
 constexpr std::string_view kLight = "Light";
 
-constexpr std::array<SceneCreateItem, 19> kItems{ {
+constexpr std::array<SceneCreateItem, 21> kItems{ {
     { "Empty", "Create Empty", "Entity", {}, "Ctrl+Shift+N" },
     { "Map Top Down", "Map - Top Down", "Map", "2D Object", {} },
     { "Map Platformer", "Map - Platformer", "Map", "2D Object", {} },
+    { "Sprite 2D", "Sprite 2D", "Sprite", "2D Object", {} },
+    { "Animated Sprite", "Animated Sprite", "Animated Sprite", "2D Object", {} },
     { "Cube", "Cube", "Cube", k3DObject, "1 m" },
     { "Sphere", "Sphere", "Sphere", k3DObject, "1 m" },
     { "Capsule", "Capsule", "Capsule", k3DObject, "2 m" },
@@ -59,6 +61,7 @@ constexpr std::array<SceneCreateItem, 19> kItems{ {
 // The components an item is made of, in the ids of SceneComponentAuthoring.
 [[nodiscard]] std::vector<std::string_view> OwnComponents(std::string_view id) {
     if (id == "Map Top Down" || id == "Map Platformer") return { "Grid" };
+    if (id == "Sprite 2D" || id == "Animated Sprite") return { "Sprite2D" };
     if (kb::assets::FindBuiltInShape(id) != nullptr) return { "MeshRenderer" };
     if (LightKindOf(id).has_value()) return { "Light" };
     if (id == "Camera") return { "Camera" };
@@ -173,6 +176,13 @@ SceneCreateResult SceneCreateMenu::Create(Scene& scene, std::string_view id, std
             light.sourceRadius = 0.5357F;  // Source Angle of the sun seen from the Earth
         }
         scene.Components().Lights().Set(entity, light);
+    } else if (item->id == "Sprite 2D" || item->id == "Animated Sprite") {
+        // An animated sprite starts as a four frame loop; the picture and the cell size are chosen afterwards.
+        if (item->id == "Animated Sprite") {
+            Sprite2DComponent sprite{};
+            sprite.frameCount = 4U;
+            scene.Components().Sprites2D().Set(entity, sprite);
+        }
     } else if (item->id == "Environment") {
         WorldBackdropComponent backdrop{};
         backdrop.mode = WorldBackdropMode::ProceduralSky;

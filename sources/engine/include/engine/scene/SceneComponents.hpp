@@ -27,6 +27,7 @@
 #include "engine/scene/SceneTilemapComponents.hpp"
 #include "engine/scene/SceneTilemapRendererComponents.hpp"
 #include "engine/scene/SceneTilemapColliderComponents.hpp"
+#include "engine/scene/SceneSprite2DComponents.hpp"
 #include "engine/scene/SceneStreamFocusComponents.hpp"
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneAmbientRadianceComponents.hpp"
@@ -72,6 +73,7 @@ public:
     [[nodiscard]] SceneTilemapComponents Tilemaps() const noexcept;
     [[nodiscard]] SceneTilemapRendererComponents TilemapRenderers() const noexcept;
     [[nodiscard]] SceneTilemapColliderComponents TilemapColliders() const noexcept;
+    [[nodiscard]] SceneSprite2DComponents Sprites2D() const noexcept;
     [[nodiscard]] SceneStreamFocusComponents StreamFocuses() const noexcept;
     [[nodiscard]] SceneWorldBackdropComponents WorldBackdrops() const noexcept;
     [[nodiscard]] SceneAmbientRadianceComponents AmbientRadiances() const noexcept;

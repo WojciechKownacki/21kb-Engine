@@ -56,6 +56,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.tilemapCollider.has_value()) {
         sceneComponents.TilemapColliders().Set(entity, *components.tilemapCollider);
     }
+    if (components.sprite2D.has_value()) {
+        sceneComponents.Sprites2D().Set(entity, *components.sprite2D);
+    }
     if (components.streamFocus.has_value()) {
         sceneComponents.StreamFocuses().Set(entity, *components.streamFocus);
     }

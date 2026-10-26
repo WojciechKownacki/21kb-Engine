@@ -87,6 +87,7 @@ const std::array kEntries{
     Entry{ { "Tilemap", "Tilemap", "World.Map2D" }, KB_COMPONENT(Tilemaps, tilemap, TilemapComponent{}) },
     Entry{ { "TilemapRenderer", "TilemapRenderer", "World.Map2D" }, KB_COMPONENT(TilemapRenderers, tilemapRenderer, TilemapRendererComponent{}) },
     Entry{ { "TilemapCollider", "TilemapCollider", "World.Map2D" }, KB_COMPONENT(TilemapColliders, tilemapCollider, TilemapColliderComponent{}) },
+    Entry{ { "Sprite2D", "Sprite 2D", "World.Map2D" }, KB_COMPONENT(Sprites2D, sprite2D, Sprite2DComponent{}) },
     Entry{ { "ContentInstance", "Content Instance", {} }, KB_COMPONENT(ContentInstances, contentInstance, ContentInstanceComponent{}) },
     Entry{ { "StreamFocus", "Stream Focus", {} }, KB_COMPONENT(StreamFocuses, streamFocus, StreamFocusComponent{}) },
     Entry{ { "WorldBackdrop", "World Backdrop", {} }, KB_COMPONENT(WorldBackdrops, worldBackdrop, WorldBackdropComponent{}) },
