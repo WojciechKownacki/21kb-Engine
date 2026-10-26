@@ -1710,6 +1710,26 @@ if(BUILD_TESTING)
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DPackagedSmoke.cmake")
         set_tests_properties(kb_editor_sprite2d_packaged PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;packaging;map2d" TIMEOUT 240)
+        # One representative 3D scene (lights and shadows, materials, sky, fog, ambient occlusion, vignette, auto exposure, a particle effect
+        # and a terrain) drawn by the editor's Play view and by the packaged player at the same size, and compared pixel by pixel.
+        find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+        add_test(NAME kb_editor_scene3d_parity_packaged
+            COMMAND ${CMAKE_COMMAND}
+                "-DEDITOR=$<TARGET_FILE:kb_editor>"
+                "-DCOOKER=$<TARGET_FILE:kb_cooker>"
+                "-DPLAYER=$<TARGET_FILE:kb_game>"
+                "-DPROVIDERS=$<TARGET_FILE:kb_physics_jolt_plugin>;$<TARGET_FILE:kb_audio_miniaudio_plugin>;$<TARGET_FILE:kb_basic_lighting_plugin>;$<TARGET_FILE:kb_ai_plugin>;$<TARGET_FILE:kb_21kb_particle_plugin>;$<TARGET_FILE:kb_world2d_plugin>"
+                "-DENGINE_ROOT=${CMAKE_SOURCE_DIR}"
+                "-DTEST_ROOT=${CMAKE_BINARY_DIR}/SelfTest"
+                "-DSCENARIO=Scene3DParityScenario.json"
+                "-DTASK=SELFTEST-Scene3D-Package"
+                "-DWIDTH=960" "-DHEIGHT=540" "-DSCREENSHOT_FRAME=2400"
+                "-DPYTHON=${Python3_EXECUTABLE}"
+                "-DPARITY_CHECKPOINT=scene3d-editor"
+                "-DPARITY_PIXEL_TOLERANCE=12" "-DPARITY_MAX_MEAN=2.0" "-DPARITY_MAX_DIFFERING=0.002"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/Map2DPackagedSmoke.cmake")
+        set_tests_properties(kb_editor_scene3d_parity_packaged PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} LABELS "editor;runtime;packaging;rendering" TIMEOUT 600)
     endif()
     set_tests_properties(
         kb_editor_headless_automation_scenario

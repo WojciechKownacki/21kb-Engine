@@ -5,10 +5,14 @@ endif()
 if(NOT DEFINED TASK)
     set(TASK "SELFTEST-Map2D-Package")
 endif()
+set(editorTimeout 120)
+if(DEFINED SCREENSHOT_FRAME)
+    set(editorTimeout 240)
+endif()
 execute_process(COMMAND "${EDITOR}"
     --selftest-scenario "${ENGINE_ROOT}/sources/editor/tests/${SCENARIO}"
     --selftest-root "${TEST_ROOT}" --selftest-task ${TASK}
-    WORKING_DIRECTORY "${ENGINE_ROOT}" RESULT_VARIABLE result TIMEOUT 120)
+    WORKING_DIRECTORY "${ENGINE_ROOT}" RESULT_VARIABLE result TIMEOUT ${editorTimeout})
 if(NOT result EQUAL 0)
     message(FATAL_ERROR "Map editor scenario failed: ${result}")
 endif()
@@ -37,14 +41,26 @@ if(NOT result EQUAL 0 OR NOT output MATCHES "rendered=120" OR NOT output MATCHES
 endif()
 # Profiling and readback are development-only switches. Load the same cooked pack
 # through the build player after proving the deployed executable's normal startup.
+set(sizeArguments)
+if(DEFINED WIDTH AND DEFINED HEIGHT)
+    set(sizeArguments "--width=${WIDTH}" "--height=${HEIGHT}")
+endif()
+set(playerFrames 120)
+set(screenshotFrame 60)
+set(playerTimeout 60)
+if(DEFINED SCREENSHOT_FRAME)
+    set(screenshotFrame ${SCREENSHOT_FRAME})
+    math(EXPR playerFrames "${SCREENSHOT_FRAME} + 60")
+    set(playerTimeout 240)
+endif()
 execute_process(COMMAND "${PLAYER}" "--project=${package}/Game.kbpack"
-    --headless --frames=120 --renderer=d3d11 --profile-fixed-step
+    --headless --frames=${playerFrames} --renderer=d3d11 --profile-fixed-step
     "--profile-file=${package}/frames.csv"
-    "--screenshot-file=${package}/game.png" --screenshot-frame=60
-    WORKING_DIRECTORY "${package}" RESULT_VARIABLE result TIMEOUT 60
+    "--screenshot-file=${package}/game.png" --screenshot-frame=${screenshotFrame} ${sizeArguments}
+    WORKING_DIRECTORY "${package}" RESULT_VARIABLE result TIMEOUT ${playerTimeout}
     OUTPUT_VARIABLE output ERROR_VARIABLE errors)
 file(WRITE "${package}/player.log" "${output}\n${errors}")
-if(NOT result EQUAL 0 OR NOT output MATCHES "rendered=120" OR NOT output MATCHES "errors=0")
+if(NOT result EQUAL 0 OR NOT output MATCHES "rendered=${playerFrames}" OR NOT output MATCHES "errors=0")
     message(FATAL_ERROR "Packaged map failed: ${result}\n${output}\n${errors}")
 endif()
 file(SIZE "${package}/game.png" imageSize)
@@ -62,4 +78,17 @@ foreach(frame IN LISTS frames)
         message(FATAL_ERROR "Packaged map has an incomplete frame: ${frame}")
     endif()
 endforeach()
+# Image parity: the picture the editor's Play view drew (PARITY_CHECKPOINT) against the packaged player's, same size and scene.
+if(DEFINED PARITY_CHECKPOINT)
+    execute_process(COMMAND "${PYTHON}" -I "${ENGINE_ROOT}/scripts/compare_images.py"
+        "${artifacts}/automation/screenshots/${PARITY_CHECKPOINT}.png" "${package}/game.png"
+        --pixel-tolerance ${PARITY_PIXEL_TOLERANCE} --max-mean ${PARITY_MAX_MEAN} --max-differing ${PARITY_MAX_DIFFERING}
+        ${PARITY_EXTRA}
+        RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE errors)
+    file(WRITE "${package}/parity.log" "${output}\n${errors}")
+    message(STATUS "${output}")
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR "The packaged player's picture differs from the editor's: ${output}${errors}")
+    endif()
+endif()
 message(STATUS "Map editor -> package -> player passed: ${package}")
