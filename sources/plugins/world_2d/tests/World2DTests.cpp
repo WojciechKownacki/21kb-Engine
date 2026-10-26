@@ -1331,7 +1331,8 @@ int main() {
         Require(checked == 13U * 4U * 3U, "every combination was checked");
         // A window drag: every height keeps whole pixels per texel and the zoom never shrinks as the window grows.
         std::uint32_t previousZoom = 0U;
-        for (float viewport = 120.0F; viewport <= 2400.0F; viewport += 1.0F) {
+        for (std::uint32_t pixels = 120U; pixels <= 2400U; ++pixels) {
+            const float viewport = static_cast<float>(pixels);
             const kb::world2d::PixelPerfectView view = kb::world2d::ComputePixelPerfectView(viewport, 16.0F, 11.0F);
             Require(std::abs(static_cast<double>(view.orthographicHeight) * 16.0 * view.zoom - viewport) <= viewport * 1.0e-6 && view.zoom >= previousZoom,
                 "resizing the window keeps whole pixels per texel and a zoom that only grows");

@@ -134,10 +134,12 @@ std::uint64_t RenderMap2DMeshBuilder::MaterialAssetId(std::string_view virtualPa
 
 std::optional<RenderMeshAssetData> RenderMap2DMeshBuilder::BuildOccluders(const kb::assets::Map2DAsset& map, float drawOffset, double seconds) {
     auto shadow = map; shadow.tiles.clear(); shadow.background = false; shadow.lit = false;
-    for (const auto& [key, tile] : map.tiles) {
-        const auto add = [&](kb::assets::Map2DSprite sprite) {
+    for (const auto& entry : map.tiles) {
+        const std::uint64_t tileKey = entry.first;
+        const kb::assets::Map2DTile& tile = entry.second;
+        const auto add = [&map, &shadow, tileKey](kb::assets::Map2DSprite sprite) {
             const auto* definition = kb::assets::Map2DDefinition(map, sprite);
-            if (definition && definition->occludesLight) shadow.tiles[key].items.push_back(sprite);
+            if (definition && definition->occludesLight) shadow.tiles[tileKey].items.push_back(sprite);
         };
         add(tile.ground); for (auto sprite : tile.items) add(sprite);
     }

@@ -174,7 +174,7 @@ void CALLBACK StatusCallback(HINTERNET, DWORD_PTR context, DWORD status, LPVOID 
     } else if (status == WINHTTP_CALLBACK_STATUS_SENDING_REQUEST && !state->pin.empty() && !state->pinChecked.exchange(true)) {
         // The handshake is done and nothing of the request has been sent: this is the moment to check the pin.
         PCCERT_CONTEXT certificate = nullptr;
-        DWORD size = sizeof(certificate);
+        DWORD size = static_cast<DWORD>(sizeof(PCCERT_CONTEXT));
         bool matches = false;
         if (WinHttpQueryOption(state->request->Get(), WINHTTP_OPTION_SERVER_CERT_CONTEXT, &certificate, &size) && certificate != nullptr) {
             matches = Lower(Sha256Hex(certificate->pbCertEncoded, certificate->cbCertEncoded)) == Lower(state->pin);

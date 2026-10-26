@@ -64,7 +64,8 @@ struct World {
         kb::scene::PhysicsBackend::SetCollisionEventConsumer(scene, true);
     }
     void Run(float seconds) {
-        for (float elapsed = 0.0F; elapsed < seconds; elapsed += 1.0F / 60.0F) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        const int steps = static_cast<int>(std::ceil(seconds * 60.0F));
+        for (int step = 0; step < steps; ++step) static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
     }
     [[nodiscard]] SceneEntity Make(const char* name, float x, float y, float z = 0.0F) {
         kb::scene::SceneObjectDesc desc{ .name = name };
