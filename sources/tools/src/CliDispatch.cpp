@@ -320,9 +320,14 @@ R"(  map2d        2D tile maps (World, 2D Map Editor plugin, on by default): wha
                  [--tick-group <group>] [--execution-order <n>] [--disabled]
 )",
 R"(  run          Run a scene headless and report logs, events, and errors (the
-               project's startup scene unless --scene). Exits 1 on any error.
+               project's startup scene unless --scene). Exits 1 on errors,
+               124 on playback timeout, or 130 on cancellation.
                  --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>] [--realtime]
                  [--quiet] [--report particles|audio|audio-meters|ecs|world-memory] [--pcm-frames <n>]
+                 [--timeout-ms <1..86400000>] [--cancel-file <path>]
+               Playback limits are cooperative between ticks and during paced waits;
+               startup, an executing callback, and shutdown are not forcibly interrupted.
+               Create the cancellation file to stop; the command does not remove it.
                Reports are versioned JSON on stdout; logs go to stderr.
                Audio probes use explicit offline PCM rendering (up to 600 ticks
                and 1920000 total PCM frames). --pcm-frames overrides audio frames

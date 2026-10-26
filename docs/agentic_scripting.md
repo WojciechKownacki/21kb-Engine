@@ -117,6 +117,7 @@ scene in the editor and press Play.
 | `kb_cli scene-attach --project <dir> --scene <path> --node <name> --script <path>` | attach a script to a node |
 | `kb_cli run --project <dir> --scene <path> --frames <n>` | run a scene without the editor and report errors |
 | `kb_cli run --project <dir> --frames <n> --realtime` | pace fixed simulation steps by wall time so asynchronous streaming and external services can run during playback |
+| `kb_cli run --project <dir> --frames <n> --timeout-ms <ms> --cancel-file <path>` | stop playback cooperatively on a wall-time limit or when the cancellation file exists; shutdown still runs; exit 124 means timeout and 130 means cancelled |
 | `kb_cli batch --project <dir> --file <list> [--dry-run]` | run many commands as one all-or-nothing transaction, or preview their changes |
 | `kb_cli mod <build\|install\|list\|verify\|enable\|disable\|remove\|trust\|info>` | build content mods and manage their installation, dependencies and trust; see [Modding](modding.md) for arguments and package compatibility |
 

@@ -62,6 +62,7 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -449,6 +450,9 @@ void RunParticleReportCommandTests() {
             basis->Find("estimated") && basis->Find("estimated")->Size() > 0U && telemetry->Find("committed_bytes") != nullptr &&
             telemetry->Find("query_estimated_gigabytes_per_second") != nullptr,
             "ECS telemetry report does not separate measured, estimated and unavailable numbers");
+        Require(basis->Find("memory_scope") && Contains(basis->Find("memory_scope")->AsString(), "not process RSS") &&
+                basis->Find("budget_scope") && Contains(basis->Find("budget_scope")->AsString(), "side_payload_bytes"),
+            "ECS telemetry must distinguish capped payload from uncapped memory and physical process counters");
         const JsonValue* scheduler = report.Find("scheduler");
         Require(scheduler != nullptr && scheduler->Find("frame_wall_ns") != nullptr && scheduler->Find("cpu_time_ns") != nullptr &&
             scheduler->Find("cpu_time_basis") != nullptr && scheduler->Find("cpu_time_basis")->AsString().find("not wall time") != std::string::npos &&
@@ -4131,6 +4135,57 @@ struct CliRun {
     return CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
 }
 
+void RunPlaybackStopTests() {
+    PrepareProject();
+    const std::string root = TestRoot().string();
+    WriteTextFile(TestRoot() / "Assets" / "Logic" / "Player.lua",
+        "function Destroyed(self, dt) Log('playback shutdown complete') end\n");
+    Require(RunCliProgram({"scene-attach", "--project", root, "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "Player", "--script", "/Game/Logic/Player.lua"}).exitCode == 0, "stop fixture must attach its shutdown observer");
+    const auto verifyStopped = [](const CliRun& result, int code, std::string_view reason) {
+        JsonValue report;
+        std::string error;
+        Require(result.exitCode == code && JsonValue::Parse(result.out, report, error),
+            "stopped playback must preserve its exit code and JSON output: " + result.out + result.err);
+        Require(report.Find("stop_reason") && report.Find("stop_reason")->AsString() == reason &&
+                report.Find("succeeded") && !report.Find("succeeded")->AsBool() &&
+                report.Find("completed_frames") && report.Find("completed_frames")->AsNumber() == 0.0,
+            "stopped playback must report zero completed ticks and its actual reason");
+        Require(Contains(result.err, "playback shutdown complete"), "stopping playback must dispatch script shutdown");
+    };
+    const auto started = std::chrono::steady_clock::now();
+    const auto timed = RunCliProgram({"run", "--project", root, "--frames", "2", "--dt", "5", "--realtime",
+        "--timeout-ms", "30", "--report", "ecs"});
+    verifyStopped(timed, 124, "timeout");
+    Require(std::chrono::steady_clock::now() - started < std::chrono::seconds{4},
+        "timeout must interrupt a paced wait before the first five-second tick");
+    const auto cancelPath = TestRoot() / "cancel-playback";
+    const auto cancel = cancelPath.string();
+    std::jthread requestCancel{[cancelPath] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{50});
+        std::ofstream output{cancelPath};
+        output << "stop";
+    }};
+    const auto cancelled = RunCliProgram({"run", "--project", root, "--frames", "2", "--dt", "5", "--realtime",
+        "--timeout-ms", "2000", "--cancel-file", cancel, "--report", "particles"});
+    requestCancel.join();
+    verifyStopped(cancelled, 130, "cancelled");
+    Require(std::filesystem::exists(cancelPath), "playback must not consume the caller's cancellation file");
+    verifyStopped(RunCliProgram({"run", "--project", root, "--frames", "2", "--cancel-file", cancel,
+        "--report", "ecs"}), 130, "cancelled");
+    std::filesystem::remove(cancelPath);
+    const auto complete = RunCliProgram({"run", "--project", root, "--frames", "2", "--timeout-ms", "2000",
+        "--cancel-file", cancel, "--report", "ecs"});
+    JsonValue report;
+    std::string error;
+    Require(complete.exitCode == 0 && JsonValue::Parse(complete.out, report, error) &&
+            report.Find("stop_reason") && report.Find("stop_reason")->AsString() == "completed",
+        "a new playback must not retain an earlier cancellation");
+    for (const std::string_view invalid : {"0", "-1", "86400001", "abc"})
+        Require(RunCliProgram({"run", "--project", root, "--timeout-ms", invalid}).exitCode == 1,
+            "invalid playback timeout must be rejected");
+}
+
 // The one result object --json prints for a command that has no JSON of its own.
 [[nodiscard]] JsonValue ParseCliResult(const CliRun& run) {
     JsonValue result;
@@ -4709,6 +4764,7 @@ int main(int argc, char** argv) {
 #endif
     RunSceneCommandTests();
     RunRunCommandTests();
+    RunPlaybackStopTests();
     RunParticleReportCommandTests();
     RunPlayerControllerTemplateTests();
     RunNewCommandTests();

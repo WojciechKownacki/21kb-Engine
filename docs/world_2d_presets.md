@@ -57,6 +57,18 @@ a **Character Controller 2D** (side view for the platformer, top down without gr
 `Physics2D.JumpCharacter`. The input and the map cameras are the same. The tiles of the map stop it, because the 2D physics
 makes the collision of a map into 2D shapes. The 2D platformer script has no coyote time and no variable jump height.
 
+## Map bounds and runtime chunks
+
+Maps support up to 4096 cells on each horizontal axis and floors from -50 to 50.
+Cell coordinates start at zero. An import containing an out-of-range cell or oversized
+dimensions is rejected as a whole. Painting entirely outside the map changes nothing;
+a brush overlapping an edge applies only to cells inside the map. Resizing can be undone
+to restore removed cells.
+
+The map asset stores authored cells sparsely. Runtime geometry is grouped into 16 by 16
+cell chunks per floor; an edit rebuilds affected chunks, including neighbouring borders.
+These geometry chunks do not imply that the map asset itself is loaded on demand.
+
 ## Not covered
 
 - The editor's Create menu does not list these items yet (it would need the project folder to write the script, and an

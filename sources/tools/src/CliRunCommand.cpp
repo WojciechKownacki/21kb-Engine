@@ -271,6 +271,19 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     }
 
     const bool realtime = arguments.Flag("--realtime");
+    std::optional<int> timeoutMilliseconds;
+    if (const auto value = arguments.Option("--timeout-ms")) {
+        timeoutMilliseconds = ParseInt(*value);
+        if (!timeoutMilliseconds || *timeoutMilliseconds <= 0 || *timeoutMilliseconds > 86400000) {
+            io.err << "error: --timeout-ms expects 1..86400000 milliseconds\n";
+            return 1;
+        }
+    }
+    const auto cancelFile = arguments.Option("--cancel-file");
+    if (cancelFile && cancelFile->empty()) {
+        io.err << "error: --cancel-file expects a nonempty path\n";
+        return 1;
+    }
     if (realtime && static_cast<double>(frames) * deltaSeconds > 86400.0) {
         io.err << "error: --realtime playback must not exceed 24 hours\n";
         return 1;
@@ -484,10 +497,42 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         scene.Runtime().SetEcsProfilerEnabled(true);
     }
     const auto playbackStarted = std::chrono::steady_clock::now();
+    int stopCode = 0;
+    std::string stopReason = "completed";
+    const auto stopRequested = [&] {
+        if (stopCode != 0) return true;
+        if (cancelFile) {
+            std::error_code cancelError;
+            const bool requested = std::filesystem::exists(std::filesystem::path{*cancelFile}, cancelError);
+            if (cancelError) {
+                stopCode = 1;
+                stopReason = "cancel-check-error";
+                io.err << "error: cannot inspect cancellation file: " << cancelError.message() << '\n';
+            } else if (requested) {
+                stopCode = 130;
+                stopReason = "cancelled";
+                io.err << "run cancelled by cancellation file\n";
+            }
+        }
+        if (stopCode == 0 && timeoutMilliseconds &&
+            std::chrono::steady_clock::now() - playbackStarted >= std::chrono::milliseconds{*timeoutMilliseconds}) {
+            stopCode = 124;
+            stopReason = "timeout";
+            io.err << "run playback time limit reached\n";
+        }
+        return stopCode != 0;
+    };
     for (int frame = 1; frame <= frames; ++frame) {
+        if (stopRequested()) break;
         if (realtime) {
-            std::this_thread::sleep_until(playbackStarted + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                std::chrono::duration<double>{ static_cast<double>(frame) * deltaSeconds }));
+            const auto nextFrame = playbackStarted + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>{ static_cast<double>(frame) * deltaSeconds });
+            // Poll during paced waits, including a very large authored time step.
+            while (std::chrono::steady_clock::now() < nextFrame && !stopRequested()) {
+                std::this_thread::sleep_until(std::min(nextFrame,
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds{10}));
+            }
+            if (stopRequested()) break;
         }
         const auto updateStarted = std::chrono::steady_clock::now();
         static_cast<void>(scene.Runtime().Update(deltaSeconds));
@@ -570,14 +615,17 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         return 1;
     }
     executedBehaviours += shutdown->executedBehaviours;
-    printer.PrintScript(shutdown->diagnostics, static_cast<std::size_t>(frames) + 1U);
-    printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), static_cast<std::size_t>(frames) + 1U);
+    printer.PrintScript(shutdown->diagnostics, static_cast<std::size_t>(completedFrames) + 1U);
+    printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), static_cast<std::size_t>(completedFrames) + 1U);
 
     io.out << "done: " << completedFrames << " frames, " << executedBehaviours << " behaviour executions, "
            << emittedEvents << " events, " << printer.total << " diagnostics\n";
     if (particleReport != nullptr) {
-        *particleReport << ParticleExecutionReport(particleSnapshot, particleProviderAvailable,
-            updateWallNanoseconds, printer.total == 0U).Dump() << '\n';
+        auto report = ParticleExecutionReport(particleSnapshot, particleProviderAvailable,
+            updateWallNanoseconds, printer.total == 0U && stopCode == 0);
+        report.Set("stop_reason", kb::core::JsonValue::MakeString(stopReason));
+        report.Set("completed_frames", kb::core::JsonValue::MakeNumber(completedFrames));
+        *particleReport << report.Dump() << '\n';
         if (!particleReport->good()) {
             io.err << "error: particle execution report could not be written\n";
             return 1;
@@ -587,7 +635,8 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         using kb::core::JsonValue;
         auto report = JsonValue::MakeObject();
         report.Set("schema", JsonValue::MakeString("21kb.world-memory/v1"));
-        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U));
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && stopCode == 0));
+        report.Set("stop_reason", JsonValue::MakeString(stopReason));
         report.Set("simulation_frames", JsonValue::MakeNumber(frames));
         report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
         report.Set("diagnostics", JsonValue::MakeNumber(static_cast<double>(printer.total)));
@@ -611,7 +660,8 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         }
         auto report = JsonValue::MakeObject();
         report.Set("schema", JsonValue::MakeString("21kb.ecs-telemetry/v1"));
-        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U));
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && stopCode == 0));
+        report.Set("stop_reason", JsonValue::MakeString(stopReason));
         report.Set("simulation_frames", JsonValue::MakeNumber(frames));
         report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
         report.Set("diagnostics", JsonValue::MakeNumber(static_cast<double>(printer.total)));
@@ -630,7 +680,8 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
             report.Set("schema", JsonValue::MakeString("21kb.audio-meters/v1"));
             report.Set("meters", AudioMetersJson(meterSnapshot));
         }
-        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && audioSucceeded));
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && audioSucceeded && stopCode == 0));
+        report.Set("stop_reason", JsonValue::MakeString(stopReason));
         report.Set("error", JsonValue::MakeString(audioError));
         report.Set("simulation_frames", JsonValue::MakeNumber(frames));
         report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
@@ -654,7 +705,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         *audioReport << report.Dump() << '\n';
         if (!audioReport->good()) { io.err << "error: audio execution report could not be written\n"; return 1; }
     }
-    return printer.total == 0U && audioSucceeded ? 0 : 1;
+    return stopCode != 0 ? stopCode : (printer.total == 0U && audioSucceeded ? 0 : 1);
 }
 
 } // namespace

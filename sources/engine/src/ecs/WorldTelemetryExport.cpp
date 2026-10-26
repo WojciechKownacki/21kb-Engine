@@ -170,6 +170,8 @@ std::string WorldTelemetrySnapshotToJson(const WorldTelemetrySnapshot& snapshot)
     WriteFieldPrefix(output, "metric_basis", first);
     output << "{\n"
               "    \"measured\": \"counters and *_nanoseconds fields (steady_clock) taken while the world ran\",\n"
+              "    \"memory_scope\": \"committed_bytes counts native chunk payload reserved by the allocator, not process RSS or OS commit\",\n"
+              "    \"budget_scope\": \"maxNativeStorageCommittedPayloadBytes caps committed_bytes only; side_payload_bytes, chunk_metadata_bytes, entity_record_bytes, the mirrored backend and other subsystems are outside this cap\",\n"
               "    \"estimated\": [\"query_bytes_touched\", \"query_average_bytes_per_entity\", "
               "\"query_estimated_bytes_per_second\", \"query_estimated_gigabytes_per_second\", "
               "\"query_kernel_estimated_bytes_per_second\", \"query_kernel_estimated_gigabytes_per_second\"],\n"

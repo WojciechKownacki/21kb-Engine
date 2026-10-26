@@ -804,6 +804,13 @@ void TestProductionBakeCacheAndCapabilityGates() {
     Require(rebuilt.status == ParticleBakeStatus::Baked && rebuilt.effect != nullptr &&
             kb::particles::ParticleCompiledEffectCache::Load(rebuilt.cachePath, rebuilt.key).Succeeded(),
         "corrupt compiled cache was accepted or not atomically rebuilt");
+    auto newerCompiler = rebuilt.key;
+    ++newerCompiler.compilerVersion;
+    Require(kb::particles::ParticleCompiledEffectCache::PathFor(cacheRoot, newerCompiler) != rebuilt.cachePath &&
+            kb::particles::ParticleCompiledEffectCache::Load(rebuilt.cachePath, newerCompiler).status ==
+                kb::particles::ParticleCompiledEffectCacheStatus::InvalidCache &&
+            kb::particles::ParticleCompiledEffectCache::Load(rebuilt.cachePath, rebuilt.key).Succeeded(),
+        "a compiler version change must isolate the cache without damaging the previous compiler's entry");
     {
         std::ofstream oversized{rebuilt.cachePath, std::ios::binary | std::ios::trunc};
         oversized.seekp(static_cast<std::streamoff>(kb::particles::kParticleCompiledEffectCacheMaxBytes));
