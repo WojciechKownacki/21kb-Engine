@@ -6024,9 +6024,9 @@ void RunTemporalResolveReactiveAlphaGpuTest() {
     std::vector<float> historyTexels(kTexels * 4U, 0.5F);
     const bgfx::TextureHandle historyTexture = FullscreenFloatHarness::CreateTexture(historyTexels);
     const bgfx::TextureHandle velocityTexture = FullscreenFloatHarness::CreateTexture(std::vector<float>(kTexels * 4U, 0.0F));
-    const auto resolve = [&](float visibleShare) {
+    const auto resolve = [&](float visibleShare, bool historyValid = true) {
         const bgfx::TextureHandle current = FullscreenFloatHarness::CreateTexture(sceneColor(visibleShare));
-        const float temporalParams[4]{ 0.9F, 1.0F, 1.0F / FullscreenFloatHarness::kSize, 1.0F / FullscreenFloatHarness::kSize };
+        const float temporalParams[4]{ 0.9F, historyValid ? 1.0F : 0.0F, 1.0F / FullscreenFloatHarness::kSize, 1.0F / FullscreenFloatHarness::kSize };
         bgfx::setUniform(params, temporalParams);
         bgfx::setTexture(0U, source, current);
         bgfx::setTexture(1U, history, historyTexture);
@@ -6045,6 +6045,9 @@ void RunTemporalResolveReactiveAlphaGpuTest() {
     const std::array<float, 4U> half = resolve(0.5F);
     Require(half[0] > opaque[0] + 0.01F && half[0] < covered[0] - 0.01F,
         "A half covered pixel must trust its history in between");
+    const auto cut = resolve(1.0F, false);
+    Require(std::fabs(cut[0] - 1.0F) < 0.001F,
+        "An invalidated camera history must resolve to the current opaque pixel without ghosting");
 
     bgfx::destroy(velocityTexture);
     bgfx::destroy(historyTexture);

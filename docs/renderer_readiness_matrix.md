@@ -14,7 +14,7 @@ otherwise; the other backends are not run by CI.
 | Built-in PBR material | files, `kb_cli` | yes | yes | yes | `ctest:kb_renderer_tests`, `selector:packaged-material` | Mobile path; clearcoat, sheen, transmission and subsurface fields of the built-in type are read and ignored |
 | Material graph | graph file, `kb_cli` | yes | yes | yes | `ctest:kb_renderer_graph_shader_node_cook_0`, `ctest:kb_renderer_graph_shader_node_cook_1`, `ctest:kb_renderer_graph_shader_node_cook_2`, `ctest:kb_renderer_graph_shader_node_cook_3`, `ctest:kb_renderer_graph_program_lifetime` | A semantic test for every node kind (the cook sweep proves only that each node compiles) |
 | Exposure, tonemap, bloom, vignette | profile asset | yes | yes | yes | `selector:exposure-meter`, `selector:post-process-profile`, `ctest:kb_renderer_display_alpha` | Pixel test of bloom; flicker under a sudden brightness change; output profiles |
-| FXAA and TAA | profile asset | yes | yes | yes | `ctest:kb_renderer_tests` | Multi-frame ghosting, camera cut, resize, transparency, particles and 2D cameras |
+| FXAA and TAA | profile asset; per-submit camera cut flag | yes | yes | yes | `ctest:kb_renderer_tests`, `ctest:kb_renderer_temporal_history`, `ctest:kb_renderer_display_alpha` | Full moving-scene ghosting measurements across particles, animated meshes and all export backends |
 | Ambient occlusion | profile asset | yes | yes | yes | `ctest:kb_renderer_gi_resolve`, `selector:post-process-profile` | Thin objects, range, camera motion, cost |
 | Screen-space reflections | lighting config only | no | yes | no | `ctest:kb_renderer_screen_space` | Off-screen objects, lost depth, camera cut, roughness range; no profile or inspector field |
 | Global illumination | profile asset | yes | yes | yes | `ctest:kb_renderer_gi_resolve`, `ctest:kb_renderer_screen_space` | Moving lights, thin walls, streaming, rebuild time; a mesh without CPU geometry fills its bounding box without a diagnostic |
@@ -29,6 +29,13 @@ otherwise; the other backends are not run by CI.
 | World partition and HLOD | scene settings | yes | yes | yes | `selector:world-hlod` | Long travel, teleport, cancelled loads, hitch limits |
 | GPU particles | effect asset, `kb_cli vfx-*` | yes | yes | yes | `ctest:kb_renderer_particle_motion`, `ctest:kb_renderer_particle_contact_death`, `ctest:kb_renderer_particle_depth_collision`, `ctest:kb_21kb_particle_cpu_backend_tests`, `ctest:kb_game_particle_gpu_package` | Backends other than Direct3D 11 in CTest; GPU flipbook, mesh emission, collision events |
 | GPU culling | diagnostics only | n/a | opt-in | n/a | `selector:mesh-pipeline` | Draws are still culled on the CPU; no frustum-edge image comparison; no measured gain |
+
+Temporal history is scoped to a viewport and invalidated when its scene or selected camera changes,
+when switching between perspective and orthographic projection, after a skipped render frame,
+when TAA is re-enabled, and on resize. A host that teleports the same camera or cuts between camera
+overrides sets `RenderSceneSubmitDesc::resetTemporalHistory` for that submission. Ordinary camera
+movement retains reprojection history. The reset affects both temporal resolve and motion-vector
+camera matrices. It does not reset exposure adaptation.
 
 ## Not implemented
 

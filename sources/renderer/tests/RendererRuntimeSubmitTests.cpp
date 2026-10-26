@@ -3283,6 +3283,52 @@ void RunRendererDrawsDetachedViewportFinalCompositePixelsTest() {
             variedPixelCount >= 32U,
             "Detached viewport final composite stayed uniform after switching from viewport index 0");
 
+        // ReadPixels advances bgfx while waiting; synchronize the host's frame counter before the sequence.
+        Require(renderer.BeginFrame(), "Temporal sequence synchronization frame must begin");
+        renderer.EndFrame();
+        auto temporalDesc = detachedDesc;
+        temporalDesc.postProcessSettings->temporalAntiAliasingEnabled = true;
+        temporalDesc.postProcessSettings->temporalJitterEnabled = true;
+        std::size_t temporalSample = 0U;
+        const auto temporalFrame = [&](const kb::scene::Scene& submittedScene, bool expectedHistory) {
+            ++temporalSample;
+            SubmitLifecycleFrame(renderer, submittedScene, temporalDesc, "Temporal continuity frame must submit");
+            const auto lines = renderer.LastAaPipelineTraceLines();
+            const std::string expected = expectedHistory ? "historyValid=true" : "historyValid=false";
+            const std::string diagnostic = "Temporal sample " + std::to_string(temporalSample) + " expected " + expected +
+                (lines.empty() ? " (no trace)" : ": " + lines.front());
+            Require(std::ranges::any_of(lines, [&](const std::string& line) { return line.find(expected) != std::string::npos; }),
+                diagnostic.c_str());
+        };
+        temporalFrame(scene, false);
+        temporalFrame(scene, true);
+        temporalDesc.cameraOverride->view[12] += 10.0F;
+        temporalDesc.resetTemporalHistory = true;
+        temporalFrame(scene, false);
+        temporalDesc.resetTemporalHistory = false;
+        temporalFrame(scene, true);
+        temporalDesc.postProcessSettings->temporalAntiAliasingEnabled = false;
+        temporalFrame(scene, false);
+        temporalDesc.postProcessSettings->temporalAntiAliasingEnabled = true;
+        temporalFrame(scene, false);
+        temporalFrame(scene, true);
+        {
+            kb::scene::Scene otherScene;
+            temporalFrame(otherScene, false);
+            renderer.ReleaseScene(otherScene);
+        }
+        temporalFrame(scene, false);
+        temporalFrame(scene, true);
+        SceneDepthPolicy::MakeOrthographic(temporalDesc.cameraOverride->projection.data(), 10.0F, 1.0F,
+            0.05F, 100.0F, SceneDepthPolicy::HomogeneousDepth());
+        temporalFrame(scene, false);
+        temporalFrame(scene, true);
+        temporalDesc.cameraOverride->view[12] += 0.01F;
+        temporalFrame(scene, true);
+        renderer.OnResize(128U, 64U);
+        temporalFrame(scene, false);
+        temporalFrame(scene, true);
+
         postProcessTargets.Shutdown();
         sceneTarget.Shutdown();
     }

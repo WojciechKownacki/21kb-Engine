@@ -1440,6 +1440,24 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 ? resolvedPostProcessSettings->temporalJitterEnabled
                 : defaultPostProcessSettings_.temporalJitterEnabled);
     {
+        auto& history = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
+        const auto* cameraProxy = desc.cameraOverride.has_value() ? nullptr :
+            renderScene.FindPrimaryCameraProxy(desc.target.viewport.id.value);
+        const std::uint64_t cameraEntityId = cameraProxy != nullptr ? cameraProxy->entityId : 0U;
+        const bool orthographic = overlayCamera != nullptr && overlayCamera->projection[15] != 0.0F;
+        if (desc.resetTemporalHistory || history.sceneId != scene.Id() ||
+            history.cameraEntityId != cameraEntityId || history.cameraOverride != desc.cameraOverride.has_value() ||
+            history.orthographic != orthographic || !history.taaEnabled || !temporalAntiAliasingEnabled ||
+            history.historyFrame + 1U != frameIndex) {
+            history.hasHistory = false;
+        }
+        history.sceneId = scene.Id();
+        history.cameraEntityId = cameraEntityId;
+        history.cameraOverride = desc.cameraOverride.has_value();
+        history.orthographic = orthographic;
+        history.taaEnabled = temporalAntiAliasingEnabled;
+    }
+    {
         std::ostringstream message;
         message << "Scene receive AA viewportId=" << desc.target.viewport.id.value
                 << " viewportIndex=" << desc.target.viewport.viewportIndex
@@ -1897,7 +1915,8 @@ bool Renderer::SubmitSceneToViewportInRenderSpace(const kb::scene::Scene& scene,
                 WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcess Submit invalid output");
                 return false;
             }
-            // Unreal's post-process materials (Before Tonemapping): the scene's Post Process materials over the HDR image.
+            temporalState.historyFrame = frameIndex;
+            // Apply the scene's post-process materials to the HDR image before tonemapping.
             scenePostProcessOutput = sceneRenderer_->SubmitPostProcessMaterials(renderScene, ScenePostProcessMaterialChainDesc{
                 .views = viewportPlan.viewIds.postProcessMaterialViews,
                 .frameBuffers = { sampledSceneDesc.postProcess.finalFrameBuffer, sampledSceneDesc.postProcess.combineFrameBuffer },

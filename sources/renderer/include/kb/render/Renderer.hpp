@@ -299,6 +299,12 @@ private:
         std::array<float, 16> previousViewProjection{};
         std::array<float, 2> previousJitter{};
         bool hasHistory = false;
+        std::uint64_t sceneId = 0;
+        std::uint64_t cameraEntityId = 0;
+        std::uint64_t historyFrame = 0;
+        bool cameraOverride = false;
+        bool orthographic = false;
+        bool taaEnabled = false;
         // The render origin previousViewProjection works relative to.
         kb::math::DVec3 renderOrigin{};
     };

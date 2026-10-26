@@ -897,6 +897,10 @@ if(BUILD_TESTING AND TARGET kb_renderer_bake AND TARGET kb_runtime_asset_pack_va
         set_tests_properties(kb_renderer_display_alpha PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;headless" TIMEOUT 180
             FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
+        add_test(NAME kb_renderer_temporal_history COMMAND $<TARGET_FILE:kb_renderer_tests> detached-final-composite)
+        set_tests_properties(kb_renderer_temporal_history PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;headless" TIMEOUT 180
+            FAIL_REGULAR_EXPRESSION "MEMORY LEAK: Number of leaked blocks")
         add_test(NAME kb_renderer_gi_resolve COMMAND $<TARGET_FILE:kb_renderer_tests> gi-resolve)
         set_tests_properties(kb_renderer_gi_resolve PROPERTIES
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR} LABELS "renderer;gpu;gi" TIMEOUT 180)
