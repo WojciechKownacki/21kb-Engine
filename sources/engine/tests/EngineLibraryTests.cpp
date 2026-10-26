@@ -280,7 +280,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Gameplay", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation", "Map2D", "Physics2D", "Net" };
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "UI", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Gameplay", "Timeline", "Localization", "Renderer", "Assets", "Save", "Collections", "Text", "Navigation", "Map2D", "Physics2D", "Net", "Mods" };
     kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must list every domain module");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");

@@ -67,6 +67,9 @@ struct RuntimeAssetPackMount {
     // key), for a pack encrypted under another key. Without one the pack is read with the
     // trust's content key itself.
     std::optional<WrappedAssetPackKey> wrappedContentKey;
+    // The trust this pack alone is read with, in place of the set's. A mod pack is sealed by its
+    // author, not by the release key that every pack of the game itself must carry.
+    std::optional<AssetPackTrust> trust;
 };
 
 // Where one block of a mounted artifact lies: which pack of the set, and its validated entry.

@@ -52,6 +52,8 @@ namespace kb::cli {
 [[nodiscard]] int RunMcpCommand(const ArgumentList& arguments, std::istream& in, CommandIo io);
 [[nodiscard]] int RunKeysCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackCommand(const ArgumentList& arguments, CommandIo io);
+// Mods of a game: build, install, list, verify, enable, disable, remove, trust (CliModCommands.cpp).
+[[nodiscard]] int RunModCommand(const ArgumentList& arguments, CommandIo io);
 // The pack subcommands that work on pack contents and pack sets (CliPackSetCommands.cpp).
 [[nodiscard]] int RunPackInfoCommand(const ArgumentList& arguments, CommandIo io);
 [[nodiscard]] int RunPackCompressCommand(const ArgumentList& arguments, CommandIo io);

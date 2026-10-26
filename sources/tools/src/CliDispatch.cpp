@@ -361,6 +361,21 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                           [--previous-release <dir> ...] <Game.kbpackset>
                  set-verify [--anchor <file> | --public-key <hex>]
                             <Game.kbpackset>
+  mod          Mods of a game (content and scripts in a chunk pack; docs/modding.md).
+                 build --game <Game.kbpackset | Game.kbpack> --cook <cook.kbpack>
+                       --id <id> --version <x.y.z> --output <folder>
+                       [--name <name>] [--author <text>] [--description <text>]
+                       [--api <range>] [--requires <id>[@<range>]]...
+                       [--conflicts <id>]... [--entry <scene path>]
+                       [--key <signing key file>] [--current-release <dir>]
+                 install --mods <Mods folder> [--game <Game pack>]
+                         [--trust <public key>]... [--allow-unsigned]
+                         [--replace] <mod folder>
+                 list|verify --mods <Mods folder> [--game <Game pack>]
+                 enable|disable|remove --mods <Mods folder> <id>
+                 trust --mods <Mods folder> [--add <public key>]
+                       [--remove <public key>] [--allow-unsigned|--deny-unsigned]
+                 info [--game <Game pack>] <mod folder>
   release      Sign the manifest of a finished release directory, or verify one
                against the trust anchor of the player it ships.
                  sign --key <key file> --dir <dir> --product <id>
@@ -421,9 +436,9 @@ void PrintUsage(std::ostream& output) {
     for (const auto part : kUsageParts) output << part;
 }
 
-constexpr std::array<std::string_view, 11> kFlagNames{
+constexpr std::array<std::string_view, 14> kFlagNames{
     "--anti-rollback", "--disabled", "--quiet", "--update-baseline", "--require-gpu", "--allow-fallback", "--as-ground", "--no-borders", "--items",
-    "--diff", "--list-backups" };
+    "--diff", "--list-backups", "--allow-unsigned", "--deny-unsigned", "--replace" };
 
 // Runs the named command. Empty when no command has that name.
 std::optional<int> RunNamedCommand(
@@ -552,6 +567,9 @@ std::optional<int> RunNamedCommand(
     }
     if (command == "pack") {
         return RunPackCommand(arguments, io);
+    }
+    if (command == "mod") {
+        return RunModCommand(arguments, io);
     }
     if (command == "release") {
         return RunReleaseCommand(arguments, io);

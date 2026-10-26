@@ -21,6 +21,7 @@
 #include "engine/script/ScriptPostProcessApi.hpp"
 #include "engine/script/ScriptNavigationApi.hpp"
 #include "engine/script/ScriptMap2DApi.hpp"
+#include "engine/script/ScriptModsApi.hpp"
 #include "engine/script/ScriptPhysics2DApi.hpp"
 #include "engine/script/ScriptNetApi.hpp"
 #include "engine/script/ScriptPhysicsApi.hpp"
@@ -331,6 +332,12 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Net",
             .ownerRuntime = "kb::network::INetworkScriptRuntime",
             .Register = &kb::script::ScriptNetApi::Register,
+        },
+        // Mods.*: the mods the running game has loaded and the entry scene each names.
+        LibraryModuleDesc{
+            .name = "Mods",
+            .ownerRuntime = "kb::mods::PublishedLoadedMods",
+            .Register = &kb::script::ScriptModsApi::Register,
         },
     };
     return kCatalog;

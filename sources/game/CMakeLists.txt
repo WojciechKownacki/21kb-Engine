@@ -315,6 +315,11 @@ if(BUILD_TESTING)
     add_test(NAME kb_game_packaged_trust
         COMMAND $<TARGET_FILE:kb_game_core_tests> --packaged-trust
     )
+    # Mods beside a game whose player requires its release key: each pack under its own trust, a mod that
+    # replaces a game asset refused by name.
+    add_test(NAME kb_game_mods
+        COMMAND $<TARGET_FILE:kb_game_core_tests> --mods
+    )
     # Partitioned worlds: one build for kb_cli and kb_cooker, single-pack and region-chunk
     # packaging, streaming from the packages. Three cooks; kept out of kb_game_core's budget.
     add_test(NAME kb_game_partitioned_world
@@ -446,5 +451,22 @@ if(BUILD_TESTING)
             "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
         set_tests_properties(kb_game_audio_reference_package PROPERTIES
             LABELS "game;runtime;packaging;audio" TIMEOUT 240)
+        add_test(NAME kb_game_mods_package COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ModProjectTests.py"
+            "--cli" "$<TARGET_FILE:kb_cli>"
+            "--cooker" "$<TARGET_FILE:kb_cooker>"
+            "--player" "$<TARGET_FILE:kb_game>"
+            "--engine-root" "${CMAKE_SOURCE_DIR}"
+            "--test-root" "${CMAKE_BINARY_DIR}/mod_package_tests"
+            "--shaderc" "${_kb_particle_test_shaderc}"
+            ${_kb_touch_test_runtime_args}
+            "--plugin" "$<TARGET_FILE:kb_physics_jolt_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_audio_miniaudio_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_basic_lighting_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_21kb_particle_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_ai_plugin>"
+            "--plugin" "$<TARGET_FILE:kb_world2d_plugin>")
+        set_tests_properties(kb_game_mods_package PROPERTIES
+            LABELS "game;runtime;packaging;mods" TIMEOUT 600)
     endif()
 endif()

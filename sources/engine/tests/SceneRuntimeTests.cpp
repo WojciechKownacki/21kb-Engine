@@ -18,6 +18,7 @@ void RunSceneHierarchyDepthTests();
 void RunPrefabHierarchyDepthTests();
 void RunEcsBatchHierarchyDepthTests();
 void RunScriptNativeHeaderReloadTest();
+void RunModTests();
 void RunScriptAudioMixerTests();
 void RunPhysicsReplayOnlyTest();
 void RunPhysicsOneWayOnlyTest();
@@ -64,6 +65,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunAssetPackTests();
     } else if (suite == "content-streaming") {
         kb::tests::RunContentStreamingTests();
+    } else if (suite == "mods") {
+        kb::tests::RunModTests();
     } else if (suite == "save") {
         kb::tests::RunSaveGameTests();
     } else if (suite == "security") {
@@ -191,6 +194,7 @@ void RunAllSuites() {
     kb::tests::RunAssetPackTests();
     kb::tests::RunContentStreamingTests();
     kb::tests::RunSaveGameTests();
+    kb::tests::RunModTests();
     kb::tests::RunSecurityTests();
     kb::tests::RunEcsRuntimeTests();
     RunDeepParentCycleAllocationTest();

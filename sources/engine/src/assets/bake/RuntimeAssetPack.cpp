@@ -149,7 +149,7 @@ RuntimeAssetPackStatus RuntimeAssetPack::MountSet(
         container.readMutex = std::make_unique<std::mutex>();
         // A pack with its own content key gets it unwrapped with the release's key; one that
         // does not unwrap is a key for another release (or an altered one).
-        AssetPackTrust packTrust = trust;
+        AssetPackTrust packTrust = packs[index].trust.has_value() ? *packs[index].trust : trust;
         if (packs[index].wrappedContentKey.has_value()) {
             kb::security::AeadKey packKey{};
             if (!trust.contentKey.has_value() ||
@@ -383,7 +383,16 @@ RuntimeAssetPackStatus RuntimeAssetPack::FinishMount(
             const auto byId = slotById.find(asset.id.value);
             const auto byPath = slotByPath.find(asset.virtualPath);
             if (!patch && (byId != slotById.end() || byPath != slotByPath.end())) {
-                // A chunk adds content; two packs claiming one asset is a split gone wrong.
+                // A chunk adds content; two packs claiming one asset is a split gone wrong. The one
+                // thing let through is a chunk carrying an asset another chunk already carries,
+                // entry for entry: two mods that each bring the same shared asset (a primitive mesh
+                // their scenes use) agree on it, and the first one's copy serves both.
+                if (byId != slotById.end() && byPath != slotByPath.end() && byId->second == byPath->second) {
+                    const Slot& existing = slots[byId->second];
+                    if (existing.container != 0U && *existing.entry == asset) {
+                        continue;
+                    }
+                }
                 return refuse(RuntimeAssetPackStatus::ManifestDuplicate);
             }
             if (byId != slotById.end()) {

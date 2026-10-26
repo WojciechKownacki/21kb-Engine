@@ -56,6 +56,11 @@ add_library(kb_engine STATIC
     include/engine/assets/bake/AssetPackReader.hpp
     include/engine/assets/bake/AssetPackSeal.hpp
     include/engine/assets/bake/AssetPackSet.hpp
+    include/engine/mods/ModCatalog.hpp
+    include/engine/mods/ModManifest.hpp
+    include/engine/mods/ModRuntime.hpp
+    include/engine/mods/ModVersion.hpp
+    include/engine/script/ScriptModsApi.hpp
     include/engine/assets/bake/AssetPackTools.hpp
     include/engine/assets/bake/AssetPackWriter.hpp
     include/engine/assets/bake/BakeTargetProfile.hpp
@@ -627,6 +632,11 @@ add_library(kb_engine STATIC
     src/assets/bake/AssetPackReader.cpp
     src/assets/bake/AssetPackSeal.cpp
     src/assets/bake/AssetPackSet.cpp
+    src/mods/ModCatalog.cpp
+    src/mods/ModManifest.cpp
+    src/mods/ModRuntime.cpp
+    src/mods/ModVersion.cpp
+    src/script/ScriptModsApi.cpp
     src/assets/bake/AssetPackTools.cpp
     src/assets/bake/AssetPackWriter.cpp
     src/assets/bake/BakeTargetProfile.cpp
@@ -1907,6 +1917,7 @@ if(BUILD_TESTING)
         tests/AssetRuntimeTests.cpp
         tests/AssetBakeTests.cpp
         tests/AssetPackTests.cpp
+        tests/ModTests.cpp
         tests/ContentStreamingTests.cpp
         tests/SaveGameTests.cpp
         tests/EcsConfigTests.cpp
