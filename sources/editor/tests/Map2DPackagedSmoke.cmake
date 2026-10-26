@@ -32,7 +32,9 @@ if(NOT result EQUAL 0)
 endif()
 file(COPY "${PLAYER}" ${PROVIDERS} DESTINATION "${package}")
 get_filename_component(playerName "${PLAYER}" NAME)
-execute_process(COMMAND "${package}/${playerName}" --headless --frames=120
+# Startup needs real rendering but no full-size image comparison. Bound its
+# framebuffer cost on software adapters; the parity capture below keeps its authored size.
+execute_process(COMMAND "${package}/${playerName}" --headless --frames=120 --width=320 --height=180
     WORKING_DIRECTORY "${package}" RESULT_VARIABLE result TIMEOUT 60
     OUTPUT_VARIABLE output ERROR_VARIABLE errors)
 file(WRITE "${package}/launch.log" "${output}\n${errors}")
