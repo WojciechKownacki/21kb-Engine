@@ -5,6 +5,8 @@
 #include "engine/project/ProjectSettings.hpp"
 
 #include <string>
+#include <utility>
+#include <vector>
 #include <system_error>
 
 namespace kb::project {
@@ -43,12 +45,17 @@ ProjectDescriptor ProjectCreator::DefaultDescriptor() {
     ProjectDescriptor descriptor;
     descriptor.contentRoot = "Assets";
     descriptor.targetPlatforms = { "Windows" };
-    for (const auto& [name, stem] : { std::pair{ "Physics.Jolt", "kb_physics_jolt_plugin" },
-             std::pair{ "Audio.Miniaudio", "kb_audio_miniaudio_plugin" },
-             std::pair{ "Rendering.BasicLighting", "kb_basic_lighting_plugin" },
-             std::pair{ "Rendering.21kbParticle", "kb_21kb_particle_plugin" },
-             std::pair{ "Gameplay.AI", "kb_ai_plugin" },
-             std::pair{ "World.Map2D", "kb_world2d_plugin" } }) {
+    std::vector<std::pair<const char*, const char*>> defaults{ { "Physics.Jolt", "kb_physics_jolt_plugin" },
+        { "Audio.Miniaudio", "kb_audio_miniaudio_plugin" },
+        { "Rendering.BasicLighting", "kb_basic_lighting_plugin" },
+        { "Rendering.21kbParticle", "kb_21kb_particle_plugin" },
+        { "Gameplay.AI", "kb_ai_plugin" } };
+#if defined(KB_DEFAULT_PROJECT_HAS_WORLD2D)
+    // The 2D world plugin draws through the renderer, so a build without the renderer does not make it; a project
+    // that listed it would not start there.
+    defaults.emplace_back("World.Map2D", "kb_world2d_plugin");
+#endif
+    for (const auto& [name, stem] : defaults) {
         descriptor.plugins.push_back(ProjectPluginReference{ .name = name, .binaryPath = PluginFileName(stem), .enabled = true });
     }
     return descriptor;

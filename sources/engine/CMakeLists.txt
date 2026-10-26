@@ -1752,6 +1752,11 @@ if(NOT WIN32)
     set_target_properties(kb_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
+# A new project lists the 2D world plugin only where it is built: it needs the renderer.
+if(KB_BUILD_RENDERER)
+    set_source_files_properties(src/project/ProjectCreator.cpp PROPERTIES COMPILE_DEFINITIONS KB_DEFAULT_PROJECT_HAS_WORLD2D=1)
+endif()
+
 target_include_directories(kb_engine
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
