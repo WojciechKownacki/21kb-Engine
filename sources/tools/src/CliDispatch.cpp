@@ -326,8 +326,13 @@ R"(  run          Run a scene headless and report logs, events, and errors (the
                project's startup scene unless --scene). Exits 1 on errors,
                124 on playback timeout, or 130 on cancellation.
                  --project <dir> [--scene <path>] [--frames <n>] [--dt <seconds>] [--realtime]
-                 [--quiet] [--report particles|audio|audio-meters|ecs|world-memory] [--pcm-frames <n>]
+                 [--quiet] [--report particles|audio|audio-meters|ecs|world-memory|input] [--pcm-frames <n>]
                  [--timeout-ms <1..86400000>] [--cancel-file <path>]
+                 [--input-replay <recording>] [--input-record <recording>]
+               Replay uses recorded per-tick durations and controller slots; --frames
+               may select a prefix. --dt and audio probes cannot override replay timing.
+               Recording captures input before each completed tick, including a partial
+               run stopped by cancellation. Replay does not guarantee world determinism.
                Playback limits are cooperative between ticks and during paced waits;
                startup, an executing callback, and shutdown are not forcibly interrupted.
                Create the cancellation file to stop; the command does not remove it.

@@ -3,6 +3,7 @@
 #include "CliAudioMeterJson.hpp"
 
 #include "engine/core/JsonValue.hpp"
+#include "engine/input/InputRecording.hpp"
 #include "engine/ecs/SystemSchedulerTraceExport.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/ecs/WorldTelemetryExport.hpp"
@@ -19,6 +20,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneInputActivation.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 #include "engine/world/WorldPartitionRuntime.hpp"
@@ -242,7 +244,7 @@ struct DiagnosticPrinter {
 }
 
 int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* particleReport, std::ostream* audioReport = nullptr,
-    std::ostream* ecsReport = nullptr, std::ostream* worldMemoryReport = nullptr) {
+    std::ostream* ecsReport = nullptr, std::ostream* worldMemoryReport = nullptr, std::ostream* inputReport = nullptr) {
     const bool requireMeters = arguments.Option("--report") == std::optional<std::string>{"audio-meters"};
     const std::optional<std::string> project = arguments.Option("--project");
     if (!project.has_value()) {
@@ -270,6 +272,38 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         deltaSeconds = *parsed;
     }
 
+    const auto inputReplayPath = arguments.Option("--input-replay");
+    const auto inputRecordPath = arguments.Option("--input-record");
+    kb::input::InputRecording inputReplay;
+    kb::input::InputRecording inputRecording;
+    double playbackSeconds = static_cast<double>(frames) * deltaSeconds;
+    if ((inputReplayPath && inputReplayPath->empty()) || (inputRecordPath && inputRecordPath->empty())) {
+        io.err << "error: input recording paths must not be empty\n";
+        return 1;
+    }
+    if (inputReplayPath) {
+        if (arguments.Option("--dt") || audioReport != nullptr) {
+            io.err << "error: input replay supplies recorded frame durations and cannot use --dt or audio probes\n";
+            return 1;
+        }
+        auto loaded = kb::input::ReadInputRecording(std::filesystem::path{*inputReplayPath});
+        if (!loaded.succeeded || loaded.asset.empty()) {
+            io.err << "error: input replay: " << (loaded.succeeded ? "recording has no frames" : loaded.error) << '\n';
+            return 1;
+        }
+        inputReplay = std::move(loaded.asset);
+        if (!arguments.Option("--frames")) frames = static_cast<int>(inputReplay.size());
+        if (static_cast<std::size_t>(frames) > inputReplay.size()) {
+            io.err << "error: --frames exceeds the input recording length\n";
+            return 1;
+        }
+        playbackSeconds = 0.0;
+        for (int i = 0; i < frames; ++i) playbackSeconds += inputReplay[static_cast<std::size_t>(i)].deltaSeconds;
+    }
+    if (inputRecordPath && static_cast<std::uint32_t>(frames) > kb::input::InputAssetFormat::MaxRecordingFrameCount) {
+        io.err << "error: frame count exceeds the input recording limit\n";
+        return 1;
+    }
     const bool realtime = arguments.Flag("--realtime");
     std::optional<int> timeoutMilliseconds;
     if (const auto value = arguments.Option("--timeout-ms")) {
@@ -284,7 +318,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         io.err << "error: --cancel-file expects a nonempty path\n";
         return 1;
     }
-    if (realtime && static_cast<double>(frames) * deltaSeconds > 86400.0) {
+    if (realtime && playbackSeconds > 86400.0) {
         io.err << "error: --realtime playback must not exceed 24 hours\n";
         return 1;
     }
@@ -351,6 +385,10 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     const std::string physicsLayersAsset = projectSettings.found && projectSettings.Succeeded()
         ? projectSettings.settings.physicsLayersAsset
         : loadedProject.legacySettings.physicsLayersAsset;
+    const bool inputEnabled = projectSettings.found && projectSettings.Succeeded()
+        ? projectSettings.settings.inputEnabled : loadedProject.legacySettings.inputEnabled;
+    const std::string inputMappingContext = projectSettings.found && projectSettings.Succeeded()
+        ? projectSettings.settings.inputMappingContext : loadedProject.legacySettings.inputMappingContext;
     kb::scene::Scene scene{ std::move(loadedProject.descriptor) };
     // A headless run is a determinism tool: scripts see each physics step in the update that ran it.
     kb::scene::PhysicsBackend::SetStepPipelining(scene, false);
@@ -419,6 +457,16 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         io.err << "error: could not load scene into runtime: " << scenePath.generic_string() << '\n';
         return 1;
     }
+    kb::scene::SceneInputActivation::Apply(scene);
+    if (inputEnabled && !inputMappingContext.empty()) {
+        const auto* mapping = scene.Assets().Manager().Registry().FindByPath(inputMappingContext);
+        if (mapping == nullptr || mapping->type != "InputMappingContext" ||
+            !scene.Input().AddMappingContext(mapping->id.value, 0)) {
+            io.err << "error: project input mapping could not be activated: "
+                   << inputMappingContext << '\n';
+            return 1;
+        }
+    }
 
     std::uint32_t pcmFramesPerTick = 0U;
     if (audioReport != nullptr) {
@@ -465,7 +513,7 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     }
 
     io.out << "running " << scenePath.filename().generic_string()
-           << " for " << frames << " frames (dt " << deltaSeconds << "s, "
+           << " for " << frames << " frames (" << (inputReplayPath ? "recorded dt, " : "fixed dt, ")
            << discovered << " assets discovered, "
            << scene.ActiveModuleCount() << " modules active)\n";
 
@@ -522,11 +570,14 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
         }
         return stopCode != 0;
     };
+    double elapsedSimulationSeconds = 0.0;
     for (int frame = 1; frame <= frames; ++frame) {
         if (stopRequested()) break;
+        const float frameDeltaSeconds = inputReplayPath ?
+            inputReplay[static_cast<std::size_t>(frame - 1)].deltaSeconds : deltaSeconds;
         if (realtime) {
             const auto nextFrame = playbackStarted + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                std::chrono::duration<double>{ static_cast<double>(frame) * deltaSeconds });
+                std::chrono::duration<double>{elapsedSimulationSeconds + frameDeltaSeconds});
             // Poll during paced waits, including a very large authored time step.
             while (std::chrono::steady_clock::now() < nextFrame && !stopRequested()) {
                 std::this_thread::sleep_until(std::min(nextFrame,
@@ -534,8 +585,13 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
             }
             if (stopRequested()) break;
         }
+        if (inputReplayPath)
+            kb::input::ApplyInputFrame(scene.Input().MutableDeviceState(), inputReplay[static_cast<std::size_t>(frame - 1)]);
+        if (inputRecordPath)
+            inputRecording.push_back(kb::input::CaptureInputFrame(scene.Input().DeviceState(), frameDeltaSeconds));
         const auto updateStarted = std::chrono::steady_clock::now();
-        static_cast<void>(scene.Runtime().Update(deltaSeconds));
+        static_cast<void>(scene.Runtime().Update(frameDeltaSeconds));
+        elapsedSimulationSeconds += frameDeltaSeconds;
         updateWallNanoseconds += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - updateStarted).count());
         ++completedFrames;
@@ -617,6 +673,33 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
     executedBehaviours += shutdown->executedBehaviours;
     printer.PrintScript(shutdown->diagnostics, static_cast<std::size_t>(completedFrames) + 1U);
     printer.PrintSceneSystems(scene.Runtime().DrainSceneSystemErrors(), static_cast<std::size_t>(completedFrames) + 1U);
+
+    bool recordingWritten = false;
+    if (inputRecordPath) {
+        recordingWritten = kb::input::WriteInputRecording(std::filesystem::path{*inputRecordPath}, inputRecording);
+        if (!recordingWritten) {
+            io.err << "error: input recording could not be written\n";
+            stopCode = 1;
+            stopReason = "input-recording-write-failed";
+        }
+    }
+    if (inputReport != nullptr) {
+        using kb::core::JsonValue;
+        auto report = JsonValue::MakeObject();
+        report.Set("schema", JsonValue::MakeString("21kb.input-execution/v1"));
+        report.Set("succeeded", JsonValue::MakeBool(printer.total == 0U && stopCode == 0));
+        report.Set("stop_reason", JsonValue::MakeString(stopReason));
+        report.Set("simulation_frames", JsonValue::MakeNumber(frames));
+        report.Set("completed_frames", JsonValue::MakeNumber(completedFrames));
+        report.Set("simulation_seconds", JsonValue::MakeNumber(elapsedSimulationSeconds));
+        report.Set("replayed", JsonValue::MakeBool(inputReplayPath.has_value()));
+        report.Set("recording_written", JsonValue::MakeBool(recordingWritten));
+        report.Set("recorded_frames", JsonValue::MakeNumber(static_cast<double>(inputRecording.size())));
+        report.Set("timing", JsonValue::MakeString(inputReplayPath ? "recorded delta per tick" : "fixed delta per tick"));
+        report.Set("scope", JsonValue::MakeString("Input snapshots and action evaluation; not deterministic world simulation"));
+        *inputReport << report.Dump() << '\n';
+        if (!inputReport->good()) { io.err << "error: input report could not be written\n"; return 1; }
+    }
 
     io.out << "done: " << completedFrames << " frames, " << executedBehaviours << " behaviour executions, "
            << emittedEvents << " events, " << printer.total << " diagnostics\n";
@@ -713,14 +796,15 @@ int RunSceneRuntime(const ArgumentList& arguments, CommandIo io, std::ostream* p
 int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     const auto report = arguments.Option("--report");
     if (arguments.Flag("--dry-run")) { io.err << "error: run does not support --dry-run\n"; return 1; }
-    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs or world-memory\n"; return 1; }
+    if (arguments.Flag("--json") && !report) { io.err << "error: run JSON output requires --report particles, audio, audio-meters, ecs, world-memory or input\n"; return 1; }
     if (arguments.Option("--pcm-frames").has_value() && (!report || (*report != "audio" && *report != "audio-meters"))) {
         io.err << "error: --pcm-frames requires --report audio or audio-meters\n"; return 1;
     }
-    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory") {
-        io.err << "error: --report expects particles, audio, audio-meters, ecs or world-memory\n";
+    if (report && *report != "particles" && *report != "audio" && *report != "audio-meters" && *report != "ecs" && *report != "world-memory" && *report != "input") {
+        io.err << "error: --report expects particles, audio, audio-meters, ecs, world-memory or input\n";
         return 1;
     }
+    if (report && *report == "input") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, nullptr, &io.out);
     if (report && *report == "ecs") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, &io.out);
     if (report && *report == "world-memory") return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, nullptr, nullptr, &io.out);
     if (report && (*report == "audio" || *report == "audio-meters")) return RunSceneRuntime(arguments, {.out = io.err, .err = io.err}, nullptr, &io.out);

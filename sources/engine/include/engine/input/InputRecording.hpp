@@ -77,6 +77,8 @@ void ReplayInputRecording(InputSubsystem& subsystem, std::span<const InputFrameS
 // magic/version/atomic-write conventions rather than inventing new I/O, same
 // as every other kb::input binary format this session (InputAssetIO,
 // InputRebinding).
+// Invalid snapshots produce an empty encoding; Write refuses them without
+// replacing an existing recording. Device slots and key kinds are validated.
 [[nodiscard]] std::vector<std::uint8_t> EncodeInputRecording(const InputRecording& recording);
 [[nodiscard]] InputAssetLoadResult<InputRecording> DecodeInputRecording(std::span<const std::uint8_t> bytes);
 [[nodiscard]] InputAssetLoadResult<InputRecording> ReadInputRecording(const std::filesystem::path& path);

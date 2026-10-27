@@ -12,6 +12,7 @@
 #include "engine/assets/bake/BakeTargetProfile.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/input/InputKey.hpp"
+#include "engine/input/InputRecording.hpp"
 #include "engine/navigation/NavMeshAsset.hpp"
 #include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
@@ -3861,8 +3862,8 @@ void RunLightingQualityCommandTests() {
     const std::filesystem::path parent = TestRoot() / std::string{ folder };
     std::error_code error;
     std::filesystem::remove_all(parent, error);
-    Require(Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Studio", "--template", "Empty" }).exitCode == 0,
-        "new failed for an authoring project");
+    const auto created = Run(&kb::cli::RunNewCommand, { "--parent", parent.string(), "--name", "Studio", "--template", "Empty" });
+    Require(created.exitCode == 0, "new failed for an authoring project: " + created.output);
     return (parent / "Studio").string();
 }
 
@@ -4143,6 +4144,84 @@ struct CliRun {
     std::ostringstream err;
     const int exitCode = kb::cli::RunCli(arguments, in, kb::cli::CommandIo{ .out = out, .err = err });
     return CliRun{ .exitCode = exitCode, .out = out.str(), .err = err.str() };
+}
+
+void RunInputRecordingCliTests() {
+    PrepareProject();
+    const auto root = TestRoot();
+    const auto project = root.string();
+    std::filesystem::create_directories(root / "Assets/Input");
+    kb::input::InputActionAsset action;
+    action.name = "Axis";
+    action.valueType = kb::input::InputActionValueType::Axis1D;
+    Require(kb::input::WriteInputAction(root / "Assets/Input/Axis.21kbinputaction", action), "Replay action must be saved");
+    kb::input::InputMappingContextAsset context;
+    context.mappings.push_back({.actionId = kb::assets::MakeAssetId("/Game/Input/Axis.21kbinputaction:InputAction").value,
+        .key = kb::input::InputKey::GamepadLeftStickX, .gamepadIndex = 3U});
+    Require(kb::input::WriteInputMappingContext(root / "Assets/Input/Replay.21kbinputcontext", context), "Replay mapping must be saved");
+    auto settings = kb::project::ProjectSettingsStore::Load(kb::project::ProjectSettingsStore::FilePath(root)).settings;
+    settings.inputMappingContext = "/Game/Input/Replay.21kbinputcontext";
+    std::string settingsError;
+    Require(kb::project::ProjectSettingsStore::Save(kb::project::ProjectSettingsStore::FilePath(root), settings, settingsError),
+        "Project replay mapping must be saved");
+    WriteTextFile(root / "Assets/Logic/Player.lua", R"(
+local frame = 0
+local durations = {0.02, 0.04, 0.06, 0.03}
+local axes = {0.75, -0.5, 0, 0.25}
+function Tick(self, dt)
+    frame = frame + 1
+    assert(math.abs(dt - durations[frame]) < 0.00001, 'recorded duration')
+    local axis, error = CallFunction('Input.Value', {action='Axis'})
+    assert(axis ~= nil and math.abs(axis - axes[frame]) < 0.00001, error or 'recorded controller action')
+    assert(Input.IsGamepadConnected(3), 'recorded controller slot')
+    Log('replay tick ' .. frame)
+end
+)");
+    Require(RunCliProgram({"scene-attach", "--project", project, "--scene", "Assets/Scenes/Main.21kbscene",
+        "--node", "Player", "--script", "/Game/Logic/Player.lua"}).exitCode == 0, "Replay script must attach");
+    kb::input::InputRecording recording;
+    const std::array<float, 4> durations{0.02F, 0.04F, 0.06F, 0.03F};
+    const std::array<float, 4> axes{0.75F, -0.5F, 0.0F, 0.25F};
+    for (std::size_t i = 0; i < durations.size(); ++i) {
+        kb::input::InputDeviceState device;
+        device.SetHasFocus(true);
+        device.SetGamepadConnected(3U, true);
+        device.SetAnalog(kb::input::InputKey::GamepadLeftStickX, axes[i], 3U);
+        recording.push_back(kb::input::CaptureInputFrame(device, durations[i]));
+    }
+    const auto source = (root / "source.21kbinputrecording").string();
+    const auto copy = (root / "copy.21kbinputrecording").string();
+    Require(kb::input::WriteInputRecording(source, recording), "Source recording must be written");
+    const auto result = RunCliProgram({"run", "--project", project, "--input-replay", source,
+        "--input-record", copy, "--report", "input", "--json"});
+    JsonValue report;
+    std::string error;
+    Require(result.exitCode == 0 && JsonValue::Parse(result.out, report, error),
+        "Replay must execute the scene and emit JSON: " + result.out + result.err);
+    Require(report.Find("completed_frames")->AsNumber() == 4 && report.Find("recording_written")->AsBool() &&
+        std::abs(report.Find("simulation_seconds")->AsNumber() - 0.15) < 0.00001 && Contains(result.err, "replay tick 4"),
+        "Replay must evaluate all recorded ticks with actual script assertions");
+    const auto saved = kb::input::ReadInputRecording(copy);
+    Require(saved.succeeded && kb::input::EncodeInputRecording(saved.asset) == kb::input::EncodeInputRecording(recording),
+        "Recording replayed input must preserve all consumed snapshots");
+    Require(RunCliProgram({"run", "--project", project, "--input-replay", source, "--frames", "2",
+        "--input-record", copy}).exitCode == 0 && kb::input::ReadInputRecording(copy).asset.size() == 2U,
+        "A replay prefix must record exactly its two consumed frames");
+    Require(RunCliProgram({"run", "--project", project, "--input-replay", source, "--dt", "0.1"}).exitCode != 0,
+        "Replay timing cannot be silently overridden");
+    Require(RunCliProgram({"run", "--project", project, "--input-replay", source, "--frames", "5"}).exitCode != 0,
+        "Replay cannot silently invent missing frames");
+    Require(RunCliProgram({"run", "--project", project, "--input-replay", source, "--input-record", project}).exitCode != 0,
+        "Recording write failure must fail the command");
+    auto malformed = kb::input::EncodeInputRecording(recording);
+    malformed[8] = 99U;
+    const auto bad = root / "unknown.21kbinputrecording";
+    std::ofstream stream{bad, std::ios::binary};
+    stream.write(reinterpret_cast<const char*>(malformed.data()), static_cast<std::streamsize>(malformed.size()));
+    stream.close();
+    const auto rejected = RunCliProgram({"run", "--project", project, "--input-replay", bad.string()});
+    Require(rejected.exitCode != 0 && Contains(rejected.err, "Unsupported input recording version") &&
+        !Contains(rejected.err + rejected.out, "replay tick"), "Unknown recording version must fail before executing scripts");
 }
 
 void RunPlaybackStopTests() {
@@ -4776,6 +4855,10 @@ int main(int argc, char** argv) {
         RunBatchCommandTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{argv[1]} == "input-recording") {
+        RunInputRecordingCliTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{argv[1]} == "sprite2d") {
 #if KB_CLI_RENDERER
         RunSprite2DCliTests();
@@ -4809,6 +4892,7 @@ int main(int argc, char** argv) {
     RunSceneCommandTests();
     RunRunCommandTests();
     RunPlaybackStopTests();
+    RunInputRecordingCliTests();
     RunParticleReportCommandTests();
     RunPlayerControllerTemplateTests();
     RunNewCommandTests();

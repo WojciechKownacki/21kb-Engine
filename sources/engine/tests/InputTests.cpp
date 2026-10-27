@@ -1315,6 +1315,69 @@ void TestInputRecordingRefusesUnknownVersionsAndMagic() {
 }
 
 
+void TestInputRecordingRejectsInvalidState() {
+    InputDeviceState device;
+    device.SetKeyDown(InputKey::W, true);
+    device.SetAnalog(InputKey::MouseX, 2.0F);
+    InputRecording recording{CaptureInputFrame(device, 0.016F)};
+    const auto valid = EncodeInputRecording(recording);
+    const auto patchWord = [&](std::size_t offset, std::uint32_t value) {
+        auto bytes = valid;
+        for (std::size_t i = 0; i < 4U; ++i)
+            bytes[offset + i] = static_cast<std::uint8_t>(value >> (8U * i));
+        Require(!DecodeInputRecording(bytes).succeeded, "Invalid recorded key or float was accepted");
+    };
+    patchWord(16U, 0x7FC00000U); // NaN time step.
+    patchWord(16U, 0xBF800000U); // Negative time step.
+    patchWord(24U, 0x10000U + static_cast<std::uint32_t>(InputKey::W)); // Must not narrow to W.
+    patchWord(24U, static_cast<std::uint32_t>(InputKey::Count));
+    patchWord(24U, static_cast<std::uint32_t>(InputKey::MouseX)); // Analog in digital list.
+    patchWord(33U, static_cast<std::uint32_t>(InputKey::W)); // Digital in analog list.
+    patchWord(38U, 0x7F800000U); // Infinite analog value.
+    auto badSlot = valid;
+    badSlot[28U] = 1U;
+    Require(!DecodeInputRecording(badSlot).succeeded, "A keyboard key must not alias a gamepad slot");
+    auto trailing = valid;
+    trailing.push_back(0U);
+    Require(!DecodeInputRecording(trailing).succeeded, "Trailing recording data must be rejected");
+
+    auto invalid = recording;
+    invalid[0].digitalDown.push_back(invalid[0].digitalDown.front());
+    Require(EncodeInputRecording(invalid).empty(), "Duplicate recorded keys must be rejected");
+    invalid = recording;
+    invalid[0].touchPoints = {{.id = 1U}, {.id = 1U}};
+    Require(EncodeInputRecording(invalid).empty(), "Duplicate recorded contacts must be rejected");
+    invalid = recording;
+    invalid[0].textInput = {static_cast<char32_t>(0xD800)};
+    Require(EncodeInputRecording(invalid).empty(), "Invalid recorded Unicode must be rejected");
+
+    const auto path = std::filesystem::temp_directory_path() / "21kb_recording_validation.21kbinputrecording";
+    Require(WriteInputRecording(path, recording), "Valid recording must be writable");
+    Require(!WriteInputRecording(path, invalid), "Invalid recording must not be written");
+    const auto saved = ReadInputRecording(path);
+    Require(saved.succeeded && EncodeInputRecording(saved.asset) == valid,
+        "Rejected recording must preserve the previous file");
+    std::error_code error;
+    std::filesystem::remove(path, error);
+
+    device.Reset();
+    for (std::uint8_t slot = 0U; slot < InputDeviceState::kMaxGamepads; ++slot) {
+        device.SetGamepadConnected(slot, true);
+        device.SetKeyDown(InputKey::GamepadFaceBottom, slot % 2U == 0U, slot);
+        device.SetAnalog(InputKey::GamepadLeftStickX, 0.2F * static_cast<float>(slot + 1U), slot);
+    }
+    const auto multiple = DecodeInputRecording(EncodeInputRecording({CaptureInputFrame(device, 0.03F)}));
+    Require(multiple.succeeded, "All controller slots must survive serialization");
+    InputDeviceState restored;
+    ApplyInputFrame(restored, multiple.asset.front());
+    for (std::uint8_t slot = 0U; slot < InputDeviceState::kMaxGamepads; ++slot) {
+        Require(restored.IsGamepadConnected(slot) &&
+            restored.IsKeyDown(InputKey::GamepadFaceBottom, slot) == device.IsKeyDown(InputKey::GamepadFaceBottom, slot) &&
+            restored.GetValue(InputKey::GamepadLeftStickX, slot) == device.GetValue(InputKey::GamepadLeftStickX, slot),
+            "Replaying one controller must not redirect its input to another slot");
+    }
+}
+
 #if defined(_WIN32)
 // The Windows host calls, without a window or a pad: a collector with no foreground owner reports no focus and clears
 // every held key and button (nothing can stay stuck after the window lost focus), and the XInput vibration backend
@@ -1364,6 +1427,7 @@ void RunInputTests() {
     TestInvalidAndAnalogBindingsAreHandled();
     TestGamepadRebindSurvivesARestart();
     TestInputRecordingRefusesUnknownVersionsAndMagic();
+    TestInputRecordingRejectsInvalidState();
 #if defined(_WIN32)
     TestWindowsCollectorAndHapticsHostCalls();
 #endif

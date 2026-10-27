@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cmath>
 
 namespace kb::input {
 namespace {
@@ -11,6 +12,41 @@ namespace {
 // Reuse the engine's byte-level (de)serialization helpers; they are generic and
 // not scene-specific despite their namespace.
 namespace io = kb::scene::SceneAssetBinaryIO;
+
+[[nodiscard]] bool ValidFrame(const InputFrameSnapshot& frame) {
+    if (!std::isfinite(frame.deltaSeconds) || frame.deltaSeconds < 0.0F ||
+        !std::isfinite(frame.pointerX) || !std::isfinite(frame.pointerY) ||
+        frame.digitalDown.size() > InputAssetFormat::MaxRecordingKeysPerFrame ||
+        frame.analogValues.size() > InputAssetFormat::MaxRecordingKeysPerFrame ||
+        frame.touchPoints.size() > InputDeviceState::kMaxTouchPoints ||
+        frame.textInput.size() > InputDeviceState::kMaxTextInputCodePoints) return false;
+    std::array<bool, InputDeviceState::kKeyCount * InputDeviceState::kMaxGamepads> seen{};
+    const auto validKey = [&seen](InputKey key, std::uint8_t slot, bool analog) {
+        const auto index = static_cast<std::size_t>(key);
+        if (index >= InputDeviceState::kKeyCount || ToString(key) == "None" ||
+            key == InputKey::TouchDown || IsAnalogKey(key) != analog ||
+            slot >= InputDeviceState::kMaxGamepads ||
+            (DeviceKindOf(key) != InputDeviceKind::Gamepad && slot != 0U)) return false;
+        const auto offset = index + static_cast<std::size_t>(slot) * InputDeviceState::kKeyCount;
+        if (seen[offset]) return false;
+        seen[offset] = true;
+        return true;
+    };
+    for (const auto& entry : frame.digitalDown)
+        if (!validKey(entry.key, entry.gamepadIndex, false)) return false;
+    for (const auto& entry : frame.analogValues)
+        if (!validKey(entry.key, entry.gamepadIndex, true) || !std::isfinite(entry.value)) return false;
+    for (std::size_t i = 0; i < frame.touchPoints.size(); ++i) {
+        const auto& point = frame.touchPoints[i];
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+            point.phase > InputTouchPhase::Cancelled) return false;
+        for (std::size_t j = 0; j < i; ++j)
+            if (frame.touchPoints[j].id == point.id) return false;
+    }
+    for (const auto codePoint : frame.textInput)
+        if (!IsUnicodeScalar(codePoint)) return false;
+    return true;
+}
 
 [[nodiscard]] bool ReadMagic(io::ByteReader& reader, const std::array<std::uint8_t, 8U>& expected) {
     std::array<std::uint8_t, 8U> magic{};
@@ -89,7 +125,8 @@ void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& fra
     frame.digitalDown.resize(digitalCount);
     for (InputRecordedDigitalKey& entry : frame.digitalDown) {
         std::uint32_t key = 0U;
-        if (!reader.ReadUInt32(key) || !reader.ReadUInt8(entry.gamepadIndex)) {
+        if (!reader.ReadUInt32(key) || key >= static_cast<std::uint32_t>(InputKey::Count) ||
+            !reader.ReadUInt8(entry.gamepadIndex)) {
             return false;
         }
         entry.key = static_cast<InputKey>(static_cast<std::uint16_t>(key));
@@ -102,14 +139,15 @@ void WriteFrame(std::vector<std::uint8_t>& output, const InputFrameSnapshot& fra
     frame.analogValues.resize(analogCount);
     for (InputRecordedAnalogKey& entry : frame.analogValues) {
         std::uint32_t key = 0U;
-        if (!reader.ReadUInt32(key) || !reader.ReadUInt8(entry.gamepadIndex) || !reader.ReadFloat(entry.value)) {
+        if (!reader.ReadUInt32(key) || key >= static_cast<std::uint32_t>(InputKey::Count) ||
+            !reader.ReadUInt8(entry.gamepadIndex) || !reader.ReadFloat(entry.value)) {
             return false;
         }
         entry.key = static_cast<InputKey>(static_cast<std::uint16_t>(key));
     }
 
     std::uint32_t touchCount = 0U;
-    if (!reader.ReadUInt32(touchCount) || touchCount > InputAssetFormat::MaxRecordingKeysPerFrame) {
+    if (!reader.ReadUInt32(touchCount) || touchCount > InputDeviceState::kMaxTouchPoints) {
         return false;
     }
     frame.touchPoints.resize(touchCount);
@@ -215,6 +253,9 @@ void ReplayInputRecording(InputSubsystem& subsystem, std::span<const InputFrameS
 }
 
 std::vector<std::uint8_t> EncodeInputRecording(const InputRecording& recording) {
+    if (recording.size() > InputAssetFormat::MaxRecordingFrameCount) return {};
+    for (const auto& frame : recording)
+        if (!ValidFrame(frame)) return {};
     std::vector<std::uint8_t> output;
     io::WriteRaw(output, InputAssetFormat::RecordingMagic.data(), InputAssetFormat::RecordingMagic.size());
     io::WriteUInt32(output, InputAssetFormat::RecordingBinaryVersion);
@@ -256,9 +297,12 @@ InputAssetLoadResult<InputRecording> DecodeInputRecording(std::span<const std::u
         if (!ReadFrame(
                 reader,
                 frame,
-                version)) {
+                version) || !ValidFrame(frame)) {
             return InputAssetLoadResult<InputRecording>{.succeeded = false, .asset = {}, .error = "Corrupt input recording frame"};
         }
+    }
+    if (!reader.Exhausted()) {
+        return InputAssetLoadResult<InputRecording>{.succeeded = false, .asset = {}, .error = "Trailing input recording data"};
     }
     return InputAssetLoadResult<InputRecording>{.succeeded = true, .asset = std::move(recording), .error = {}};
 }
@@ -268,7 +312,8 @@ InputAssetLoadResult<InputRecording> ReadInputRecording(const std::filesystem::p
 }
 
 bool WriteInputRecording(const std::filesystem::path& path, const InputRecording& recording) {
-    return io::WriteBytesAtomically(path, EncodeInputRecording(recording));
+    const auto bytes = EncodeInputRecording(recording);
+    return !bytes.empty() && io::WriteBytesAtomically(path, bytes);
 }
 
 } // namespace kb::input

@@ -96,7 +96,9 @@ struct ToolProperty {
             ToolProperty{ "scene", "string", "Scene path: physical (relative to project root) or virtual (/Game/...).", true },
             ToolProperty{ "frames", "number", "Frame count (default 60).", false },
             ToolProperty{ "dt", "number", "Delta seconds per frame (default 1/60).", false },
-            ToolProperty{ "report", "string", "Use particles for a versioned emitter execution report.", false },
+            ToolProperty{ "report", "string", "Use particles or input for a versioned execution report.", false },
+            ToolProperty{ "inputReplay", "string", "Recording file to replay with its per-tick durations.", false },
+            ToolProperty{ "inputRecord", "string", "Recording file to write with input consumed by completed ticks.", false },
         }));
     return tools;
 }
@@ -185,6 +187,8 @@ struct ToolCallOutcome {
         }
         command = &RunSceneAttachCommand;
     } else if (toolName == "run_scene") {
+        pushOption("--input-replay", GetStringArgument(toolArguments, "inputReplay"));
+        pushOption("--input-record", GetStringArgument(toolArguments, "inputRecord"));
         pushOption("--scene", GetStringArgument(toolArguments, "scene"));
         pushOption("--report", GetStringArgument(toolArguments, "report"));
         if (toolArguments != nullptr) {
@@ -205,8 +209,8 @@ struct ToolCallOutcome {
     std::ostringstream captured;
     std::ostringstream diagnostics;
     const ArgumentList parsedArguments{ commandArguments, std::array<std::string_view, 1>{ "--disabled" } };
-    const bool particleReport = toolName == "run_scene" && GetStringArgument(toolArguments, "report") == "particles";
-    const int exitCode = command(parsedArguments, CommandIo{ .out = captured, .err = particleReport ? diagnostics : captured });
+    const bool structuredReport = toolName == "run_scene" && !GetStringArgument(toolArguments, "report").empty();
+    const int exitCode = command(parsedArguments, CommandIo{ .out = captured, .err = structuredReport ? diagnostics : captured });
     if (exitCode != 0) captured << diagnostics.str();
     return ToolCallOutcome{ .isError = exitCode != 0, .text = captured.str() };
 }
