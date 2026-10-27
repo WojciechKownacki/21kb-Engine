@@ -2,6 +2,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneAssetCopy.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "kb/render/resources/RenderMeshImportArtifacts.hpp"
 
@@ -448,6 +449,10 @@ bool EditorSceneAssetBrowserCommands::CopyAssetToFolder(
             ": " + error.message();
         return false;
     }
+    if (!kb::scene::ReidentifyCopiedSceneAssets(destination, reason)) {
+        std::filesystem::remove(destination, error);
+        return false;
+    }
     CopyMetaSidecarIfPresent(source, destination);
 
     RefreshAssets(scene);
@@ -484,8 +489,16 @@ bool EditorSceneAssetBrowserCommands::CopyFolderToFolder(
     if (destination.empty()) {
         return false;
     }
+    if (!std::filesystem::create_directory(destination, error)) {
+        manager.SetError("Could not reserve a new folder for the copy.");
+        return false;
+    }
     std::filesystem::copy(*source, destination, std::filesystem::copy_options::recursive, error);
-    if (error) {
+    std::string reason;
+    if (error || !kb::scene::ReidentifyCopiedSceneAssets(destination, reason)) {
+        manager.SetError(error ? error.message() : reason);
+        std::error_code cleanup;
+        std::filesystem::remove_all(destination, cleanup);
         return false;
     }
 

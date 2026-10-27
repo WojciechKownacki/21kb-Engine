@@ -10,6 +10,8 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
@@ -377,6 +379,92 @@ void RunFolderRelocationPreservesDependencySourcesTest() {
         "Deleting a folder with only internal dependencies must remain possible");
     kb::editor::tests::Require(!std::filesystem::exists(content / "Group") && !std::filesystem::exists(content / "Self.lua"),
         "Allowed deletion did not remove the selected files");
+}
+
+void RunCopiedPrefabIdentityTest() {
+    ResetTempRoot();
+    const auto project = TempRoot() / "PrefabCopyProject";
+    const auto content = project / "Assets";
+    std::filesystem::create_directories(content / "Group");
+    std::filesystem::create_directories(content / "Destination");
+    kb::scene::Scene scene;
+    kb::editor::tests::Require(scene.Assets().MountProject(project), "Prefab copy project mount failed");
+    kb::scene::ScenePrefab prefab;
+    kb::scene::ScenePrefabNodeDesc root;
+    root.name = "Root";
+    root.stableId = 501U;
+    static_cast<void>(prefab.AddNode(root));
+    const auto base = scene.Prefabs().Register("Base", prefab);
+    const std::string originalGuid = scene.Prefabs().Guid(base);
+    kb::editor::tests::Require(scene.Prefabs().Save(base, content / "Group/Base.kbprefab"), "Base prefab save failed");
+    const auto variant = scene.Prefabs().RegisterVariant("Variant", base, {
+        kb::scene::ScenePrefabPropertyOverride{ .nodeIndex = 0U, .propertyPath = "name",
+            .value = "VariantRoot", .flag = kb::scene::ScenePrefabOverrideFlag::Name },
+    });
+    kb::editor::tests::Require(scene.Prefabs().Save(variant, content / "Group/Variant.kbprefab"), "Variant prefab save failed");
+    const auto external = scene.Prefabs().Register("External", prefab);
+    const std::string externalGuid = scene.Prefabs().Guid(external);
+    kb::editor::tests::Require(scene.Prefabs().Save(external, content / "External.kbprefab"), "External prefab save failed");
+    root.nestedPrefabGuid = originalGuid;
+    kb::scene::ScenePrefab nested;
+    static_cast<void>(nested.AddNode(root));
+    root.stableId = 502U;
+    root.parentNode = 0U;
+    root.nestedPrefabGuid = externalGuid;
+    static_cast<void>(nested.AddNode(root));
+    const auto parent = scene.Prefabs().Register("Parent", nested);
+    kb::editor::tests::Require(scene.Prefabs().Save(parent, content / "Group/Parent.kbprefab"), "Nested prefab save failed");
+    kb::scene::SceneDocument document;
+    document.guid = "scene-copy-source";
+    document.worldPrefab = nested;
+    kb::editor::tests::Require(kb::scene::SceneDocumentService::Save(document, content / "Group/Scene.21kbscene"), "Copy scene save failed");
+    static_cast<void>(scene.Assets().Discover());
+    auto& manager = scene.Assets().Manager();
+    const auto* metadata = manager.Registry().FindByPath("/Game/Group/Base.kbprefab");
+    kb::editor::tests::Require(metadata != nullptr, "Base prefab was not discovered");
+    kb::editor::EditorAssetBrowserState browser;
+    std::string reason;
+    kb::editor::tests::Require(kb::editor::EditorSceneAssetBrowserCommands::CopyAssetToFolder(
+        scene, browser, metadata->id, "/Game/Destination", reason), "Single prefab copy failed");
+    kb::scene::Scene reader;
+    kb::editor::tests::Require(reader.Prefabs().Load(content / "External.kbprefab").IsValid(), "External prefab load failed");
+    const auto original = reader.Prefabs().Load(content / "Group/Base.kbprefab");
+    const auto single = reader.Prefabs().Load(content / "Destination/Base.kbprefab");
+    kb::editor::tests::Require(original.IsValid() && single.IsValid() &&
+        reader.Prefabs().Guid(original) != reader.Prefabs().Guid(single), "Copied prefab must have an independent identity");
+    kb::editor::tests::Require(reader.Prefabs().Get(single).Nodes().front().stableId == 501U,
+        "Copied prefab must preserve stable node IDs");
+    kb::editor::tests::Require(kb::editor::EditorSceneAssetBrowserCommands::CopyFolderToFolder(
+        scene, browser, "/Game/Group", "/Game/Destination"), "Prefab folder copy failed");
+    const auto copiedBase = reader.Prefabs().Load(content / "Destination/Group/Base.kbprefab");
+    const auto copiedVariant = reader.Prefabs().Load(content / "Destination/Group/Variant.kbprefab");
+    const auto copiedParent = reader.Prefabs().Load(content / "Destination/Group/Parent.kbprefab");
+    kb::editor::tests::Require(copiedBase.IsValid() && copiedVariant.IsValid() && copiedParent.IsValid(),
+        "Copied prefab graph must load without identity collisions");
+    const std::string copiedGuid = reader.Prefabs().Guid(copiedBase);
+    kb::editor::tests::Require(copiedGuid != originalGuid && copiedGuid != reader.Prefabs().Guid(single) &&
+        reader.Prefabs().Get(copiedParent).Nodes().front().nestedPrefabGuid == copiedGuid,
+        "Copied nested prefab must reference the copied base");
+    kb::editor::tests::Require(reader.Prefabs().Get(copiedParent).Nodes()[1].nestedPrefabGuid == externalGuid,
+        "Copying must preserve references to prefabs outside the copied folder");
+    kb::editor::tests::Require(reader.Prefabs().Guid(reader.Prefabs().OriginalSourcePrefab(copiedVariant)) == copiedGuid,
+        "Copied variant must retain its relationship to the copied base");
+    kb::editor::tests::Require(reader.Prefabs().Get(copiedVariant).Nodes().front().name == "VariantRoot" &&
+        reader.Prefabs().Get(copiedBase).Nodes().front().name == "Root",
+        "Copied variants must preserve overrides without changing their base");
+    const auto copiedScene = kb::scene::SceneDocumentService::Load(content / "Destination/Group/Scene.21kbscene");
+    kb::editor::tests::Require(copiedScene.succeeded && copiedScene.document.guid != document.guid &&
+        copiedScene.document.worldPrefab.Nodes().front().nestedPrefabGuid == copiedGuid,
+        "Copied scene must have an independent identity and reference copied prefabs");
+    kb::editor::tests::Require(scene.Prefabs().Guid(base) == originalGuid && manager.ValidateCompatibility(
+        manager.Registry().FindByPath("/Game/Group/Parent.kbprefab")->id).compatible,
+        "Copying must leave the original dependency graph valid");
+    WriteTextFile(content / "Bad/Broken.kbprefab", "invalid prefab\n");
+    static_cast<void>(scene.Assets().Discover());
+    kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::CopyFolderToFolder(
+        scene, browser, "/Game/Bad", "/Game/Destination"), "Malformed prefabs must refuse folder publication");
+    kb::editor::tests::Require(std::filesystem::exists(content / "Bad/Broken.kbprefab") &&
+        !std::filesystem::exists(content / "Destination/Bad"), "A failed copy must preserve its source and remove its unpublished destination");
 }
 
 void RunSearchTextShortcutStateTest() {
@@ -1283,6 +1371,7 @@ void RunEditorAssetBrowserTests() {
     RunTextEditStateTest();
     RunDependencySafetyBlocksRenameAndDeleteTest();
     RunFolderRelocationPreservesDependencySourcesTest();
+    RunCopiedPrefabIdentityTest();
     RunSearchTextShortcutStateTest();
     RunImportCommandReturnsMaterialTextureReportTest();
     RunImportCommandPublishesSkeletalGltfTest();

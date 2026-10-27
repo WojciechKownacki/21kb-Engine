@@ -215,6 +215,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMotionSkeletonRuleComponents.hpp
     include/engine/scene/SceneDeformedGeometryComponents.hpp
     include/engine/scene/SceneAssets.hpp
+    include/engine/scene/SceneAssetCopy.hpp
     include/engine/scene/SceneAssetMeta.hpp
     include/engine/scene/SceneBehaviourComponents.hpp
     include/engine/scene/SceneCameraComponents.hpp
@@ -1060,6 +1061,7 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneVisibilityModule.cpp
     src/scene/modules/ScenePrefabAssetModule.cpp
     src/scene/modules/SceneAssets.cpp
+    src/scene/SceneAssetCopy.cpp
     src/scene/modules/SceneAssetsAccess.cpp
     src/scene/modules/ScenePrefabCaptureModule.cpp
     src/scene/modules/SceneEntities.cpp

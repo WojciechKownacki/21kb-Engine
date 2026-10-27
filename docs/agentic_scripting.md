@@ -63,6 +63,12 @@ The declaration does not grant filesystem access or execute Lua during discovery
 Project Files refuses a rename or move that would break registered references,
 including references between files in the same folder. Deleting a folder is allowed
 when all users of its assets are deleted with it; surviving users prevent deletion.
+Copying scenes and prefabs assigns new asset identities while preserving stable node
+IDs and variant overrides. When copying a folder, nested prefab references and variant
+base references within that copy point to the copied prefabs. References to prefabs
+outside the folder retain their original targets. Path-based resource references and
+Lua asset declarations are not rewritten by copying. Malformed or ambiguous prefab
+graphs refuse the copy without modifying the source.
 
 ## What a script is allowed to do
 
