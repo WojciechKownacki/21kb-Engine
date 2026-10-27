@@ -3,7 +3,8 @@ project(WebInputTests LANGUAGES CXX)
 if(NOT EMSCRIPTEN)
     message(FATAL_ERROR "Web input tests require the Emscripten toolchain")
 endif()
-add_executable(kb_web_input_tests InputTests.cpp ../../src/web/WebTouchInput.cpp)
+add_executable(kb_web_input_tests InputTests.cpp ../../src/web/WebTouchInput.cpp
+    ../../src/web/WebGamepadInput.cpp)
 target_compile_features(kb_web_input_tests PRIVATE cxx_std_20)
 target_include_directories(kb_web_input_tests PRIVATE ../../src/private ../../../engine/include)
 target_compile_options(kb_web_input_tests PRIVATE

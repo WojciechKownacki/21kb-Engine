@@ -404,6 +404,52 @@ void TestAssetDiscoveryAndResolve() {
     const kb::assets::AssetHandle<InputActionAsset> handle = manager.Load<InputActionAsset>(metadata->id);
     Require(handle.IsLoaded() && handle->name == "Jump", "Loading the discovered input action should round-trip");
 
+    const kb::assets::AssetId jumpId = metadata->id;
+    action.name = "Modifier";
+    Require(WriteInputAction(root / "Modifier.21kbinputaction", action), "Writing the chord action should succeed");
+    action.name = "Move";
+    action.valueType = InputActionValueType::Axis2D;
+    Require(WriteInputAction(root / "Move.21kbinputaction", action), "Writing the composite action should succeed");
+    static_cast<void>(manager.DiscoverMountedAssets());
+    const auto* modifierMetadata = manager.Registry().FindByPath("/Game/Modifier.21kbinputaction");
+    const auto* moveMetadata = manager.Registry().FindByPath("/Game/Move.21kbinputaction");
+    Require(modifierMetadata != nullptr && moveMetadata != nullptr, "The referenced input actions must be discovered");
+    const auto modifierId = modifierMetadata->id;
+    const auto moveId = moveMetadata->id;
+    InputMappingContextAsset context;
+    context.mappings.push_back(InputKeyMapping{.actionId = jumpId.value, .key = InputKey::Space,
+        .triggers = {InputTriggerDesc{.type = InputTriggerType::Chorded, .chordActionId = modifierId.value}}});
+    context.mappings.push_back(InputKeyMapping{.actionId = jumpId.value, .key = InputKey::GamepadFaceBottom});
+    context.composites.push_back(InputCompositeBinding{.actionId = moveId.value,
+        .slots = {InputCompositeSlot{.key = InputKey::GamepadLeftStickX}},
+        .triggers = {InputTriggerDesc{.type = InputTriggerType::Chorded, .chordActionId = jumpId.value}}});
+    Require(WriteInputMappingContext(root / "Controls.21kbinputcontext", context), "Writing the input context should succeed");
+    static_cast<void>(manager.DiscoverMountedAssets());
+    const auto* contextMetadata = manager.Registry().FindByPath("/Game/Controls.21kbinputcontext");
+    Require(contextMetadata != nullptr && contextMetadata->dependencies.size() == 3U &&
+        std::ranges::find(contextMetadata->dependencies, jumpId) != contextMetadata->dependencies.end() &&
+        std::ranges::find(contextMetadata->dependencies, modifierId) != contextMetadata->dependencies.end() &&
+        std::ranges::find(contextMetadata->dependencies, moveId) != contextMetadata->dependencies.end(),
+        "Discovery must retain deduplicated button, composite and chord actions for package closure");
+    InputMappingContextAssetLoader loader;
+    Require(!loader.ValidateDependencies(*contextMetadata, manager.Registry()),
+        "Valid input dependencies must pass loose asset validation");
+    auto packagedMetadata = *contextMetadata;
+    packagedMetadata.physicalPath.clear();
+    const auto encoded = EncodeInputMappingContext(context);
+    const kb::assets::AssetLoadRequest request{.metadata = packagedMetadata,
+        .sourceBytes = std::span<const std::uint8_t>{encoded}};
+    Require(!loader.ValidateRuntimeDependencies(request, manager.Registry()),
+        "Runtime input validation must use source bytes without requiring an authored file");
+    auto wrongType = *manager.Registry().Find(modifierId);
+    wrongType.type = "InputMappingContext";
+    Require(manager.Registry().Upsert(wrongType), "Wrong-type validation fixture must replace its metadata");
+    Require(loader.ValidateRuntimeDependencies(request, manager.Registry()).has_value(),
+        "A chord referencing a non-action must fail explicitly");
+    Require(manager.Registry().Remove(modifierId), "Missing dependency fixture must remove its metadata");
+    Require(loader.ValidateRuntimeDependencies(request, manager.Registry()).has_value(),
+        "A missing chord action must fail explicitly instead of silently losing controls");
+
     std::filesystem::remove_all(root, error);
 }
 

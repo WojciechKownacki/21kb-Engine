@@ -1,8 +1,11 @@
 #include "WebTouchInput.hpp"
+#include "WebGamepadInput.hpp"
 
 #include <emscripten/emscripten.h>
 
 #include <cstddef>
+#include <cstring>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -42,6 +45,70 @@ extern "C" EMSCRIPTEN_KEEPALIVE const char* kb_input_snapshot() {
 }
 
 extern "C" EMSCRIPTEN_KEEPALIVE void kb_input_finish() { input.FinishFrame(); }
+
+extern "C" EMSCRIPTEN_KEEPALIVE const char* kb_gamepad_snapshot() {
+    kb::game::PollWebGamepads(state);
+    std::ostringstream text;
+    text << '[';
+    for (std::uint8_t slot = 0U; slot < state.kMaxGamepads; ++slot) {
+        if (slot != 0U) text << ',';
+        using kb::input::InputKey;
+        text << '[' << state.IsGamepadConnected(slot) << ','
+             << state.GetValue(InputKey::GamepadFaceBottom, slot) << ','
+             << state.GetValue(InputKey::GamepadFaceRight, slot) << ','
+             << state.GetValue(InputKey::GamepadLeftStickX, slot) << ','
+             << state.GetValue(InputKey::GamepadLeftStickY, slot) << ','
+             << state.GetValue(InputKey::GamepadRightStickX, slot) << ','
+             << state.GetValue(InputKey::GamepadRightStickY, slot) << ','
+             << state.GetValue(InputKey::GamepadLeftTrigger, slot) << ','
+             << state.GetValue(InputKey::GamepadRightTrigger, slot) << ']';
+    }
+    text << ']'; snapshot = text.str(); return snapshot.c_str();
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int kb_gamepad_invalid() {
+    using kb::input::InputKey;
+    kb::input::InputDeviceState sampleState;
+    EmscriptenGamepadEvent event{};
+    event.connected = true;
+    std::memcpy(event.mapping, "standard", 9U);
+    event.numAxes = 4;
+    event.numButtons = 17;
+    event.axis[0] = std::numeric_limits<double>::infinity();
+    event.axis[1] = std::numeric_limits<double>::quiet_NaN();
+    event.axis[2] = 10.0;
+    event.axis[3] = -10.0;
+    event.analogButton[6] = -2.0;
+    event.analogButton[7] = 2.0;
+    event.digitalButton[15] = true;
+    kb::game::ApplyWebGamepadSample(sampleState, 3U, &event);
+    if (!sampleState.IsGamepadConnected(3U) || sampleState.IsGamepadConnected(0U) ||
+        sampleState.GetValue(InputKey::GamepadLeftStickX, 3U) != 0.0F ||
+        sampleState.GetValue(InputKey::GamepadLeftStickY, 3U) != 0.0F ||
+        sampleState.GetValue(InputKey::GamepadRightStickX, 3U) != 1.0F ||
+        sampleState.GetValue(InputKey::GamepadRightStickY, 3U) != 1.0F ||
+        sampleState.GetValue(InputKey::GamepadLeftTrigger, 3U) != 0.0F ||
+        sampleState.GetValue(InputKey::GamepadRightTrigger, 3U) != 1.0F ||
+        !sampleState.IsKeyDown(InputKey::GamepadDPadRight, 3U)) return 0;
+    for (int invalid : {-1, 65}) {
+        event.numButtons = invalid;
+        kb::game::ApplyWebGamepadSample(sampleState, 3U, &event);
+        if (sampleState.GetValue(InputKey::GamepadRightStickX, 3U) != 0.0F ||
+            sampleState.IsKeyDown(InputKey::GamepadDPadRight, 3U)) return 0;
+    }
+    event.numButtons = 17;
+    event.numAxes = 65;
+    kb::game::ApplyWebGamepadSample(sampleState, 3U, &event);
+    if (sampleState.IsKeyDown(InputKey::GamepadDPadRight, 3U)) return 0;
+    event.numAxes = 4;
+    kb::game::ApplyWebGamepadSample(sampleState, 3U, &event);
+    kb::game::ApplyWebGamepadSample(sampleState, 4U, nullptr);
+    if (!sampleState.IsKeyDown(InputKey::GamepadDPadRight, 3U)) return 0;
+    kb::game::ApplyWebGamepadSample(sampleState, 3U, nullptr);
+    return !sampleState.IsGamepadConnected(3U) &&
+        !sampleState.IsKeyDown(InputKey::GamepadDPadRight, 3U) &&
+        sampleState.GetValue(InputKey::GamepadRightTrigger, 3U) == 0.0F ? 1 : 0;
+}
 
 extern "C" EMSCRIPTEN_KEEPALIVE void kb_input_resize() {
     int width = 0, height = 0;

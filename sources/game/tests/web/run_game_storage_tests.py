@@ -175,6 +175,38 @@ class BrowserSession:
                 raise RuntimeError("Owned browser cleanup failed: " + str(cleanup_errors))
 
 
+def hold_storage_transaction(case):
+    # Keep a real transaction active in this profile's database. IndexedDB
+    # queues the player's synchronization behind it; no fake save result
+    # or callback is supplied and the production deadline stays unchanged.
+    case.client.call("Runtime.evaluate", awaitPromise=True, expression="""
+        new Promise((resolve,reject) => {
+            const request=indexedDB.open(Module.kbUserStorage.root);
+            request.onerror=()=>reject(request.error);
+            request.onsuccess=()=>{
+                const database=request.result;
+                const transaction=database.transaction('FILE_DATA','readwrite');
+                const store=transaction.objectStore('FILE_DATA');
+                window.kbStorageHold={active:true,reads:0,database,transaction};
+                const next=()=>{
+                    const query=store.get('__21kb_local_test_hold__');
+                    query.onsuccess=()=>{++kbStorageHold.reads;if(kbStorageHold.active)next();};
+                };
+                next();
+                window.kbCompletedStorageWrites=0;
+                const original=IDBDatabase.prototype.transaction;
+                IDBDatabase.prototype.transaction=function(...args){
+                    const tx=original.apply(this,args);
+                    if(this.name===Module.kbUserStorage.root && args[1]==='readwrite')
+                        tx.addEventListener('complete',()=>++kbCompletedStorageWrites);
+                    return tx;
+                };
+                resolve(true);
+            };
+        })
+    """)
+
+
 def run_cases(args, root, report, origin):
     profile = root / "profile"
     with BrowserSession(args, root, profile, report, origin, "write") as case:
@@ -250,6 +282,42 @@ def run_cases(args, root, report, origin):
         report["observations"].append(dict(check="explicit retry survives browser restart", state=value))
         case.graphics()
 
+    with BrowserSession(args, root, profile, report, origin, "navigate-pending") as case:
+        value = case.ready()
+        require(value["counter"] == 2 and value["note"] == "latest",
+            "Navigation control did not load the committed save")
+        hold_storage_transaction(case)
+        cursor = len(case.states())
+        case.click_save()
+        pending_navigation = case.wait("navigation starts with a real queued flush",
+            lambda s: s["status"] == "Pending" and s["counter"] == 3, cursor)
+        require(case.client.evaluate("kbStorageHold.reads > 0 && kbCompletedStorageWrites === 0"),
+            "The navigation fixture did not hold the actual persistence transaction")
+        states = case.states()[cursor:]
+        require(not any(s["counter"] == 3 and s["status"] == "Clean" for s in states),
+            "A queued flush reported success before navigation")
+        (root / "navigate-pending-native-states.json").write_text(
+            json.dumps(states, indent=2), encoding="utf-8")
+        case.graphics()
+        # Leaving the document destroys its real queued transactions. Do not
+        # release the hold or invoke a replacement completion callback.
+        case.client.call("Page.navigate", url="about:blank")
+        deadline = time.monotonic() + 10
+        while case.client.evaluate("location.href") != "about:blank":
+            require(time.monotonic() < deadline, "The player did not navigate away")
+            time.sleep(0.03)
+        report["observations"].append(dict(check="navigation interrupts an unacknowledged flush",
+            state=pending_navigation))
+
+    with BrowserSession(args, root, profile, report, origin, "after-navigation") as case:
+        value = case.ready()
+        require(value["loaded"] and value["settingsLoaded"] and value["counter"] == 2 and
+            value["note"] == "latest" and value["label"] == "Zażółć 2",
+            "Navigation during a queued flush damaged the committed save/settings: " + str(value))
+        report["observations"].append(dict(check="navigation retains the preceding committed save/settings",
+            state=value))
+        case.graphics()
+
     with BrowserSession(args, root, profile, report, origin, "other-directory", route="/other") as case:
         value = case.ready()
         require(not value["loaded"] and not value["settingsLoaded"] and value["counter"] == 0,
@@ -274,35 +342,7 @@ def run_cases(args, root, report, origin):
     timeout_profile = root / "timeout-profile"
     with BrowserSession(args, root, timeout_profile, report, origin, "timeout") as case:
         case.ready()
-        # Keep a real transaction active in this profile's database. IndexedDB
-        # queues the player's synchronization behind it; no fake save result
-        # or callback is supplied and the production deadline stays unchanged.
-        case.client.call("Runtime.evaluate", awaitPromise=True, expression="""
-            new Promise((resolve,reject) => {
-                const request=indexedDB.open(Module.kbUserStorage.root);
-                request.onerror=()=>reject(request.error);
-                request.onsuccess=()=>{
-                    const database=request.result;
-                    const transaction=database.transaction('FILE_DATA','readwrite');
-                    const store=transaction.objectStore('FILE_DATA');
-                    window.kbStorageHold={active:true,reads:0,database,transaction};
-                    const next=()=>{
-                        const query=store.get('__21kb_local_test_hold__');
-                        query.onsuccess=()=>{++kbStorageHold.reads;if(kbStorageHold.active)next();};
-                    };
-                    next();
-                    window.kbCompletedStorageWrites=0;
-                    const original=IDBDatabase.prototype.transaction;
-                    IDBDatabase.prototype.transaction=function(...args){
-                        const tx=original.apply(this,args);
-                        if(this.name===Module.kbUserStorage.root && args[1]==='readwrite')
-                            tx.addEventListener('complete',()=>++kbCompletedStorageWrites);
-                        return tx;
-                    };
-                    resolve(true);
-                };
-            })
-        """)
+        hold_storage_transaction(case)
         cursor = len(case.states())
         started = time.monotonic()
         case.click_save()

@@ -29,10 +29,31 @@ restoring the canvas's previous `touch-action`. DOM observations also verify
 `isTrusted` and the ID of the released finger. Missing browsers, registration
 failure, timeouts, sanitizer diagnostics and failed checks fail the test.
 
+The production player also polls the browser's standard Gamepad mapping for
+four independent controller slots. It releases inputs on disconnection or focus
+loss and samples them again on focus restoration. Stick Y is positive upward;
+triggers use `[0,1]`. Unmapped controllers report presence with neutral controls
+because their layout is not portable. Browser security and user activation
+policies can delay controller visibility. Vibration is not provided by this bridge.
+The sanitized input runner supplies synthetic browser Gamepad samples through
+the actual Emscripten polling bridge, covering sparse slots, reconnect, focus,
+unmapped layouts and malformed native values. These checks do not establish
+physical controller or browser/device compatibility.
+
 The result uses schema `21kb.web-input-tests/v1`. This isolated input test does
 not verify a rendered game, graphics backend, virtual controls or the scene UI's
 simultaneous handling of multiple contacts. Those need separate integration
 scenarios with the full player.
+
+`run_game_gamepad_tests.py` uses the packaged touch/storage runner's tool paths.
+It creates the normal player preset and cooks its Move/Jump action assets. The
+input context retains its button, composite and chord action dependencies in
+the package; missing or wrong-type action references fail validation. The
+final player polls synthetic standard browser controller samples; its Lua
+controller reads the public action API and changes a native UI color verified
+by GPU readback. Cases cover independent controller presence, axes, buttons,
+D-pad, disconnect, reconnect, unknown mappings and disconnect during actual
+tab focus loss. Hardware controller compatibility remains a separate check.
 
 The packaged touch scenario authors a fresh project through the CLI, saves a Lua
 joystick controller and a native UI button, cooks its package, and runs the
@@ -154,6 +175,8 @@ committed data. Explicit retry must persist the failed working revision without
 rewriting it. An actual held IndexedDB transaction exercises the unchanged
 15-second deadline: retries are refused after timeout and a late real commit
 cannot turn that failure into success. Reopening must read valid data.
+Navigating away during a queued flush must preserve the preceding committed
+save/settings without acknowledging the unfinished revision.
 Other URL directories must have separate slots, and a denied
 initial storage read must fail startup explicitly. The result uses schema
 `21kb.web-game-storage-tests/v1` and retains commands, hashes, native states,

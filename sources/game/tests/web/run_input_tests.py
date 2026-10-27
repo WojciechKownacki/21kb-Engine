@@ -84,6 +84,11 @@ def main():
     def snapshot():
         return client.evaluate("JSON.parse(Module.UTF8ToString(Module._kb_input_snapshot()))")
 
+    def gamepads(label, expected):
+        value = client.evaluate("JSON.parse(Module.UTF8ToString(Module._kb_gamepad_snapshot()))")
+        assert value == expected, (label, value, expected)
+        observations.append(dict(check=label, state=value, inputSource="synthetic browser Gamepad samples"))
+
     def expect(label, points, *, focus=1, viewport=None, pointer=None):
         until = time.monotonic() + 8
         while True:
@@ -137,6 +142,32 @@ def main():
             report["browser"] = client.call("Browser.getVersion")["product"]
             initial = expect("initial", [], viewport=[800, 600])
             assert initial["asan"] == 1 and initial["ubsan"] == 1, "The native test module must have both sanitizers enabled"
+            assert client.evaluate("Module._kb_gamepad_invalid()") == 1
+            client.evaluate("""
+                window.kbOriginalGetGamepads = navigator.getGamepads;
+                window.kbVirtualPads = [];
+                window.kbMakePad = (index,axes,pressed,triggers) => ({
+                    id:'Standard test controller',index,connected:true,mapping:'standard',
+                    timestamp:performance.now(),axes,
+                    buttons:Array.from({length:17},(_,i)=>({pressed:pressed.includes(i),
+                        value:i===6?triggers[0]:i===7?triggers[1]:pressed.includes(i)?1:0}))
+                });
+                navigator.getGamepads = () => kbVirtualPads;
+            """)
+            neutral = [0] * 9
+            first_pad = [1, 1, 0, 0.25, 0.5, -0.75, -1, 0.125, 0.875]
+            last_pad = [1, 0, 1, -1, -0.25, 0.5, 0.75, 1, 0]
+            gamepads("no browser controllers", [neutral] * 4)
+            client.evaluate("kbVirtualPads=[kbMakePad(0,[.25,-.5,-.75,1],[0],[.125,.875]),"
+                "null,null,kbMakePad(3,[-1,.25,.5,-.75],[1],[1,0])]")
+            gamepads("sparse independent browser controller slots", [first_pad, neutral, neutral, last_pad])
+            client.evaluate("kbVirtualPads[0]=null")
+            gamepads("controller disconnect releases only its slot", [neutral, neutral, neutral, last_pad])
+            client.evaluate("kbVirtualPads[0]=kbMakePad(0,[.25,-.5,-.75,1],[0],[.125,.875])")
+            gamepads("controller reconnect restores its slot", [first_pad, neutral, neutral, last_pad])
+            client.evaluate("kbVirtualPads[0].mapping=''")
+            gamepads("unmapped controller does not guess its layout", [[1] + [0] * 8, neutral, neutral, last_pad])
+            client.evaluate("kbVirtualPads[0].mapping='standard'")
             for kind, buttons in [("mousePressed", 1), ("mouseReleased", 0)]:
                 client.call("Input.dispatchMouseEvent", type=kind, x=140, y=150,
                             button="left", buttons=buttons, clickCount=1)
@@ -166,10 +197,13 @@ def main():
             other = DevTools(endpoint(second_id)["webSocketDebuggerUrl"])
             other.call("Page.bringToFront")
             expect("actual tab focus loss", [[7, 3, 200, 200]], focus=0)
+            gamepads("focus loss releases browser controller input", [neutral] * 4)
             client.evaluate("Module._kb_input_finish()")
             expect("unfocused release consumed", [], focus=0)
             client.call("Page.bringToFront")
             expect("actual tab focus restoration", [])
+            gamepads("focus restoration samples controllers again", [first_pad, neutral, neutral, last_pad])
+            client.evaluate("navigator.getGamepads=kbOriginalGetGamepads")
             client.call("Target.closeTarget", targetId=second_id)
             other.close()
             other = None
@@ -208,6 +242,7 @@ def main():
             assert dom_events and all(event["trusted"] for event in dom_events), dom_events
             assert any(event["type"] == "touchend" and event["changed"] == [7] for event in dom_events), dom_events
             report.update(result="PASS", trustedTouchEvents=True, sanitizedWebAssembly=True,
+                          gamepadSamples="synthetic through the production Emscripten polling bridge; no physical controller claim",
                           touchPhases=dict(began=0, moved=1, ended=2, cancelled=3),
                           mousePositiveControl=True, emulatedMouseEvents=0, observations=observations, domTouchEvents=dom_events)
     except Exception as error:

@@ -1,6 +1,7 @@
 #include "GameProjectRuntime.hpp"
 #include "PackagedGameRuntime.hpp"
 #include "WebTouchInput.hpp"
+#include "WebGamepadInput.hpp"
 #include "WebDownloadProgress.hpp"
 #include "WebDownloadBuffer.hpp"
 
@@ -541,6 +542,7 @@ private:
         if (kb::scene::Scene* scene = host->runtime_.Scene(); scene != nullptr) {
             scene->Input().MutableDeviceState().SetPointerViewportExtent(
                 host->surface_.Width(), host->surface_.Height());
+            kb::game::PollWebGamepads(scene->Input().MutableDeviceState());
         }
         host->touches_.SetViewport(host->surface_.Width(), host->surface_.Height());
         bool frameSubmitted = false;

@@ -81,6 +81,11 @@ After a quota failure it removes the local quota limit and retries through the
 native button. The tracked revision must stay unchanged and the committed
 values must survive another browser restart.
 
+A navigation case holds a real database transaction while the native button
+requests another flush. The attempted revision must stay pending, without a
+success acknowledgement. Navigating away and reopening the owned profile must
+retain the preceding committed save and settings.
+
 For the timeout case, the test keeps an actual IndexedDB transaction active,
 which queues the player's synchronization behind it. The production deadline
 remains 15 seconds. The timeout must report failure and refuse an overlapping
